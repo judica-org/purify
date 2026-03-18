@@ -140,6 +140,49 @@ private:
     std::vector<Term> linear_;
 };
 
+/**
+ * @brief Small runtime builder that flattens affine combinations into one expression.
+ *
+ * This avoids repeated intermediate `Expr` allocations in gadgets that know they are
+ * constructing a linear combination of existing expressions.
+ */
+class ExprBuilder {
+public:
+    /** @brief Returns a builder with storage reserved for approximately `terms` linear slots. */
+    static ExprBuilder reserved(std::size_t terms);
+
+    /** @brief Reserves storage for approximately `terms` linear slots. */
+    ExprBuilder& reserve(std::size_t terms);
+
+    /** @brief Adds a constant field term to the pending affine expression. */
+    ExprBuilder& add(const FieldElement& value);
+
+    /** @brief Adds an integer constant term to the pending affine expression. */
+    ExprBuilder& add(std::int64_t value);
+
+    /** @brief Adds one scaled symbolic variable term. */
+    ExprBuilder& add_term(Symbol symbol, const FieldElement& scale);
+
+    /** @brief Adds an existing expression with implicit coefficient one. */
+    ExprBuilder& add(const Expr& expr);
+
+    /** @brief Subtracts an existing expression with implicit coefficient minus one. */
+    ExprBuilder& subtract(const Expr& expr);
+
+    /** @brief Adds an existing expression scaled by a field element. */
+    ExprBuilder& add_scaled(const Expr& expr, const FieldElement& scale);
+
+    /** @brief Adds an existing expression scaled by an integer constant. */
+    ExprBuilder& add_scaled(const Expr& expr, std::int64_t scale);
+
+    /** @brief Materializes the flattened affine expression. */
+    Expr build();
+
+private:
+    FieldElement constant_ = FieldElement::zero();
+    std::vector<Expr::Term> terms_;
+};
+
 /** @brief Streams the human-readable expression form to an output stream. */
 std::ostream& operator<<(std::ostream& out, const Expr& expr);
 

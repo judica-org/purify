@@ -9,9 +9,11 @@
 
 #include "purify/expr.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <format>
 #include <sstream>
+#include <utility>
 
 namespace {
 
@@ -128,8 +130,114 @@ void Expr::push_term(const Term& term) {
     linear_.push_back(term);
 }
 
+ExprBuilder ExprBuilder::reserved(std::size_t terms) {
+    ExprBuilder builder;
+    builder.terms_.reserve(terms);
+    return builder;
+}
+
+ExprBuilder& ExprBuilder::reserve(std::size_t terms) {
+    terms_.reserve(terms);
+    return *this;
+}
+
+ExprBuilder& ExprBuilder::add(const FieldElement& value) {
+    constant_ = constant_ + value;
+    return *this;
+}
+
+ExprBuilder& ExprBuilder::add(std::int64_t value) {
+    return add(FieldElement::from_int(value));
+}
+
+ExprBuilder& ExprBuilder::add_term(Symbol symbol, const FieldElement& scale) {
+    if (!scale.is_zero()) {
+        terms_.push_back({symbol, scale});
+    }
+    return *this;
+}
+
+ExprBuilder& ExprBuilder::add(const Expr& expr) {
+    constant_ = constant_ + expr.constant();
+    if (expr.linear().empty()) {
+        return *this;
+    }
+    terms_.reserve(terms_.size() + expr.linear().size());
+    for (const auto& term : expr.linear()) {
+        terms_.push_back(term);
+    }
+    return *this;
+}
+
+ExprBuilder& ExprBuilder::subtract(const Expr& expr) {
+    constant_ = constant_ - expr.constant();
+    if (expr.linear().empty()) {
+        return *this;
+    }
+    terms_.reserve(terms_.size() + expr.linear().size());
+    for (const auto& term : expr.linear()) {
+        FieldElement coeff = term.second.negate();
+        if (!coeff.is_zero()) {
+            terms_.push_back({term.first, coeff});
+        }
+    }
+    return *this;
+}
+
+ExprBuilder& ExprBuilder::add_scaled(const Expr& expr, const FieldElement& scale) {
+    if (scale.is_zero()) {
+        return *this;
+    }
+    if (scale.is_one()) {
+        return add(expr);
+    }
+    if (scale == FieldElement::from_int(-1)) {
+        return subtract(expr);
+    }
+    constant_ = constant_ + expr.constant() * scale;
+    if (expr.linear().empty()) {
+        return *this;
+    }
+    terms_.reserve(terms_.size() + expr.linear().size());
+    for (const auto& term : expr.linear()) {
+        FieldElement coeff = term.second * scale;
+        if (!coeff.is_zero()) {
+            terms_.push_back({term.first, coeff});
+        }
+    }
+    return *this;
+}
+
+ExprBuilder& ExprBuilder::add_scaled(const Expr& expr, std::int64_t scale) {
+    return add_scaled(expr, FieldElement::from_int(scale));
+}
+
+Expr ExprBuilder::build() {
+    Expr out(constant_);
+    if (terms_.empty()) {
+        return out;
+    }
+    std::sort(terms_.begin(), terms_.end(), [](const Expr::Term& lhs, const Expr::Term& rhs) {
+        return lhs.first < rhs.first;
+    });
+    auto& linear = out.linear();
+    linear.reserve(terms_.size());
+    for (const auto& term : terms_) {
+        if (!linear.empty() && linear.back().first == term.first) {
+            linear.back().second = linear.back().second + term.second;
+            if (linear.back().second.is_zero()) {
+                linear.pop_back();
+            }
+        } else if (!term.second.is_zero()) {
+            linear.push_back(term);
+        }
+    }
+    return out;
+}
+
 Expr operator+(const Expr& lhs, const Expr& rhs) {
     Expr out(lhs.constant_ + rhs.constant_);
+    out.linear_.reserve(lhs.linear_.size() + rhs.linear_.size());
     std::size_t i = 0;
     std::size_t j = 0;
     while (i < lhs.linear_.size() || j < rhs.linear_.size()) {

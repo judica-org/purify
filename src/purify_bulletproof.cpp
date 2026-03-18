@@ -621,15 +621,20 @@ bool BulletproofTranscript::contains_transcript_var(const Expr& expr) {
 }
 
 Expr circuit_1bit(const std::array<FieldElement, 2>& values, Transcript&, const Expr& x) {
-    return Expr(values[0]) + x * (values[1] - values[0]);
+    return ExprBuilder::reserved(x.linear().size())
+        .add(values[0])
+        .add_scaled(x, values[1] - values[0])
+        .build();
 }
 
 Expr circuit_2bit(const std::array<FieldElement, 4>& values, Transcript& transcript, const Expr& x, const Expr& y) {
     Expr xy = transcript.mul(x, y);
-    return Expr(values[0])
-        + x * (values[1] - values[0])
-        + y * (values[2] - values[0])
-        + xy * (values[0] + values[3] - values[1] - values[2]);
+    return ExprBuilder::reserved(x.linear().size() + y.linear().size() + xy.linear().size())
+        .add(values[0])
+        .add_scaled(x, values[1] - values[0])
+        .add_scaled(y, values[2] - values[0])
+        .add_scaled(xy, values[0] + values[3] - values[1] - values[2])
+        .build();
 }
 
 Expr circuit_3bit(const std::array<FieldElement, 8>& values, Transcript& transcript, const Expr& x, const Expr& y, const Expr& z) {
@@ -637,14 +642,17 @@ Expr circuit_3bit(const std::array<FieldElement, 8>& values, Transcript& transcr
     Expr yz = transcript.mul(y, z);
     Expr zx = transcript.mul(z, x);
     Expr xyz = transcript.mul(xy, z);
-    return Expr(values[0])
-        + x * (values[1] - values[0])
-        + y * (values[2] - values[0])
-        + z * (values[4] - values[0])
-        + xy * (values[0] + values[3] - values[1] - values[2])
-        + zx * (values[0] + values[5] - values[1] - values[4])
-        + yz * (values[0] + values[6] - values[2] - values[4])
-        + xyz * (values[1] + values[2] + values[4] + values[7] - values[0] - values[3] - values[5] - values[6]);
+    return ExprBuilder::reserved(x.linear().size() + y.linear().size() + z.linear().size()
+                                 + xy.linear().size() + yz.linear().size() + zx.linear().size() + xyz.linear().size())
+        .add(values[0])
+        .add_scaled(x, values[1] - values[0])
+        .add_scaled(y, values[2] - values[0])
+        .add_scaled(z, values[4] - values[0])
+        .add_scaled(xy, values[0] + values[3] - values[1] - values[2])
+        .add_scaled(zx, values[0] + values[5] - values[1] - values[4])
+        .add_scaled(yz, values[0] + values[6] - values[2] - values[4])
+        .add_scaled(xyz, values[1] + values[2] + values[4] + values[7] - values[0] - values[3] - values[5] - values[6])
+        .build();
 }
 
 ExprPoint circuit_1bit_point(const EllipticCurve& curve, const std::array<JacobianPoint, 2>& points,
@@ -687,14 +695,32 @@ ExprPoint circuit_optionally_negate_ec(const ExprPoint& point, Transcript& trans
 
 ExprPoint circuit_ec_add(Transcript& transcript, const ExprPoint& p1, const ExprPoint& p2) {
     Expr lambda = transcript.div(p2.second - p1.second, p2.first - p1.first);
-    Expr x = transcript.mul(lambda, lambda) - p1.first - p2.first;
-    Expr y = transcript.mul(lambda, p1.first - x) - p1.second;
+    Expr lambda_sq = transcript.mul(lambda, lambda);
+    Expr x = ExprBuilder::reserved(lambda_sq.linear().size() + p1.first.linear().size() + p2.first.linear().size())
+        .add(lambda_sq)
+        .subtract(p1.first)
+        .subtract(p2.first)
+        .build();
+    Expr delta = ExprBuilder::reserved(p1.first.linear().size() + x.linear().size())
+        .add(p1.first)
+        .subtract(x)
+        .build();
+    Expr lambda_delta = transcript.mul(lambda, delta);
+    Expr y = ExprBuilder::reserved(lambda_delta.linear().size() + p1.second.linear().size())
+        .add(lambda_delta)
+        .subtract(p1.second)
+        .build();
     return {x, y};
 }
 
 Expr circuit_ec_add_x(Transcript& transcript, const ExprPoint& p1, const ExprPoint& p2) {
     Expr lambda = transcript.div(p2.second - p1.second, p2.first - p1.first);
-    return transcript.mul(lambda, lambda) - p1.first - p2.first;
+    Expr lambda_sq = transcript.mul(lambda, lambda);
+    return ExprBuilder::reserved(lambda_sq.linear().size() + p1.first.linear().size() + p2.first.linear().size())
+        .add(lambda_sq)
+        .subtract(p1.first)
+        .subtract(p2.first)
+        .build();
 }
 
 Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
@@ -749,10 +775,29 @@ Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
 }
 
 Expr circuit_combine(Transcript& transcript, const Expr& x1, const Expr& x2) {
-    Expr u = x1;
-    Expr v = x2 * field_di();
-    return transcript.div(transcript.mul(u + v, transcript.mul(u, v) + Expr(field_a())) + Expr(FieldElement::from_int(2) * field_b()),
-                          transcript.mul(u - v, u - v));
+    Expr v = ExprBuilder::reserved(x2.linear().size())
+        .add_scaled(x2, field_di())
+        .build();
+    Expr u_plus_v = ExprBuilder::reserved(x1.linear().size() + v.linear().size())
+        .add(x1)
+        .add(v)
+        .build();
+    Expr uv = transcript.mul(x1, v);
+    Expr uv_plus_a = ExprBuilder::reserved(uv.linear().size())
+        .add(field_a())
+        .add(uv)
+        .build();
+    Expr numerator_mul = transcript.mul(u_plus_v, uv_plus_a);
+    Expr numerator = ExprBuilder::reserved(numerator_mul.linear().size())
+        .add(FieldElement::from_int(2) * field_b())
+        .add(numerator_mul)
+        .build();
+    Expr u_minus_v = ExprBuilder::reserved(x1.linear().size() + v.linear().size())
+        .add(x1)
+        .subtract(v)
+        .build();
+    Expr denominator = transcript.mul(u_minus_v, u_minus_v);
+    return transcript.div(numerator, denominator);
 }
 
 Result<CircuitMainResult> circuit_main(Transcript& transcript, const JacobianPoint& m1, const JacobianPoint& m2,

@@ -260,6 +260,23 @@ void test_equal_lowering(TestContext& ctx) {
     }
 }
 
+void test_expr_builder(TestContext& ctx) {
+    Transcript transcript;
+    Expr x = transcript.secret(FieldElement::from_int(3));
+    Expr y = transcript.secret(FieldElement::from_int(5));
+
+    Expr built = purify::ExprBuilder::reserved(x.linear().size() + y.linear().size())
+        .add(7)
+        .add_scaled(x, 2)
+        .add_scaled(y, -3)
+        .build();
+    Expr expected = Expr(7) + 2 * x - 3 * y;
+
+    ctx.expect(built == expected, "ExprBuilder flattens affine combinations equivalently");
+    ctx.expect(transcript.evaluate(built) == transcript.evaluate(expected),
+               "ExprBuilder preserves affine evaluation semantics");
+}
+
 void test_bppp_move_overload(TestContext& ctx) {
     purify::bppp::NormArgInputs inputs;
     Result<purify::bppp::NormArgProof> proof = purify::bppp::prove_norm_arg(std::move(inputs));
@@ -277,6 +294,7 @@ int main() {
     test_secret_key_validation(ctx);
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);
+    test_expr_builder(ctx);
     test_bppp_move_overload(ctx);
 
     if (ctx.failures != 0) {

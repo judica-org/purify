@@ -2,12 +2,15 @@
 
 #include <cctype>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <random>
+#include <sstream>
 #include <string>
 #include <string_view>
 
+#include "purify_bppp.hpp"
 #include "purify.hpp"
 
 namespace purify {
@@ -40,6 +43,27 @@ inline Bytes bytes_from_hex(std::string_view hex) {
         out.push_back(static_cast<unsigned char>((decode(filtered[i]) << 4) | decode(filtered[i + 1])));
     }
     return out;
+}
+
+template <std::size_t N>
+inline std::array<unsigned char, N> array_from_hex(std::string_view hex) {
+    Bytes bytes = bytes_from_hex(hex);
+    if (bytes.size() != N) {
+        throw std::runtime_error(std::format("Expected {} bytes of hex input", N));
+    }
+    std::array<unsigned char, N> out{};
+    std::copy(bytes.begin(), bytes.end(), out.begin());
+    return out;
+}
+
+template <typename ByteContainer>
+inline std::string hex_from_bytes(const ByteContainer& bytes) {
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    for (unsigned char byte : bytes) {
+        out << std::setw(2) << static_cast<unsigned>(byte);
+    }
+    return out.str();
 }
 
 inline UInt512 random_below(const UInt512& range) {
@@ -82,6 +106,8 @@ inline int run_cli(int argc, char** argv) {
         std::cout << "       " << argv[0] << " eval <seckey> <hexmsg>: evaluate the PRF\n";
         std::cout << "       " << argv[0] << " verifier <hexmsg> <pubkey>: output verifier circuit for a given message\n";
         std::cout << "       " << argv[0] << " prove <hexmsg> <seckey>: produce input for verifier\n";
+        std::cout << "       " << argv[0] << " run-circuit <hexmsg> <seckey>: build and evaluate the native verifier circuit\n";
+        std::cout << "       " << argv[0] << " commit-eval <seckey> <hexmsg> <blind32>: commit to the evaluated output\n";
     };
 
     try {
@@ -128,6 +154,36 @@ inline int run_cli(int argc, char** argv) {
             Bytes message = bytes_from_hex(argv[2]);
             UInt512 secret = UInt512::from_hex(argv[3]);
             prove(message, secret);
+            return 0;
+        }
+        if (command == "run-circuit") {
+            if (argc != 4) {
+                usage();
+                return 1;
+            }
+            Bytes message = bytes_from_hex(argv[2]);
+            UInt512 secret = UInt512::from_hex(argv[3]);
+            BulletproofWitnessData witness = prove_assignment_data(message, secret);
+            NativeBulletproofCircuit circuit = verifier_circuit(message, witness.public_key);
+            bool ok = circuit.evaluate(witness.assignment);
+            std::cout << "gates=" << circuit.n_gates << "\n";
+            std::cout << "constraints=" << circuit.c.size() << "\n";
+            std::cout << "commitments=" << circuit.n_commitments << "\n";
+            std::cout << (ok ? "ok" : "fail") << "\n";
+            return ok ? 0 : 1;
+        }
+        if (command == "commit-eval") {
+            if (argc != 5) {
+                usage();
+                return 1;
+            }
+            UInt512 secret = UInt512::from_hex(argv[2]);
+            Bytes message = bytes_from_hex(argv[3]);
+            auto blind = array_from_hex<32>(argv[4]);
+            auto committed = bppp::commit_output_witness(message, secret, blind);
+            std::cout << "pubkey=" << committed.public_key.to_hex() << "\n";
+            std::cout << "output=" << committed.output.to_hex() << "\n";
+            std::cout << "commit=" << hex_from_bytes(committed.commitment) << "\n";
             return 0;
         }
         std::cout << "Unknown command\n";

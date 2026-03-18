@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <cstdint>
 #include <format>
 #include <iomanip>
@@ -1229,6 +1230,184 @@ private:
     std::vector<Expr> eqs_;
 };
 
+struct BulletproofAssignmentData {
+    std::vector<FieldElement> left;
+    std::vector<FieldElement> right;
+    std::vector<FieldElement> output;
+    std::vector<FieldElement> commitments;
+
+    Bytes serialize() const {
+        if (left.size() != right.size() || left.size() != output.size()) {
+            throw std::runtime_error("Mismatched bulletproof assignment columns");
+        }
+
+        Bytes out;
+        out.reserve(4 + 4 + 8 + ((left.size() * 3) + commitments.size()) * 33);
+        auto append_u32_le = [&](std::uint32_t value) {
+            for (int i = 0; i < 4; ++i) {
+                out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
+            }
+        };
+        auto append_u64_le = [&](std::uint64_t value) {
+            for (int i = 0; i < 8; ++i) {
+                out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
+            }
+        };
+        auto write_column = [&](const std::vector<FieldElement>& column) {
+            for (const FieldElement& value : column) {
+                out.push_back(static_cast<unsigned char>(0x20));
+                std::array<unsigned char, 32> bytes = value.to_bytes_le();
+                out.insert(out.end(), bytes.begin(), bytes.end());
+            }
+        };
+
+        append_u32_le(1);
+        append_u32_le(static_cast<std::uint32_t>(commitments.size()));
+        append_u64_le(static_cast<std::uint64_t>(left.size()));
+        write_column(left);
+        write_column(right);
+        write_column(output);
+        write_column(commitments);
+        return out;
+    }
+};
+
+struct NativeBulletproofCircuitTerm {
+    std::size_t idx = 0;
+    FieldElement scalar;
+};
+
+struct NativeBulletproofCircuitRow {
+    std::vector<NativeBulletproofCircuitTerm> entries;
+
+    void add(std::size_t idx, const FieldElement& scalar) {
+        if (scalar.is_zero()) {
+            return;
+        }
+        entries.push_back({idx, scalar});
+    }
+};
+
+struct NativeBulletproofCircuit {
+    std::size_t n_gates = 0;
+    std::size_t n_commitments = 0;
+    std::size_t n_bits = 0;
+    std::vector<NativeBulletproofCircuitRow> wl;
+    std::vector<NativeBulletproofCircuitRow> wr;
+    std::vector<NativeBulletproofCircuitRow> wo;
+    std::vector<NativeBulletproofCircuitRow> wv;
+    std::vector<FieldElement> c;
+
+    NativeBulletproofCircuit() = default;
+
+    NativeBulletproofCircuit(std::size_t gates, std::size_t commitments, std::size_t bits = 0)
+        : n_gates(gates), n_commitments(commitments), n_bits(bits), wl(gates), wr(gates), wo(gates), wv(commitments) {}
+
+    void resize(std::size_t gates, std::size_t commitments, std::size_t bits = 0) {
+        n_gates = gates;
+        n_commitments = commitments;
+        n_bits = bits;
+        wl.assign(gates, {});
+        wr.assign(gates, {});
+        wo.assign(gates, {});
+        wv.assign(commitments, {});
+        c.clear();
+    }
+
+    bool has_valid_shape() const {
+        return wl.size() == n_gates
+            && wr.size() == n_gates
+            && wo.size() == n_gates
+            && wv.size() == n_commitments;
+    }
+
+    std::size_t add_constraint(const FieldElement& constant = FieldElement::zero()) {
+        c.push_back(constant);
+        return c.size() - 1;
+    }
+
+    void add_left_term(std::size_t gate_idx, std::size_t constraint_idx, const FieldElement& scalar) {
+        add_row_term(wl, n_gates, gate_idx, constraint_idx, scalar);
+    }
+
+    void add_right_term(std::size_t gate_idx, std::size_t constraint_idx, const FieldElement& scalar) {
+        add_row_term(wr, n_gates, gate_idx, constraint_idx, scalar);
+    }
+
+    void add_output_term(std::size_t gate_idx, std::size_t constraint_idx, const FieldElement& scalar) {
+        add_row_term(wo, n_gates, gate_idx, constraint_idx, scalar);
+    }
+
+    void add_commitment_term(std::size_t commitment_idx, std::size_t constraint_idx, const FieldElement& scalar) {
+        // W_V is accumulated against -V during evaluation, so store the negated coefficient here.
+        add_row_term(wv, n_commitments, commitment_idx, constraint_idx, scalar.negate());
+    }
+
+    bool evaluate(const BulletproofAssignmentData& assignment) const {
+        if (!has_valid_shape()) {
+            return false;
+        }
+        if (assignment.left.size() != n_gates || assignment.right.size() != n_gates || assignment.output.size() != n_gates) {
+            return false;
+        }
+        if (assignment.commitments.size() != n_commitments) {
+            return false;
+        }
+
+        for (std::size_t i = 0; i < n_gates; ++i) {
+            if (assignment.left[i] * assignment.right[i] != assignment.output[i]) {
+                return false;
+            }
+        }
+
+        std::vector<FieldElement> acc(c.size(), FieldElement::zero());
+        auto accumulate = [&](const std::vector<NativeBulletproofCircuitRow>& rows, const std::vector<FieldElement>& values) {
+            if (rows.size() != values.size()) {
+                return false;
+            }
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                for (const NativeBulletproofCircuitTerm& entry : rows[i].entries) {
+                    if (entry.idx >= acc.size()) {
+                        return false;
+                    }
+                    acc[entry.idx] = acc[entry.idx] + entry.scalar * values[i];
+                }
+            }
+            return true;
+        };
+        if (!accumulate(wl, assignment.left) || !accumulate(wr, assignment.right) || !accumulate(wo, assignment.output)) {
+            return false;
+        }
+        std::vector<FieldElement> negated_commitments;
+        negated_commitments.reserve(assignment.commitments.size());
+        for (const FieldElement& value : assignment.commitments) {
+            negated_commitments.push_back(value.negate());
+        }
+        if (!accumulate(wv, negated_commitments)) {
+            return false;
+        }
+
+        for (std::size_t i = 0; i < c.size(); ++i) {
+            if (acc[i] != c[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+private:
+    static void add_row_term(std::vector<NativeBulletproofCircuitRow>& rows, std::size_t expected_size,
+                             std::size_t row_idx, std::size_t constraint_idx, const FieldElement& scalar) {
+        if (rows.size() != expected_size) {
+            throw std::runtime_error("Circuit rows are not initialized");
+        }
+        if (row_idx >= rows.size()) {
+            throw std::runtime_error("Native circuit row index out of range");
+        }
+        rows[row_idx].add(constraint_idx, scalar);
+    }
+};
+
 class BulletproofTranscript {
 public:
     void replace_expr_v_with_bp_var(Expr& expr) {
@@ -1359,7 +1538,72 @@ public:
         return true;
     }
 
-    Bytes serialize_assignment(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
+    NativeBulletproofCircuit native_circuit() const {
+        NativeBulletproofCircuit circuit;
+        circuit.n_gates = n_muls_;
+        circuit.n_commitments = n_commitments_;
+        circuit.n_bits = n_bits_;
+        circuit.wl.resize(n_muls_);
+        circuit.wr.resize(n_muls_);
+        circuit.wo.resize(n_muls_);
+        circuit.wv.resize(n_commitments_);
+
+        auto parse_symbol = [](std::string_view symbol) -> std::pair<char, std::size_t> {
+            if (symbol.size() < 2) {
+                throw std::runtime_error("Invalid circuit symbol");
+            }
+            std::size_t index = 0;
+            auto result = std::from_chars(symbol.data() + 1, symbol.data() + symbol.size(), index);
+            if (result.ec != std::errc() || result.ptr != symbol.data() + symbol.size()) {
+                throw std::runtime_error("Invalid circuit symbol index");
+            }
+            return {symbol.front(), index};
+        };
+        auto append_constraint = [&](const Expr& lhs, const Expr& rhs) {
+            Expr combined = lhs - rhs;
+            std::size_t constraint_idx = circuit.c.size();
+            circuit.c.push_back(combined.constant().negate());
+            for (const auto& term : combined.linear()) {
+                auto [kind, index] = parse_symbol(term.first);
+                if (kind == 'L') {
+                    if (index >= circuit.wl.size()) {
+                        throw std::runtime_error("L index out of range");
+                    }
+                    circuit.wl[index].add(constraint_idx, term.second);
+                } else if (kind == 'R') {
+                    if (index >= circuit.wr.size()) {
+                        throw std::runtime_error("R index out of range");
+                    }
+                    circuit.wr[index].add(constraint_idx, term.second);
+                } else if (kind == 'O') {
+                    if (index >= circuit.wo.size()) {
+                        throw std::runtime_error("O index out of range");
+                    }
+                    circuit.wo[index].add(constraint_idx, term.second);
+                } else if (kind == 'V') {
+                    if (index >= circuit.wv.size()) {
+                        throw std::runtime_error("V index out of range");
+                    }
+                    // Match the W_V convention used by NativeBulletproofCircuit::evaluate().
+                    circuit.wv[index].add(constraint_idx, term.second.negate());
+                } else {
+                    throw std::runtime_error("Unsupported native circuit symbol: " + term.first);
+                }
+            }
+        };
+
+        for (const auto& assignment : assignments_) {
+            if (!assignment.is_v) {
+                append_constraint(Expr::variable(assignment.symbol), assignment.expr);
+            }
+        }
+        for (const auto& constraint : constraints_) {
+            append_constraint(constraint.first, constraint.second);
+        }
+        return circuit;
+    }
+
+    BulletproofAssignmentData assignment_data(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
         std::unordered_map<std::string, FieldElement> values;
         values.reserve(vars.size() + assignments_.size() + v_to_a_.size());
         for (const auto& item : vars) {
@@ -1378,34 +1622,37 @@ public:
             values[assignment.symbol] = evaluate_known(assignment.expr, values);
         }
 
-        Bytes out;
-        out.reserve(4 + 4 + 8 + ((n_muls_ * 3) + 1) * 33);
-        append_u32_le(out, 1);
-        append_u32_le(out, static_cast<std::uint32_t>(n_commitments_));
-        append_u64_le(out, static_cast<std::uint64_t>(n_muls_));
-        auto write_column = [&](std::string_view prefix) {
+        BulletproofAssignmentData assignment;
+        assignment.left.reserve(n_muls_);
+        assignment.right.reserve(n_muls_);
+        assignment.output.reserve(n_muls_);
+        assignment.commitments.reserve(n_commitments_);
+        auto read_column = [&](std::string_view prefix, std::vector<FieldElement>& column) {
             for (std::size_t i = 0; i < n_muls_; ++i) {
-                out.push_back(static_cast<unsigned char>(0x20));
                 std::string key = std::format("{}{}", prefix, i);
                 auto it = values.find(key);
                 if (it == values.end()) {
                     throw std::runtime_error("Missing serialized assignment column " + key);
                 }
-                std::array<unsigned char, 32> bytes = it->second.to_bytes_le();
-                out.insert(out.end(), bytes.begin(), bytes.end());
+                column.push_back(it->second);
             }
         };
-        write_column("L");
-        write_column("R");
-        write_column("O");
-        out.push_back(static_cast<unsigned char>(0x20));
-        auto it = values.find("V0");
-        if (it == values.end()) {
-            throw std::runtime_error("Missing serialized commitment V0");
+        read_column("L", assignment.left);
+        read_column("R", assignment.right);
+        read_column("O", assignment.output);
+        for (std::size_t i = 0; i < n_commitments_; ++i) {
+            std::string key = std::format("V{}", i);
+            auto it = values.find(key);
+            if (it == values.end()) {
+                throw std::runtime_error("Missing serialized commitment " + key);
+            }
+            assignment.commitments.push_back(it->second);
         }
-        std::array<unsigned char, 32> commitment_bytes = it->second.to_bytes_le();
-        out.insert(out.end(), commitment_bytes.begin(), commitment_bytes.end());
-        return out;
+        return assignment;
+    }
+
+    Bytes serialize_assignment(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
+        return assignment_data(vars).serialize();
     }
 
 private:
@@ -1425,18 +1672,6 @@ private:
             out = out + it->second * term.second;
         }
         return out;
-    }
-
-    static void append_u32_le(Bytes& out, std::uint32_t value) {
-        for (int i = 0; i < 4; ++i) {
-            out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-        }
-    }
-
-    static void append_u64_le(Bytes& out, std::uint64_t value) {
-        for (int i = 0; i < 8; ++i) {
-            out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-        }
     }
 
     std::vector<Assignment> assignments_;
@@ -1622,6 +1857,12 @@ struct GeneratedKey {
     UInt512 public_key;
 };
 
+struct BulletproofWitnessData {
+    UInt512 public_key;
+    FieldElement output;
+    BulletproofAssignmentData assignment;
+};
+
 inline UInt512 key_space_size() {
     static const UInt512 value = multiply(half_n1(), half_n2());
     return value;
@@ -1654,7 +1895,18 @@ inline std::string verifier(const Bytes& message, const UInt512& pubkey) {
     return bp.to_string();
 }
 
-inline Bytes prove_assignment(const Bytes& message, const UInt512& secret) {
+inline NativeBulletproofCircuit verifier_circuit(const Bytes& message, const UInt512& pubkey) {
+    JacobianPoint m1 = hash_to_curve(bytes_from_ascii("Eval/1/") + message, curve1());
+    JacobianPoint m2 = hash_to_curve(bytes_from_ascii("Eval/2/") + message, curve2());
+    Transcript transcript;
+    CircuitMainResult result = circuit_main(transcript, m1, m2);
+    BulletproofTranscript bp;
+    bp.from_transcript(transcript, result.n_bits);
+    bp.add_pubkey_and_out(pubkey, result.p1x, result.p2x, result.out);
+    return bp.native_circuit();
+}
+
+inline BulletproofWitnessData prove_assignment_data(const Bytes& message, const UInt512& secret) {
     auto unpacked = unpack_secret(secret);
     JacobianPoint m1 = hash_to_curve(bytes_from_ascii("Eval/1/") + message, curve1());
     JacobianPoint m2 = hash_to_curve(bytes_from_ascii("Eval/2/") + message, curve2());
@@ -1691,7 +1943,19 @@ inline Bytes prove_assignment(const Bytes& message, const UInt512& secret) {
     } else {
         vars["V0"] = native_out;
     }
-    return bp.serialize_assignment(vars);
+    return {pubkey, native_out, bp.assignment_data(vars)};
+}
+
+inline bool evaluate_verifier_circuit(const Bytes& message, const BulletproofWitnessData& witness) {
+    return verifier_circuit(message, witness.public_key).evaluate(witness.assignment);
+}
+
+inline bool evaluate_verifier_circuit(const Bytes& message, const UInt512& secret) {
+    return evaluate_verifier_circuit(message, prove_assignment_data(message, secret));
+}
+
+inline Bytes prove_assignment(const Bytes& message, const UInt512& secret) {
+    return prove_assignment_data(message, secret).assignment.serialize();
 }
 
 }  // namespace purify

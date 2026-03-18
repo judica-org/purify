@@ -1,0 +1,6 @@
+[submodule "third_party/secp256k1-zkp"]
+	path = third_party/secp256k1-zkp
+	url = https://github.com/BlockstreamResearch/secp256k1-zkp.git
+[submodule "third_party/nanobench"]
+	path = third_party/nanobench
+	url = https://github.com/martinus/nanobench

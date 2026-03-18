@@ -4,3 +4,13 @@
 [submodule "third_party/nanobench"]
 	path = third_party/nanobench
 	url = https://github.com/martinus/nanobench
+[submodule "reference/purify"]
+	path = reference/purify
+	url = https://github.com/jonasnick/purify.git
+	branch = master
+	shallow = true
+[submodule "reference/secp256k1-zkp"]
+	path = reference/secp256k1-zkp
+	url = https://github.com/jonasnick/secp256k1-zkp.git
+	branch = bulletproof-musig-dn-benches
+	shallow = true

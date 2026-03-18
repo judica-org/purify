@@ -42,6 +42,7 @@ add_library(purify_bppp_support STATIC
 target_include_directories(purify_bppp_support
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
 purify_enable_warnings(purify_bppp_support)

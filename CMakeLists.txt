@@ -43,7 +43,7 @@ add_library(purify
 add_library(purify::purify ALIAS purify)
 add_library(purify_bppp_support ALIAS purify)
 
-target_compile_features(purify PUBLIC cxx_std_20)
+target_compile_features(purify PUBLIC cxx_std_23)
 
 set_target_properties(purify PROPERTIES
     C_STANDARD 11

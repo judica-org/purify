@@ -322,7 +322,7 @@ inline const EllipticCurve& curve2() {
 }
 
 /** @brief Hashes arbitrary data onto the supplied curve by rejection sampling x-coordinates. */
-inline JacobianPoint hash_to_curve(const Bytes& data, const EllipticCurve& curve) {
+inline Result<JacobianPoint> hash_to_curve(const Bytes& data, const EllipticCurve& curve) {
     for (int i = 0; i < 256; ++i) {
         Bytes info{static_cast<unsigned char>(i)};
         std::optional<UInt320> value = hash_to_int(data, two_p(), info);
@@ -330,7 +330,12 @@ inline JacobianPoint hash_to_curve(const Bytes& data, const EllipticCurve& curve
             continue;
         }
         UInt320 x_candidate = value->shifted_right(1);
-        FieldElement x = FieldElement::from_uint256(narrow<4>(x_candidate));
+        Result<UInt256> narrowed = try_narrow<4>(x_candidate);
+        assert(narrowed.has_value() && "hash_to_curve() x-coordinate candidate should fit in 256 bits");
+        if (!narrowed.has_value()) {
+            return unexpected_error(ErrorCode::InternalMismatch, "hash_to_curve:narrow_x_candidate");
+        }
+        FieldElement x = FieldElement::from_uint256(*narrowed);
         if (curve.is_x_coord(x)) {
             std::optional<JacobianPoint> point = curve.lift_x(x);
             if (!point.has_value()) {
@@ -342,16 +347,16 @@ inline JacobianPoint hash_to_curve(const Bytes& data, const EllipticCurve& curve
             return *point;
         }
     }
-    throw std::runtime_error("hash_to_curve failed");
+    return unexpected_error(ErrorCode::HashToCurveExhausted, "hash_to_curve:exhausted_retries");
 }
 
 /** @brief Returns the fixed generator for the first curve. */
 inline const JacobianPoint& generator1() {
     static const JacobianPoint value = [] {
-        JacobianPoint point = hash_to_curve(bytes_from_ascii("Generator/1"), curve1());
-        if (!curve1().mul(point, order_n1()).infinity) {
-            throw std::runtime_error("G1 order check failed");
-        }
+        Result<JacobianPoint> point_result = hash_to_curve(bytes_from_ascii("Generator/1"), curve1());
+        assert(point_result.has_value() && "generator1() hash_to_curve should not exhaust");
+        JacobianPoint point = *point_result;
+        assert(curve1().mul(point, order_n1()).infinity && "generator1() subgroup order check failed");
         return point;
     }();
     return value;
@@ -360,10 +365,10 @@ inline const JacobianPoint& generator1() {
 /** @brief Returns the fixed generator for the second curve. */
 inline const JacobianPoint& generator2() {
     static const JacobianPoint value = [] {
-        JacobianPoint point = hash_to_curve(bytes_from_ascii("Generator/2"), curve2());
-        if (!curve2().mul(point, order_n2()).infinity) {
-            throw std::runtime_error("G2 order check failed");
-        }
+        Result<JacobianPoint> point_result = hash_to_curve(bytes_from_ascii("Generator/2"), curve2());
+        assert(point_result.has_value() && "generator2() hash_to_curve should not exhaust");
+        JacobianPoint point = *point_result;
+        assert(curve2().mul(point, order_n2()).infinity && "generator2() subgroup order check failed");
         return point;
     }();
     return value;
@@ -401,10 +406,10 @@ inline FieldElement combine(const FieldElement& x1, const FieldElement& x2) {
 }
 
 /** @brief Encodes a scalar into the signed 3-bit window bit schedule used by the circuit. */
-inline std::vector<int> key_to_bits(UInt256 n, int bits) {
+inline Result<std::vector<int>> key_to_bits(UInt256 n, int bits) {
     n.sub_assign(UInt256::one());
     if (static_cast<int>(n.bit_length()) > bits) {
-        throw std::runtime_error("Key out of range");
+        return unexpected_error(ErrorCode::RangeViolation, "key_to_bits:out_of_range");
     }
     std::vector<int> out(bits);
     for (int i = 0; i < bits; ++i) {

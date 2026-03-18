@@ -32,9 +32,9 @@ GeneratorBytes value_generator_h();
 /**
  * @brief Expands the BPPP generator list.
  * @param count Number of generators requested.
- * @return Serialized generator points.
+ * @return Serialized generator points, or a BPPP input/backend error.
  */
-std::vector<PointBytes> create_generators(std::size_t count);
+Result<std::vector<PointBytes>> create_generators(std::size_t count);
 
 /**
  * @brief Computes a Pedersen commitment to an arbitrary 32-byte scalar value.
@@ -42,11 +42,11 @@ std::vector<PointBytes> create_generators(std::size_t count);
  * @param value Committed scalar value.
  * @param value_gen Generator used for the value term.
  * @param blind_gen Generator used for the blind term.
- * @return Serialized compressed commitment point.
+ * @return Serialized compressed commitment point, or a backend rejection error.
  */
-PointBytes pedersen_commit_char(const ScalarBytes& blind, const ScalarBytes& value,
-                                const GeneratorBytes& value_gen = value_generator_h(),
-                                const GeneratorBytes& blind_gen = base_generator());
+Result<PointBytes> pedersen_commit_char(const ScalarBytes& blind, const ScalarBytes& value,
+                                        const GeneratorBytes& value_gen = value_generator_h(),
+                                        const GeneratorBytes& blind_gen = base_generator());
 
 /**
  * @brief Serializes a Purify field element into the scalar encoding expected by the BPPP bridge.
@@ -93,9 +93,9 @@ struct NormArgProof {
 /**
  * @brief Produces a standalone BPPP norm argument.
  * @param inputs Prover inputs and optional generators.
- * @return Proof bundle containing all verifier-side inputs.
+ * @return Proof bundle containing all verifier-side inputs, or a BPPP input/backend error.
  */
-NormArgProof prove_norm_arg(const NormArgInputs& inputs);
+Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs);
 /**
  * @brief Verifies a standalone BPPP norm argument.
  * @param proof Proof bundle returned by prove_norm_arg.
@@ -120,13 +120,19 @@ struct CommittedPurifyWitness {
  * @param blind_gen Generator used for the blind term.
  * @return Witness bundle extended with the serialized output commitment.
  */
-inline CommittedPurifyWitness commit_output_witness(const Bytes& message, const UInt512& secret,
-                                                    const ScalarBytes& blind,
-                                                    const GeneratorBytes& value_gen = value_generator_h(),
-                                                    const GeneratorBytes& blind_gen = base_generator()) {
-    BulletproofWitnessData witness = prove_assignment_data(message, secret);
-    return {witness.public_key, witness.output, std::move(witness.assignment),
-            pedersen_commit_char(blind, scalar_bytes(witness.output), value_gen, blind_gen)};
+inline Result<CommittedPurifyWitness> commit_output_witness(const Bytes& message, const UInt512& secret,
+                                                            const ScalarBytes& blind,
+                                                            const GeneratorBytes& value_gen = value_generator_h(),
+                                                            const GeneratorBytes& blind_gen = base_generator()) {
+    Result<BulletproofWitnessData> witness = prove_assignment_data(message, secret);
+    if (!witness.has_value()) {
+        return unexpected_error(witness.error(), "commit_output_witness:prove_assignment_data");
+    }
+    Result<PointBytes> commitment = pedersen_commit_char(blind, scalar_bytes(witness->output), value_gen, blind_gen);
+    if (!commitment.has_value()) {
+        return unexpected_error(commitment.error(), "commit_output_witness:pedersen_commit_char");
+    }
+    return CommittedPurifyWitness{witness->public_key, witness->output, std::move(witness->assignment), *commitment};
 }
 
 }  // namespace purify::bppp

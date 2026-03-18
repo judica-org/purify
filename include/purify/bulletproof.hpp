@@ -22,9 +22,9 @@ struct BulletproofAssignmentData {
     std::vector<FieldElement> commitments;
 
     /** @brief Serializes the witness columns in the legacy assignment blob format. */
-    Bytes serialize() const {
+    Result<Bytes> serialize() const {
         if (left.size() != right.size() || left.size() != output.size()) {
-            throw std::runtime_error("Mismatched bulletproof assignment columns");
+            return unexpected_error(ErrorCode::SizeMismatch, "BulletproofAssignmentData::serialize:column_sizes");
         }
 
         Bytes out;
@@ -202,12 +202,8 @@ private:
     /** @brief Shared bounds-checked helper for appending a sparse term to one matrix family. */
     static void add_row_term(std::vector<NativeBulletproofCircuitRow>& rows, std::size_t expected_size,
                              std::size_t row_idx, std::size_t constraint_idx, const FieldElement& scalar) {
-        if (rows.size() != expected_size) {
-            throw std::runtime_error("Circuit rows are not initialized");
-        }
-        if (row_idx >= rows.size()) {
-            throw std::runtime_error("Native circuit row index out of range");
-        }
+        assert(rows.size() == expected_size && "NativeBulletproofCircuit rows must be initialized before adding terms");
+        assert(row_idx < rows.size() && "NativeBulletproofCircuit row index out of range");
         rows[row_idx].add(constraint_idx, scalar);
     }
 };
@@ -331,12 +327,16 @@ public:
         for (const auto& item : v_to_a_order_) {
             auto it = values.find(item.first);
             if (it == values.end()) {
-                throw std::runtime_error("Missing mapped assignment value for " + item.first);
+                return false;
             }
             values[item.second] = it->second;
         }
         for (const auto& assignment : assignments_) {
-            values[assignment.symbol] = evaluate_known(assignment.expr, values);
+            Result<FieldElement> evaluated = evaluate_known(assignment.expr, values);
+            if (!evaluated.has_value()) {
+                return false;
+            }
+            values[assignment.symbol] = *evaluated;
         }
         for (std::size_t i = 0; i < n_muls_; ++i) {
             std::string suffix = std::format("{}", i);
@@ -345,7 +345,9 @@ public:
             }
         }
         for (const auto& constraint : constraints_) {
-            if (evaluate_known(constraint.first, values) != evaluate_known(constraint.second, values)) {
+            Result<FieldElement> lhs = evaluate_known(constraint.first, values);
+            Result<FieldElement> rhs = evaluate_known(constraint.second, values);
+            if (!lhs.has_value() || !rhs.has_value() || *lhs != *rhs) {
                 return false;
             }
         }
@@ -368,13 +370,15 @@ public:
             + constraints_.size());
 
         auto parse_symbol = [](std::string_view symbol) -> std::pair<char, std::size_t> {
+            assert(symbol.size() >= 2 && "native_circuit() requires well-formed symbols");
             if (symbol.size() < 2) {
-                throw std::runtime_error("Invalid circuit symbol");
+                return {'?', 0};
             }
             std::size_t index = 0;
             auto result = std::from_chars(symbol.data() + 1, symbol.data() + symbol.size(), index);
             if (result.ec != std::errc() || result.ptr != symbol.data() + symbol.size()) {
-                throw std::runtime_error("Invalid circuit symbol index");
+                assert(false && "native_circuit() requires symbols with numeric indices");
+                return {'?', 0};
             }
             return {symbol.front(), index};
         };
@@ -385,27 +389,19 @@ public:
             for (const auto& term : combined.linear()) {
                 auto [kind, index] = parse_symbol(term.first);
                 if (kind == 'L') {
-                    if (index >= circuit.wl.size()) {
-                        throw std::runtime_error("L index out of range");
-                    }
+                    assert(index < circuit.wl.size() && "native_circuit() L index out of range");
                     circuit.wl[index].add(constraint_idx, term.second);
                 } else if (kind == 'R') {
-                    if (index >= circuit.wr.size()) {
-                        throw std::runtime_error("R index out of range");
-                    }
+                    assert(index < circuit.wr.size() && "native_circuit() R index out of range");
                     circuit.wr[index].add(constraint_idx, term.second);
                 } else if (kind == 'O') {
-                    if (index >= circuit.wo.size()) {
-                        throw std::runtime_error("O index out of range");
-                    }
+                    assert(index < circuit.wo.size() && "native_circuit() O index out of range");
                     circuit.wo[index].add(constraint_idx, term.second);
                 } else if (kind == 'V') {
-                    if (index >= circuit.wv.size()) {
-                        throw std::runtime_error("V index out of range");
-                    }
+                    assert(index < circuit.wv.size() && "native_circuit() V index out of range");
                     circuit.wv[index].add(constraint_idx, term.second.negate());
                 } else {
-                    throw std::runtime_error("Unsupported native circuit symbol: " + term.first);
+                    assert(false && "native_circuit() encountered an unsupported symbol kind");
                 }
             }
         };
@@ -422,7 +418,7 @@ public:
     }
 
     /** @brief Materializes the witness columns expected by the native circuit representation. */
-    BulletproofAssignmentData assignment_data(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
+    Result<BulletproofAssignmentData> assignment_data(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
         std::unordered_map<std::string, FieldElement> values;
         values.reserve(vars.size() + assignments_.size() + v_to_a_.size());
         for (const auto& item : vars) {
@@ -433,12 +429,16 @@ public:
         for (const auto& item : v_to_a_order_) {
             auto it = values.find(item.first);
             if (it == values.end()) {
-                throw std::runtime_error("Missing mapped write-assignment value for " + item.first);
+                return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:mapped_value");
             }
             values[item.second] = it->second;
         }
         for (const auto& assignment : assignments_) {
-            values[assignment.symbol] = evaluate_known(assignment.expr, values);
+            Result<FieldElement> evaluated = evaluate_known(assignment.expr, values);
+            if (!evaluated.has_value()) {
+                return unexpected_error(evaluated.error(), "BulletproofTranscript::assignment_data:evaluate_assignment");
+            }
+            values[assignment.symbol] = *evaluated;
         }
 
         BulletproofAssignmentData assignment;
@@ -446,24 +446,34 @@ public:
         assignment.right.reserve(n_muls_);
         assignment.output.reserve(n_muls_);
         assignment.commitments.reserve(n_commitments_);
-        auto read_column = [&](std::string_view prefix, std::vector<FieldElement>& column) {
+        auto read_column = [&](std::string_view prefix, std::vector<FieldElement>& column) -> Status {
             for (std::size_t i = 0; i < n_muls_; ++i) {
                 std::string key = std::format("{}{}", prefix, i);
                 auto it = values.find(key);
                 if (it == values.end()) {
-                    throw std::runtime_error("Missing serialized assignment column " + key);
+                    return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:column_value");
                 }
                 column.push_back(it->second);
             }
+            return {};
         };
-        read_column("L", assignment.left);
-        read_column("R", assignment.right);
-        read_column("O", assignment.output);
+        Status left_status = read_column("L", assignment.left);
+        if (!left_status.has_value()) {
+            return unexpected_error(left_status.error(), "BulletproofTranscript::assignment_data:left_column");
+        }
+        Status right_status = read_column("R", assignment.right);
+        if (!right_status.has_value()) {
+            return unexpected_error(right_status.error(), "BulletproofTranscript::assignment_data:right_column");
+        }
+        Status output_status = read_column("O", assignment.output);
+        if (!output_status.has_value()) {
+            return unexpected_error(output_status.error(), "BulletproofTranscript::assignment_data:output_column");
+        }
         for (std::size_t i = 0; i < n_commitments_; ++i) {
             std::string key = std::format("V{}", i);
             auto it = values.find(key);
             if (it == values.end()) {
-                throw std::runtime_error("Missing serialized commitment " + key);
+                return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:commitment");
             }
             assignment.commitments.push_back(it->second);
         }
@@ -471,8 +481,12 @@ public:
     }
 
     /** @brief Serializes the derived witness assignment using the legacy blob format. */
-    Bytes serialize_assignment(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
-        return assignment_data(vars).serialize();
+    Result<Bytes> serialize_assignment(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
+        Result<BulletproofAssignmentData> assignment = assignment_data(vars);
+        if (!assignment.has_value()) {
+            return unexpected_error(assignment.error(), "BulletproofTranscript::serialize_assignment:assignment_data");
+        }
+        return assignment->serialize();
     }
 
 private:
@@ -482,13 +496,13 @@ private:
         bool is_v;
     };
 
-    /** @brief Evaluates an expression using a fully known variable map and throws on missing values. */
-    static FieldElement evaluate_known(const Expr& expr, const std::unordered_map<std::string, FieldElement>& values) {
+    /** @brief Evaluates an expression using a fully known variable map. */
+    static Result<FieldElement> evaluate_known(const Expr& expr, const std::unordered_map<std::string, FieldElement>& values) {
         FieldElement out = expr.constant();
         for (const auto& term : expr.linear()) {
             auto it = values.find(term.first);
             if (it == values.end()) {
-                throw std::runtime_error("Missing assignment value");
+                return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::evaluate_known:missing_term");
             }
             out = out + it->second * term.second;
         }
@@ -666,8 +680,12 @@ inline CircuitMainResult circuit_main(Transcript& transcript, const JacobianPoin
     std::vector<int> z1_values(z1_bits_len, -1);
     std::vector<int> z2_values(z2_bits_len, -1);
     if (z1.has_value() && z2.has_value()) {
-        z1_values = key_to_bits(*z1, z1_bits_len);
-        z2_values = key_to_bits(*z2, z2_bits_len);
+        Result<std::vector<int>> z1_result = key_to_bits(*z1, z1_bits_len);
+        Result<std::vector<int>> z2_result = key_to_bits(*z2, z2_bits_len);
+        assert(z1_result.has_value() && "circuit_main() expects z1 to be in range");
+        assert(z2_result.has_value() && "circuit_main() expects z2 to be in range");
+        z1_values = *z1_result;
+        z2_values = *z2_result;
     }
     std::vector<Expr> z1_bits;
     std::vector<Expr> z2_bits;

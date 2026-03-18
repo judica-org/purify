@@ -10,7 +10,6 @@
 #include "purify_bppp.hpp"
 
 #include <algorithm>
-#include <stdexcept>
 #include <vector>
 
 #include "purify_bppp_bridge.h"
@@ -38,37 +37,41 @@ std::vector<unsigned char> flatten_scalars(const std::vector<ScalarBytes>& scala
     return out;
 }
 
-/** @brief Throws when a bridge call signals failure. */
-void require_ok(int ok, const char* message) {
-    if (ok == 0) {
-        throw std::runtime_error(message);
-    }
+/** @brief Returns true when a bridge call signals success. */
+bool require_ok(int ok) {
+    return ok != 0;
 }
 
 }  // namespace
 
 GeneratorBytes base_generator() {
     GeneratorBytes out{};
-    require_ok(purify_bppp_base_generator(out.data()), "Unable to serialize base generator");
+    bool ok = require_ok(purify_bppp_base_generator(out.data()));
+    assert(ok && "base_generator() requires a functioning backend");
+    (void)ok;
     return out;
 }
 
 GeneratorBytes value_generator_h() {
     GeneratorBytes out{};
-    require_ok(purify_bppp_value_generator_h(out.data()), "Unable to serialize alternate generator");
+    bool ok = require_ok(purify_bppp_value_generator_h(out.data()));
+    assert(ok && "value_generator_h() requires a functioning backend");
+    (void)ok;
     return out;
 }
 
-std::vector<PointBytes> create_generators(std::size_t count) {
+Result<std::vector<PointBytes>> create_generators(std::size_t count) {
     std::vector<PointBytes> out(count);
     std::size_t serialized_len = count * PointBytes{}.size();
     if (count == 0) {
         return out;
     }
     std::vector<unsigned char> serialized(serialized_len);
-    require_ok(purify_bppp_create_generators(count, serialized.data(), &serialized_len), "Unable to create BPPP generators");
+    if (!require_ok(purify_bppp_create_generators(count, serialized.data(), &serialized_len))) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "create_generators:backend");
+    }
     if (serialized_len != serialized.size()) {
-        throw std::runtime_error("Unexpected BPPP generator serialization length");
+        return unexpected_error(ErrorCode::UnexpectedSize, "create_generators:serialized_len");
     }
     for (std::size_t i = 0; i < count; ++i) {
         std::copy_n(serialized.data() + i * PointBytes{}.size(), PointBytes{}.size(), out[i].data());
@@ -76,25 +79,31 @@ std::vector<PointBytes> create_generators(std::size_t count) {
     return out;
 }
 
-PointBytes pedersen_commit_char(const ScalarBytes& blind, const ScalarBytes& value,
-                                const GeneratorBytes& value_gen, const GeneratorBytes& blind_gen) {
+Result<PointBytes> pedersen_commit_char(const ScalarBytes& blind, const ScalarBytes& value,
+                                        const GeneratorBytes& value_gen, const GeneratorBytes& blind_gen) {
     PointBytes commitment{};
-    require_ok(purify_pedersen_commit_char(blind.data(), value.data(), value_gen.data(), blind_gen.data(), commitment.data()),
-               "Unable to compute Pedersen commitment");
+    if (!require_ok(purify_pedersen_commit_char(blind.data(), value.data(), value_gen.data(), blind_gen.data(), commitment.data()))) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "pedersen_commit_char:backend");
+    }
     return commitment;
 }
 
-NormArgProof prove_norm_arg(const NormArgInputs& inputs) {
+Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs) {
     if (inputs.n_vec.empty() || inputs.l_vec.empty() || inputs.c_vec.empty()) {
-        throw std::runtime_error("BPPP vectors must be non-empty");
+        return unexpected_error(ErrorCode::EmptyInput, "prove_norm_arg:empty_vectors");
     }
     if (inputs.l_vec.size() != inputs.c_vec.size()) {
-        throw std::runtime_error("BPPP l_vec and c_vec must have the same length");
+        return unexpected_error(ErrorCode::SizeMismatch, "prove_norm_arg:l_c_size_mismatch");
     }
 
-    std::vector<PointBytes> generators = inputs.generators.empty()
-        ? create_generators(inputs.n_vec.size() + inputs.l_vec.size())
-        : inputs.generators;
+    std::vector<PointBytes> generators = inputs.generators;
+    if (generators.empty()) {
+        Result<std::vector<PointBytes>> generated = create_generators(inputs.n_vec.size() + inputs.l_vec.size());
+        if (!generated.has_value()) {
+            return unexpected_error(generated.error(), "prove_norm_arg:create_generators");
+        }
+        generators = std::move(*generated);
+    }
     std::vector<unsigned char> generator_bytes = flatten_points(generators);
     std::vector<unsigned char> n_vec = flatten_scalars(inputs.n_vec);
     std::vector<unsigned char> l_vec = flatten_scalars(inputs.l_vec);
@@ -104,15 +113,16 @@ NormArgProof prove_norm_arg(const NormArgInputs& inputs) {
     Bytes proof(proof_len);
 
     if (proof_len == 0) {
-        throw std::runtime_error("Invalid BPPP proof dimensions");
+        return unexpected_error(ErrorCode::InvalidDimensions, "prove_norm_arg:proof_len_zero");
     }
-    require_ok(purify_bppp_prove_norm_arg(inputs.rho.data(), generator_bytes.data(), generators.size(),
-                                          n_vec.data(), inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
-                                          c_vec.data(), inputs.c_vec.size(), commitment.data(), proof.data(), &proof_len),
-               "Unable to produce BPPP norm argument");
+    if (!require_ok(purify_bppp_prove_norm_arg(inputs.rho.data(), generator_bytes.data(), generators.size(),
+                                               n_vec.data(), inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
+                                               c_vec.data(), inputs.c_vec.size(), commitment.data(), proof.data(), &proof_len))) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "prove_norm_arg:backend");
+    }
     proof.resize(proof_len);
 
-    return {inputs.rho, std::move(generators), inputs.c_vec, inputs.n_vec.size(), commitment, std::move(proof)};
+    return NormArgProof{inputs.rho, std::move(generators), inputs.c_vec, inputs.n_vec.size(), commitment, std::move(proof)};
 }
 
 bool verify_norm_arg(const NormArgProof& proof) {

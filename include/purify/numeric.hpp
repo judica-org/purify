@@ -52,7 +52,7 @@ struct BigUInt {
     }
 
     /** @brief Parses a hexadecimal string, ignoring optional `0x` and whitespace. */
-    static BigUInt from_hex(std::string_view hex) {
+    static Result<BigUInt> try_from_hex(std::string_view hex) {
         BigUInt out;
         if (hex.size() >= 2 && hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
             hex.remove_prefix(2);
@@ -69,12 +69,24 @@ struct BigUInt {
             } else if (ch >= 'A' && ch <= 'F') {
                 value = static_cast<unsigned>(10 + ch - 'A');
             } else {
-                throw std::runtime_error("Invalid hex character");
+                return unexpected_error(ErrorCode::InvalidHex, "BigUInt::try_from_hex:invalid_digit");
             }
-            out.mul_small(16);
-            out.add_small(value);
+            if (!out.try_mul_small(16) || !out.try_add_small(value)) {
+                return unexpected_error(ErrorCode::Overflow, "BigUInt::try_from_hex:overflow");
+            }
         }
         return out;
+    }
+
+    /**
+     * @brief Parses a hexadecimal string with the precondition that the value fits exactly.
+     *
+     * Call `try_from_hex()` when the input may be user-controlled.
+     */
+    static BigUInt from_hex(std::string_view hex) {
+        Result<BigUInt> out = try_from_hex(hex);
+        assert(out.has_value() && "BigUInt::from_hex() requires valid in-range input");
+        return std::move(*out);
     }
 
     /** @brief Returns true when all limbs are zero. */
@@ -116,62 +128,118 @@ struct BigUInt {
         return compare(other) >= 0;
     }
 
-    /** @brief Adds a small unsigned value in place. */
-    void add_small(std::uint32_t value) {
+    /** @brief Adds a small unsigned value in place when the result fits. */
+    bool try_add_small(std::uint32_t value) {
+        BigUInt out = *this;
         unsigned __int128 carry = value;
         for (std::size_t i = 0; i < Words && carry != 0; ++i) {
-            carry += limbs[i];
-            limbs[i] = static_cast<std::uint64_t>(carry);
+            carry += out.limbs[i];
+            out.limbs[i] = static_cast<std::uint64_t>(carry);
             carry >>= 64;
         }
         if (carry != 0) {
-            throw std::runtime_error("BigUInt overflow");
+            return false;
         }
+        *this = out;
+        return true;
     }
 
-    /** @brief Multiplies by a small unsigned value in place. */
+    /**
+     * @brief Adds a small unsigned value in place.
+     *
+     * Precondition: the sum fits in the fixed-width representation.
+     */
+    void add_small(std::uint32_t value) {
+        bool ok = try_add_small(value);
+        assert(ok && "BigUInt::add_small() overflow");
+        (void)ok;
+    }
+
+    /** @brief Multiplies by a small unsigned value in place when the result fits. */
+    bool try_mul_small(std::uint32_t value) {
+        BigUInt out = *this;
+        unsigned __int128 carry = 0;
+        for (std::size_t i = 0; i < Words; ++i) {
+            unsigned __int128 accum = static_cast<unsigned __int128>(out.limbs[i]) * value + carry;
+            out.limbs[i] = static_cast<std::uint64_t>(accum);
+            carry = accum >> 64;
+        }
+        if (carry != 0) {
+            return false;
+        }
+        *this = out;
+        return true;
+    }
+
+    /**
+     * @brief Multiplies by a small unsigned value in place.
+     *
+     * Precondition: the product fits in the fixed-width representation.
+     */
     void mul_small(std::uint32_t value) {
+        bool ok = try_mul_small(value);
+        assert(ok && "BigUInt::mul_small() overflow");
+        (void)ok;
+    }
+
+    /** @brief Adds another fixed-width integer when the result fits. */
+    bool try_add_assign(const BigUInt& other) {
+        BigUInt out = *this;
         unsigned __int128 carry = 0;
         for (std::size_t i = 0; i < Words; ++i) {
-            unsigned __int128 accum = static_cast<unsigned __int128>(limbs[i]) * value + carry;
-            limbs[i] = static_cast<std::uint64_t>(accum);
+            unsigned __int128 accum = static_cast<unsigned __int128>(out.limbs[i]) + other.limbs[i] + carry;
+            out.limbs[i] = static_cast<std::uint64_t>(accum);
             carry = accum >> 64;
         }
         if (carry != 0) {
-            throw std::runtime_error("BigUInt overflow");
+            return false;
         }
+        *this = out;
+        return true;
     }
 
-    /** @brief Adds another fixed-width integer, throwing on overflow. */
+    /**
+     * @brief Adds another fixed-width integer in place.
+     *
+     * Precondition: the sum fits in the fixed-width representation.
+     */
     void add_assign(const BigUInt& other) {
-        unsigned __int128 carry = 0;
-        for (std::size_t i = 0; i < Words; ++i) {
-            unsigned __int128 accum = static_cast<unsigned __int128>(limbs[i]) + other.limbs[i] + carry;
-            limbs[i] = static_cast<std::uint64_t>(accum);
-            carry = accum >> 64;
-        }
-        if (carry != 0) {
-            throw std::runtime_error("BigUInt overflow");
-        }
+        bool ok = try_add_assign(other);
+        assert(ok && "BigUInt::add_assign() overflow");
+        (void)ok;
     }
 
-    /** @brief Subtracts another fixed-width integer, throwing on underflow. */
-    void sub_assign(const BigUInt& other) {
+    /** @brief Subtracts another fixed-width integer when the minuend is large enough. */
+    bool try_sub_assign(const BigUInt& other) {
+        BigUInt out = *this;
         std::uint64_t borrow = 0;
         for (std::size_t i = 0; i < Words; ++i) {
             std::uint64_t rhs = other.limbs[i] + borrow;
             std::uint64_t next_borrow = borrow ? (rhs <= other.limbs[i] ? 1U : 0U) : 0U;
-            if (limbs[i] < rhs) {
-                limbs[i] = static_cast<std::uint64_t>((static_cast<unsigned __int128>(1) << 64) + limbs[i] - rhs);
+            if (out.limbs[i] < rhs) {
+                out.limbs[i] = static_cast<std::uint64_t>((static_cast<unsigned __int128>(1) << 64) + out.limbs[i] - rhs);
                 borrow = 1;
             } else {
-                limbs[i] -= rhs;
+                out.limbs[i] -= rhs;
                 borrow = next_borrow;
             }
         }
         if (borrow != 0) {
-            throw std::runtime_error("BigUInt underflow");
+            return false;
         }
+        *this = out;
+        return true;
+    }
+
+    /**
+     * @brief Subtracts another fixed-width integer in place.
+     *
+     * Precondition: `*this >= other`.
+     */
+    void sub_assign(const BigUInt& other) {
+        bool ok = try_sub_assign(other);
+        assert(ok && "BigUInt::sub_assign() underflow");
+        (void)ok;
     }
 
     /** @brief Returns the index of the highest set bit plus one. */
@@ -194,14 +262,26 @@ struct BigUInt {
         return ((limbs[word] >> shift) & 1U) != 0;
     }
 
-    /** @brief Sets the bit at the given little-endian bit index. */
-    void set_bit(std::size_t index) {
+    /** @brief Sets the bit at the given little-endian bit index when it is in range. */
+    bool try_set_bit(std::size_t index) {
         std::size_t word = index / 64;
         std::size_t shift = index % 64;
         if (word >= Words) {
-            throw std::runtime_error("Bit index out of range");
+            return false;
         }
         limbs[word] |= (static_cast<std::uint64_t>(1) << shift);
+        return true;
+    }
+
+    /**
+     * @brief Sets the bit at the given little-endian bit index.
+     *
+     * Precondition: `index < Words * 64`.
+     */
+    void set_bit(std::size_t index) {
+        bool ok = try_set_bit(index);
+        assert(ok && "BigUInt::set_bit() index out of range");
+        (void)ok;
     }
 
     /** @brief Returns a copy shifted left by the requested bit count. */
@@ -337,7 +417,7 @@ BigUInt<OutWords> widen(const BigUInt<InWords>& value) {
 
 /** @brief Narrows an integer to a smaller limb count, rejecting truncated high bits. */
 template <std::size_t OutWords, std::size_t InWords>
-BigUInt<OutWords> narrow(const BigUInt<InWords>& value) {
+Result<BigUInt<OutWords>> try_narrow(const BigUInt<InWords>& value) {
     static_assert(OutWords <= InWords, "Cannot widen with narrow");
     BigUInt<OutWords> out;
     for (std::size_t i = 0; i < OutWords; ++i) {
@@ -345,37 +425,58 @@ BigUInt<OutWords> narrow(const BigUInt<InWords>& value) {
     }
     for (std::size_t i = OutWords; i < InWords; ++i) {
         if (value.limbs[i] != 0) {
-            throw std::runtime_error("BigUInt narrowing overflow");
+            return unexpected_error(ErrorCode::NarrowingOverflow, "try_narrow:high_bits_set");
         }
     }
     return out;
 }
 
+/** @brief Narrows an integer to a smaller limb count, requiring that no high bits are lost. */
+template <std::size_t OutWords, std::size_t InWords>
+BigUInt<OutWords> narrow(const BigUInt<InWords>& value) {
+    Result<BigUInt<OutWords>> out = try_narrow<OutWords>(value);
+    assert(out.has_value() && "narrow() requires the source value to fit");
+    return std::move(*out);
+}
+
 /** @brief Performs long division where numerator and denominator have the same width. */
 template <std::size_t Words>
-std::pair<BigUInt<Words>, BigUInt<Words>> divmod_same(const BigUInt<Words>& numerator, const BigUInt<Words>& denominator) {
+Result<std::pair<BigUInt<Words>, BigUInt<Words>>> try_divmod_same(const BigUInt<Words>& numerator, const BigUInt<Words>& denominator) {
     if (denominator.is_zero()) {
-        throw std::runtime_error("Division by zero");
+        return unexpected_error(ErrorCode::DivisionByZero, "try_divmod_same:zero_denominator");
     }
     BigUInt<Words> quotient;
     BigUInt<Words> remainder = numerator;
     std::size_t n_bits = remainder.bit_length();
     std::size_t d_bits = denominator.bit_length();
     if (n_bits < d_bits) {
-        return {quotient, remainder};
+        return std::make_pair(quotient, remainder);
     }
     std::size_t shift = n_bits - d_bits;
     BigUInt<Words> shifted = denominator.shifted_left(shift);
     for (std::size_t i = shift + 1; i-- > 0;) {
         if (remainder.compare(shifted) >= 0) {
-            remainder.sub_assign(shifted);
-            quotient.set_bit(i);
+            bool sub_ok = remainder.try_sub_assign(shifted);
+            bool bit_ok = quotient.try_set_bit(i);
+            assert(sub_ok && "divmod_same() subtraction should stay in range");
+            assert(bit_ok && "divmod_same() quotient bit index should stay in range");
+            if (!sub_ok || !bit_ok) {
+                return unexpected_error(ErrorCode::InternalMismatch, "try_divmod_same:internal_step");
+            }
         }
         if (i != 0) {
             shifted.shift_right_one();
         }
     }
-    return {quotient, remainder};
+    return std::make_pair(quotient, remainder);
+}
+
+/** @brief Performs long division where numerator and denominator have the same width. */
+template <std::size_t Words>
+std::pair<BigUInt<Words>, BigUInt<Words>> divmod_same(const BigUInt<Words>& numerator, const BigUInt<Words>& denominator) {
+    Result<std::pair<BigUInt<Words>, BigUInt<Words>>> out = try_divmod_same(numerator, denominator);
+    assert(out.has_value() && "divmod_same() requires a non-zero denominator");
+    return std::move(*out);
 }
 
 /** @brief Multiplies two fixed-width integers and returns the full-width product. */

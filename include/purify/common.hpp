@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cctype>
 #include <charconv>
 #include <cstdint>
@@ -20,7 +21,6 @@
 #include <optional>
 #include <ostream>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -29,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+#include "purify/error.hpp"
 #include "purify_secp_bridge.h"
 
 namespace purify {

@@ -251,9 +251,7 @@ public:
         }
         std::optional<FieldElement> lhs_val = lhs.evaluate(varmap_);
         std::optional<FieldElement> rhs_val = rhs.evaluate(varmap_);
-        if (rhs_val.has_value() && rhs_val->is_zero()) {
-            throw std::runtime_error("Division by zero");
-        }
+        assert((!rhs_val.has_value() || !rhs_val->is_zero()) && "Transcript::div() requires a non-zero known divisor");
         std::optional<FieldElement> value;
         if (lhs_val.has_value() && rhs_val.has_value()) {
             value = *lhs_val * rhs_val->inverse();
@@ -271,9 +269,8 @@ public:
             return expr;
         }
         std::optional<FieldElement> value = expr.evaluate(varmap_);
-        if (value.has_value() && *value != FieldElement::zero() && *value != FieldElement::one()) {
-            throw std::runtime_error("Boolean constraint on non-boolean value");
-        }
+        assert((!value.has_value() || *value == FieldElement::zero() || *value == FieldElement::one())
+               && "Transcript::boolean() requires a known value to be 0 or 1");
         bool_cache_.insert(key);
         muls_.push_back({expr, expr - 1, Expr(0)});
         return expr;
@@ -283,9 +280,7 @@ public:
     void equal(const Expr& lhs, const Expr& rhs) {
         Expr diff = lhs - rhs;
         std::optional<FieldElement> value = diff.evaluate(varmap_);
-        if (value.has_value() && !value->is_zero()) {
-            throw std::runtime_error("Equation mismatch");
-        }
+        assert((!value.has_value() || value->is_zero()) && "Transcript::equal() requires known values to match");
         eqs_.push_back(diff);
     }
 

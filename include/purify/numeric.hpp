@@ -650,7 +650,19 @@ public:
         return out;
     }
 
-    /** @brief Returns the multiplicative inverse modulo the field prime. */
+    /** @brief Conditionally assigns `other` into `*this` when `flag` is true. */
+    void conditional_assign(const FieldElement& other, bool flag) {
+        purify_scalar_cmov(&value_, &other.value_, flag ? 1 : 0);
+    }
+
+    /** @brief Returns the multiplicative inverse modulo the field prime in constant time. */
+    FieldElement inverse_consttime() const {
+        FieldElement out;
+        purify_scalar_inverse(&out.value_, &value_);
+        return out;
+    }
+
+    /** @brief Returns the multiplicative inverse modulo the field prime using the faster variable-time backend. */
     FieldElement inverse() const {
         FieldElement out;
         purify_scalar_inverse_var(&out.value_, &value_);

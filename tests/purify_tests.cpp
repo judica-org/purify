@@ -96,6 +96,59 @@ void test_known_sample(TestContext& ctx) {
     }
 }
 
+void test_secret_hardening_path(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for secret hardening checks");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Result<std::pair<purify::UInt256, purify::UInt256>> unpacked = purify::unpack_secret(*secret);
+    expect_ok(ctx, unpacked, "sample secret unpacks for hardened multiplication checks");
+    if (!unpacked.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+    Bytes m1_input = purify::bytes_from_ascii("Eval/1/");
+    m1_input.insert(m1_input.end(), message.begin(), message.end());
+    Result<purify::JacobianPoint> m1 = purify::hash_to_curve(m1_input, purify::curve1());
+    expect_ok(ctx, m1, "hash_to_curve for curve1 succeeds in hardened multiplication checks");
+    Bytes m2_input = purify::bytes_from_ascii("Eval/2/");
+    m2_input.insert(m2_input.end(), message.begin(), message.end());
+    Result<purify::JacobianPoint> m2 = purify::hash_to_curve(m2_input, purify::curve2());
+    expect_ok(ctx, m2, "hash_to_curve for curve2 succeeds in hardened multiplication checks");
+    if (!m1.has_value() || !m2.has_value()) {
+        return;
+    }
+
+    purify::AffinePoint p1_public = purify::curve1().affine(purify::curve1().mul(purify::generator1(), unpacked->first));
+    purify::AffinePoint p2_public = purify::curve2().affine(purify::curve2().mul(purify::generator2(), unpacked->second));
+    purify::AffinePoint q1_public = purify::curve1().affine(purify::curve1().mul(*m1, unpacked->first));
+    purify::AffinePoint q2_public = purify::curve2().affine(purify::curve2().mul(*m2, unpacked->second));
+
+    Result<purify::AffinePoint> p1_secret = purify::curve1().mul_secret_affine(purify::generator1(), unpacked->first);
+    expect_ok(ctx, p1_secret, "hardened generator multiplication succeeds on curve1");
+    Result<purify::AffinePoint> p2_secret = purify::curve2().mul_secret_affine(purify::generator2(), unpacked->second);
+    expect_ok(ctx, p2_secret, "hardened generator multiplication succeeds on curve2");
+    Result<purify::AffinePoint> q1_secret = purify::curve1().mul_secret_affine(*m1, unpacked->first);
+    expect_ok(ctx, q1_secret, "hardened message multiplication succeeds on curve1");
+    Result<purify::AffinePoint> q2_secret = purify::curve2().mul_secret_affine(*m2, unpacked->second);
+    expect_ok(ctx, q2_secret, "hardened message multiplication succeeds on curve2");
+    if (!p1_secret.has_value() || !p2_secret.has_value() || !q1_secret.has_value() || !q2_secret.has_value()) {
+        return;
+    }
+
+    ctx.expect(p1_secret->x == p1_public.x && p1_secret->y == p1_public.y,
+               "hardened curve1 generator multiplication matches the existing arithmetic");
+    ctx.expect(p2_secret->x == p2_public.x && p2_secret->y == p2_public.y,
+               "hardened curve2 generator multiplication matches the existing arithmetic");
+    ctx.expect(q1_secret->x == q1_public.x && q1_secret->y == q1_public.y,
+               "hardened curve1 message multiplication matches the existing arithmetic");
+    ctx.expect(q2_secret->x == q2_public.x && q2_secret->y == q2_public.y,
+               "hardened curve2 message multiplication matches the existing arithmetic");
+}
+
 void test_secret_key_validation(TestContext& ctx) {
     Bytes message = sample_message();
 
@@ -158,6 +211,7 @@ int main() {
     TestContext ctx;
 
     test_known_sample(ctx);
+    test_secret_hardening_path(ctx);
     test_secret_key_validation(ctx);
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);

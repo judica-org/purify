@@ -9,15 +9,27 @@
 
 #pragma once
 
+#include <cerrno>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <optional>
-#include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
+
+#if defined(_WIN32)
+#include <bcrypt.h>
+#elif defined(__linux__)
+#include <sys/random.h>
+#include <unistd.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#include <unistd.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "purify_bppp.hpp"
 #include "purify.hpp"
@@ -101,18 +113,74 @@ inline std::string hex_from_bytes(const ByteContainer& bytes) {
 }
 
 /**
+ * @brief Fills a buffer with operating-system randomness.
+ * @param out Output buffer.
+ * @param size Number of bytes to fill.
+ * @return Success or `ErrorCode::EntropyUnavailable`.
+ */
+inline Status secure_random_bytes(unsigned char* out, std::size_t size) {
+#if defined(_WIN32)
+    while (true) {
+        if (size == 0) {
+            return {};
+        }
+        ULONG chunk = static_cast<ULONG>(std::min<std::size_t>(size, static_cast<std::size_t>(0xFFFFFFFFu)));
+        NTSTATUS status = BCryptGenRandom(nullptr, out, chunk, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        if (status < 0) {
+            return unexpected_error(ErrorCode::EntropyUnavailable, "secure_random_bytes:bcrypt");
+        }
+        out += chunk;
+        size -= chunk;
+    }
+#elif defined(__linux__)
+    while (size != 0) {
+        ssize_t written = getrandom(out, size, 0);
+        if (written > 0) {
+            out += static_cast<std::size_t>(written);
+            size -= static_cast<std::size_t>(written);
+            continue;
+        }
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        return unexpected_error(ErrorCode::EntropyUnavailable, "secure_random_bytes:getrandom");
+    }
+    return {};
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    arc4random_buf(out, size);
+    return {};
+#else
+    std::ifstream file("/dev/urandom", std::ios::binary);
+    if (!file) {
+        return unexpected_error(ErrorCode::EntropyUnavailable, "secure_random_bytes:open_urandom");
+    }
+    file.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(size));
+    if (!file) {
+        return unexpected_error(ErrorCode::EntropyUnavailable, "secure_random_bytes:read_urandom");
+    }
+    return {};
+#endif
+}
+
+/**
  * @brief Samples a uniformly random integer below a range.
  * @param range Exclusive upper bound.
  * @return Random integer in the interval [0, range).
  */
-inline UInt512 random_below(const UInt512& range) {
-    std::random_device rng;
+inline Result<UInt512> random_below(const UInt512& range) {
+    if (range.is_zero()) {
+        return unexpected_error(ErrorCode::RangeViolation, "random_below:zero_range");
+    }
+    std::size_t bits = range.bit_length();
+    std::size_t bytes_needed = (bits + 7) / 8;
+    std::array<unsigned char, 64> bytes{};
     while (true) {
-        std::array<unsigned char, 64> bytes{};
-        for (unsigned char& byte : bytes) {
-            byte = static_cast<unsigned char>(rng());
+        Status status = secure_random_bytes(bytes.data(), bytes_needed);
+        if (!status.has_value()) {
+            return unexpected_error(status.error(), "random_below:secure_random_bytes");
         }
-        UInt512 candidate = UInt512::from_bytes_be(bytes.data(), bytes.size());
+        UInt512 candidate = UInt512::from_bytes_be(bytes.data(), bytes_needed);
+        candidate.mask_bits(bits);
         if (candidate.compare(range) < 0) {
             return candidate;
         }
@@ -125,8 +193,14 @@ inline UInt512 random_below(const UInt512& range) {
  * @return Generated keypair bundle.
  */
 inline Result<GeneratedKey> generate_key(const std::optional<UInt512>& secret_override = std::nullopt) {
-    UInt512 secret = secret_override.has_value() ? *secret_override : random_below(key_space_size());
-    return derive_key(secret);
+    if (secret_override.has_value()) {
+        return derive_key(*secret_override);
+    }
+    Result<UInt512> secret = random_below(key_space_size());
+    if (!secret.has_value()) {
+        return unexpected_error(secret.error(), "generate_key:random_below");
+    }
+    return derive_key(*secret);
 }
 
 /**

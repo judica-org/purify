@@ -33,6 +33,13 @@ struct AffinePoint {
     bool infinity = false;
 };
 
+/** @brief Projective point used by the hardened secret-scalar multiplication path. */
+struct CompleteProjectivePoint {
+    FieldElement x;
+    FieldElement y;
+    FieldElement z;
+};
+
 /**
  * @brief Minimal elliptic-curve arithmetic over the Purify base field.
  *
@@ -182,7 +189,144 @@ public:
         return result;
     }
 
+    /**
+     * @brief Multiplies a public point by a secret scalar using exception-free complete formulas.
+     *
+     * The point input is treated as public and may be normalized with the variable-time affine
+     * helper before entering the constant-time ladder. The ladder itself, point selection, final
+     * inversion, and the Purify secret-dependent arithmetic remain constant-time in `scalar`.
+     */
+    Result<AffinePoint> mul_secret_affine(const JacobianPoint& point, const UInt256& scalar) const {
+        CompleteProjectivePoint r0 = complete_identity();
+        CompleteProjectivePoint r1 = secret_input_point(point);
+        unsigned prev_bit = 0;
+        std::size_t bits = n_.bit_length();
+        for (std::size_t i = bits; i-- > 0;) {
+            unsigned bit = scalar.bit(i) ? 1U : 0U;
+            conditional_swap(r0, r1, bit ^ prev_bit);
+            CompleteProjectivePoint sum = complete_add(r0, r1);
+            CompleteProjectivePoint doubled = complete_double(r0);
+            r1 = std::move(sum);
+            r0 = std::move(doubled);
+            prev_bit = bit;
+        }
+        conditional_swap(r0, r1, prev_bit);
+        if (r0.z.is_zero()) {
+            return unexpected_error(ErrorCode::InternalMismatch, "EllipticCurve::mul_secret_affine:point_at_infinity");
+        }
+        FieldElement inv = r0.z.inverse_consttime();
+        return AffinePoint{r0.x * inv, r0.y * inv, false};
+    }
+
 private:
+    static CompleteProjectivePoint complete_identity() {
+        return {FieldElement::zero(), FieldElement::one(), FieldElement::zero()};
+    }
+
+    CompleteProjectivePoint secret_input_point(const JacobianPoint& point) const {
+        if (point.infinity || point.z.is_zero()) {
+            return complete_identity();
+        }
+        if (point.z.is_one()) {
+            return {point.x, point.y, point.z};
+        }
+        AffinePoint normalized = affine(point);
+        return {normalized.x, normalized.y, FieldElement::one()};
+    }
+
+    static void conditional_assign(CompleteProjectivePoint& dst, const CompleteProjectivePoint& src, bool flag) {
+        dst.x.conditional_assign(src.x, flag);
+        dst.y.conditional_assign(src.y, flag);
+        dst.z.conditional_assign(src.z, flag);
+    }
+
+    static void conditional_swap(CompleteProjectivePoint& lhs, CompleteProjectivePoint& rhs, bool flag) {
+        CompleteProjectivePoint tmp = lhs;
+        conditional_assign(lhs, rhs, flag);
+        conditional_assign(rhs, tmp, flag);
+    }
+
+    CompleteProjectivePoint complete_add(const CompleteProjectivePoint& lhs, const CompleteProjectivePoint& rhs) const {
+        FieldElement b3 = b_ + b_ + b_;
+        FieldElement t0 = lhs.x * rhs.x;
+        FieldElement t1 = lhs.y * rhs.y;
+        FieldElement t2 = lhs.z * rhs.z;
+        FieldElement t3 = lhs.x + lhs.y;
+        FieldElement t4 = rhs.x + rhs.y;
+        t3 = t3 * t4;
+        t4 = t0 + t1;
+        t3 = t3 - t4;
+        t4 = lhs.x + lhs.z;
+        FieldElement t5 = rhs.x + rhs.z;
+        t4 = t4 * t5;
+        t5 = t0 + t2;
+        t4 = t4 - t5;
+        t5 = lhs.y + lhs.z;
+        FieldElement x3 = rhs.y + rhs.z;
+        t5 = t5 * x3;
+        x3 = t1 + t2;
+        t5 = t5 - x3;
+        FieldElement z3 = a_ * t4;
+        x3 = b3 * t2;
+        z3 = x3 + z3;
+        x3 = t1 - z3;
+        z3 = t1 + z3;
+        FieldElement y3 = x3 * z3;
+        t1 = t0 + t0;
+        t1 = t1 + t0;
+        t2 = a_ * t2;
+        t4 = b3 * t4;
+        t1 = t1 + t2;
+        t2 = t0 - t2;
+        t2 = a_ * t2;
+        t4 = t4 + t2;
+        t0 = t1 * t4;
+        y3 = y3 + t0;
+        t0 = t5 * t4;
+        x3 = t3 * x3;
+        x3 = x3 - t0;
+        t0 = t3 * t1;
+        z3 = t5 * z3;
+        z3 = z3 + t0;
+        return {x3, y3, z3};
+    }
+
+    CompleteProjectivePoint complete_double(const CompleteProjectivePoint& point) const {
+        FieldElement b3 = b_ + b_ + b_;
+        FieldElement t0 = point.x * point.x;
+        FieldElement t1 = point.y * point.y;
+        FieldElement t2 = point.z * point.z;
+        FieldElement t3 = point.x * point.y;
+        t3 = t3 + t3;
+        FieldElement z3 = point.x * point.z;
+        z3 = z3 + z3;
+        FieldElement x3 = a_ * z3;
+        FieldElement y3 = b3 * t2;
+        y3 = x3 + y3;
+        x3 = t1 - y3;
+        y3 = t1 + y3;
+        y3 = x3 * y3;
+        x3 = t3 * x3;
+        z3 = b3 * z3;
+        t2 = a_ * t2;
+        t3 = t0 - t2;
+        t3 = a_ * t3;
+        t3 = t3 + z3;
+        z3 = t0 + t0;
+        t0 = z3 + t0;
+        t0 = t0 + t2;
+        t0 = t0 * t3;
+        y3 = y3 + t0;
+        t2 = point.y * point.z;
+        t2 = t2 + t2;
+        t0 = t2 * t3;
+        x3 = x3 - t0;
+        z3 = t2 * t1;
+        z3 = z3 + z3;
+        z3 = z3 + z3;
+        return {x3, y3, z3};
+    }
+
     FieldElement a_;
     FieldElement b_;
     UInt256 n_;
@@ -447,7 +591,7 @@ inline UInt512 pack_public(const UInt256& x1, const UInt256& x2) {
 inline FieldElement combine(const FieldElement& x1, const FieldElement& x2) {
     FieldElement u = x1;
     FieldElement v = x2 * field_di();
-    FieldElement w = (u - v).inverse();
+    FieldElement w = (u - v).inverse_consttime();
     return ((u + v) * (field_a() + u * v) + FieldElement::from_int(2) * field_b()) * w * w;
 }
 
@@ -460,14 +604,13 @@ inline Result<std::vector<int>> key_to_bits(UInt256 n, const UInt256& max_value)
     n.sub_assign(UInt256::one());
     std::vector<int> out(bits);
     for (int i = 0; i < bits; ++i) {
-        out[i] = n.bit(static_cast<std::size_t>(i)) ? 1 : 0;
+        out[i] = static_cast<int>(n.bit(static_cast<std::size_t>(i)));
     }
     for (int i = 3; i < bits; i += 3) {
-        if (!out[i]) {
-            out[i - 1] = 1 - out[i - 1];
-            out[i - 2] = 1 - out[i - 2];
-        }
-        out[i] = 1 - out[i];
+        int flip = 1 - out[i];
+        out[i - 1] ^= flip;
+        out[i - 2] ^= flip;
+        out[i] ^= 1;
     }
     return out;
 }

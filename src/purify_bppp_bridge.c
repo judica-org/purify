@@ -72,6 +72,10 @@ void purify_scalar_negate(purify_scalar* out, const purify_scalar* value) {
     secp256k1_scalar_negate(purify_scalar_cast(out), purify_scalar_cast_const(value));
 }
 
+void purify_scalar_inverse(purify_scalar* out, const purify_scalar* value) {
+    secp256k1_scalar_inverse(purify_scalar_cast(out), purify_scalar_cast_const(value));
+}
+
 void purify_scalar_inverse_var(purify_scalar* out, const purify_scalar* value) {
     secp256k1_scalar_inverse_var(purify_scalar_cast(out), purify_scalar_cast_const(value));
 }
@@ -82,6 +86,10 @@ int purify_scalar_add(purify_scalar* out, const purify_scalar* lhs, const purify
 
 void purify_scalar_mul(purify_scalar* out, const purify_scalar* lhs, const purify_scalar* rhs) {
     secp256k1_scalar_mul(purify_scalar_cast(out), purify_scalar_cast_const(lhs), purify_scalar_cast_const(rhs));
+}
+
+void purify_scalar_cmov(purify_scalar* dst, const purify_scalar* src, int flag) {
+    secp256k1_scalar_cmov(purify_scalar_cast(dst), purify_scalar_cast_const(src), flag);
 }
 
 void purify_hmac_sha256(unsigned char output32[32],

@@ -41,9 +41,15 @@ inline Result<GeneratedKey> derive_key(const UInt512& secret) {
     if (!unpacked.has_value()) {
         return unexpected_error(unpacked.error(), "derive_key:unpack_secret");
     }
-    AffinePoint p1 = curve1().affine(curve1().mul(generator1(), unpacked->first));
-    AffinePoint p2 = curve2().affine(curve2().mul(generator2(), unpacked->second));
-    return GeneratedKey{secret, pack_public(p1.x.to_uint256(), p2.x.to_uint256())};
+    Result<AffinePoint> p1 = curve1().mul_secret_affine(generator1(), unpacked->first);
+    if (!p1.has_value()) {
+        return unexpected_error(p1.error(), "derive_key:mul_secret_affine_p1");
+    }
+    Result<AffinePoint> p2 = curve2().mul_secret_affine(generator2(), unpacked->second);
+    if (!p2.has_value()) {
+        return unexpected_error(p2.error(), "derive_key:mul_secret_affine_p2");
+    }
+    return GeneratedKey{secret, pack_public(p1->x.to_uint256(), p2->x.to_uint256())};
 }
 
 /**
@@ -65,9 +71,15 @@ inline Result<FieldElement> eval(const UInt512& secret, const Bytes& message) {
     if (!m2.has_value()) {
         return unexpected_error(m2.error(), "eval:hash_to_curve_m2");
     }
-    AffinePoint q1 = curve1().affine(curve1().mul(*m1, unpacked->first));
-    AffinePoint q2 = curve2().affine(curve2().mul(*m2, unpacked->second));
-    return combine(q1.x, q2.x);
+    Result<AffinePoint> q1 = curve1().mul_secret_affine(*m1, unpacked->first);
+    if (!q1.has_value()) {
+        return unexpected_error(q1.error(), "eval:mul_secret_affine_q1");
+    }
+    Result<AffinePoint> q2 = curve2().mul_secret_affine(*m2, unpacked->second);
+    if (!q2.has_value()) {
+        return unexpected_error(q2.error(), "eval:mul_secret_affine_q2");
+    }
+    return combine(q1->x, q2->x);
 }
 
 /**
@@ -153,28 +165,40 @@ inline Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message
     if (!m2.has_value()) {
         return unexpected_error(m2.error(), "prove_assignment_data:hash_to_curve_m2");
     }
-    AffinePoint p1 = curve1().affine(curve1().mul(generator1(), unpacked->first));
-    AffinePoint p2 = curve2().affine(curve2().mul(generator2(), unpacked->second));
-    AffinePoint q1 = curve1().affine(curve1().mul(*m1, unpacked->first));
-    AffinePoint q2 = curve2().affine(curve2().mul(*m2, unpacked->second));
-    FieldElement native_out = combine(q1.x, q2.x);
+    Result<AffinePoint> p1 = curve1().mul_secret_affine(generator1(), unpacked->first);
+    if (!p1.has_value()) {
+        return unexpected_error(p1.error(), "prove_assignment_data:mul_secret_affine_p1");
+    }
+    Result<AffinePoint> p2 = curve2().mul_secret_affine(generator2(), unpacked->second);
+    if (!p2.has_value()) {
+        return unexpected_error(p2.error(), "prove_assignment_data:mul_secret_affine_p2");
+    }
+    Result<AffinePoint> q1 = curve1().mul_secret_affine(*m1, unpacked->first);
+    if (!q1.has_value()) {
+        return unexpected_error(q1.error(), "prove_assignment_data:mul_secret_affine_q1");
+    }
+    Result<AffinePoint> q2 = curve2().mul_secret_affine(*m2, unpacked->second);
+    if (!q2.has_value()) {
+        return unexpected_error(q2.error(), "prove_assignment_data:mul_secret_affine_q2");
+    }
+    FieldElement native_out = combine(q1->x, q2->x);
 
     Transcript transcript;
     Result<CircuitMainResult> result = circuit_main(transcript, *m1, *m2, unpacked->first, unpacked->second);
     if (!result.has_value()) {
         return unexpected_error(result.error(), "prove_assignment_data:circuit_main");
     }
-    if (transcript.evaluate(result->p1x) != std::optional<FieldElement>(p1.x)) {
+    if (transcript.evaluate(result->p1x) != std::optional<FieldElement>(p1->x)) {
         return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:p1x_mismatch");
     }
-    if (transcript.evaluate(result->p2x) != std::optional<FieldElement>(p2.x)) {
+    if (transcript.evaluate(result->p2x) != std::optional<FieldElement>(p2->x)) {
         return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:p2x_mismatch");
     }
     if (transcript.evaluate(result->out) != std::optional<FieldElement>(native_out)) {
         return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:output_mismatch");
     }
 
-    UInt512 pubkey = pack_public(p1.x.to_uint256(), p2.x.to_uint256());
+    UInt512 pubkey = pack_public(p1->x.to_uint256(), p2->x.to_uint256());
     BulletproofTranscript bp;
     Status transcript_status = bp.from_transcript(transcript, result->n_bits);
     if (!transcript_status.has_value()) {

@@ -41,12 +41,16 @@ int purify_scalar_eq(const purify_scalar* lhs, const purify_scalar* rhs);
 
 /** @brief Computes the additive inverse of a scalar. */
 void purify_scalar_negate(purify_scalar* out, const purify_scalar* value);
+/** @brief Computes the multiplicative inverse of a scalar in constant time. */
+void purify_scalar_inverse(purify_scalar* out, const purify_scalar* value);
 /** @brief Computes the multiplicative inverse of a scalar. */
 void purify_scalar_inverse_var(purify_scalar* out, const purify_scalar* value);
 /** @brief Adds two scalars modulo the backend field. */
 int purify_scalar_add(purify_scalar* out, const purify_scalar* lhs, const purify_scalar* rhs);
 /** @brief Multiplies two scalars modulo the backend field. */
 void purify_scalar_mul(purify_scalar* out, const purify_scalar* lhs, const purify_scalar* rhs);
+/** @brief Conditionally assigns `src` into `dst` when `flag` is nonzero. */
+void purify_scalar_cmov(purify_scalar* dst, const purify_scalar* src, int flag);
 
 /**
  * @brief Computes HMAC-SHA256 over a byte string.

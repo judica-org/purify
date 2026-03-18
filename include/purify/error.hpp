@@ -60,6 +60,7 @@ enum class ErrorCode : std::uint16_t {
     EquationMismatch,
     IoOpenFailed,
     IoWriteFailed,
+    EntropyUnavailable,
     BackendRejectedInput,
     HashToCurveExhausted,
     UnexpectedSize,
@@ -103,6 +104,7 @@ using Status = Expected<void, Error>;
     switch (code) {
     case ErrorCode::IoOpenFailed:
     case ErrorCode::IoWriteFailed:
+    case ErrorCode::EntropyUnavailable:
     case ErrorCode::HashToCurveExhausted:
         return ErrorCategory::Natural;
 
@@ -193,6 +195,8 @@ using Status = Expected<void, Error>;
         return "io_open_failed";
     case ErrorCode::IoWriteFailed:
         return "io_write_failed";
+    case ErrorCode::EntropyUnavailable:
+        return "entropy_unavailable";
     case ErrorCode::BackendRejectedInput:
         return "backend_rejected_input";
     case ErrorCode::HashToCurveExhausted:
@@ -253,6 +257,8 @@ using Status = Expected<void, Error>;
         return "unable to open the requested file or stream";
     case ErrorCode::IoWriteFailed:
         return "unable to write the requested file or stream";
+    case ErrorCode::EntropyUnavailable:
+        return "unable to obtain secure operating-system randomness";
     case ErrorCode::BackendRejectedInput:
         return "the cryptographic backend rejected the supplied input";
     case ErrorCode::HashToCurveExhausted:

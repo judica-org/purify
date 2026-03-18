@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <format>
 #include <iomanip>
 #include <map>
 #include <optional>
@@ -1125,7 +1126,7 @@ class Transcript {
 public:
     Expr secret(const std::optional<FieldElement>& value) {
         std::size_t index = varmap_.size();
-        std::string name = "v[" + std::to_string(index) + "]";
+        std::string name = std::format("v[{}]", index);
         varmap_[name] = value;
         return Expr::variable(name);
     }
@@ -1270,14 +1271,14 @@ public:
         }
         for (std::size_t i = 0; i < source_muls; ++i) {
             const auto& mul = transcript.muls()[i];
-            add_assignment("L" + std::to_string(i), mul.lhs);
-            add_assignment("R" + std::to_string(i), mul.rhs);
-            add_assignment("O" + std::to_string(i), mul.out);
+            add_assignment(std::format("L{}", i), mul.lhs);
+            add_assignment(std::format("R{}", i), mul.rhs);
+            add_assignment(std::format("O{}", i), mul.out);
         }
         for (std::size_t i = source_muls; i < n_muls_; ++i) {
-            add_assignment("L" + std::to_string(i), Expr(0));
-            add_assignment("R" + std::to_string(i), Expr(0));
-            add_assignment("O" + std::to_string(i), Expr(0));
+            add_assignment(std::format("L{}", i), Expr(0));
+            add_assignment(std::format("R{}", i), Expr(0));
+            add_assignment(std::format("O{}", i), Expr(0));
         }
     }
 
@@ -1345,7 +1346,7 @@ public:
             values[assignment.symbol] = evaluate_known(assignment.expr, values);
         }
         for (std::size_t i = 0; i < n_muls_; ++i) {
-            std::string suffix = std::to_string(i);
+            std::string suffix = std::format("{}", i);
             if (values.at("L" + suffix) * values.at("R" + suffix) != values.at("O" + suffix)) {
                 return false;
             }
@@ -1385,7 +1386,7 @@ public:
         auto write_column = [&](std::string_view prefix) {
             for (std::size_t i = 0; i < n_muls_; ++i) {
                 out.push_back(static_cast<unsigned char>(0x20));
-                std::string key = std::string(prefix) + std::to_string(i);
+                std::string key = std::format("{}{}", prefix, i);
                 auto it = values.find(key);
                 if (it == values.end()) {
                     throw std::runtime_error("Missing serialized assignment column " + key);

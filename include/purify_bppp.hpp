@@ -14,12 +14,6 @@
 #include <utility>
 #include <vector>
 
-extern "C" {
-#include "third_party/secp256k1-zkp/include/secp256k1.h"
-#include "third_party/secp256k1-zkp/include/secp256k1_bppp.h"
-#include "third_party/secp256k1-zkp/include/secp256k1_generator.h"
-}
-
 #include "purify.hpp"
 
 namespace purify::bppp {

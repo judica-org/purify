@@ -7,8 +7,7 @@
  * @brief Nanobench-based performance harness for circuit construction and BPPP operations.
  */
 
-#define ANKERL_NANOBENCH_IMPLEMENT
-#include "third_party/nanobench/src/include/nanobench.h"
+#include <nanobench.h>
 
 #include <chrono>
 #include <cstddef>

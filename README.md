@@ -6,7 +6,8 @@ Upstream reference material is available under [`reference/`](reference/) as opt
 
 ## Repository layout
 
-- `src/`: core Purify headers and support sources
+- `include/`: public library headers intended for downstream consumers
+- `src/`: compiled support sources plus private headers
 - `cli/`: CLI entrypoint for `purify_cpp`
 - `bench/`: benchmark entrypoint for `bench_purify`
 - `reference/`: local guide plus optional reference submodules for upstream `purify` and the benchmark fork of `secp256k1-zkp`
@@ -15,20 +16,55 @@ Upstream reference material is available under [`reference/`](reference/) as opt
 
 ## Build
 
-Initialize the required build submodules first:
+Initialize the library dependency submodule first:
 
 ```sh
-git submodule update --init third_party/secp256k1-zkp third_party/nanobench
+git submodule update --init third_party/secp256k1-zkp
 ```
 
 Configure and build:
 
 ```sh
 cmake -S . -B build
-cmake --build build --target purify_cpp bench_purify -j
+cmake --build build -j
 ```
 
-The current CMake configuration builds with C++20, C11, warnings enabled, and `-O3` on non-MSVC toolchains.
+Top-level builds enable the CLI, benchmark, and docs targets by default. When this repository is added to another CMake project via `add_subdirectory(...)`, only the library target is enabled by default.
+
+### Using as a submodule
+
+Add the repository as a git submodule, then wire it into the parent `CMakeLists.txt`:
+
+```cmake
+add_subdirectory(external/purifycpp)
+target_link_libraries(your_target PRIVATE purify::purify)
+```
+
+Downstream code should include the library headers from the stable public include root:
+
+```cpp
+#include <purify.hpp>
+#include <purify_bppp.hpp>
+```
+
+If you want the bundled CLI, benchmark, or docs targets while consuming the project as a subdirectory, enable them explicitly before `add_subdirectory(...)`:
+
+```cmake
+set(PURIFY_BUILD_CLI ON CACHE BOOL "" FORCE)
+set(PURIFY_BUILD_BENCH ON CACHE BOOL "" FORCE)
+set(PURIFY_BUILD_DOCS ON CACHE BOOL "" FORCE)
+add_subdirectory(external/purifycpp)
+```
+
+### Benchmarks
+
+Benchmarks require the additional `nanobench` submodule:
+
+```sh
+git submodule update --init third_party/nanobench
+```
+
+Then build `bench_purify` normally from the top-level project, or enable `PURIFY_BUILD_BENCH` before `add_subdirectory(...)` in a parent project.
 
 Generate API documentation with Doxygen:
 

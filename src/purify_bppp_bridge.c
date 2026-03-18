@@ -2,6 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+/**
+ * @file purify_bppp_bridge.c
+ * @brief C bridge that binds Purify's lightweight ABI to secp256k1-zkp internals and BPPP helpers.
+ */
+
 #define SECP256K1_BUILD
 #define ENABLE_MODULE_GENERATOR 1
 #define ENABLE_MODULE_BPPP 1

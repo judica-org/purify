@@ -2,6 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+/**
+ * @file common.hpp
+ * @brief Shared includes and foundational aliases for the Purify C++ implementation.
+ */
+
 #pragma once
 
 #include <algorithm>
@@ -28,6 +33,7 @@
 
 namespace purify {
 
+/** @brief Dynamically sized byte string used for messages, serialized witnesses, and proofs. */
 using Bytes = std::vector<unsigned char>;
 
 }  // namespace purify

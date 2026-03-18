@@ -2,6 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+/**
+ * @file purify_runtime.hpp
+ * @brief Runtime helpers and CLI wiring for the Purify executable.
+ */
+
 #pragma once
 
 #include <cctype>
@@ -19,6 +24,11 @@
 
 namespace purify {
 
+/**
+ * @brief Parses a hexadecimal string into raw bytes.
+ * @param hex Input hex string; ASCII whitespace is ignored.
+ * @return Parsed bytes.
+ */
 inline Bytes bytes_from_hex(std::string_view hex) {
     Bytes out;
     std::string filtered;
@@ -49,6 +59,12 @@ inline Bytes bytes_from_hex(std::string_view hex) {
     return out;
 }
 
+/**
+ * @brief Parses a fixed-size hexadecimal string into an array.
+ * @tparam N Required byte length.
+ * @param hex Input hex string.
+ * @return Parsed byte array.
+ */
 template <std::size_t N>
 inline std::array<unsigned char, N> array_from_hex(std::string_view hex) {
     Bytes bytes = bytes_from_hex(hex);
@@ -60,6 +76,12 @@ inline std::array<unsigned char, N> array_from_hex(std::string_view hex) {
     return out;
 }
 
+/**
+ * @brief Encodes a byte container as lowercase hexadecimal.
+ * @tparam ByteContainer Container with byte-like values.
+ * @param bytes Input bytes.
+ * @return Hexadecimal string.
+ */
 template <typename ByteContainer>
 inline std::string hex_from_bytes(const ByteContainer& bytes) {
     std::ostringstream out;
@@ -70,6 +92,11 @@ inline std::string hex_from_bytes(const ByteContainer& bytes) {
     return out.str();
 }
 
+/**
+ * @brief Samples a uniformly random integer below a range.
+ * @param range Exclusive upper bound.
+ * @return Random integer in the interval [0, range).
+ */
 inline UInt512 random_below(const UInt512& range) {
     std::random_device rng;
     while (true) {
@@ -84,11 +111,21 @@ inline UInt512 random_below(const UInt512& range) {
     }
 }
 
+/**
+ * @brief Generates a Purify keypair or derives one from an explicit secret.
+ * @param secret_override Optional packed secret to reuse instead of sampling.
+ * @return Generated keypair bundle.
+ */
 inline GeneratedKey generate_key(const std::optional<UInt512>& secret_override = std::nullopt) {
     UInt512 secret = secret_override.has_value() ? *secret_override : random_below(key_space_size());
     return derive_key(secret);
 }
 
+/**
+ * @brief Writes a byte buffer to disk.
+ * @param path Output file path.
+ * @param bytes Bytes to write.
+ */
 inline void write_file(const std::string& path, const Bytes& bytes) {
     std::ofstream file(path, std::ios::binary);
     if (!file) {
@@ -100,10 +137,22 @@ inline void write_file(const std::string& path, const Bytes& bytes) {
     }
 }
 
+/**
+ * @brief Writes a serialized witness assignment for a message and secret.
+ * @param message Message bytes to evaluate.
+ * @param secret Packed secret scalar pair.
+ * @param output_path Destination path for the witness blob.
+ */
 inline void prove(const Bytes& message, const UInt512& secret, const std::string& output_path = "prove.assn") {
     write_file(output_path, prove_assignment(message, secret));
 }
 
+/**
+ * @brief Dispatches the purify_cpp command-line interface.
+ * @param argc Argument count.
+ * @param argv Argument vector.
+ * @return Process exit status.
+ */
 inline int run_cli(int argc, char** argv) {
     auto usage = [&]() {
         std::cout << "Usage: " << argv[0] << " gen [<seckey>]: generate a key\n";

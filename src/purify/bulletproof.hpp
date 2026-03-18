@@ -2,6 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+/**
+ * @file bulletproof.hpp
+ * @brief Native Bulletproof-style circuit types and witness serialization helpers.
+ */
+
 #pragma once
 
 #include "purify/curve.hpp"
@@ -9,12 +14,14 @@
 
 namespace purify {
 
+/** @brief Columnar witness assignment compatible with the native Bulletproof circuit layout. */
 struct BulletproofAssignmentData {
     std::vector<FieldElement> left;
     std::vector<FieldElement> right;
     std::vector<FieldElement> output;
     std::vector<FieldElement> commitments;
 
+    /** @brief Serializes the witness columns in the legacy assignment blob format. */
     Bytes serialize() const {
         if (left.size() != right.size() || left.size() != output.size()) {
             throw std::runtime_error("Mismatched bulletproof assignment columns");
@@ -51,14 +58,17 @@ struct BulletproofAssignmentData {
     }
 };
 
+/** @brief One sparse matrix entry in a native circuit row. */
 struct NativeBulletproofCircuitTerm {
     std::size_t idx = 0;
     FieldElement scalar;
 };
 
+/** @brief One sparse row of circuit coefficients. */
 struct NativeBulletproofCircuitRow {
     std::vector<NativeBulletproofCircuitTerm> entries;
 
+    /** @brief Appends a sparse coefficient to the row, skipping zero entries. */
     void add(std::size_t idx, const FieldElement& scalar) {
         if (scalar.is_zero()) {
             return;
@@ -67,6 +77,12 @@ struct NativeBulletproofCircuitRow {
     }
 };
 
+/**
+ * @brief Native in-memory representation of a Bulletproof-style arithmetic circuit.
+ *
+ * The matrices are stored in sparse row form per gate column so the circuit can be
+ * built directly in C++ without parser round-trips.
+ */
 struct NativeBulletproofCircuit {
     std::size_t n_gates = 0;
     std::size_t n_commitments = 0;
@@ -79,9 +95,11 @@ struct NativeBulletproofCircuit {
 
     NativeBulletproofCircuit() = default;
 
+    /** @brief Constructs a circuit with pre-sized gate and commitment row arrays. */
     NativeBulletproofCircuit(std::size_t gates, std::size_t commitments, std::size_t bits = 0)
         : n_gates(gates), n_commitments(commitments), n_bits(bits), wl(gates), wr(gates), wo(gates), wv(commitments) {}
 
+    /** @brief Reinitializes the circuit shape and clears all accumulated constraints. */
     void resize(std::size_t gates, std::size_t commitments, std::size_t bits = 0) {
         n_gates = gates;
         n_commitments = commitments;
@@ -93,6 +111,7 @@ struct NativeBulletproofCircuit {
         c.clear();
     }
 
+    /** @brief Returns true when the sparse matrix vectors match the declared circuit dimensions. */
     bool has_valid_shape() const {
         return wl.size() == n_gates
             && wr.size() == n_gates
@@ -100,27 +119,33 @@ struct NativeBulletproofCircuit {
             && wv.size() == n_commitments;
     }
 
+    /** @brief Appends a new linear constraint constant term and returns its index. */
     std::size_t add_constraint(const FieldElement& constant = FieldElement::zero()) {
         c.push_back(constant);
         return c.size() - 1;
     }
 
+    /** @brief Adds a coefficient to the left-wire matrix. */
     void add_left_term(std::size_t gate_idx, std::size_t constraint_idx, const FieldElement& scalar) {
         add_row_term(wl, n_gates, gate_idx, constraint_idx, scalar);
     }
 
+    /** @brief Adds a coefficient to the right-wire matrix. */
     void add_right_term(std::size_t gate_idx, std::size_t constraint_idx, const FieldElement& scalar) {
         add_row_term(wr, n_gates, gate_idx, constraint_idx, scalar);
     }
 
+    /** @brief Adds a coefficient to the output-wire matrix. */
     void add_output_term(std::size_t gate_idx, std::size_t constraint_idx, const FieldElement& scalar) {
         add_row_term(wo, n_gates, gate_idx, constraint_idx, scalar);
     }
 
+    /** @brief Adds a coefficient to the commitment matrix using the Bulletproof sign convention. */
     void add_commitment_term(std::size_t commitment_idx, std::size_t constraint_idx, const FieldElement& scalar) {
         add_row_term(wv, n_commitments, commitment_idx, constraint_idx, scalar.negate());
     }
 
+    /** @brief Evaluates the circuit against a witness assignment and checks all gate and row equations. */
     bool evaluate(const BulletproofAssignmentData& assignment) const {
         if (!has_valid_shape()) {
             return false;
@@ -174,6 +199,7 @@ struct NativeBulletproofCircuit {
     }
 
 private:
+    /** @brief Shared bounds-checked helper for appending a sparse term to one matrix family. */
     static void add_row_term(std::vector<NativeBulletproofCircuitRow>& rows, std::size_t expected_size,
                              std::size_t row_idx, std::size_t constraint_idx, const FieldElement& scalar) {
         if (rows.size() != expected_size) {
@@ -186,8 +212,12 @@ private:
     }
 };
 
+/**
+ * @brief Lowering helper that converts a symbolic transcript into native Bulletproof witness and circuit forms.
+ */
 class BulletproofTranscript {
 public:
+    /** @brief Rewrites transcript variable names to their eventual Bulletproof wire aliases. */
     void replace_expr_v_with_bp_var(Expr& expr) {
         for (auto& term : expr.linear()) {
             auto it = v_to_a_.find(term.first);
@@ -197,6 +227,7 @@ public:
         }
     }
 
+    /** @brief Detects simple witness aliases and records them for later assignment lowering. */
     bool replace_and_insert(Expr& expr, const std::string& symbol) {
         if (!expr.linear().empty()) {
             replace_expr_v_with_bp_var(expr);
@@ -214,11 +245,13 @@ public:
         return false;
     }
 
+    /** @brief Adds one symbolic wire assignment to the lowering state. */
     void add_assignment(const std::string& symbol, Expr expr) {
         bool is_v = replace_and_insert(expr, symbol);
         assignments_.push_back({symbol, std::move(expr), is_v});
     }
 
+    /** @brief Imports a symbolic transcript and pads it to a power-of-two multiplication count. */
     void from_transcript(const Transcript& transcript, std::size_t n_bits) {
         n_bits_ = n_bits;
         std::size_t source_muls = transcript.muls().size();
@@ -239,6 +272,7 @@ public:
         }
     }
 
+    /** @brief Binds packed public-key coordinates and the output commitment into explicit constraints. */
     void add_pubkey_and_out(const UInt512& pubkey, Expr p1x, Expr p2x, Expr out) {
         auto unpacked = unpack_public(pubkey);
         auto add_constraint = [&](const UInt256& packed, Expr expr) {
@@ -252,6 +286,7 @@ public:
         constraints_.push_back({out - Expr::variable("V0"), Expr(0)});
     }
 
+    /** @brief Renders the lowered circuit in the legacy textual verifier format. */
     std::string to_string() const {
         std::size_t n_constraints = 0;
         for (const auto& assignment : assignments_) {
@@ -283,6 +318,7 @@ public:
         return out.str();
     }
 
+    /** @brief Evaluates the lowered symbolic constraints with a concrete commitment value. */
     bool evaluate(const std::unordered_map<std::string, std::optional<FieldElement>>& vars, const FieldElement& commitment) const {
         std::unordered_map<std::string, FieldElement> values;
         values.reserve(vars.size() + assignments_.size() + v_to_a_.size() + 1);
@@ -316,6 +352,7 @@ public:
         return true;
     }
 
+    /** @brief Builds the native sparse circuit object from the lowered assignments and constraints. */
     NativeBulletproofCircuit native_circuit() const {
         NativeBulletproofCircuit circuit;
         circuit.n_gates = n_muls_;
@@ -384,6 +421,7 @@ public:
         return circuit;
     }
 
+    /** @brief Materializes the witness columns expected by the native circuit representation. */
     BulletproofAssignmentData assignment_data(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
         std::unordered_map<std::string, FieldElement> values;
         values.reserve(vars.size() + assignments_.size() + v_to_a_.size());
@@ -432,6 +470,7 @@ public:
         return assignment;
     }
 
+    /** @brief Serializes the derived witness assignment using the legacy blob format. */
     Bytes serialize_assignment(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
         return assignment_data(vars).serialize();
     }
@@ -443,6 +482,7 @@ private:
         bool is_v;
     };
 
+    /** @brief Evaluates an expression using a fully known variable map and throws on missing values. */
     static FieldElement evaluate_known(const Expr& expr, const std::unordered_map<std::string, FieldElement>& values) {
         FieldElement out = expr.constant();
         for (const auto& term : expr.linear()) {
@@ -464,10 +504,12 @@ private:
     std::size_t n_bits_ = 0;
 };
 
+/** @brief Selects one of two field constants using a single boolean expression bit. */
 inline Expr circuit_1bit(const std::array<FieldElement, 2>& values, Transcript&, const Expr& x) {
     return Expr(values[0]) + x * (values[1] - values[0]);
 }
 
+/** @brief Selects one of four field constants using two boolean expression bits. */
 inline Expr circuit_2bit(const std::array<FieldElement, 4>& values, Transcript& transcript, const Expr& x, const Expr& y) {
     Expr xy = transcript.mul(x, y);
     return Expr(values[0])
@@ -476,6 +518,7 @@ inline Expr circuit_2bit(const std::array<FieldElement, 4>& values, Transcript& 
         + xy * (values[0] + values[3] - values[1] - values[2]);
 }
 
+/** @brief Selects one of eight field constants using three boolean expression bits. */
 inline Expr circuit_3bit(const std::array<FieldElement, 8>& values, Transcript& transcript, const Expr& x, const Expr& y, const Expr& z) {
     Expr xy = transcript.mul(x, y);
     Expr yz = transcript.mul(y, z);
@@ -491,8 +534,10 @@ inline Expr circuit_3bit(const std::array<FieldElement, 8>& values, Transcript& 
         + xyz * (values[1] + values[2] + values[4] + values[7] - values[0] - values[3] - values[5] - values[6]);
 }
 
+/** @brief Symbolic affine point represented as independent x and y expressions. */
 using ExprPoint = std::pair<Expr, Expr>;
 
+/** @brief Selects between two affine point constants using one boolean expression bit. */
 inline ExprPoint circuit_1bit_point(const EllipticCurve& curve, const std::array<JacobianPoint, 2>& points, Transcript& transcript, const Expr& b0) {
     std::array<AffinePoint, 2> affine_points{curve.affine(points[0]), curve.affine(points[1])};
     return {
@@ -501,6 +546,7 @@ inline ExprPoint circuit_1bit_point(const EllipticCurve& curve, const std::array
     };
 }
 
+/** @brief Selects between four affine point constants using two boolean expression bits. */
 inline ExprPoint circuit_2bit_point(const EllipticCurve& curve, const std::array<JacobianPoint, 4>& points, Transcript& transcript, const Expr& b0, const Expr& b1) {
     std::array<AffinePoint, 4> affine_points{curve.affine(points[0]), curve.affine(points[1]), curve.affine(points[2]), curve.affine(points[3])};
     return {
@@ -509,6 +555,7 @@ inline ExprPoint circuit_2bit_point(const EllipticCurve& curve, const std::array
     };
 }
 
+/** @brief Selects between eight affine point constants using three boolean expression bits. */
 inline ExprPoint circuit_3bit_point(const EllipticCurve& curve, const std::array<JacobianPoint, 8>& points, Transcript& transcript, const Expr& b0, const Expr& b1, const Expr& b2) {
     std::array<AffinePoint, 8> affine_points{
         curve.affine(points[0]), curve.affine(points[1]), curve.affine(points[2]), curve.affine(points[3]),
@@ -524,10 +571,12 @@ inline ExprPoint circuit_3bit_point(const EllipticCurve& curve, const std::array
     };
 }
 
+/** @brief Conditionally negates an elliptic-curve point encoded as symbolic affine expressions. */
 inline ExprPoint circuit_optionally_negate_ec(const ExprPoint& point, Transcript& transcript, const Expr& negate_bit) {
     return {point.first, transcript.mul(Expr(1) - 2 * negate_bit, point.second)};
 }
 
+/** @brief Symbolically adds two affine elliptic-curve points. */
 inline ExprPoint circuit_ec_add(Transcript& transcript, const ExprPoint& p1, const ExprPoint& p2) {
     Expr lambda = transcript.div(p2.second - p1.second, p2.first - p1.first);
     Expr x = transcript.mul(lambda, lambda) - p1.first - p2.first;
@@ -535,11 +584,13 @@ inline ExprPoint circuit_ec_add(Transcript& transcript, const ExprPoint& p1, con
     return {x, y};
 }
 
+/** @brief Symbolically adds two affine points and returns only the resulting x-coordinate. */
 inline Expr circuit_ec_add_x(Transcript& transcript, const ExprPoint& p1, const ExprPoint& p2) {
     Expr lambda = transcript.div(p2.second - p1.second, p2.first - p1.first);
     return transcript.mul(lambda, lambda) - p1.first - p2.first;
 }
 
+/** @brief Builds the symbolic x-coordinate multiplication gadget for one curve point. */
 inline Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript, const JacobianPoint& point, const std::vector<Expr>& bits) {
     std::vector<JacobianPoint> powers;
     powers.reserve(bits.size());
@@ -590,6 +641,7 @@ inline Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transc
     return circuit_ec_add_x(transcript, out, lookups.back());
 }
 
+/** @brief Builds the symbolic Purify output combiner over two x-coordinates. */
 inline Expr circuit_combine(Transcript& transcript, const Expr& x1, const Expr& x2) {
     Expr u = x1;
     Expr v = x2 * field_di();
@@ -597,6 +649,7 @@ inline Expr circuit_combine(Transcript& transcript, const Expr& x1, const Expr& 
                           transcript.mul(u - v, u - v));
 }
 
+/** @brief Result bundle returned by the main symbolic Purify circuit construction. */
 struct CircuitMainResult {
     Expr out;
     Expr p1x;
@@ -604,6 +657,7 @@ struct CircuitMainResult {
     std::size_t n_bits;
 };
 
+/** @brief Builds the full symbolic Purify circuit from message points and optional witness scalars. */
 inline CircuitMainResult circuit_main(Transcript& transcript, const JacobianPoint& m1, const JacobianPoint& m2,
                                       const std::optional<UInt256>& z1 = std::nullopt,
                                       const std::optional<UInt256>& z2 = std::nullopt) {

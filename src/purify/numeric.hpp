@@ -2,32 +2,46 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+/**
+ * @file numeric.hpp
+ * @brief Fixed-width integer and field arithmetic helpers used throughout Purify.
+ */
+
 #pragma once
 
 #include "purify/common.hpp"
 
 namespace purify {
 
+/**
+ * @brief Little-endian fixed-width unsigned integer with simple arithmetic utilities.
+ *
+ * @tparam Words Number of 64-bit limbs stored in the integer.
+ */
 template <std::size_t Words>
 struct BigUInt {
     std::array<std::uint64_t, Words> limbs{};
 
+    /** @brief Returns the additive identity. */
     static BigUInt zero() {
         return {};
     }
 
+    /** @brief Returns the multiplicative identity. */
     static BigUInt one() {
         BigUInt out;
         out.limbs[0] = 1;
         return out;
     }
 
+    /** @brief Constructs a value from a single 64-bit limb. */
     static BigUInt from_u64(std::uint64_t value) {
         BigUInt out;
         out.limbs[0] = value;
         return out;
     }
 
+    /** @brief Parses a big-endian byte string into the fixed-width integer. */
     static BigUInt from_bytes_be(const unsigned char* data, std::size_t size) {
         BigUInt out;
         for (std::size_t i = 0; i < size; ++i) {
@@ -37,6 +51,7 @@ struct BigUInt {
         return out;
     }
 
+    /** @brief Parses a hexadecimal string, ignoring optional `0x` and whitespace. */
     static BigUInt from_hex(std::string_view hex) {
         BigUInt out;
         if (hex.size() >= 2 && hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
@@ -62,6 +77,7 @@ struct BigUInt {
         return out;
     }
 
+    /** @brief Returns true when all limbs are zero. */
     bool is_zero() const {
         for (std::uint64_t limb : limbs) {
             if (limb != 0) {
@@ -71,6 +87,7 @@ struct BigUInt {
         return true;
     }
 
+    /** @brief Compares two fixed-width integers using unsigned ordering. */
     int compare(const BigUInt& other) const {
         for (std::size_t i = Words; i-- > 0;) {
             if (limbs[i] < other.limbs[i]) {
@@ -99,6 +116,7 @@ struct BigUInt {
         return compare(other) >= 0;
     }
 
+    /** @brief Adds a small unsigned value in place. */
     void add_small(std::uint32_t value) {
         unsigned __int128 carry = value;
         for (std::size_t i = 0; i < Words && carry != 0; ++i) {
@@ -111,6 +129,7 @@ struct BigUInt {
         }
     }
 
+    /** @brief Multiplies by a small unsigned value in place. */
     void mul_small(std::uint32_t value) {
         unsigned __int128 carry = 0;
         for (std::size_t i = 0; i < Words; ++i) {
@@ -123,6 +142,7 @@ struct BigUInt {
         }
     }
 
+    /** @brief Adds another fixed-width integer, throwing on overflow. */
     void add_assign(const BigUInt& other) {
         unsigned __int128 carry = 0;
         for (std::size_t i = 0; i < Words; ++i) {
@@ -135,6 +155,7 @@ struct BigUInt {
         }
     }
 
+    /** @brief Subtracts another fixed-width integer, throwing on underflow. */
     void sub_assign(const BigUInt& other) {
         std::uint64_t borrow = 0;
         for (std::size_t i = 0; i < Words; ++i) {
@@ -153,6 +174,7 @@ struct BigUInt {
         }
     }
 
+    /** @brief Returns the index of the highest set bit plus one. */
     std::size_t bit_length() const {
         for (std::size_t i = Words; i-- > 0;) {
             if (limbs[i] != 0) {
@@ -162,6 +184,7 @@ struct BigUInt {
         return 0;
     }
 
+    /** @brief Returns the bit at the given little-endian bit index. */
     bool bit(std::size_t index) const {
         std::size_t word = index / 64;
         std::size_t shift = index % 64;
@@ -171,6 +194,7 @@ struct BigUInt {
         return ((limbs[word] >> shift) & 1U) != 0;
     }
 
+    /** @brief Sets the bit at the given little-endian bit index. */
     void set_bit(std::size_t index) {
         std::size_t word = index / 64;
         std::size_t shift = index % 64;
@@ -180,6 +204,7 @@ struct BigUInt {
         limbs[word] |= (static_cast<std::uint64_t>(1) << shift);
     }
 
+    /** @brief Returns a copy shifted left by the requested bit count. */
     BigUInt shifted_left(std::size_t bits) const {
         BigUInt out;
         std::size_t word_shift = bits / 64;
@@ -197,6 +222,7 @@ struct BigUInt {
         return out;
     }
 
+    /** @brief Returns a copy shifted right by the requested bit count. */
     BigUInt shifted_right(std::size_t bits) const {
         BigUInt out;
         std::size_t word_shift = bits / 64;
@@ -214,6 +240,7 @@ struct BigUInt {
         return out;
     }
 
+    /** @brief Shifts the value right by one bit in place. */
     void shift_right_one() {
         for (std::size_t i = 0; i < Words; ++i) {
             std::uint64_t next = (i + 1 < Words) ? limbs[i + 1] : 0;
@@ -221,6 +248,7 @@ struct BigUInt {
         }
     }
 
+    /** @brief Clears all bits above the requested width. */
     void mask_bits(std::size_t bits) {
         std::size_t full_words = bits / 64;
         std::size_t extra_bits = bits % 64;
@@ -233,6 +261,7 @@ struct BigUInt {
         }
     }
 
+    /** @brief Divides by a small unsigned value in place and returns the remainder. */
     std::uint32_t divmod_small(std::uint32_t divisor) {
         unsigned __int128 rem = 0;
         for (std::size_t i = Words; i-- > 0;) {
@@ -243,6 +272,7 @@ struct BigUInt {
         return static_cast<std::uint32_t>(rem);
     }
 
+    /** @brief Serializes the value to a fixed-width big-endian byte array. */
     std::array<unsigned char, Words * 8> to_bytes_be() const {
         std::array<unsigned char, Words * 8> out{};
         for (std::size_t i = 0; i < Words; ++i) {
@@ -255,6 +285,7 @@ struct BigUInt {
         return out;
     }
 
+    /** @brief Formats the value as lowercase hexadecimal without leading zero padding. */
     std::string to_hex() const {
         auto bytes = to_bytes_be();
         std::ostringstream out;
@@ -274,6 +305,7 @@ struct BigUInt {
         return started ? out.str() : "0";
     }
 
+    /** @brief Formats the value as an unsigned decimal string. */
     std::string to_decimal() const {
         if (is_zero()) {
             return "0";
@@ -292,6 +324,7 @@ struct BigUInt {
     }
 };
 
+/** @brief Widens an integer to a larger limb count by zero-extending high limbs. */
 template <std::size_t OutWords, std::size_t InWords>
 BigUInt<OutWords> widen(const BigUInt<InWords>& value) {
     static_assert(OutWords >= InWords, "Cannot narrow with widen");
@@ -302,6 +335,7 @@ BigUInt<OutWords> widen(const BigUInt<InWords>& value) {
     return out;
 }
 
+/** @brief Narrows an integer to a smaller limb count, rejecting truncated high bits. */
 template <std::size_t OutWords, std::size_t InWords>
 BigUInt<OutWords> narrow(const BigUInt<InWords>& value) {
     static_assert(OutWords <= InWords, "Cannot widen with narrow");
@@ -317,6 +351,7 @@ BigUInt<OutWords> narrow(const BigUInt<InWords>& value) {
     return out;
 }
 
+/** @brief Performs long division where numerator and denominator have the same width. */
 template <std::size_t Words>
 std::pair<BigUInt<Words>, BigUInt<Words>> divmod_same(const BigUInt<Words>& numerator, const BigUInt<Words>& denominator) {
     if (denominator.is_zero()) {
@@ -343,6 +378,7 @@ std::pair<BigUInt<Words>, BigUInt<Words>> divmod_same(const BigUInt<Words>& nume
     return {quotient, remainder};
 }
 
+/** @brief Multiplies two fixed-width integers and returns the full-width product. */
 template <std::size_t LeftWords, std::size_t RightWords>
 BigUInt<LeftWords + RightWords> multiply(const BigUInt<LeftWords>& lhs, const BigUInt<RightWords>& rhs) {
     BigUInt<LeftWords + RightWords> out;
@@ -359,36 +395,51 @@ BigUInt<LeftWords + RightWords> multiply(const BigUInt<LeftWords>& lhs, const Bi
     return out;
 }
 
+/** @brief 256-bit unsigned integer used for field elements and curve orders. */
 using UInt256 = BigUInt<4>;
+/** @brief 320-bit unsigned integer used during hash-to-curve sampling. */
 using UInt320 = BigUInt<5>;
+/** @brief 512-bit unsigned integer used for private and packed public keys. */
 using UInt512 = BigUInt<8>;
 
 class FieldElement;
 
 inline const UInt256& prime_p();
+/** @brief Squares a field element. */
 FieldElement square(const FieldElement& value);
+/** @brief Returns the Legendre symbol of a field element. */
 int legendre_symbol(const FieldElement& value);
 
+/**
+ * @brief Field element modulo the backend scalar field used by this implementation.
+ *
+ * The implementation delegates arithmetic to secp256k1-zkp scalar routines through
+ * a thin C bridge so the C++ layer stays header-only.
+ */
 class FieldElement {
 public:
     FieldElement() {
         purify_scalar_set_int(&value_, 0);
     }
 
+    /** @brief Returns the additive identity of the scalar field. */
     static FieldElement zero() {
         return FieldElement();
     }
 
+    /** @brief Returns the multiplicative identity of the scalar field. */
     static FieldElement one() {
         return from_u64(1);
     }
 
+    /** @brief Constructs a field element from an unsigned 64-bit integer. */
     static FieldElement from_u64(std::uint64_t value) {
         FieldElement out;
         purify_scalar_set_u64(&out.value_, value);
         return out;
     }
 
+    /** @brief Constructs a field element from a signed integer, reducing negatives modulo the field. */
     static FieldElement from_int(std::int64_t value) {
         if (value >= 0) {
             return from_u64(static_cast<std::uint64_t>(value));
@@ -396,6 +447,7 @@ public:
         return from_u64(static_cast<std::uint64_t>(-value)).negate();
     }
 
+    /** @brief Decodes a 32-byte big-endian field element. */
     static FieldElement from_bytes32(const std::array<unsigned char, 32>& bytes) {
         FieldElement out;
         int overflow = 0;
@@ -403,47 +455,57 @@ public:
         return out;
     }
 
+    /** @brief Converts a 256-bit unsigned integer into the scalar field representation. */
     static FieldElement from_uint256(const UInt256& value) {
         return from_bytes32(narrow<4>(widen<4>(value)).to_bytes_be());
     }
 
+    /** @brief Exports the field element as a canonical 256-bit unsigned integer. */
     UInt256 to_uint256() const {
         std::array<unsigned char, 32> bytes = to_bytes_be();
         return UInt256::from_bytes_be(bytes.data(), bytes.size());
     }
 
+    /** @brief Serializes the field element in big-endian form. */
     std::array<unsigned char, 32> to_bytes_be() const {
         std::array<unsigned char, 32> bytes{};
         purify_scalar_get_b32(bytes.data(), &value_);
         return bytes;
     }
 
+    /** @brief Serializes the field element in little-endian form. */
     std::array<unsigned char, 32> to_bytes_le() const {
         std::array<unsigned char, 32> bytes = to_bytes_be();
         std::reverse(bytes.begin(), bytes.end());
         return bytes;
     }
 
+    /** @brief Formats the field element as lowercase hexadecimal. */
     std::string to_hex() const {
         return to_uint256().to_hex();
     }
 
+    /** @brief Formats the field element as an unsigned decimal string. */
     std::string to_decimal() const {
         return to_uint256().to_decimal();
     }
 
+    /** @brief Returns true when the element is zero. */
     bool is_zero() const {
         return purify_scalar_is_zero(&value_) != 0;
     }
 
+    /** @brief Returns true when the element is one. */
     bool is_one() const {
         return purify_scalar_is_one(&value_) != 0;
     }
 
+    /** @brief Returns true when the canonical representative is odd. */
     bool is_odd() const {
         return purify_scalar_is_even(&value_) == 0;
     }
 
+    /** @brief Returns true when the element is a quadratic residue in the field. */
     bool is_square() const {
         if (is_zero()) {
             return true;
@@ -455,18 +517,21 @@ public:
         return result.is_one();
     }
 
+    /** @brief Returns the additive inverse modulo the field prime. */
     FieldElement negate() const {
         FieldElement out;
         purify_scalar_negate(&out.value_, &value_);
         return out;
     }
 
+    /** @brief Returns the multiplicative inverse modulo the field prime. */
     FieldElement inverse() const {
         FieldElement out;
         purify_scalar_inverse_var(&out.value_, &value_);
         return out;
     }
 
+    /** @brief Computes a square root when one exists, otherwise returns `std::nullopt`. */
     std::optional<FieldElement> sqrt() const {
         if (is_zero()) {
             return std::nullopt;
@@ -520,6 +585,7 @@ public:
         return x;
     }
 
+    /** @brief Raises the element to an unsigned exponent via square-and-multiply. */
     FieldElement pow(const UInt256& exponent) const {
         FieldElement result = one();
         std::size_t bits = exponent.bit_length();
@@ -532,24 +598,29 @@ public:
         return result;
     }
 
+    /** @brief Compares two field elements for exact equality. */
     friend bool operator==(const FieldElement& lhs, const FieldElement& rhs) {
         return purify_scalar_eq(&lhs.value_, &rhs.value_) != 0;
     }
 
+    /** @brief Compares two field elements for inequality. */
     friend bool operator!=(const FieldElement& lhs, const FieldElement& rhs) {
         return !(lhs == rhs);
     }
 
+    /** @brief Adds two field elements modulo the field prime. */
     friend FieldElement operator+(const FieldElement& lhs, const FieldElement& rhs) {
         FieldElement out;
         purify_scalar_add(&out.value_, &lhs.value_, &rhs.value_);
         return out;
     }
 
+    /** @brief Subtracts two field elements modulo the field prime. */
     friend FieldElement operator-(const FieldElement& lhs, const FieldElement& rhs) {
         return lhs + rhs.negate();
     }
 
+    /** @brief Multiplies two field elements modulo the field prime. */
     friend FieldElement operator*(const FieldElement& lhs, const FieldElement& rhs) {
         FieldElement out;
         purify_scalar_mul(&out.value_, &lhs.value_, &rhs.value_);
@@ -562,10 +633,12 @@ private:
     purify_scalar value_{};
 };
 
+/** @brief Squares a field element. */
 inline FieldElement square(const FieldElement& value) {
     return value * value;
 }
 
+/** @brief Returns `0` for zero, `1` for quadratic residues, and `-1` for non-residues. */
 inline int legendre_symbol(const FieldElement& value) {
     if (value.is_zero()) {
         return 0;

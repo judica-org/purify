@@ -2,6 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+/**
+ * @file bench_purify.cpp
+ * @brief Nanobench-based performance harness for circuit construction and BPPP operations.
+ */
+
 #define ANKERL_NANOBENCH_IMPLEMENT
 #include "third_party/nanobench/src/include/nanobench.h"
 
@@ -29,11 +34,13 @@ constexpr std::string_view kSecretHex =
     "11427c7268288dddf0cd24af3d30524fd817a91e103e7e02eb28b78db81cb350"
     "b3d2562f45fa8ecd711d1becc02fa348cf2187429228e7aac6644a3da2824e93";
 
+/** @brief Runtime tuning parameters for the nanobench harness. */
 struct BenchConfig {
     std::size_t epochs = 5;
     std::chrono::milliseconds min_epoch_time = 10ms;
 };
 
+/** @brief Precomputed benchmark fixture shared across benchmark cases. */
 struct PurifyBenchCase {
     Bytes message;
     UInt512 secret;
@@ -42,10 +49,12 @@ struct PurifyBenchCase {
     purify::bppp::NormArgProof norm_arg_proof;
 };
 
+/** @brief Estimates heap usage for one row in the native circuit matrix. */
 std::size_t estimate_bytes(const NativeBulletproofCircuitRow& row) {
     return row.entries.capacity() * sizeof(purify::NativeBulletproofCircuitTerm);
 }
 
+/** @brief Estimates heap usage for a vector of native circuit rows. */
 std::size_t estimate_bytes(const std::vector<NativeBulletproofCircuitRow>& rows) {
     std::size_t total = rows.capacity() * sizeof(NativeBulletproofCircuitRow);
     for (const NativeBulletproofCircuitRow& row : rows) {
@@ -54,10 +63,12 @@ std::size_t estimate_bytes(const std::vector<NativeBulletproofCircuitRow>& rows)
     return total;
 }
 
+/** @brief Estimates heap usage for a vector of field elements. */
 std::size_t estimate_bytes(const std::vector<FieldElement>& scalars) {
     return scalars.capacity() * sizeof(FieldElement);
 }
 
+/** @brief Estimates the aggregate in-memory footprint of a native circuit object. */
 std::size_t estimate_bytes(const NativeBulletproofCircuit& circuit) {
     return sizeof(circuit)
         + estimate_bytes(circuit.wl)
@@ -67,6 +78,12 @@ std::size_t estimate_bytes(const NativeBulletproofCircuit& circuit) {
         + estimate_bytes(circuit.c);
 }
 
+/**
+ * @brief Parses benchmark-specific command-line arguments.
+ * @param argc Argument count.
+ * @param argv Argument vector.
+ * @return Parsed benchmark configuration.
+ */
 BenchConfig parse_args(int argc, char** argv) {
     BenchConfig config;
     for (int i = 1; i < argc; ++i) {
@@ -91,6 +108,7 @@ BenchConfig parse_args(int argc, char** argv) {
     return config;
 }
 
+/** @brief Builds the shared benchmark fixture and validates the initial proof instance. */
 PurifyBenchCase make_case() {
     PurifyBenchCase out;
     out.message = Bytes{0x01, 0x23, 0x45, 0x67};
@@ -110,6 +128,7 @@ PurifyBenchCase make_case() {
     return out;
 }
 
+/** @brief Creates a consistently configured nanobench runner. */
 ankerl::nanobench::Bench make_bench(const BenchConfig& config) {
     ankerl::nanobench::Bench bench;
     bench.title("purify")
@@ -122,6 +141,12 @@ ankerl::nanobench::Bench make_bench(const BenchConfig& config) {
 
 }  // namespace
 
+/**
+ * @brief Runs the Purify benchmark suite.
+ * @param argc Argument count.
+ * @param argv Argument vector.
+ * @return Process exit status.
+ */
 int main(int argc, char** argv) {
     BenchConfig config = parse_args(argc, argv);
     PurifyBenchCase bench_case = make_case();

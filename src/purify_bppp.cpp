@@ -2,6 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+/**
+ * @file purify_bppp.cpp
+ * @brief C++ convenience wrappers over the low-level BPPP C bridge.
+ */
+
 #include "purify_bppp.hpp"
 
 #include <algorithm>
@@ -13,6 +18,7 @@
 namespace purify::bppp {
 namespace {
 
+/** @brief Flattens compressed point encodings into the contiguous layout expected by the C bridge. */
 std::vector<unsigned char> flatten_points(const std::vector<PointBytes>& points) {
     std::vector<unsigned char> out;
     out.reserve(points.size() * PointBytes{}.size());
@@ -22,6 +28,7 @@ std::vector<unsigned char> flatten_points(const std::vector<PointBytes>& points)
     return out;
 }
 
+/** @brief Flattens scalar encodings into the contiguous layout expected by the C bridge. */
 std::vector<unsigned char> flatten_scalars(const std::vector<ScalarBytes>& scalars) {
     std::vector<unsigned char> out;
     out.reserve(scalars.size() * ScalarBytes{}.size());
@@ -31,6 +38,7 @@ std::vector<unsigned char> flatten_scalars(const std::vector<ScalarBytes>& scala
     return out;
 }
 
+/** @brief Throws when a bridge call signals failure. */
 void require_ok(int ok, const char* message) {
     if (ok == 0) {
         throw std::runtime_error(message);

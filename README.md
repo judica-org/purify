@@ -30,6 +30,14 @@ cmake --build build --target purify_cpp bench_purify -j
 
 The current CMake configuration builds with C++20, C11, warnings enabled, and `-O3` on non-MSVC toolchains.
 
+Generate API documentation with Doxygen:
+
+```sh
+cmake --build build --target docs
+```
+
+The generated HTML entrypoint is `build/docs/html/index.html`.
+
 Optional reference material can be fetched separately:
 
 ```sh

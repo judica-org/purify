@@ -1,6 +1,6 @@
 # Reference Material
 
-This directory now contains optional upstream reference repositories as git submodules.
+This directory contains optional upstream reference repositories as git submodules.
 They are not required for building `purify-cpp`.
 
 Initialize both reference submodules:

@@ -4,12 +4,10 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
-#include <fstream>
 #include <iomanip>
-#include <iostream>
 #include <map>
 #include <optional>
-#include <random>
+#include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -763,36 +761,6 @@ inline Bytes operator+(Bytes lhs, const Bytes& rhs) {
     return lhs;
 }
 
-inline Bytes bytes_from_hex(std::string_view hex) {
-    Bytes out;
-    std::string filtered;
-    filtered.reserve(hex.size());
-    for (char ch : hex) {
-        if (std::isspace(static_cast<unsigned char>(ch)) == 0) {
-            filtered.push_back(ch);
-        }
-    }
-    if ((filtered.size() & 1U) != 0) {
-        throw std::runtime_error("Hex input must have even length");
-    }
-    for (std::size_t i = 0; i < filtered.size(); i += 2) {
-        auto decode = [](char ch) -> unsigned {
-            if (ch >= '0' && ch <= '9') {
-                return static_cast<unsigned>(ch - '0');
-            }
-            if (ch >= 'a' && ch <= 'f') {
-                return static_cast<unsigned>(10 + ch - 'a');
-            }
-            if (ch >= 'A' && ch <= 'F') {
-                return static_cast<unsigned>(10 + ch - 'A');
-            }
-            throw std::runtime_error("Invalid hex input");
-        };
-        out.push_back(static_cast<unsigned char>((decode(filtered[i]) << 4) | decode(filtered[i + 1])));
-    }
-    return out;
-}
-
 inline std::uint64_t ceil_div(std::uint64_t lhs, std::uint64_t rhs) {
     return (lhs + rhs - 1) / rhs;
 }
@@ -1390,7 +1358,7 @@ public:
         return true;
     }
 
-    void write_assignment(const std::unordered_map<std::string, std::optional<FieldElement>>& vars, std::ostream& stream) const {
+    Bytes serialize_assignment(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
         std::unordered_map<std::string, FieldElement> values;
         values.reserve(vars.size() + assignments_.size() + v_to_a_.size());
         for (const auto& item : vars) {
@@ -1409,31 +1377,34 @@ public:
             values[assignment.symbol] = evaluate_known(assignment.expr, values);
         }
 
-        write_u32_le(stream, 1);
-        write_u32_le(stream, static_cast<std::uint32_t>(n_commitments_));
-        write_u64_le(stream, static_cast<std::uint64_t>(n_muls_));
+        Bytes out;
+        out.reserve(4 + 4 + 8 + ((n_muls_ * 3) + 1) * 33);
+        append_u32_le(out, 1);
+        append_u32_le(out, static_cast<std::uint32_t>(n_commitments_));
+        append_u64_le(out, static_cast<std::uint64_t>(n_muls_));
         auto write_column = [&](std::string_view prefix) {
             for (std::size_t i = 0; i < n_muls_; ++i) {
-                stream.put(static_cast<char>(0x20));
+                out.push_back(static_cast<unsigned char>(0x20));
                 std::string key = std::string(prefix) + std::to_string(i);
                 auto it = values.find(key);
                 if (it == values.end()) {
                     throw std::runtime_error("Missing serialized assignment column " + key);
                 }
                 std::array<unsigned char, 32> bytes = it->second.to_bytes_le();
-                stream.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                out.insert(out.end(), bytes.begin(), bytes.end());
             }
         };
         write_column("L");
         write_column("R");
         write_column("O");
-        stream.put(static_cast<char>(0x20));
+        out.push_back(static_cast<unsigned char>(0x20));
         auto it = values.find("V0");
         if (it == values.end()) {
             throw std::runtime_error("Missing serialized commitment V0");
         }
         std::array<unsigned char, 32> commitment_bytes = it->second.to_bytes_le();
-        stream.write(reinterpret_cast<const char*>(commitment_bytes.data()), commitment_bytes.size());
+        out.insert(out.end(), commitment_bytes.begin(), commitment_bytes.end());
+        return out;
     }
 
 private:
@@ -1455,15 +1426,15 @@ private:
         return out;
     }
 
-    static void write_u32_le(std::ostream& stream, std::uint32_t value) {
+    static void append_u32_le(Bytes& out, std::uint32_t value) {
         for (int i = 0; i < 4; ++i) {
-            stream.put(static_cast<char>((value >> (8 * i)) & 0xffU));
+            out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
         }
     }
 
-    static void write_u64_le(std::ostream& stream, std::uint64_t value) {
+    static void append_u64_le(Bytes& out, std::uint64_t value) {
         for (int i = 0; i < 8; ++i) {
-            stream.put(static_cast<char>((value >> (8 * i)) & 0xffU));
+            out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
         }
     }
 
@@ -1650,27 +1621,12 @@ struct GeneratedKey {
     UInt512 public_key;
 };
 
-inline UInt512 random_below(const UInt512& range) {
-    std::random_device rng;
-    while (true) {
-        std::array<unsigned char, 64> bytes{};
-        for (unsigned char& byte : bytes) {
-            byte = static_cast<unsigned char>(rng());
-        }
-        UInt512 candidate = UInt512::from_bytes_be(bytes.data(), bytes.size());
-        if (candidate.compare(range) < 0) {
-            return candidate;
-        }
-    }
-}
-
 inline UInt512 key_space_size() {
     static const UInt512 value = multiply(half_n1(), half_n2());
     return value;
 }
 
-inline GeneratedKey generate_key(const std::optional<UInt512>& secret_override = std::nullopt) {
-    UInt512 secret = secret_override.has_value() ? *secret_override : random_below(key_space_size());
+inline GeneratedKey derive_key(const UInt512& secret) {
     auto unpacked = unpack_secret(secret);
     AffinePoint p1 = curve1().affine(curve1().mul(generator1(), unpacked.first));
     AffinePoint p2 = curve2().affine(curve2().mul(generator2(), unpacked.second));
@@ -1697,7 +1653,7 @@ inline std::string verifier(const Bytes& message, const UInt512& pubkey) {
     return bp.to_string();
 }
 
-inline void prove(const Bytes& message, const UInt512& secret, const std::string& output_path = "prove.assn") {
+inline Bytes prove_assignment(const Bytes& message, const UInt512& secret) {
     auto unpacked = unpack_secret(secret);
     JacobianPoint m1 = hash_to_curve(bytes_from_ascii("Eval/1/") + message, curve1());
     JacobianPoint m2 = hash_to_curve(bytes_from_ascii("Eval/2/") + message, curve2());
@@ -1727,10 +1683,6 @@ inline void prove(const Bytes& message, const UInt512& secret, const std::string
         throw std::runtime_error("Bulletproof transcript check failed");
     }
 
-    std::ofstream file(output_path, std::ios::binary);
-    if (!file) {
-        throw std::runtime_error("Unable to open proof output file");
-    }
     auto vars = transcript.varmap();
     auto it = vars.find("V0");
     if (it == vars.end()) {
@@ -1738,69 +1690,7 @@ inline void prove(const Bytes& message, const UInt512& secret, const std::string
     } else {
         vars["V0"] = native_out;
     }
-    bp.write_assignment(vars, file);
-}
-
-inline int run_cli(int argc, char** argv) {
-    auto usage = [&]() {
-        std::cout << "Usage: " << argv[0] << " gen [<seckey>]: generate a key\n";
-        std::cout << "       " << argv[0] << " eval <seckey> <hexmsg>: evaluate the PRF\n";
-        std::cout << "       " << argv[0] << " verifier <hexmsg> <pubkey>: output verifier circuit for a given message\n";
-        std::cout << "       " << argv[0] << " prove <hexmsg> <seckey>: produce input for verifier\n";
-    };
-
-    try {
-        if (argc < 2) {
-            usage();
-            return 0;
-        }
-        std::string command = argv[1];
-        if (command == "gen") {
-            std::optional<UInt512> secret_override;
-            if (argc >= 3) {
-                secret_override = UInt512::from_hex(argv[2]);
-            }
-            GeneratedKey key = generate_key(secret_override);
-            std::cout << "z=" << key.secret.to_hex() << " # private key\n";
-            std::cout << "x=" << key.public_key.to_hex() << " # public key\n";
-            return 0;
-        }
-        if (command == "eval") {
-            if (argc != 4) {
-                usage();
-                return 1;
-            }
-            UInt512 secret = UInt512::from_hex(argv[2]);
-            Bytes message = bytes_from_hex(argv[3]);
-            std::cout << "eval: " << eval(secret, message).to_hex() << "\n";
-            return 0;
-        }
-        if (command == "verifier") {
-            if (argc != 4) {
-                usage();
-                return 1;
-            }
-            Bytes message = bytes_from_hex(argv[2]);
-            UInt512 pubkey = UInt512::from_hex(argv[3]);
-            std::cout << verifier(message, pubkey) << "\n";
-            return 0;
-        }
-        if (command == "prove") {
-            if (argc != 4) {
-                usage();
-                return 1;
-            }
-            Bytes message = bytes_from_hex(argv[2]);
-            UInt512 secret = UInt512::from_hex(argv[3]);
-            prove(message, secret);
-            return 0;
-        }
-        std::cout << "Unknown command\n";
-        return 1;
-    } catch (const std::exception& ex) {
-        std::cerr << ex.what() << "\n";
-        return 1;
-    }
+    return bp.serialize_assignment(vars);
 }
 
 }  // namespace purify

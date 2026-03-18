@@ -103,6 +103,10 @@ add_library(purify_bppp_support ALIAS purify)
 
 purify_configure_library_target(purify)
 
+if(WIN32)
+    target_link_libraries(purify PUBLIC bcrypt)
+endif()
+
 install(TARGETS purify
     EXPORT purifyTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -159,10 +163,6 @@ if(PURIFY_BUILD_CLI)
         PRIVATE
             purify::purify
     )
-
-    if(WIN32)
-        target_link_libraries(purify_cpp PRIVATE bcrypt)
-    endif()
 
     purify_enable_warnings(purify_cpp)
 endif()

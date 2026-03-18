@@ -9,6 +9,24 @@
 
 #pragma once
 
+#include <cerrno>
+#include <concepts>
+#include <cstdlib>
+#include <fstream>
+#include <span>
+#include <type_traits>
+
+#if defined(_WIN32)
+#include <bcrypt.h>
+#elif defined(__linux__)
+#include <sys/random.h>
+#include <unistd.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#include <unistd.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "purify/bulletproof.hpp"
 
 namespace purify {
@@ -26,9 +44,183 @@ struct BulletproofWitnessData {
     BulletproofAssignmentData assignment;
 };
 
+/** @brief Derives the packed public key corresponding to a packed secret. */
+inline Result<GeneratedKey> derive_key(const UInt512& secret);
+
 /** @brief Returns the size of the packed Purify secret-key space. */
 inline UInt512 key_space_size() {
     return packed_secret_key_space_size();
+}
+
+/** @brief Callable concept for byte-fill RNG adapters that cannot fail. */
+template <typename FillRandom>
+concept NoexceptByteFill = requires(FillRandom&& fill, std::span<unsigned char> bytes) {
+    { std::forward<FillRandom>(fill)(bytes) } noexcept -> std::same_as<void>;
+};
+
+/** @brief Callable concept for byte-fill RNG adapters that report failure via `Status`. */
+template <typename FillRandom>
+concept NoexceptCheckedByteFill = requires(FillRandom&& fill, std::span<unsigned char> bytes) {
+    { std::forward<FillRandom>(fill)(bytes) } noexcept -> std::same_as<Status>;
+};
+
+/**
+ * @brief Fills a buffer with operating-system randomness.
+ * @param bytes Buffer to fill.
+ * @return Success or `ErrorCode::EntropyUnavailable`.
+ */
+inline Status fill_secure_random(std::span<unsigned char> bytes) noexcept {
+#if defined(_WIN32)
+    unsigned char* out = bytes.data();
+    std::size_t size = bytes.size();
+    while (size != 0) {
+        ULONG chunk = static_cast<ULONG>(std::min<std::size_t>(size, static_cast<std::size_t>(0xFFFFFFFFu)));
+        NTSTATUS status = BCryptGenRandom(nullptr, out, chunk, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        if (status < 0) {
+            return unexpected_error(ErrorCode::EntropyUnavailable, "fill_secure_random:bcrypt");
+        }
+        out += chunk;
+        size -= chunk;
+    }
+    return {};
+#elif defined(__linux__)
+    unsigned char* out = bytes.data();
+    std::size_t size = bytes.size();
+    while (size != 0) {
+        ssize_t written = getrandom(out, size, 0);
+        if (written > 0) {
+            out += static_cast<std::size_t>(written);
+            size -= static_cast<std::size_t>(written);
+            continue;
+        }
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        return unexpected_error(ErrorCode::EntropyUnavailable, "fill_secure_random:getrandom");
+    }
+    return {};
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    arc4random_buf(bytes.data(), bytes.size());
+    return {};
+#else
+    std::ifstream file("/dev/urandom", std::ios::binary);
+    if (!file) {
+        return unexpected_error(ErrorCode::EntropyUnavailable, "fill_secure_random:open_urandom");
+    }
+    file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!file) {
+        return unexpected_error(ErrorCode::EntropyUnavailable, "fill_secure_random:read_urandom");
+    }
+    return {};
+#endif
+}
+
+/**
+ * @brief Samples a uniformly random packed secret below a range using a checked byte-fill source.
+ * @param range Exclusive upper bound.
+ * @param fill_random Callable with signature `Status(std::span<unsigned char>) noexcept`.
+ * @return Random integer in `[0, range)`.
+ */
+template <typename FillRandom>
+requires NoexceptCheckedByteFill<FillRandom>
+inline Result<UInt512> random_below(const UInt512& range, FillRandom&& fill_random) {
+    if (range.is_zero()) {
+        return unexpected_error(ErrorCode::RangeViolation, "random_below:zero_range");
+    }
+    std::size_t bits = range.bit_length();
+    std::size_t bytes_needed = (bits + 7) / 8;
+    std::array<unsigned char, 64> bytes{};
+    std::span<unsigned char> out(bytes.data(), bytes_needed);
+    while (true) {
+        Status status = std::forward<FillRandom>(fill_random)(out);
+        if (!status.has_value()) {
+            return unexpected_error(status.error(), "random_below:fill_random");
+        }
+        UInt512 candidate = UInt512::from_bytes_be(bytes.data(), bytes_needed);
+        candidate.mask_bits(bits);
+        if (candidate.compare(range) < 0) {
+            return candidate;
+        }
+    }
+}
+
+/**
+ * @brief Samples a uniformly random packed secret below a range using a no-fail byte-fill source.
+ * @param range Exclusive upper bound.
+ * @param fill_random Callable with signature `void(std::span<unsigned char>) noexcept`.
+ * @return Random integer in `[0, range)`.
+ */
+template <typename FillRandom>
+requires NoexceptByteFill<FillRandom>
+inline Result<UInt512> random_below(const UInt512& range, FillRandom&& fill_random) {
+    if (range.is_zero()) {
+        return unexpected_error(ErrorCode::RangeViolation, "random_below:zero_range");
+    }
+    std::size_t bits = range.bit_length();
+    std::size_t bytes_needed = (bits + 7) / 8;
+    std::array<unsigned char, 64> bytes{};
+    std::span<unsigned char> out(bytes.data(), bytes_needed);
+    while (true) {
+        std::forward<FillRandom>(fill_random)(out);
+        UInt512 candidate = UInt512::from_bytes_be(bytes.data(), bytes_needed);
+        candidate.mask_bits(bits);
+        if (candidate.compare(range) < 0) {
+            return candidate;
+        }
+    }
+}
+
+/**
+ * @brief Samples a uniformly random packed secret below a range using the built-in OS RNG.
+ * @param range Exclusive upper bound.
+ * @return Random integer in `[0, range)`.
+ */
+inline Result<UInt512> random_below(const UInt512& range) {
+    return random_below(range, fill_secure_random);
+}
+
+/**
+ * @brief Generates a random Purify keypair using the built-in OS RNG.
+ * @return Generated keypair bundle.
+ */
+inline Result<GeneratedKey> generate_key() {
+    Result<UInt512> secret = random_below(key_space_size());
+    if (!secret.has_value()) {
+        return unexpected_error(secret.error(), "generate_key:random_below");
+    }
+    return derive_key(*secret);
+}
+
+/**
+ * @brief Deterministically derives a Purify keypair from seed material.
+ * @param seed Arbitrary seed bytes.
+ * @return Generated keypair bundle.
+ */
+inline Result<GeneratedKey> generate_key(std::span<const unsigned char> seed) {
+    if (seed.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput, "generate_key:empty_seed");
+    }
+    Bytes seed_bytes(seed.begin(), seed.end());
+    std::optional<UInt512> secret = hash_to_int<8>(seed_bytes, key_space_size(), bytes_from_ascii("Purify/KeyGen"));
+    if (!secret.has_value()) {
+        return unexpected_error(ErrorCode::InternalMismatch, "generate_key:hash_to_int_seed");
+    }
+    return derive_key(*secret);
+}
+
+/**
+ * @brief Generates a random Purify keypair using a caller-supplied byte-fill routine.
+ * @param fill_random Callable that fills the supplied byte span.
+ * @return Generated keypair bundle.
+ */
+template <typename FillRandom>
+requires(NoexceptByteFill<FillRandom> || NoexceptCheckedByteFill<FillRandom>)
+inline Result<GeneratedKey> generate_key(FillRandom&& fill_random) {
+    Result<UInt512> secret = random_below(key_space_size(), std::forward<FillRandom>(fill_random));
+    if (!secret.has_value()) {
+        return unexpected_error(secret.error(), "generate_key:random_below_custom");
+    }
+    return derive_key(*secret);
 }
 
 /**

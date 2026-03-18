@@ -149,6 +149,60 @@ void test_secret_hardening_path(TestContext& ctx) {
                "hardened curve2 message multiplication matches the existing arithmetic");
 }
 
+void test_library_key_generation(TestContext& ctx) {
+    std::array<unsigned char, 32> seed{};
+    for (std::size_t i = 0; i < seed.size(); ++i) {
+        seed[i] = static_cast<unsigned char>(i);
+    }
+
+    Result<purify::GeneratedKey> seeded_a = purify::generate_key(std::span<const unsigned char>(seed));
+    expect_ok(ctx, seeded_a, "seeded generate_key succeeds");
+    Result<purify::GeneratedKey> seeded_b = purify::generate_key(std::span<const unsigned char>(seed));
+    expect_ok(ctx, seeded_b, "seeded generate_key is repeatable");
+    if (seeded_a.has_value() && seeded_b.has_value()) {
+        ctx.expect(seeded_a->secret == seeded_b->secret, "seeded generate_key is deterministic");
+        ctx.expect(seeded_a->public_key == seeded_b->public_key, "seeded generate_key derives a stable public key");
+    }
+
+    auto fill_one = [](std::span<unsigned char> bytes) noexcept {
+        std::fill(bytes.begin(), bytes.end(), static_cast<unsigned char>(0));
+        if (!bytes.empty()) {
+            bytes.back() = 1;
+        }
+    };
+    Result<purify::GeneratedKey> callable_key = purify::generate_key(fill_one);
+    expect_ok(ctx, callable_key, "generate_key accepts a no-fail byte-fill callable");
+    Result<purify::GeneratedKey> expected_one = purify::derive_key(purify::UInt512::one());
+    expect_ok(ctx, expected_one, "derive_key succeeds for the packed secret one");
+    if (callable_key.has_value() && expected_one.has_value()) {
+        ctx.expect(callable_key->secret == expected_one->secret, "callable-based generate_key uses the supplied bytes");
+        ctx.expect(callable_key->public_key == expected_one->public_key,
+                   "callable-based generate_key derives the expected public key");
+    }
+
+    auto fill_two = [](std::span<unsigned char> bytes) noexcept -> Status {
+        std::fill(bytes.begin(), bytes.end(), static_cast<unsigned char>(0));
+        if (!bytes.empty()) {
+            bytes.back() = 2;
+        }
+        return {};
+    };
+    Result<purify::GeneratedKey> checked_callable_key = purify::generate_key(fill_two);
+    expect_ok(ctx, checked_callable_key, "generate_key accepts a checked byte-fill callable");
+
+    Result<purify::GeneratedKey> os_key = purify::generate_key();
+    expect_ok(ctx, os_key, "default generate_key succeeds");
+    if (os_key.has_value()) {
+        ctx.expect(purify::is_valid_secret_key(os_key->secret), "default generate_key returns a canonical packed secret");
+        Result<purify::GeneratedKey> roundtrip = purify::derive_key(os_key->secret);
+        expect_ok(ctx, roundtrip, "default generate_key output round-trips through derive_key");
+        if (roundtrip.has_value()) {
+            ctx.expect(roundtrip->public_key == os_key->public_key,
+                       "default generate_key public key matches a round-trip derivation");
+        }
+    }
+}
+
 void test_secret_key_validation(TestContext& ctx) {
     Bytes message = sample_message();
 
@@ -212,6 +266,7 @@ int main() {
 
     test_known_sample(ctx);
     test_secret_hardening_path(ctx);
+    test_library_key_generation(ctx);
     test_secret_key_validation(ctx);
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);

@@ -137,4 +137,19 @@ bool verify_norm_arg(const NormArgProof& proof) {
                                        proof.commitment.data(), proof.proof.data(), proof.proof.size()) != 0;
 }
 
+Result<CommittedPurifyWitness> commit_output_witness(const Bytes& message, const UInt512& secret,
+                                                     const ScalarBytes& blind,
+                                                     const GeneratorBytes& value_gen,
+                                                     const GeneratorBytes& blind_gen) {
+    Result<BulletproofWitnessData> witness = prove_assignment_data(message, secret);
+    if (!witness.has_value()) {
+        return unexpected_error(witness.error(), "commit_output_witness:prove_assignment_data");
+    }
+    Result<PointBytes> commitment = pedersen_commit_char(blind, scalar_bytes(witness->output), value_gen, blind_gen);
+    if (!commitment.has_value()) {
+        return unexpected_error(commitment.error(), "commit_output_witness:pedersen_commit_char");
+    }
+    return CommittedPurifyWitness{witness->public_key, witness->output, std::move(witness->assignment), *commitment};
+}
+
 }  // namespace purify::bppp

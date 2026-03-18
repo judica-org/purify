@@ -94,6 +94,11 @@ function(purify_enable_release_optimizations target)
 endfunction()
 
 add_library(purify
+    src/purify_api.cpp
+    src/purify_bulletproof.cpp
+    src/purify_curve.cpp
+    src/purify_expr.cpp
+    src/purify_numeric.cpp
     src/purify_bppp.cpp
     src/purify_bppp_bridge.c
 )
@@ -166,6 +171,11 @@ if(PURIFY_BUILD_BENCH)
     add_subdirectory(third_party/nanobench EXCLUDE_FROM_ALL)
 
     add_library(purify_bench_support STATIC
+        src/purify_api.cpp
+        src/purify_bulletproof.cpp
+        src/purify_curve.cpp
+        src/purify_expr.cpp
+        src/purify_numeric.cpp
         src/purify_bppp.cpp
         src/purify_bppp_bridge.c
     )

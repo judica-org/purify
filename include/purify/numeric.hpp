@@ -505,7 +505,7 @@ using UInt512 = BigUInt<8>;
 
 class FieldElement;
 
-inline const UInt256& prime_p();
+const UInt256& prime_p();
 /** @brief Squares a field element. */
 FieldElement square(const FieldElement& value);
 /** @brief Returns the Legendre symbol of a field element. */
@@ -519,251 +519,99 @@ int legendre_symbol(const FieldElement& value);
  */
 class FieldElement {
 public:
-    FieldElement() {
-        purify_scalar_set_int(&value_, 0);
-    }
+    FieldElement();
 
     /** @brief Returns the additive identity of the scalar field. */
-    static FieldElement zero() {
-        return FieldElement();
-    }
+    static FieldElement zero();
 
     /** @brief Returns the multiplicative identity of the scalar field. */
-    static FieldElement one() {
-        return from_u64(1);
-    }
+    static FieldElement one();
 
     /** @brief Constructs a field element from an unsigned 64-bit integer. */
-    static FieldElement from_u64(std::uint64_t value) {
-        FieldElement out;
-        purify_scalar_set_u64(&out.value_, value);
-        return out;
-    }
+    static FieldElement from_u64(std::uint64_t value);
 
     /** @brief Constructs a field element from a signed integer, reducing negatives modulo the field. */
-    static FieldElement from_int(std::int64_t value) {
-        if (value >= 0) {
-            return from_u64(static_cast<std::uint64_t>(value));
-        }
-        return from_u64(static_cast<std::uint64_t>(-value)).negate();
-    }
+    static FieldElement from_int(std::int64_t value);
 
     /** @brief Decodes a canonical 32-byte big-endian field element. */
-    static Result<FieldElement> try_from_bytes32(const std::array<unsigned char, 32>& bytes) {
-        FieldElement out;
-        int overflow = 0;
-        purify_scalar_set_b32(&out.value_, bytes.data(), &overflow);
-        if (overflow != 0) {
-            return unexpected_error(ErrorCode::RangeViolation, "FieldElement::try_from_bytes32:out_of_range");
-        }
-        return out;
-    }
+    static Result<FieldElement> try_from_bytes32(const std::array<unsigned char, 32>& bytes);
 
     /**
      * @brief Decodes a 32-byte big-endian field element.
      *
      * Precondition: the input is canonical and strictly below the field modulus.
      */
-    static FieldElement from_bytes32(const std::array<unsigned char, 32>& bytes) {
-        Result<FieldElement> out = try_from_bytes32(bytes);
-        assert(out.has_value() && "FieldElement::from_bytes32() requires a canonical field element");
-        return std::move(*out);
-    }
+    static FieldElement from_bytes32(const std::array<unsigned char, 32>& bytes);
 
     /** @brief Converts a canonical 256-bit unsigned integer into the scalar field representation. */
-    static Result<FieldElement> try_from_uint256(const UInt256& value) {
-        return try_from_bytes32(value.to_bytes_be());
-    }
+    static Result<FieldElement> try_from_uint256(const UInt256& value);
 
     /**
      * @brief Converts a 256-bit unsigned integer into the scalar field representation.
      *
      * Precondition: the integer is strictly below the field modulus.
      */
-    static FieldElement from_uint256(const UInt256& value) {
-        Result<FieldElement> out = try_from_uint256(value);
-        assert(out.has_value() && "FieldElement::from_uint256() requires a canonical field element");
-        return std::move(*out);
-    }
+    static FieldElement from_uint256(const UInt256& value);
 
     /** @brief Exports the field element as a canonical 256-bit unsigned integer. */
-    UInt256 to_uint256() const {
-        std::array<unsigned char, 32> bytes = to_bytes_be();
-        return UInt256::from_bytes_be(bytes.data(), bytes.size());
-    }
+    UInt256 to_uint256() const;
 
     /** @brief Serializes the field element in big-endian form. */
-    std::array<unsigned char, 32> to_bytes_be() const {
-        std::array<unsigned char, 32> bytes{};
-        purify_scalar_get_b32(bytes.data(), &value_);
-        return bytes;
-    }
+    std::array<unsigned char, 32> to_bytes_be() const;
 
     /** @brief Serializes the field element in little-endian form. */
-    std::array<unsigned char, 32> to_bytes_le() const {
-        std::array<unsigned char, 32> bytes = to_bytes_be();
-        std::reverse(bytes.begin(), bytes.end());
-        return bytes;
-    }
+    std::array<unsigned char, 32> to_bytes_le() const;
 
     /** @brief Formats the field element as lowercase hexadecimal. */
-    std::string to_hex() const {
-        return to_uint256().to_hex();
-    }
+    std::string to_hex() const;
 
     /** @brief Formats the field element as an unsigned decimal string. */
-    std::string to_decimal() const {
-        return to_uint256().to_decimal();
-    }
+    std::string to_decimal() const;
 
     /** @brief Returns true when the element is zero. */
-    bool is_zero() const {
-        return purify_scalar_is_zero(&value_) != 0;
-    }
+    bool is_zero() const;
 
     /** @brief Returns true when the element is one. */
-    bool is_one() const {
-        return purify_scalar_is_one(&value_) != 0;
-    }
+    bool is_one() const;
 
     /** @brief Returns true when the canonical representative is odd. */
-    bool is_odd() const {
-        return purify_scalar_is_even(&value_) == 0;
-    }
+    bool is_odd() const;
 
     /** @brief Returns true when the element is a quadratic residue in the field. */
-    bool is_square() const {
-        if (is_zero()) {
-            return true;
-        }
-        UInt256 exponent = prime_p();
-        exponent.sub_assign(UInt256::one());
-        exponent = exponent.shifted_right(1);
-        FieldElement result = pow(exponent);
-        return result.is_one();
-    }
+    bool is_square() const;
 
     /** @brief Returns the additive inverse modulo the field prime. */
-    FieldElement negate() const {
-        FieldElement out;
-        purify_scalar_negate(&out.value_, &value_);
-        return out;
-    }
+    FieldElement negate() const;
 
     /** @brief Conditionally assigns `other` into `*this` when `flag` is true. */
-    void conditional_assign(const FieldElement& other, bool flag) {
-        purify_scalar_cmov(&value_, &other.value_, flag ? 1 : 0);
-    }
+    void conditional_assign(const FieldElement& other, bool flag);
 
     /** @brief Returns the multiplicative inverse modulo the field prime in constant time. */
-    FieldElement inverse_consttime() const {
-        FieldElement out;
-        purify_scalar_inverse(&out.value_, &value_);
-        return out;
-    }
+    FieldElement inverse_consttime() const;
 
     /** @brief Returns the multiplicative inverse modulo the field prime using the faster variable-time backend. */
-    FieldElement inverse() const {
-        FieldElement out;
-        purify_scalar_inverse_var(&out.value_, &value_);
-        return out;
-    }
+    FieldElement inverse() const;
 
     /** @brief Computes a square root when one exists, otherwise returns `std::nullopt`. */
-    std::optional<FieldElement> sqrt() const {
-        if (is_zero()) {
-            return std::nullopt;
-        }
-        if (!is_square()) {
-            return std::nullopt;
-        }
-        UInt256 q = prime_p();
-        q.sub_assign(UInt256::one());
-        unsigned s = 0;
-        while (!q.bit(0)) {
-            q = q.shifted_right(1);
-            ++s;
-        }
-        if (s == 1) {
-            UInt256 exponent = q;
-            exponent.add_small(1);
-            exponent = exponent.shifted_right(1);
-            return pow(exponent);
-        }
-        FieldElement z = FieldElement::from_u64(2);
-        while (legendre_symbol(z) != -1) {
-            z = z + FieldElement::one();
-        }
-        FieldElement c = z.pow(q);
-        UInt256 exponent = q;
-        exponent.add_small(1);
-        exponent = exponent.shifted_right(1);
-        FieldElement x = pow(exponent);
-        FieldElement t = pow(q);
-        unsigned m = s;
-        while (t != FieldElement::one()) {
-            unsigned i = 1;
-            FieldElement t2i = square(t);
-            while (i < m && t2i != FieldElement::one()) {
-                t2i = square(t2i);
-                ++i;
-            }
-            if (i == m) {
-                return std::nullopt;
-            }
-            UInt256 b_exp = UInt256::one();
-            b_exp = b_exp.shifted_left(m - i - 1);
-            FieldElement b = c.pow(b_exp);
-            x = x * b;
-            FieldElement b2 = square(b);
-            t = t * b2;
-            c = b2;
-            m = i;
-        }
-        return x;
-    }
+    std::optional<FieldElement> sqrt() const;
 
     /** @brief Raises the element to an unsigned exponent via square-and-multiply. */
-    FieldElement pow(const UInt256& exponent) const {
-        FieldElement result = one();
-        std::size_t bits = exponent.bit_length();
-        for (std::size_t i = bits; i-- > 0;) {
-            result = result * result;
-            if (exponent.bit(i)) {
-                result = result * *this;
-            }
-        }
-        return result;
-    }
+    FieldElement pow(const UInt256& exponent) const;
 
     /** @brief Compares two field elements for exact equality. */
-    friend bool operator==(const FieldElement& lhs, const FieldElement& rhs) {
-        return purify_scalar_eq(&lhs.value_, &rhs.value_) != 0;
-    }
+    friend bool operator==(const FieldElement& lhs, const FieldElement& rhs);
 
     /** @brief Compares two field elements for inequality. */
-    friend bool operator!=(const FieldElement& lhs, const FieldElement& rhs) {
-        return !(lhs == rhs);
-    }
+    friend bool operator!=(const FieldElement& lhs, const FieldElement& rhs);
 
     /** @brief Adds two field elements modulo the field prime. */
-    friend FieldElement operator+(const FieldElement& lhs, const FieldElement& rhs) {
-        FieldElement out;
-        purify_scalar_add(&out.value_, &lhs.value_, &rhs.value_);
-        return out;
-    }
+    friend FieldElement operator+(const FieldElement& lhs, const FieldElement& rhs);
 
     /** @brief Subtracts two field elements modulo the field prime. */
-    friend FieldElement operator-(const FieldElement& lhs, const FieldElement& rhs) {
-        return lhs + rhs.negate();
-    }
+    friend FieldElement operator-(const FieldElement& lhs, const FieldElement& rhs);
 
     /** @brief Multiplies two field elements modulo the field prime. */
-    friend FieldElement operator*(const FieldElement& lhs, const FieldElement& rhs) {
-        FieldElement out;
-        purify_scalar_mul(&out.value_, &lhs.value_, &rhs.value_);
-        return out;
-    }
+    friend FieldElement operator*(const FieldElement& lhs, const FieldElement& rhs);
 
 private:
     explicit FieldElement(const purify_scalar& raw) : value_(raw) {}
@@ -772,16 +620,9 @@ private:
 };
 
 /** @brief Squares a field element. */
-inline FieldElement square(const FieldElement& value) {
-    return value * value;
-}
+FieldElement square(const FieldElement& value);
 
 /** @brief Returns `0` for zero, `1` for quadratic residues, and `-1` for non-residues. */
-inline int legendre_symbol(const FieldElement& value) {
-    if (value.is_zero()) {
-        return 0;
-    }
-    return value.is_square() ? 1 : -1;
-}
+int legendre_symbol(const FieldElement& value);
 
 }  // namespace purify

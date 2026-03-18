@@ -10,6 +10,9 @@
 #include "purify_bppp.hpp"
 
 #include <algorithm>
+#include <span>
+#include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include "purify_bppp_bridge.h"
@@ -17,24 +20,32 @@
 namespace purify::bppp {
 namespace {
 
-/** @brief Flattens compressed point encodings into the contiguous layout expected by the C bridge. */
-std::vector<unsigned char> flatten_points(const std::vector<PointBytes>& points) {
-    std::vector<unsigned char> out;
-    out.reserve(points.size() * PointBytes{}.size());
-    for (const PointBytes& point : points) {
-        out.insert(out.end(), point.begin(), point.end());
-    }
-    return out;
+template <typename ByteArray>
+constexpr void assert_packed_byte_array_layout() {
+    static_assert(std::is_same_v<typename ByteArray::value_type, unsigned char>,
+                  "byte-span bridge helpers require unsigned-char array elements");
+    static_assert(std::is_trivially_copyable_v<ByteArray>,
+                  "byte-span bridge helpers require trivially copyable array wrappers");
+    static_assert(std::is_standard_layout_v<ByteArray>,
+                  "byte-span bridge helpers require standard-layout array wrappers");
+    static_assert(alignof(ByteArray) == alignof(unsigned char),
+                  "byte-span bridge helpers require byte-aligned array wrappers");
+    static_assert(sizeof(ByteArray) == std::tuple_size_v<ByteArray>,
+                  "byte-span bridge helpers require tightly packed byte arrays with no padding");
 }
 
-/** @brief Flattens scalar encodings into the contiguous layout expected by the C bridge. */
-std::vector<unsigned char> flatten_scalars(const std::vector<ScalarBytes>& scalars) {
-    std::vector<unsigned char> out;
-    out.reserve(scalars.size() * ScalarBytes{}.size());
-    for (const ScalarBytes& scalar : scalars) {
-        out.insert(out.end(), scalar.begin(), scalar.end());
-    }
-    return out;
+template <typename ByteArray>
+std::span<const unsigned char> byte_span(const std::vector<ByteArray>& values) {
+    assert_packed_byte_array_layout<ByteArray>();
+    auto bytes = std::as_bytes(std::span<const ByteArray>(values.data(), values.size()));
+    return {reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()};
+}
+
+template <typename ByteArray>
+std::span<unsigned char> writable_byte_span(std::vector<ByteArray>& values) {
+    assert_packed_byte_array_layout<ByteArray>();
+    auto bytes = std::as_writable_bytes(std::span<ByteArray>(values.data(), values.size()));
+    return {reinterpret_cast<unsigned char*>(bytes.data()), bytes.size()};
 }
 
 /** @brief Returns true when a bridge call signals success. */
@@ -62,19 +73,16 @@ GeneratorBytes value_generator_h() {
 
 Result<std::vector<PointBytes>> create_generators(std::size_t count) {
     std::vector<PointBytes> out(count);
-    std::size_t serialized_len = count * PointBytes{}.size();
     if (count == 0) {
         return out;
     }
-    std::vector<unsigned char> serialized(serialized_len);
+    std::span<unsigned char> serialized = writable_byte_span(out);
+    std::size_t serialized_len = serialized.size();
     if (!require_ok(purify_bppp_create_generators(count, serialized.data(), &serialized_len))) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "create_generators:backend");
     }
     if (serialized_len != serialized.size()) {
         return unexpected_error(ErrorCode::UnexpectedSize, "create_generators:serialized_len");
-    }
-    for (std::size_t i = 0; i < count; ++i) {
-        std::copy_n(serialized.data() + i * PointBytes{}.size(), PointBytes{}.size(), out[i].data());
     }
     return out;
 }
@@ -104,10 +112,10 @@ Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs) {
         }
         generators = std::move(*generated);
     }
-    std::vector<unsigned char> generator_bytes = flatten_points(generators);
-    std::vector<unsigned char> n_vec = flatten_scalars(inputs.n_vec);
-    std::vector<unsigned char> l_vec = flatten_scalars(inputs.l_vec);
-    std::vector<unsigned char> c_vec = flatten_scalars(inputs.c_vec);
+    std::span<const unsigned char> generator_bytes = byte_span(generators);
+    std::span<const unsigned char> n_vec = byte_span(inputs.n_vec);
+    std::span<const unsigned char> l_vec = byte_span(inputs.l_vec);
+    std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
     std::size_t proof_len = purify_bppp_required_proof_size(inputs.n_vec.size(), inputs.c_vec.size());
     PointBytes commitment{};
     Bytes proof(proof_len);
@@ -130,8 +138,8 @@ bool verify_norm_arg(const NormArgProof& proof) {
         return false;
     }
 
-    std::vector<unsigned char> generator_bytes = flatten_points(proof.generators);
-    std::vector<unsigned char> c_vec = flatten_scalars(proof.c_vec);
+    std::span<const unsigned char> generator_bytes = byte_span(proof.generators);
+    std::span<const unsigned char> c_vec = byte_span(proof.c_vec);
     return purify_bppp_verify_norm_arg(proof.rho.data(), generator_bytes.data(), proof.generators.size(),
                                        c_vec.data(), proof.c_vec.size(), proof.n_vec_len,
                                        proof.commitment.data(), proof.proof.data(), proof.proof.size()) != 0;

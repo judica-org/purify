@@ -11,11 +11,118 @@
 
 #include <algorithm>
 #include <cassert>
-#include <charconv>
 #include <format>
+#include <limits>
 #include <sstream>
-#include <string_view>
-#include <unordered_set>
+
+namespace {
+
+using purify::Expr;
+using purify::FieldElement;
+using purify::Result;
+using purify::Symbol;
+using purify::SymbolKind;
+using purify::WitnessAssignments;
+
+std::uint32_t narrow_symbol_index(std::size_t index) {
+    assert(index <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())
+           && "symbol index must fit in uint32_t");
+    return static_cast<std::uint32_t>(index);
+}
+
+struct ResolvedValues {
+    WitnessAssignments witness;
+    std::vector<std::optional<FieldElement>> left;
+    std::vector<std::optional<FieldElement>> right;
+    std::vector<std::optional<FieldElement>> output;
+    std::vector<std::optional<FieldElement>> commitment;
+
+    ResolvedValues(std::size_t witness_count, std::size_t gate_count, std::size_t commitment_count)
+        : witness(witness_count), left(gate_count), right(gate_count), output(gate_count), commitment(commitment_count) {}
+
+    std::optional<FieldElement> get(Symbol symbol) const {
+        std::size_t index = symbol.index;
+        switch (symbol.kind) {
+        case SymbolKind::Witness:
+            if (index >= witness.size()) {
+                return std::nullopt;
+            }
+            return witness[index];
+        case SymbolKind::Left:
+            if (index >= left.size()) {
+                return std::nullopt;
+            }
+            return left[index];
+        case SymbolKind::Right:
+            if (index >= right.size()) {
+                return std::nullopt;
+            }
+            return right[index];
+        case SymbolKind::Output:
+            if (index >= output.size()) {
+                return std::nullopt;
+            }
+            return output[index];
+        case SymbolKind::Commitment:
+            if (index >= commitment.size()) {
+                return std::nullopt;
+            }
+            return commitment[index];
+        }
+        return std::nullopt;
+    }
+
+    bool set(Symbol symbol, const FieldElement& value) {
+        std::size_t index = symbol.index;
+        switch (symbol.kind) {
+        case SymbolKind::Witness:
+            if (index >= witness.size()) {
+                return false;
+            }
+            witness[index] = value;
+            return true;
+        case SymbolKind::Left:
+            if (index >= left.size()) {
+                return false;
+            }
+            left[index] = value;
+            return true;
+        case SymbolKind::Right:
+            if (index >= right.size()) {
+                return false;
+            }
+            right[index] = value;
+            return true;
+        case SymbolKind::Output:
+            if (index >= output.size()) {
+                return false;
+            }
+            output[index] = value;
+            return true;
+        case SymbolKind::Commitment:
+            if (index >= commitment.size()) {
+                return false;
+            }
+            commitment[index] = value;
+            return true;
+        }
+        return false;
+    }
+};
+
+Result<FieldElement> evaluate_known(const Expr& expr, const ResolvedValues& values) {
+    FieldElement out = expr.constant();
+    for (const auto& term : expr.linear()) {
+        std::optional<FieldElement> value = values.get(term.first);
+        if (!value.has_value()) {
+            return purify::unexpected_error(purify::ErrorCode::MissingValue, "BulletproofTranscript::evaluate_known:missing_term");
+        }
+        out = out + *value * term.second;
+    }
+    return out;
+}
+
+}  // namespace
 
 namespace purify {
 
@@ -171,31 +278,33 @@ void NativeBulletproofCircuit::add_row_term(std::vector<NativeBulletproofCircuit
 
 void BulletproofTranscript::replace_expr_v_with_bp_var(Expr& expr) {
     for (auto& term : expr.linear()) {
-        auto it = v_to_a_.find(term.first);
-        if (it != v_to_a_.end()) {
-            term.first = it->second;
+        if (term.first.kind == SymbolKind::Witness
+            && term.first.index < witness_to_a_.size()
+            && witness_to_a_[term.first.index].has_value()) {
+            term.first = *witness_to_a_[term.first.index];
         }
     }
 }
 
-bool BulletproofTranscript::replace_and_insert(Expr& expr, const std::string& symbol) {
+bool BulletproofTranscript::replace_and_insert(Expr& expr, Symbol symbol) {
     if (!expr.linear().empty()) {
         replace_expr_v_with_bp_var(expr);
-        if (expr.constant().is_zero() && expr.linear().size() == 1) {
-            const std::string& name = expr.linear()[0].first;
-            if (v_to_a_.count(name) == 0) {
-                v_to_a_[name] = symbol;
-                v_to_a_order_.push_back({name, symbol});
-                if (name.find("v[") != std::string::npos) {
-                    return true;
-                }
+        if (expr.constant().is_zero()
+            && expr.linear().size() == 1
+            && expr.linear()[0].second == FieldElement::one()
+            && expr.linear()[0].first.kind == SymbolKind::Witness) {
+            std::uint32_t witness_index = expr.linear()[0].first.index;
+            if (witness_index < witness_to_a_.size() && !witness_to_a_[witness_index].has_value()) {
+                witness_to_a_[witness_index] = symbol;
+                witness_to_a_order_.push_back({witness_index, symbol});
+                return true;
             }
         }
     }
     return false;
 }
 
-void BulletproofTranscript::add_assignment(const std::string& symbol, Expr expr) {
+void BulletproofTranscript::add_assignment(Symbol symbol, Expr expr) {
     bool is_v = replace_and_insert(expr, symbol);
     assignments_.push_back({symbol, std::move(expr), is_v});
 }
@@ -203,29 +312,32 @@ void BulletproofTranscript::add_assignment(const std::string& symbol, Expr expr)
 Status BulletproofTranscript::from_transcript(const Transcript& transcript, std::size_t n_bits) {
     assignments_.clear();
     constraints_.clear();
-    v_to_a_.clear();
-    v_to_a_order_.clear();
+    witness_to_a_.assign(transcript.varmap().size(), std::nullopt);
+    witness_to_a_order_.clear();
+    n_witnesses_ = transcript.varmap().size();
     n_bits_ = n_bits;
     std::size_t source_muls = transcript.muls().size();
     for (std::size_t i = 0; i < source_muls; ++i) {
         const auto& mul = transcript.muls()[i];
-        add_assignment(std::format("L{}", i), mul.lhs);
-        add_assignment(std::format("R{}", i), mul.rhs);
-        add_assignment(std::format("O{}", i), mul.out);
+        add_assignment(Symbol::left(narrow_symbol_index(i)), mul.lhs);
+        add_assignment(Symbol::right(narrow_symbol_index(i)), mul.rhs);
+        add_assignment(Symbol::output(narrow_symbol_index(i)), mul.out);
     }
 
-    std::vector<std::string> unmapped_transcript_vars;
-    std::unordered_set<std::string> seen_transcript_vars;
+    std::vector<std::uint32_t> unmapped_transcript_vars;
+    std::vector<bool> seen_transcript_vars(n_witnesses_, false);
     for (const Expr& eq : transcript.eqs()) {
         for (const auto& term : eq.linear()) {
             if (!is_transcript_var(term.first)) {
                 continue;
             }
-            if (v_to_a_.count(term.first) != 0) {
+            std::uint32_t witness_index = term.first.index;
+            if (witness_index >= witness_to_a_.size() || witness_to_a_[witness_index].has_value()) {
                 continue;
             }
-            if (seen_transcript_vars.insert(term.first).second) {
-                unmapped_transcript_vars.push_back(term.first);
+            if (!seen_transcript_vars[witness_index]) {
+                unmapped_transcript_vars.push_back(witness_index);
+                seen_transcript_vars[witness_index] = true;
             }
         }
     }
@@ -238,15 +350,17 @@ Status BulletproofTranscript::from_transcript(const Transcript& transcript, std:
 
     for (std::size_t i = 0; i < unmapped_transcript_vars.size(); ++i) {
         std::size_t gate_idx = source_muls + i;
-        add_assignment(std::format("L{}", gate_idx), Expr::variable(unmapped_transcript_vars[i]));
-        add_assignment(std::format("R{}", gate_idx), Expr(0));
-        add_assignment(std::format("O{}", gate_idx), Expr(0));
+        std::uint32_t gate_symbol = narrow_symbol_index(gate_idx);
+        add_assignment(Symbol::left(gate_symbol), Expr::variable(Symbol::witness(unmapped_transcript_vars[i])));
+        add_assignment(Symbol::right(gate_symbol), Expr(0));
+        add_assignment(Symbol::output(gate_symbol), Expr(0));
     }
 
     for (std::size_t i = total_gates; i < n_muls_; ++i) {
-        add_assignment(std::format("L{}", i), Expr(0));
-        add_assignment(std::format("R{}", i), Expr(0));
-        add_assignment(std::format("O{}", i), Expr(0));
+        std::uint32_t gate_symbol = narrow_symbol_index(i);
+        add_assignment(Symbol::left(gate_symbol), Expr(0));
+        add_assignment(Symbol::right(gate_symbol), Expr(0));
+        add_assignment(Symbol::output(gate_symbol), Expr(0));
     }
 
     for (const Expr& eq : transcript.eqs()) {
@@ -284,7 +398,7 @@ Status BulletproofTranscript::add_pubkey_and_out(const UInt512& pubkey, Expr p1x
         return unexpected_error(p2_status.error(), "BulletproofTranscript::add_pubkey_and_out:p2x");
     }
     replace_expr_v_with_bp_var(out);
-    constraints_.push_back({out - Expr::variable("V0"), Expr(0)});
+    constraints_.push_back({out - Expr::variable(Symbol::commitment(0)), Expr(0)});
     return {};
 }
 
@@ -306,7 +420,7 @@ std::string BulletproofTranscript::to_string() const {
                 continue;
             }
             auto parts = assignment.expr.split();
-            out << assignment.symbol;
+            out << assignment.symbol.to_string();
             if (!parts.second.linear().empty()) {
                 out << " + " << (-parts.second).to_string();
             }
@@ -319,39 +433,42 @@ std::string BulletproofTranscript::to_string() const {
     return out.str();
 }
 
-bool BulletproofTranscript::evaluate(const std::unordered_map<std::string, std::optional<FieldElement>>& vars,
-                                     const FieldElement& commitment) const {
-    std::unordered_map<std::string, FieldElement> values;
-    values.reserve(vars.size() + assignments_.size() + v_to_a_.size() + 1);
-    for (const auto& item : vars) {
-        if (item.second.has_value()) {
-            values[item.first] = *item.second;
-        }
+bool BulletproofTranscript::evaluate(const WitnessAssignments& vars, const FieldElement& commitment) const {
+    ResolvedValues values(n_witnesses_, n_muls_, n_commitments_);
+    for (std::size_t i = 0; i < std::min(vars.size(), values.witness.size()); ++i) {
+        values.witness[i] = vars[i];
     }
-    values["V0"] = commitment;
-    for (const auto& item : v_to_a_order_) {
-        auto it = values.find(item.first);
-        if (it == values.end()) {
+    if (!values.set(Symbol::commitment(0), commitment)) {
+        return false;
+    }
+    for (const auto& item : witness_to_a_order_) {
+        if (item.first >= values.witness.size() || !values.witness[item.first].has_value()) {
             return false;
         }
-        values[item.second] = it->second;
+        if (!values.set(item.second, *values.witness[item.first])) {
+            return false;
+        }
     }
     for (const auto& assignment : assignments_) {
-        Result<FieldElement> evaluated = evaluate_known(assignment.expr, values);
+        Result<FieldElement> evaluated = ::evaluate_known(assignment.expr, values);
         if (!evaluated.has_value()) {
             return false;
         }
-        values[assignment.symbol] = *evaluated;
+        if (!values.set(assignment.symbol, *evaluated)) {
+            return false;
+        }
     }
     for (std::size_t i = 0; i < n_muls_; ++i) {
-        std::string suffix = std::format("{}", i);
-        if (values.at("L" + suffix) * values.at("R" + suffix) != values.at("O" + suffix)) {
+        if (!values.left[i].has_value() || !values.right[i].has_value() || !values.output[i].has_value()) {
+            return false;
+        }
+        if (*values.left[i] * *values.right[i] != *values.output[i]) {
             return false;
         }
     }
     for (const auto& constraint : constraints_) {
-        Result<FieldElement> lhs = evaluate_known(constraint.first, values);
-        Result<FieldElement> rhs = evaluate_known(constraint.second, values);
+        Result<FieldElement> lhs = ::evaluate_known(constraint.first, values);
+        Result<FieldElement> rhs = ::evaluate_known(constraint.second, values);
         if (!lhs.has_value() || !rhs.has_value() || *lhs != *rhs) {
             return false;
         }
@@ -373,39 +490,32 @@ NativeBulletproofCircuit BulletproofTranscript::native_circuit() const {
                       [](const auto& assignment) { return !assignment.is_v; })
         + constraints_.size());
 
-    auto parse_symbol = [](std::string_view symbol) -> std::pair<char, std::size_t> {
-        assert(symbol.size() >= 2 && "native_circuit() requires well-formed symbols");
-        if (symbol.size() < 2) {
-            return {'?', 0};
-        }
-        std::size_t index = 0;
-        auto result = std::from_chars(symbol.data() + 1, symbol.data() + symbol.size(), index);
-        if (result.ec != std::errc() || result.ptr != symbol.data() + symbol.size()) {
-            assert(false && "native_circuit() requires symbols with numeric indices");
-            return {'?', 0};
-        }
-        return {symbol.front(), index};
-    };
     auto append_constraint = [&](const Expr& lhs, const Expr& rhs) {
         Expr combined = lhs - rhs;
         std::size_t constraint_idx = circuit.c.size();
         circuit.c.push_back(combined.constant().negate());
         for (const auto& term : combined.linear()) {
-            auto [kind, index] = parse_symbol(term.first);
-            if (kind == 'L') {
+            std::size_t index = term.first.index;
+            switch (term.first.kind) {
+            case SymbolKind::Left:
                 assert(index < circuit.wl.size() && "native_circuit() L index out of range");
                 circuit.wl[index].add(constraint_idx, term.second);
-            } else if (kind == 'R') {
+                break;
+            case SymbolKind::Right:
                 assert(index < circuit.wr.size() && "native_circuit() R index out of range");
                 circuit.wr[index].add(constraint_idx, term.second);
-            } else if (kind == 'O') {
+                break;
+            case SymbolKind::Output:
                 assert(index < circuit.wo.size() && "native_circuit() O index out of range");
                 circuit.wo[index].add(constraint_idx, term.second);
-            } else if (kind == 'V') {
+                break;
+            case SymbolKind::Commitment:
                 assert(index < circuit.wv.size() && "native_circuit() V index out of range");
                 circuit.wv[index].add(constraint_idx, term.second.negate());
-            } else {
-                assert(false && "native_circuit() encountered an unsupported symbol kind");
+                break;
+            case SymbolKind::Witness:
+                assert(false && "native_circuit() encountered an unmapped witness symbol");
+                break;
             }
         }
     };
@@ -421,43 +531,40 @@ NativeBulletproofCircuit BulletproofTranscript::native_circuit() const {
     return circuit;
 }
 
-Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data(
-    const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
+Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data(const WitnessAssignments& vars) const {
     return assignment_data_impl(vars, nullptr);
 }
 
-Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data(
-    const std::unordered_map<std::string, std::optional<FieldElement>>& vars,
-    const FieldElement& commitment) const {
+Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data(const WitnessAssignments& vars,
+                                                                         const FieldElement& commitment) const {
     return assignment_data_impl(vars, &commitment);
 }
 
-Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data_impl(
-    const std::unordered_map<std::string, std::optional<FieldElement>>& vars,
-    const FieldElement* commitment) const {
-    std::unordered_map<std::string, FieldElement> values;
-    values.reserve(vars.size() + assignments_.size() + v_to_a_.size() + (commitment != nullptr ? 1 : 0));
-    for (const auto& item : vars) {
-        if (item.second.has_value()) {
-            values[item.first] = *item.second;
-        }
+Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data_impl(const WitnessAssignments& vars,
+                                                                              const FieldElement* commitment) const {
+    ResolvedValues values(n_witnesses_, n_muls_, n_commitments_);
+    for (std::size_t i = 0; i < std::min(vars.size(), values.witness.size()); ++i) {
+        values.witness[i] = vars[i];
     }
-    if (commitment != nullptr) {
-        values["V0"] = *commitment;
+    if (commitment != nullptr && !values.set(Symbol::commitment(0), *commitment)) {
+        return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:commitment_slot");
     }
-    for (const auto& item : v_to_a_order_) {
-        auto it = values.find(item.first);
-        if (it == values.end()) {
+    for (const auto& item : witness_to_a_order_) {
+        if (item.first >= values.witness.size() || !values.witness[item.first].has_value()) {
             return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:mapped_value");
         }
-        values[item.second] = it->second;
+        if (!values.set(item.second, *values.witness[item.first])) {
+            return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:mapped_symbol");
+        }
     }
     for (const auto& assignment : assignments_) {
-        Result<FieldElement> evaluated = evaluate_known(assignment.expr, values);
+        Result<FieldElement> evaluated = ::evaluate_known(assignment.expr, values);
         if (!evaluated.has_value()) {
             return unexpected_error(evaluated.error(), "BulletproofTranscript::assignment_data:evaluate_assignment");
         }
-        values[assignment.symbol] = *evaluated;
+        if (!values.set(assignment.symbol, *evaluated)) {
+            return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:store_assignment");
+        }
     }
 
     BulletproofAssignmentData assignment;
@@ -465,42 +572,38 @@ Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data_impl(
     assignment.right.reserve(n_muls_);
     assignment.output.reserve(n_muls_);
     assignment.commitments.reserve(n_commitments_);
-    auto read_column = [&](std::string_view prefix, std::vector<FieldElement>& column) -> Status {
-        for (std::size_t i = 0; i < n_muls_; ++i) {
-            std::string key = std::format("{}{}", prefix, i);
-            auto it = values.find(key);
-            if (it == values.end()) {
+    auto read_column = [&](const std::vector<std::optional<FieldElement>>& source,
+                           std::vector<FieldElement>& column) -> Status {
+        for (const auto& value : source) {
+            if (!value.has_value()) {
                 return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:column_value");
             }
-            column.push_back(it->second);
+            column.push_back(*value);
         }
         return {};
     };
-    Status left_status = read_column("L", assignment.left);
+    Status left_status = read_column(values.left, assignment.left);
     if (!left_status.has_value()) {
         return unexpected_error(left_status.error(), "BulletproofTranscript::assignment_data:left_column");
     }
-    Status right_status = read_column("R", assignment.right);
+    Status right_status = read_column(values.right, assignment.right);
     if (!right_status.has_value()) {
         return unexpected_error(right_status.error(), "BulletproofTranscript::assignment_data:right_column");
     }
-    Status output_status = read_column("O", assignment.output);
+    Status output_status = read_column(values.output, assignment.output);
     if (!output_status.has_value()) {
         return unexpected_error(output_status.error(), "BulletproofTranscript::assignment_data:output_column");
     }
-    for (std::size_t i = 0; i < n_commitments_; ++i) {
-        std::string key = std::format("V{}", i);
-        auto it = values.find(key);
-        if (it == values.end()) {
+    for (const auto& value : values.commitment) {
+        if (!value.has_value()) {
             return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:commitment");
         }
-        assignment.commitments.push_back(it->second);
+        assignment.commitments.push_back(*value);
     }
     return assignment;
 }
 
-Result<Bytes> BulletproofTranscript::serialize_assignment(
-    const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
+Result<Bytes> BulletproofTranscript::serialize_assignment(const WitnessAssignments& vars) const {
     Result<BulletproofAssignmentData> assignment = assignment_data(vars);
     if (!assignment.has_value()) {
         return unexpected_error(assignment.error(), "BulletproofTranscript::serialize_assignment:assignment_data");
@@ -508,26 +611,13 @@ Result<Bytes> BulletproofTranscript::serialize_assignment(
     return assignment->serialize();
 }
 
-bool BulletproofTranscript::is_transcript_var(std::string_view symbol) {
-    return symbol.starts_with("v[");
+bool BulletproofTranscript::is_transcript_var(Symbol symbol) {
+    return symbol.kind == SymbolKind::Witness;
 }
 
 bool BulletproofTranscript::contains_transcript_var(const Expr& expr) {
     return std::any_of(expr.linear().begin(), expr.linear().end(),
                        [](const auto& term) { return is_transcript_var(term.first); });
-}
-
-Result<FieldElement> BulletproofTranscript::evaluate_known(
-    const Expr& expr, const std::unordered_map<std::string, FieldElement>& values) {
-    FieldElement out = expr.constant();
-    for (const auto& term : expr.linear()) {
-        auto it = values.find(term.first);
-        if (it == values.end()) {
-            return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::evaluate_known:missing_term");
-        }
-        out = out + it->second * term.second;
-    }
-    return out;
 }
 
 Expr circuit_1bit(const std::array<FieldElement, 2>& values, Transcript&, const Expr& x) {

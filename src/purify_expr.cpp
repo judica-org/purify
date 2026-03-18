@@ -9,7 +9,56 @@
 
 #include "purify/expr.hpp"
 
+#include <cassert>
+#include <format>
+#include <sstream>
+
+namespace {
+
+int compare_field_elements(const purify::FieldElement& lhs, const purify::FieldElement& rhs) {
+    return lhs.to_uint256().compare(rhs.to_uint256());
+}
+
+}  // namespace
+
 namespace purify {
+
+Symbol Symbol::witness(std::uint32_t index) {
+    return {SymbolKind::Witness, index};
+}
+
+Symbol Symbol::left(std::uint32_t index) {
+    return {SymbolKind::Left, index};
+}
+
+Symbol Symbol::right(std::uint32_t index) {
+    return {SymbolKind::Right, index};
+}
+
+Symbol Symbol::output(std::uint32_t index) {
+    return {SymbolKind::Output, index};
+}
+
+Symbol Symbol::commitment(std::uint32_t index) {
+    return {SymbolKind::Commitment, index};
+}
+
+std::string Symbol::to_string() const {
+    switch (kind) {
+    case SymbolKind::Witness:
+        return std::format("v[{}]", index);
+    case SymbolKind::Left:
+        return std::format("L{}", index);
+    case SymbolKind::Right:
+        return std::format("R{}", index);
+    case SymbolKind::Output:
+        return std::format("O{}", index);
+    case SymbolKind::Commitment:
+        return std::format("V{}", index);
+    }
+    assert(false && "unknown SymbolKind");
+    return "?";
+}
 
 Expr::Expr() : constant_(FieldElement::zero()) {}
 
@@ -17,45 +66,44 @@ Expr::Expr(const FieldElement& value) : constant_(value) {}
 
 Expr::Expr(std::int64_t value) : constant_(FieldElement::from_int(value)) {}
 
-Expr Expr::variable(const std::string& name) {
+Expr Expr::variable(Symbol symbol) {
     Expr out;
-    out.linear_.push_back({name, FieldElement::one()});
+    out.linear_.push_back({symbol, FieldElement::one()});
     return out;
 }
 
 std::string Expr::to_string() const {
-    std::vector<std::string> terms;
+    std::ostringstream out;
+    bool first = true;
     if (!constant_.is_zero() || linear_.empty()) {
-        terms.push_back(constant_.to_decimal());
+        out << constant_.to_decimal();
+        first = false;
     }
     for (const auto& term : linear_) {
-        if (term.second == FieldElement::one()) {
-            terms.push_back(term.first);
-        } else {
-            terms.push_back(term.second.to_decimal() + " * " + term.first);
-        }
-    }
-    if (terms.empty()) {
-        return "0";
-    }
-    std::ostringstream out;
-    for (std::size_t i = 0; i < terms.size(); ++i) {
-        if (i != 0) {
+        if (!first) {
             out << " + ";
         }
-        out << terms[i];
+        if (term.second == FieldElement::one()) {
+            out << term.first.to_string();
+        } else {
+            out << term.second.to_decimal() << " * " << term.first.to_string();
+        }
+        first = false;
     }
     return out.str();
 }
 
-std::optional<FieldElement> Expr::evaluate(const std::unordered_map<std::string, std::optional<FieldElement>>& values) const {
+std::optional<FieldElement> Expr::evaluate(const WitnessAssignments& values) const {
     FieldElement out = constant_;
     for (const auto& term : linear_) {
-        auto it = values.find(term.first);
-        if (it == values.end() || !it->second.has_value()) {
+        if (term.first.kind != SymbolKind::Witness) {
             return std::nullopt;
         }
-        out = out + (*it->second * term.second);
+        std::size_t index = term.first.index;
+        if (index >= values.size() || !values[index].has_value()) {
+            return std::nullopt;
+        }
+        out = out + (*values[index] * term.second);
     }
     return out;
 }
@@ -66,7 +114,7 @@ std::pair<Expr, Expr> Expr::split() const {
     return {Expr(constant_), linear_expr};
 }
 
-void Expr::push_term(const std::pair<std::string, FieldElement>& term) {
+void Expr::push_term(const Term& term) {
     if (term.second.is_zero()) {
         return;
     }
@@ -148,6 +196,28 @@ Expr operator*(std::int64_t scalar, const Expr& expr) {
     return expr * scalar;
 }
 
+bool operator==(const Expr& lhs, const Expr& rhs) {
+    return lhs.constant_ == rhs.constant_ && lhs.linear_ == rhs.linear_;
+}
+
+bool operator<(const Expr& lhs, const Expr& rhs) {
+    int constant_cmp = compare_field_elements(lhs.constant_, rhs.constant_);
+    if (constant_cmp != 0) {
+        return constant_cmp < 0;
+    }
+    std::size_t common = std::min(lhs.linear_.size(), rhs.linear_.size());
+    for (std::size_t i = 0; i < common; ++i) {
+        if (lhs.linear_[i].first != rhs.linear_[i].first) {
+            return lhs.linear_[i].first < rhs.linear_[i].first;
+        }
+        int coeff_cmp = compare_field_elements(lhs.linear_[i].second, rhs.linear_[i].second);
+        if (coeff_cmp != 0) {
+            return coeff_cmp < 0;
+        }
+    }
+    return lhs.linear_.size() < rhs.linear_.size();
+}
+
 std::ostream& operator<<(std::ostream& out, const Expr& expr) {
     out << expr.to_string();
     return out;
@@ -155,16 +225,15 @@ std::ostream& operator<<(std::ostream& out, const Expr& expr) {
 
 Expr Transcript::secret(const std::optional<FieldElement>& value) {
     std::size_t index = varmap_.size();
-    std::string name = std::format("v[{}]", index);
-    varmap_[name] = value;
-    return Expr::variable(name);
+    assert(index <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())
+           && "Transcript::secret() witness index must fit in uint32_t");
+    varmap_.push_back(value);
+    return Expr::variable(Symbol::witness(static_cast<std::uint32_t>(index)));
 }
 
 Expr Transcript::mul(const Expr& lhs, const Expr& rhs) {
-    std::string lhs_str = lhs.to_string();
-    std::string rhs_str = rhs.to_string();
-    auto direct = std::make_pair(lhs_str, rhs_str);
-    auto reverse = std::make_pair(rhs_str, lhs_str);
+    auto direct = std::make_pair(lhs, rhs);
+    auto reverse = std::make_pair(rhs, lhs);
     auto it = mul_cache_.find(direct);
     if (it != mul_cache_.end()) {
         return it->second;
@@ -186,9 +255,7 @@ Expr Transcript::mul(const Expr& lhs, const Expr& rhs) {
 }
 
 Expr Transcript::div(const Expr& lhs, const Expr& rhs) {
-    std::string lhs_str = lhs.to_string();
-    std::string rhs_str = rhs.to_string();
-    auto direct = std::make_pair(lhs_str, rhs_str);
+    auto direct = std::make_pair(lhs, rhs);
     auto it = div_cache_.find(direct);
     if (it != div_cache_.end()) {
         return it->second;
@@ -207,8 +274,7 @@ Expr Transcript::div(const Expr& lhs, const Expr& rhs) {
 }
 
 Expr Transcript::boolean(const Expr& expr) {
-    std::string key = expr.to_string();
-    if (bool_cache_.count(key) != 0) {
+    if (bool_cache_.count(expr) != 0) {
         return expr;
     }
 #ifndef NDEBUG
@@ -216,7 +282,7 @@ Expr Transcript::boolean(const Expr& expr) {
     assert((!value.has_value() || *value == FieldElement::zero() || *value == FieldElement::one())
            && "Transcript::boolean() requires a known value to be 0 or 1");
 #endif
-    bool_cache_.insert(key);
+    bool_cache_.insert(expr);
     muls_.push_back({expr, expr - 1, Expr(0)});
     return expr;
 }

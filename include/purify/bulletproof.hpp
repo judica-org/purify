@@ -13,7 +13,6 @@
 #include <cstddef>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -105,10 +104,10 @@ public:
     void replace_expr_v_with_bp_var(Expr& expr);
 
     /** @brief Detects simple witness aliases and records them for later assignment lowering. */
-    bool replace_and_insert(Expr& expr, const std::string& symbol);
+    bool replace_and_insert(Expr& expr, Symbol symbol);
 
     /** @brief Adds one symbolic wire assignment to the lowering state. */
-    void add_assignment(const std::string& symbol, Expr expr);
+    void add_assignment(Symbol symbol, Expr expr);
 
     /** @brief Imports a symbolic transcript and pads it to a power-of-two multiplication count. */
     Status from_transcript(const Transcript& transcript, std::size_t n_bits);
@@ -120,41 +119,36 @@ public:
     std::string to_string() const;
 
     /** @brief Evaluates the lowered symbolic constraints with a concrete commitment value. */
-    bool evaluate(const std::unordered_map<std::string, std::optional<FieldElement>>& vars, const FieldElement& commitment) const;
+    bool evaluate(const WitnessAssignments& vars, const FieldElement& commitment) const;
 
     /** @brief Builds the native sparse circuit object from the lowered assignments and constraints. */
     NativeBulletproofCircuit native_circuit() const;
 
     /** @brief Materializes the witness columns expected by the native circuit representation. */
-    Result<BulletproofAssignmentData> assignment_data(
-        const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const;
+    Result<BulletproofAssignmentData> assignment_data(const WitnessAssignments& vars) const;
 
     /** @brief Materializes the witness columns with an explicit output commitment value. */
-    Result<BulletproofAssignmentData> assignment_data(
-        const std::unordered_map<std::string, std::optional<FieldElement>>& vars,
-        const FieldElement& commitment) const;
+    Result<BulletproofAssignmentData> assignment_data(const WitnessAssignments& vars, const FieldElement& commitment) const;
 
     /** @brief Serializes the derived witness assignment using the legacy blob format. */
-    Result<Bytes> serialize_assignment(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const;
+    Result<Bytes> serialize_assignment(const WitnessAssignments& vars) const;
 
 private:
     struct Assignment {
-        std::string symbol;
+        Symbol symbol;
         Expr expr;
         bool is_v;
     };
 
-    static bool is_transcript_var(std::string_view symbol);
+    static bool is_transcript_var(Symbol symbol);
     static bool contains_transcript_var(const Expr& expr);
-    static Result<FieldElement> evaluate_known(const Expr& expr, const std::unordered_map<std::string, FieldElement>& values);
-    Result<BulletproofAssignmentData> assignment_data_impl(
-        const std::unordered_map<std::string, std::optional<FieldElement>>& vars,
-        const FieldElement* commitment) const;
+    Result<BulletproofAssignmentData> assignment_data_impl(const WitnessAssignments& vars, const FieldElement* commitment) const;
 
     std::vector<Assignment> assignments_;
     std::vector<std::pair<Expr, Expr>> constraints_;
-    std::unordered_map<std::string, std::string> v_to_a_;
-    std::vector<std::pair<std::string, std::string>> v_to_a_order_;
+    std::vector<std::optional<Symbol>> witness_to_a_;
+    std::vector<std::pair<std::uint32_t, Symbol>> witness_to_a_order_;
+    std::size_t n_witnesses_ = 0;
     std::size_t n_muls_ = 0;
     std::size_t n_commitments_ = 1;
     std::size_t n_bits_ = 0;

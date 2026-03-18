@@ -9,18 +9,56 @@
 
 #pragma once
 
+#include <compare>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "purify/numeric.hpp"
 
 namespace purify {
 
+/** @brief Symbol classes used while deriving witness and Bulletproof wire relations. */
+enum class SymbolKind : std::uint8_t {
+    Witness = 0,
+    Left = 1,
+    Right = 2,
+    Output = 3,
+    Commitment = 4,
+};
+
+/** @brief Compact symbolic variable identifier used inside expressions and transcripts. */
+struct Symbol {
+    SymbolKind kind = SymbolKind::Witness;
+    std::uint32_t index = 0;
+
+    static Symbol witness(std::uint32_t index);
+    static Symbol left(std::uint32_t index);
+    static Symbol right(std::uint32_t index);
+    static Symbol output(std::uint32_t index);
+    static Symbol commitment(std::uint32_t index);
+
+    std::string to_string() const;
+    auto operator<=>(const Symbol&) const = default;
+};
+
+/** @brief Partial witness assignment vector indexed by transcript witness id. */
+using WitnessAssignments = std::vector<std::optional<FieldElement>>;
+
 /**
- * @brief Symbolic affine expression over named variables and field coefficients.
+ * @brief Symbolic affine expression over indexed variables and field coefficients.
  *
  * This type is used while deriving circuit relations before they are lowered into
  * native multiplication gates and linear constraints.
  */
 class Expr {
 public:
+    using Term = std::pair<Symbol, FieldElement>;
+
     /** @brief Constructs the zero expression. */
     Expr();
     /** @brief Constructs a pure constant expression from a field element. */
@@ -29,7 +67,7 @@ public:
     explicit Expr(std::int64_t value);
 
     /** @brief Returns a single-variable expression with coefficient one. */
-    static Expr variable(const std::string& name);
+    static Expr variable(Symbol symbol);
 
     /** @brief Returns the constant term of the affine expression. */
     const FieldElement& constant() const {
@@ -37,12 +75,12 @@ public:
     }
 
     /** @brief Returns mutable access to the sorted linear term list. */
-    std::vector<std::pair<std::string, FieldElement>>& linear() {
+    std::vector<Term>& linear() {
         return linear_;
     }
 
     /** @brief Returns read-only access to the sorted linear term list. */
-    const std::vector<std::pair<std::string, FieldElement>>& linear() const {
+    const std::vector<Term>& linear() const {
         return linear_;
     }
 
@@ -79,21 +117,27 @@ public:
     /** @brief Scales an affine expression by an integer constant. */
     friend Expr operator*(std::int64_t scalar, const Expr& expr);
 
-    /** @brief Formats the expression in a stable human-readable form used for caches and debugging. */
+    /** @brief Compares two affine expressions structurally. */
+    friend bool operator==(const Expr& lhs, const Expr& rhs);
+
+    /** @brief Orders affine expressions structurally for cache keys. */
+    friend bool operator<(const Expr& lhs, const Expr& rhs);
+
+    /** @brief Formats the expression in a stable human-readable form used for debugging and serialization. */
     std::string to_string() const;
 
-    /** @brief Evaluates the expression against a possibly partial variable assignment. */
-    std::optional<FieldElement> evaluate(const std::unordered_map<std::string, std::optional<FieldElement>>& values) const;
+    /** @brief Evaluates the expression against a possibly partial transcript witness assignment. */
+    std::optional<FieldElement> evaluate(const WitnessAssignments& values) const;
 
     /** @brief Splits the expression into a pure constant and a pure linear component. */
     std::pair<Expr, Expr> split() const;
 
 private:
     /** @brief Appends or merges a linear term while preserving canonical ordering. */
-    void push_term(const std::pair<std::string, FieldElement>& term);
+    void push_term(const Term& term);
 
     FieldElement constant_;
-    std::vector<std::pair<std::string, FieldElement>> linear_;
+    std::vector<Term> linear_;
 };
 
 /** @brief Streams the human-readable expression form to an output stream. */
@@ -119,11 +163,11 @@ public:
     /** @brief Records a linear equality constraint between two expressions. */
     void equal(const Expr& lhs, const Expr& rhs);
 
-    /** @brief Evaluates an expression against the transcript's current variable map. */
+    /** @brief Evaluates an expression against the transcript's current witness vector. */
     std::optional<FieldElement> evaluate(const Expr& expr) const;
 
-    /** @brief Returns the underlying variable assignment map. */
-    const std::unordered_map<std::string, std::optional<FieldElement>>& varmap() const {
+    /** @brief Returns the underlying witness assignment vector. */
+    const WitnessAssignments& varmap() const {
         return varmap_;
     }
 
@@ -145,11 +189,11 @@ public:
     }
 
 private:
-    std::unordered_map<std::string, std::optional<FieldElement>> varmap_;
+    WitnessAssignments varmap_;
     std::vector<MulConstraint> muls_;
-    std::map<std::pair<std::string, std::string>, Expr> mul_cache_;
-    std::map<std::pair<std::string, std::string>, Expr> div_cache_;
-    std::unordered_set<std::string> bool_cache_;
+    std::map<std::pair<Expr, Expr>, Expr> mul_cache_;
+    std::map<std::pair<Expr, Expr>, Expr> div_cache_;
+    std::set<Expr> bool_cache_;
     std::vector<Expr> eqs_;
 };
 
@@ -164,5 +208,7 @@ Expr operator*(const Expr& expr, const FieldElement& scalar);
 Expr operator*(const FieldElement& scalar, const Expr& expr);
 Expr operator*(const Expr& expr, std::int64_t scalar);
 Expr operator*(std::int64_t scalar, const Expr& expr);
+bool operator==(const Expr& lhs, const Expr& rhs);
+bool operator<(const Expr& lhs, const Expr& rhs);
 
 }  // namespace purify

@@ -245,14 +245,14 @@ void test_equal_lowering(TestContext& ctx) {
 
     NativeBulletproofCircuit circuit = bp.native_circuit();
     auto vars = transcript.varmap();
-    vars["v[0]"] = FieldElement::one();
+    vars[0] = FieldElement::one();
     Result<BulletproofAssignmentData> bad_assignment = bp.assignment_data(vars, FieldElement::zero());
     expect_ok(ctx, bad_assignment, "assignment_data materializes a raw-witness equality assignment");
     if (bad_assignment.has_value()) {
         ctx.expect(!circuit.evaluate(*bad_assignment), "lowered equality constraint rejects a non-zero witness");
     }
 
-    vars["v[0]"] = FieldElement::zero();
+    vars[0] = FieldElement::zero();
     Result<BulletproofAssignmentData> good_assignment = bp.assignment_data(vars, FieldElement::zero());
     expect_ok(ctx, good_assignment, "assignment_data materializes a satisfying raw-witness equality assignment");
     if (good_assignment.has_value()) {

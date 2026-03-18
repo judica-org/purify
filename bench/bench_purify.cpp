@@ -34,6 +34,14 @@ constexpr std::string_view kSecretHex =
     "11427c7268288dddf0cd24af3d30524fd817a91e103e7e02eb28b78db81cb350"
     "b3d2562f45fa8ecd711d1becc02fa348cf2187429228e7aac6644a3da2824e93";
 
+#ifndef PURIFY_BENCH_BUILD_CONFIG
+#define PURIFY_BENCH_BUILD_CONFIG "unspecified"
+#endif
+
+#ifndef PURIFY_BENCH_IS_RELEASE
+#define PURIFY_BENCH_IS_RELEASE 0
+#endif
+
 /** @brief Runtime tuning parameters for the nanobench harness. */
 struct BenchConfig {
     std::size_t epochs = 5;
@@ -190,6 +198,15 @@ ankerl::nanobench::Bench make_bench(const BenchConfig& config) {
     return bench;
 }
 
+/** @brief Warns when the benchmark is not being run from a Release CMake configuration. */
+void warn_if_not_release() {
+#if !PURIFY_BENCH_IS_RELEASE
+    std::cerr << "warning: bench_purify should be run from a Release CMake configuration; current configuration is "
+              << PURIFY_BENCH_BUILD_CONFIG
+              << ". This target forces release optimization flags, but non-Release build settings can still skew timings.\n";
+#endif
+}
+
 }  // namespace
 
 /**
@@ -204,6 +221,9 @@ int main(int argc, char** argv) {
     if (!config.has_value()) {
         return parse_exit_code < 0 ? 1 : parse_exit_code;
     }
+
+    warn_if_not_release();
+
     std::optional<PurifyBenchCase> bench_case = make_case();
     if (!bench_case.has_value()) {
         return 1;

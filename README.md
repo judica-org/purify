@@ -25,11 +25,13 @@ git submodule update --init third_party/secp256k1-zkp
 Configure and build:
 
 ```sh
-cmake -S . -B build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
 Top-level builds enable the CLI, benchmark, and docs targets by default. When this repository is added to another CMake project via `add_subdirectory(...)`, only the library target is enabled by default.
+
+For multi-config generators such as Xcode, build benchmarks with `--config Release`.
 
 ### Using as a submodule
 
@@ -115,6 +117,8 @@ Run it with:
 ```sh
 ./build/bench_purify
 ```
+
+If `bench_purify` is launched from a non-`Release` CMake configuration, it prints a warning before running. The benchmark target forces release optimization flags, but the intended path is still a full `Release` build.
 
 Optional flags:
 

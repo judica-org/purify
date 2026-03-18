@@ -15,9 +15,19 @@ else()
     set(PURIFY_IS_TOP_LEVEL OFF)
 endif()
 
+get_property(PURIFY_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+
 option(PURIFY_BUILD_CLI "Build the purify_cpp CLI target." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_BENCH "Build the bench_purify benchmark target." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_DOCS "Build the Doxygen docs target when Doxygen is available." ${PURIFY_IS_TOP_LEVEL})
+
+if(PURIFY_IS_TOP_LEVEL AND NOT PURIFY_IS_MULTI_CONFIG)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+    if(PURIFY_BUILD_BENCH AND NOT CMAKE_BUILD_TYPE)
+        message(STATUS "Setting build type to Release because bench_purify should be built in Release")
+        set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
+    endif()
+endif()
 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/secp256k1-zkp/include/secp256k1_bppp.h")
     message(FATAL_ERROR "Missing third_party/secp256k1-zkp. Run: git submodule update --init third_party/secp256k1-zkp")
@@ -35,6 +45,44 @@ function(purify_enable_warnings target)
     endif()
 endfunction()
 
+if(NOT MSVC)
+    set_source_files_properties(src/purify_bppp_bridge.c PROPERTIES
+        COMPILE_OPTIONS "-Wno-unused-function"
+    )
+endif()
+
+function(purify_configure_library_target target)
+    target_compile_features(${target} PUBLIC cxx_std_23)
+
+    set_target_properties(${target} PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+        CXX_EXTENSIONS OFF
+        POSITION_INDEPENDENT_CODE ON
+    )
+
+    target_include_directories(${target}
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
+    purify_enable_warnings(${target})
+endfunction()
+
+function(purify_enable_release_optimizations target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /O2)
+    else()
+        target_compile_options(${target} PRIVATE -O3)
+    endif()
+
+    target_compile_definitions(${target} PRIVATE NDEBUG)
+endfunction()
+
 add_library(purify
     src/purify_bppp.cpp
     src/purify_bppp_bridge.c
@@ -43,31 +91,7 @@ add_library(purify
 add_library(purify::purify ALIAS purify)
 add_library(purify_bppp_support ALIAS purify)
 
-target_compile_features(purify PUBLIC cxx_std_23)
-
-set_target_properties(purify PROPERTIES
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF
-    CXX_EXTENSIONS OFF
-    POSITION_INDEPENDENT_CODE ON
-)
-
-target_include_directories(purify
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-    PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}"
-)
-
-if(NOT MSVC)
-    set_source_files_properties(src/purify_bppp_bridge.c PROPERTIES
-        COMPILE_OPTIONS "-Wno-unused-function"
-    )
-endif()
-
-purify_enable_warnings(purify)
+purify_configure_library_target(purify)
 
 install(TARGETS purify
     EXPORT purifyTargets
@@ -132,17 +156,50 @@ endif()
 if(PURIFY_BUILD_BENCH)
     add_subdirectory(third_party/nanobench EXCLUDE_FROM_ALL)
 
+    add_library(purify_bench_support STATIC
+        src/purify_bppp.cpp
+        src/purify_bppp_bridge.c
+    )
+
+    purify_configure_library_target(purify_bench_support)
+    purify_enable_release_optimizations(purify_bench_support)
+    purify_enable_release_optimizations(nanobench)
+
+    if(PURIFY_IS_MULTI_CONFIG)
+        set(PURIFY_BENCH_BUILD_CONFIG_EXPR "$<CONFIG>")
+        set(PURIFY_BENCH_IS_RELEASE_EXPR "$<IF:$<CONFIG:Release>,1,0>")
+    else()
+        if(CMAKE_BUILD_TYPE)
+            set(PURIFY_BENCH_BUILD_CONFIG_EXPR "${CMAKE_BUILD_TYPE}")
+        else()
+            set(PURIFY_BENCH_BUILD_CONFIG_EXPR "unspecified")
+        endif()
+
+        if(CMAKE_BUILD_TYPE STREQUAL "Release")
+            set(PURIFY_BENCH_IS_RELEASE_EXPR 1)
+        else()
+            set(PURIFY_BENCH_IS_RELEASE_EXPR 0)
+        endif()
+    endif()
+
     add_executable(bench_purify
         bench/bench_purify.cpp
     )
 
     target_link_libraries(bench_purify
         PRIVATE
-            purify::purify
+            purify_bench_support
             nanobench::nanobench
     )
 
+    target_compile_definitions(bench_purify
+        PRIVATE
+            PURIFY_BENCH_BUILD_CONFIG="${PURIFY_BENCH_BUILD_CONFIG_EXPR}"
+            PURIFY_BENCH_IS_RELEASE=${PURIFY_BENCH_IS_RELEASE_EXPR}
+    )
+
     purify_enable_warnings(bench_purify)
+    purify_enable_release_optimizations(bench_purify)
 endif()
 
 if(PURIFY_BUILD_DOCS)

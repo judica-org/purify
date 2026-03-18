@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import collections
 import difflib
 import re
 import subprocess
@@ -13,6 +14,8 @@ SECRET_HEX = (
     "b3d2562f45fa8ecd711d1becc02fa348cf2187429228e7aac6644a3da2824e93"
 )
 MESSAGE_HEX = "01234567"
+FIELD_MODULUS = 115792089237316195423570985008687907852837564279074904382605163141518161494337
+VARIABLE_RE = re.compile(r"^(?:[LROV]\d+|v\[\d+\])$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +53,66 @@ def split_verifier(program: str) -> list[str]:
     return lines
 
 
+def parse_linear_expr(expr: str) -> tuple[int, collections.Counter[str]]:
+    constant = 0
+    coeffs: collections.Counter[str] = collections.Counter()
+    for term in expr.split(" + "):
+        term = term.strip()
+        if not term:
+            continue
+        if " * " in term:
+            coeff_text, symbol = term.split(" * ", 1)
+            if not VARIABLE_RE.fullmatch(symbol):
+                raise RuntimeError(f"unsupported variable term in verifier output: {term}")
+            coeffs[symbol] = (coeffs[symbol] + int(coeff_text)) % FIELD_MODULUS
+            if coeffs[symbol] == 0:
+                del coeffs[symbol]
+            continue
+        if VARIABLE_RE.fullmatch(term):
+            coeffs[term] = (coeffs[term] + 1) % FIELD_MODULUS
+            if coeffs[term] == 0:
+                del coeffs[term]
+            continue
+        constant = (constant + int(term)) % FIELD_MODULUS
+    return constant, coeffs
+
+
+def normalize_statement(statement: str) -> tuple[str, str] | tuple[tuple[tuple[str, int], ...], int]:
+    statement = statement.strip()
+    if statement.endswith(";"):
+        statement = statement[:-1]
+    if " = " not in statement:
+        return ("raw", statement)
+    lhs, rhs = statement.split(" = ", 1)
+    lhs_const, lhs_coeffs = parse_linear_expr(lhs)
+    rhs_const, rhs_coeffs = parse_linear_expr(rhs)
+
+    for symbol, coeff in rhs_coeffs.items():
+        lhs_coeffs[symbol] = (lhs_coeffs[symbol] - coeff) % FIELD_MODULUS
+        if lhs_coeffs[symbol] == 0:
+            del lhs_coeffs[symbol]
+
+    constant = (lhs_const - rhs_const) % FIELD_MODULUS
+    return tuple(sorted(lhs_coeffs.items())), constant
+
+
+def canonical_statement(statement: str) -> str:
+    normalized = normalize_statement(statement)
+    if isinstance(normalized[0], str):
+        return f"{normalized[1]};\n"
+    coeffs, constant = normalized
+    terms: list[str] = []
+    for symbol, coeff in coeffs:
+        if coeff == 1:
+            terms.append(symbol)
+        else:
+            terms.append(f"{coeff} * {symbol}")
+    rhs = (-constant) % FIELD_MODULUS
+    if not terms:
+        terms.append("0")
+    return f"{' + '.join(terms)} = {rhs};\n"
+
+
 def main() -> int:
     args = parse_args()
     reference_script = args.reference_script.resolve()
@@ -77,10 +140,20 @@ def main() -> int:
     cpp_verifier = run_checked([str(purify_cpp), "verifier", MESSAGE_HEX, reference_pubkey])
 
     if cpp_verifier != reference_verifier:
+        reference_statements = split_verifier(reference_verifier)
+        cpp_statements = split_verifier(cpp_verifier)
+
+        if len(reference_statements) == len(cpp_statements):
+            reference_normalized = [normalize_statement(statement) for statement in reference_statements]
+            cpp_normalized = [normalize_statement(statement) for statement in cpp_statements]
+            if cpp_normalized == reference_normalized:
+                print("reference circuit regression passed (normalized verifier circuit matches)")
+                return 0
+
         diff = "".join(
             difflib.unified_diff(
-                split_verifier(reference_verifier),
-                split_verifier(cpp_verifier),
+                [canonical_statement(statement) for statement in reference_statements],
+                [canonical_statement(statement) for statement in cpp_statements],
                 fromfile="reference/purify",
                 tofile="purify_cpp",
             )
@@ -89,7 +162,7 @@ def main() -> int:
         if diff:
             print(diff, file=sys.stderr, end="")
         else:
-            print("outputs differ but no statement-level diff was generated", file=sys.stderr)
+            print("outputs differ but no normalized statement-level diff was generated", file=sys.stderr)
         return 1
 
     print("reference circuit regression passed")

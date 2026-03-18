@@ -121,11 +121,23 @@ bool NativeBulletproofCircuit::evaluate(const BulletproofAssignmentData& assignm
     }
 
     std::vector<FieldElement> acc(c.size(), FieldElement::zero());
-    auto accumulate = [&](const std::vector<NativeBulletproofCircuitRow>& rows, const std::vector<FieldElement>& values) {
+    auto accumulate = [&](const std::vector<NativeBulletproofCircuitRow>& rows,
+                          const std::vector<FieldElement>& values,
+                          bool negate_values = false) {
         if (rows.size() != values.size()) {
             return false;
         }
         for (std::size_t i = 0; i < rows.size(); ++i) {
+            if (negate_values) {
+                FieldElement negated = values[i].negate();
+                for (const NativeBulletproofCircuitTerm& entry : rows[i].entries) {
+                    if (entry.idx >= acc.size()) {
+                        return false;
+                    }
+                    acc[entry.idx] = acc[entry.idx] + entry.scalar * negated;
+                }
+                continue;
+            }
             for (const NativeBulletproofCircuitTerm& entry : rows[i].entries) {
                 if (entry.idx >= acc.size()) {
                     return false;
@@ -138,12 +150,7 @@ bool NativeBulletproofCircuit::evaluate(const BulletproofAssignmentData& assignm
     if (!accumulate(wl, assignment.left) || !accumulate(wr, assignment.right) || !accumulate(wo, assignment.output)) {
         return false;
     }
-    std::vector<FieldElement> negated_commitments;
-    negated_commitments.reserve(assignment.commitments.size());
-    for (const FieldElement& value : assignment.commitments) {
-        negated_commitments.push_back(value.negate());
-    }
-    if (!accumulate(wv, negated_commitments)) {
+    if (!accumulate(wv, assignment.commitments, true)) {
         return false;
     }
 
@@ -416,12 +423,27 @@ NativeBulletproofCircuit BulletproofTranscript::native_circuit() const {
 
 Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data(
     const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const {
+    return assignment_data_impl(vars, nullptr);
+}
+
+Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data(
+    const std::unordered_map<std::string, std::optional<FieldElement>>& vars,
+    const FieldElement& commitment) const {
+    return assignment_data_impl(vars, &commitment);
+}
+
+Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data_impl(
+    const std::unordered_map<std::string, std::optional<FieldElement>>& vars,
+    const FieldElement* commitment) const {
     std::unordered_map<std::string, FieldElement> values;
-    values.reserve(vars.size() + assignments_.size() + v_to_a_.size());
+    values.reserve(vars.size() + assignments_.size() + v_to_a_.size() + (commitment != nullptr ? 1 : 0));
     for (const auto& item : vars) {
         if (item.second.has_value()) {
             values[item.first] = *item.second;
         }
+    }
+    if (commitment != nullptr) {
+        values["V0"] = *commitment;
     }
     for (const auto& item : v_to_a_order_) {
         auto it = values.find(item.first);

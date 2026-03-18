@@ -129,6 +129,11 @@ public:
     Result<BulletproofAssignmentData> assignment_data(
         const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const;
 
+    /** @brief Materializes the witness columns with an explicit output commitment value. */
+    Result<BulletproofAssignmentData> assignment_data(
+        const std::unordered_map<std::string, std::optional<FieldElement>>& vars,
+        const FieldElement& commitment) const;
+
     /** @brief Serializes the derived witness assignment using the legacy blob format. */
     Result<Bytes> serialize_assignment(const std::unordered_map<std::string, std::optional<FieldElement>>& vars) const;
 
@@ -142,6 +147,9 @@ private:
     static bool is_transcript_var(std::string_view symbol);
     static bool contains_transcript_var(const Expr& expr);
     static Result<FieldElement> evaluate_known(const Expr& expr, const std::unordered_map<std::string, FieldElement>& values);
+    Result<BulletproofAssignmentData> assignment_data_impl(
+        const std::unordered_map<std::string, std::optional<FieldElement>>& vars,
+        const FieldElement* commitment) const;
 
     std::vector<Assignment> assignments_;
     std::vector<std::pair<Expr, Expr>> constraints_;

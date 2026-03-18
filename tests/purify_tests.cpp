@@ -4,8 +4,10 @@
 
 #include <iostream>
 #include <string_view>
+#include <utility>
 
 #include "purify.hpp"
+#include "purify_bppp.hpp"
 
 namespace {
 
@@ -244,19 +246,24 @@ void test_equal_lowering(TestContext& ctx) {
     NativeBulletproofCircuit circuit = bp.native_circuit();
     auto vars = transcript.varmap();
     vars["v[0]"] = FieldElement::one();
-    vars["V0"] = FieldElement::zero();
-    Result<BulletproofAssignmentData> bad_assignment = bp.assignment_data(vars);
+    Result<BulletproofAssignmentData> bad_assignment = bp.assignment_data(vars, FieldElement::zero());
     expect_ok(ctx, bad_assignment, "assignment_data materializes a raw-witness equality assignment");
     if (bad_assignment.has_value()) {
         ctx.expect(!circuit.evaluate(*bad_assignment), "lowered equality constraint rejects a non-zero witness");
     }
 
     vars["v[0]"] = FieldElement::zero();
-    Result<BulletproofAssignmentData> good_assignment = bp.assignment_data(vars);
+    Result<BulletproofAssignmentData> good_assignment = bp.assignment_data(vars, FieldElement::zero());
     expect_ok(ctx, good_assignment, "assignment_data materializes a satisfying raw-witness equality assignment");
     if (good_assignment.has_value()) {
         ctx.expect(circuit.evaluate(*good_assignment), "lowered equality constraint accepts the satisfying witness");
     }
+}
+
+void test_bppp_move_overload(TestContext& ctx) {
+    purify::bppp::NormArgInputs inputs;
+    Result<purify::bppp::NormArgProof> proof = purify::bppp::prove_norm_arg(std::move(inputs));
+    expect_error(ctx, proof, ErrorCode::EmptyInput, "rvalue prove_norm_arg overload preserves empty-input validation");
 }
 
 }  // namespace
@@ -270,6 +277,7 @@ int main() {
     test_secret_key_validation(ctx);
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);
+    test_bppp_move_overload(ctx);
 
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " test(s) failed\n";

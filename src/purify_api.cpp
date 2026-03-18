@@ -26,6 +26,17 @@
 #endif
 
 namespace purify {
+namespace {
+
+Bytes tagged_message(std::string_view prefix, const Bytes& message) {
+    Bytes out;
+    out.reserve(prefix.size() + message.size());
+    out.insert(out.end(), prefix.begin(), prefix.end());
+    out.insert(out.end(), message.begin(), message.end());
+    return out;
+}
+
+}  // namespace
 
 Status fill_secure_random(std::span<unsigned char> bytes) noexcept {
 #if defined(_WIN32)
@@ -118,11 +129,11 @@ Result<FieldElement> eval(const UInt512& secret, const Bytes& message) {
     if (!unpacked.has_value()) {
         return unexpected_error(unpacked.error(), "eval:unpack_secret");
     }
-    Result<JacobianPoint> m1 = hash_to_curve(bytes_from_ascii("Eval/1/") + message, curve1());
+    Result<JacobianPoint> m1 = hash_to_curve(tagged_message("Eval/1/", message), curve1());
     if (!m1.has_value()) {
         return unexpected_error(m1.error(), "eval:hash_to_curve_m1");
     }
-    Result<JacobianPoint> m2 = hash_to_curve(bytes_from_ascii("Eval/2/") + message, curve2());
+    Result<JacobianPoint> m2 = hash_to_curve(tagged_message("Eval/2/", message), curve2());
     if (!m2.has_value()) {
         return unexpected_error(m2.error(), "eval:hash_to_curve_m2");
     }
@@ -138,11 +149,11 @@ Result<FieldElement> eval(const UInt512& secret, const Bytes& message) {
 }
 
 Result<std::string> verifier(const Bytes& message, const UInt512& pubkey) {
-    Result<JacobianPoint> m1 = hash_to_curve(bytes_from_ascii("Eval/1/") + message, curve1());
+    Result<JacobianPoint> m1 = hash_to_curve(tagged_message("Eval/1/", message), curve1());
     if (!m1.has_value()) {
         return unexpected_error(m1.error(), "verifier:hash_to_curve_m1");
     }
-    Result<JacobianPoint> m2 = hash_to_curve(bytes_from_ascii("Eval/2/") + message, curve2());
+    Result<JacobianPoint> m2 = hash_to_curve(tagged_message("Eval/2/", message), curve2());
     if (!m2.has_value()) {
         return unexpected_error(m2.error(), "verifier:hash_to_curve_m2");
     }
@@ -164,11 +175,11 @@ Result<std::string> verifier(const Bytes& message, const UInt512& pubkey) {
 }
 
 Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UInt512& pubkey) {
-    Result<JacobianPoint> m1 = hash_to_curve(bytes_from_ascii("Eval/1/") + message, curve1());
+    Result<JacobianPoint> m1 = hash_to_curve(tagged_message("Eval/1/", message), curve1());
     if (!m1.has_value()) {
         return unexpected_error(m1.error(), "verifier_circuit:hash_to_curve_m1");
     }
-    Result<JacobianPoint> m2 = hash_to_curve(bytes_from_ascii("Eval/2/") + message, curve2());
+    Result<JacobianPoint> m2 = hash_to_curve(tagged_message("Eval/2/", message), curve2());
     if (!m2.has_value()) {
         return unexpected_error(m2.error(), "verifier_circuit:hash_to_curve_m2");
     }
@@ -194,11 +205,11 @@ Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const
     if (!unpacked.has_value()) {
         return unexpected_error(unpacked.error(), "prove_assignment_data:unpack_secret");
     }
-    Result<JacobianPoint> m1 = hash_to_curve(bytes_from_ascii("Eval/1/") + message, curve1());
+    Result<JacobianPoint> m1 = hash_to_curve(tagged_message("Eval/1/", message), curve1());
     if (!m1.has_value()) {
         return unexpected_error(m1.error(), "prove_assignment_data:hash_to_curve_m1");
     }
-    Result<JacobianPoint> m2 = hash_to_curve(bytes_from_ascii("Eval/2/") + message, curve2());
+    Result<JacobianPoint> m2 = hash_to_curve(tagged_message("Eval/2/", message), curve2());
     if (!m2.has_value()) {
         return unexpected_error(m2.error(), "prove_assignment_data:hash_to_curve_m2");
     }
@@ -249,14 +260,7 @@ Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const
         return unexpected_error(ErrorCode::TranscriptCheckFailed, "prove_assignment_data:transcript_check");
     }
 
-    auto vars = transcript.varmap();
-    auto it = vars.find("V0");
-    if (it == vars.end()) {
-        vars.insert({"V0", native_out});
-    } else {
-        vars["V0"] = native_out;
-    }
-    Result<BulletproofAssignmentData> assignment = bp.assignment_data(vars);
+    Result<BulletproofAssignmentData> assignment = bp.assignment_data(transcript.varmap(), native_out);
     assert(assignment.has_value() && "prove_assignment_data() should materialize a complete assignment");
     if (!assignment.has_value()) {
         return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:assignment_data");

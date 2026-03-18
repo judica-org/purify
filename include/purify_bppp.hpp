@@ -96,6 +96,8 @@ struct NormArgProof {
  * @return Proof bundle containing all verifier-side inputs, or a BPPP input/backend error.
  */
 Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs);
+/** @brief Produces a standalone BPPP norm argument, moving large inputs into the returned proof when possible. */
+Result<NormArgProof> prove_norm_arg(NormArgInputs&& inputs);
 /**
  * @brief Verifies a standalone BPPP norm argument.
  * @param proof Proof bundle returned by prove_norm_arg.

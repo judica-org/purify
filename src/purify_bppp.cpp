@@ -53,6 +53,62 @@ bool require_ok(int ok) {
     return ok != 0;
 }
 
+template <typename Inputs>
+Result<NormArgProof> prove_norm_arg_impl(Inputs&& inputs) {
+    if (inputs.n_vec.empty() || inputs.l_vec.empty() || inputs.c_vec.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput, "prove_norm_arg:empty_vectors");
+    }
+    if (inputs.l_vec.size() != inputs.c_vec.size()) {
+        return unexpected_error(ErrorCode::SizeMismatch, "prove_norm_arg:l_c_size_mismatch");
+    }
+
+    const std::vector<PointBytes>* generators = &inputs.generators;
+    std::vector<PointBytes> generated_generators;
+    if (generators->empty()) {
+        Result<std::vector<PointBytes>> generated = create_generators(inputs.n_vec.size() + inputs.l_vec.size());
+        if (!generated.has_value()) {
+            return unexpected_error(generated.error(), "prove_norm_arg:create_generators");
+        }
+        generated_generators = std::move(*generated);
+        generators = &generated_generators;
+    }
+    std::span<const unsigned char> generator_bytes = byte_span(*generators);
+    std::span<const unsigned char> n_vec = byte_span(inputs.n_vec);
+    std::span<const unsigned char> l_vec = byte_span(inputs.l_vec);
+    std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
+    std::size_t proof_len = purify_bppp_required_proof_size(inputs.n_vec.size(), inputs.c_vec.size());
+    PointBytes commitment{};
+    Bytes proof(proof_len);
+
+    if (proof_len == 0) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "prove_norm_arg:proof_len_zero");
+    }
+    if (!require_ok(purify_bppp_prove_norm_arg(inputs.rho.data(), generator_bytes.data(), generators->size(),
+                                               n_vec.data(), inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
+                                               c_vec.data(), inputs.c_vec.size(), commitment.data(), proof.data(), &proof_len))) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "prove_norm_arg:backend");
+    }
+    proof.resize(proof_len);
+
+    std::vector<PointBytes> proof_generators;
+    if (!generated_generators.empty()) {
+        proof_generators = std::move(generated_generators);
+    } else if constexpr (!std::is_const_v<std::remove_reference_t<Inputs>> && std::is_rvalue_reference_v<Inputs&&>) {
+        proof_generators = std::move(inputs.generators);
+    } else {
+        proof_generators = inputs.generators;
+    }
+
+    std::vector<ScalarBytes> proof_c_vec;
+    if constexpr (!std::is_const_v<std::remove_reference_t<Inputs>> && std::is_rvalue_reference_v<Inputs&&>) {
+        proof_c_vec = std::move(inputs.c_vec);
+    } else {
+        proof_c_vec = inputs.c_vec;
+    }
+
+    return NormArgProof{inputs.rho, std::move(proof_generators), std::move(proof_c_vec), inputs.n_vec.size(), commitment, std::move(proof)};
+}
+
 }  // namespace
 
 GeneratorBytes base_generator() {
@@ -97,47 +153,11 @@ Result<PointBytes> pedersen_commit_char(const ScalarBytes& blind, const ScalarBy
 }
 
 Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs) {
-    if (inputs.n_vec.empty() || inputs.l_vec.empty() || inputs.c_vec.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput, "prove_norm_arg:empty_vectors");
-    }
-    if (inputs.l_vec.size() != inputs.c_vec.size()) {
-        return unexpected_error(ErrorCode::SizeMismatch, "prove_norm_arg:l_c_size_mismatch");
-    }
+    return prove_norm_arg_impl(inputs);
+}
 
-    const std::vector<PointBytes>* generators = &inputs.generators;
-    std::vector<PointBytes> generated_generators;
-    if (generators->empty()) {
-        Result<std::vector<PointBytes>> generated = create_generators(inputs.n_vec.size() + inputs.l_vec.size());
-        if (!generated.has_value()) {
-            return unexpected_error(generated.error(), "prove_norm_arg:create_generators");
-        }
-        generated_generators = std::move(*generated);
-        generators = &generated_generators;
-    }
-    std::span<const unsigned char> generator_bytes = byte_span(*generators);
-    std::span<const unsigned char> n_vec = byte_span(inputs.n_vec);
-    std::span<const unsigned char> l_vec = byte_span(inputs.l_vec);
-    std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
-    std::size_t proof_len = purify_bppp_required_proof_size(inputs.n_vec.size(), inputs.c_vec.size());
-    PointBytes commitment{};
-    Bytes proof(proof_len);
-
-    if (proof_len == 0) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "prove_norm_arg:proof_len_zero");
-    }
-    if (!require_ok(purify_bppp_prove_norm_arg(inputs.rho.data(), generator_bytes.data(), generators->size(),
-                                               n_vec.data(), inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
-                                               c_vec.data(), inputs.c_vec.size(), commitment.data(), proof.data(), &proof_len))) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "prove_norm_arg:backend");
-    }
-    proof.resize(proof_len);
-
-    return NormArgProof{inputs.rho,
-                        generated_generators.empty() ? inputs.generators : std::move(generated_generators),
-                        inputs.c_vec,
-                        inputs.n_vec.size(),
-                        commitment,
-                        std::move(proof)};
+Result<NormArgProof> prove_norm_arg(NormArgInputs&& inputs) {
+    return prove_norm_arg_impl(std::move(inputs));
 }
 
 bool verify_norm_arg(const NormArgProof& proof) {

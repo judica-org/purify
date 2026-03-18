@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Judica, Inc.
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or https://opensource.org/license/mit/.
+
 #define SECP256K1_BUILD
 #define ENABLE_MODULE_GENERATOR 1
 #define ENABLE_MODULE_BPPP 1

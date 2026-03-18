@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Judica, Inc.
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or https://opensource.org/license/mit/.
+
 #define ANKERL_NANOBENCH_IMPLEMENT
 #include "third_party/nanobench/src/include/nanobench.h"
 

@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
-#pragma once
+#include "purify_runtime.hpp"
 
-#include "purify/api.hpp"
+int main(int argc, char** argv) {
+    return purify::run_cli(argc, argv);
+}

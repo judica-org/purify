@@ -6,7 +6,9 @@ The original project README and other source reference material live under [`ref
 
 ## Repository layout
 
-- `src/`: C++ and C sources, including the core Purify implementation, runtime CLI, BPPP bridge, and benchmarks
+- `src/`: core Purify headers and support sources
+- `cli/`: CLI entrypoint for `purify_cpp`
+- `bench/`: benchmark entrypoint for `bench_purify`
 - `reference/`: original Python reference code, verifier/proof artifacts, parameter generation scripts, and the original README
 - `third_party/secp256k1-zkp`: cryptographic backend as a git submodule
 - `third_party/nanobench`: benchmark harness as a git submodule

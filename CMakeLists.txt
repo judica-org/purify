@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Judica, Inc.
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit/.
+
 cmake_minimum_required(VERSION 3.20)
 
 project(purify LANGUAGES C CXX)
@@ -49,7 +53,7 @@ purify_enable_warnings(purify_bppp_support)
 purify_enable_optimizations(purify_bppp_support)
 
 add_executable(purify_cpp
-    src/purify.cpp
+    cli/main.cpp
 )
 
 target_link_libraries(purify_cpp
@@ -61,7 +65,7 @@ purify_enable_warnings(purify_cpp)
 purify_enable_optimizations(purify_cpp)
 
 add_executable(bench_purify
-    src/bench_purify.cpp
+    bench/bench_purify.cpp
 )
 
 target_link_libraries(bench_purify

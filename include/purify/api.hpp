@@ -25,6 +25,17 @@ struct GeneratedKey {
     UInt512 public_key;
 };
 
+/**
+ * @brief Canonical BIP340 keypair derived deterministically from a packed Purify secret.
+ *
+ * `seckey` is normalized to the even-Y representative corresponding to `xonly_pubkey`, so the
+ * returned pair is the canonical secp256k1/BIP340 encoding for this derivation.
+ */
+struct Bip340Key {
+    std::array<unsigned char, 32> seckey;
+    std::array<unsigned char, 32> xonly_pubkey;
+};
+
 /** @brief Complete witness bundle for evaluating and proving a Purify instance. */
 struct BulletproofWitnessData {
     UInt512 public_key;
@@ -34,6 +45,13 @@ struct BulletproofWitnessData {
 
 /** @brief Derives the packed public key corresponding to a packed secret. */
 Result<GeneratedKey> derive_key(const UInt512& secret);
+
+/**
+ * @brief Derives a canonical BIP340 signing keypair from a packed Purify secret.
+ *
+ * The derivation is deterministic and domain-separated from the Purify public key derivation.
+ */
+Result<Bip340Key> derive_bip340_key(const UInt512& secret);
 
 /** @brief Returns the size of the packed Purify secret-key space. */
 inline UInt512 key_space_size() {

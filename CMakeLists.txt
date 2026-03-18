@@ -99,6 +99,7 @@ add_library(purify
     src/purify_curve.cpp
     src/purify_expr.cpp
     src/purify_numeric.cpp
+    src/purify_puresign.cpp
     src/purify_bppp.cpp
     src/purify_bppp_bridge.c
 )
@@ -176,6 +177,7 @@ if(PURIFY_BUILD_BENCH)
         src/purify_curve.cpp
         src/purify_expr.cpp
         src/purify_numeric.cpp
+        src/purify_puresign.cpp
         src/purify_bppp.cpp
         src/purify_bppp_bridge.c
     )

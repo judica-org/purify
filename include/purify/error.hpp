@@ -58,6 +58,7 @@ enum class ErrorCode : std::uint16_t {
     InvalidDimensions,
     NonBooleanValue,
     EquationMismatch,
+    BindingMismatch,
     IoOpenFailed,
     IoWriteFailed,
     EntropyUnavailable,
@@ -127,6 +128,7 @@ using Status = Expected<void, Error>;
     case ErrorCode::InvalidDimensions:
     case ErrorCode::NonBooleanValue:
     case ErrorCode::EquationMismatch:
+    case ErrorCode::BindingMismatch:
     case ErrorCode::BackendRejectedInput:
         return ErrorCategory::Usage;
 
@@ -191,6 +193,8 @@ using Status = Expected<void, Error>;
         return "non_boolean_value";
     case ErrorCode::EquationMismatch:
         return "equation_mismatch";
+    case ErrorCode::BindingMismatch:
+        return "binding_mismatch";
     case ErrorCode::IoOpenFailed:
         return "io_open_failed";
     case ErrorCode::IoWriteFailed:
@@ -253,6 +257,8 @@ using Status = Expected<void, Error>;
         return "value violates a required boolean constraint";
     case ErrorCode::EquationMismatch:
         return "value violates a required equality constraint";
+    case ErrorCode::BindingMismatch:
+        return "prepared state is bound to a different secret, message, or topic";
     case ErrorCode::IoOpenFailed:
         return "unable to open the requested file or stream";
     case ErrorCode::IoWriteFailed:

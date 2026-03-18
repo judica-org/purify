@@ -10,6 +10,8 @@
 #define SECP256K1_BUILD
 #define ENABLE_MODULE_GENERATOR 1
 #define ENABLE_MODULE_BPPP 1
+#define ENABLE_MODULE_EXTRAKEYS 1
+#define ENABLE_MODULE_SCHNORRSIG 1
 
 #include "purify_bppp_bridge.h"
 #include "purify_secp_bridge.h"
@@ -17,6 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "third_party/secp256k1-zkp/include/secp256k1_extrakeys.h"
+#include "third_party/secp256k1-zkp/include/secp256k1_schnorrsig.h"
 #include "third_party/secp256k1-zkp/src/secp256k1.c"
 #include "third_party/secp256k1-zkp/src/precomputed_ecmult.c"
 #include "third_party/secp256k1-zkp/src/precomputed_ecmult_gen.c"
@@ -111,6 +115,235 @@ void purify_hmac_sha256(unsigned char output32[32],
     }
     secp256k1_hmac_sha256_finalize(&hmac, output32);
     secp256k1_hmac_sha256_clear(&hmac);
+}
+
+int purify_bip340_key_from_seckey(unsigned char seckey32[32], unsigned char xonly_pubkey32[32]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_keypair keypair;
+    secp256k1_xonly_pubkey xonly;
+    int parity = 0;
+    int ok = 0;
+
+    memset(&keypair, 0, sizeof(keypair));
+    memset(&xonly, 0, sizeof(xonly));
+    if (xonly_pubkey32 != NULL) {
+        memset(xonly_pubkey32, 0, 32);
+    }
+
+    if (ctx == NULL || seckey32 == NULL || xonly_pubkey32 == NULL) {
+        if (ctx != NULL) {
+            secp256k1_context_destroy(ctx);
+        }
+        return 0;
+    }
+
+    ok = secp256k1_keypair_create(ctx, &keypair, seckey32);
+    if (ok) {
+        ok = secp256k1_keypair_xonly_pub(ctx, &xonly, &parity, &keypair);
+    }
+    if (ok) {
+        ok = secp256k1_xonly_pubkey_serialize(ctx, xonly_pubkey32, &xonly);
+    }
+    if (ok && parity != 0) {
+        ok = secp256k1_ec_seckey_negate(ctx, seckey32);
+    }
+    if (!ok) {
+        memset(seckey32, 0, 32);
+        memset(xonly_pubkey32, 0, 32);
+    }
+
+    memset(&keypair, 0, sizeof(keypair));
+    memset(&xonly, 0, sizeof(xonly));
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+int purify_bip340_nonce_from_scalar(unsigned char scalar32[32], unsigned char xonly_nonce32[32]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_pubkey pubkey;
+    secp256k1_xonly_pubkey xonly;
+    int parity = 0;
+    int ok = 0;
+
+    memset(&pubkey, 0, sizeof(pubkey));
+    memset(&xonly, 0, sizeof(xonly));
+    if (xonly_nonce32 != NULL) {
+        memset(xonly_nonce32, 0, 32);
+    }
+
+    if (ctx == NULL || scalar32 == NULL || xonly_nonce32 == NULL) {
+        if (ctx != NULL) {
+            secp256k1_context_destroy(ctx);
+        }
+        return 0;
+    }
+
+    ok = secp256k1_ec_pubkey_create(ctx, &pubkey, scalar32);
+    if (ok) {
+        ok = secp256k1_xonly_pubkey_from_pubkey(ctx, &xonly, &parity, &pubkey);
+    }
+    if (ok) {
+        ok = secp256k1_xonly_pubkey_serialize(ctx, xonly_nonce32, &xonly);
+    }
+    if (ok && parity != 0) {
+        ok = secp256k1_ec_seckey_negate(ctx, scalar32);
+    }
+    if (!ok) {
+        memset(scalar32, 0, 32);
+        memset(xonly_nonce32, 0, 32);
+    }
+
+    memset(&pubkey, 0, sizeof(pubkey));
+    memset(&xonly, 0, sizeof(xonly));
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+int purify_bip340_validate_xonly_pubkey(const unsigned char xonly_pubkey32[32]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_xonly_pubkey xonly;
+    int ok = 0;
+
+    memset(&xonly, 0, sizeof(xonly));
+    if (ctx == NULL || xonly_pubkey32 == NULL) {
+        if (ctx != NULL) {
+            secp256k1_context_destroy(ctx);
+        }
+        return 0;
+    }
+
+    ok = secp256k1_xonly_pubkey_parse(ctx, &xonly, xonly_pubkey32);
+
+    memset(&xonly, 0, sizeof(xonly));
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+int purify_bip340_validate_signature(const unsigned char sig64[64]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_xonly_pubkey rxonly;
+    secp256k1_scalar s;
+    int overflow = 0;
+    int ok = 0;
+
+    memset(&rxonly, 0, sizeof(rxonly));
+    memset(&s, 0, sizeof(s));
+    if (ctx == NULL || sig64 == NULL) {
+        if (ctx != NULL) {
+            secp256k1_context_destroy(ctx);
+        }
+        return 0;
+    }
+
+    ok = secp256k1_xonly_pubkey_parse(ctx, &rxonly, sig64);
+    if (ok) {
+        secp256k1_scalar_set_b32(&s, sig64 + 32, &overflow);
+        ok = !overflow;
+    }
+
+    memset(&rxonly, 0, sizeof(rxonly));
+    secp256k1_scalar_clear(&s);
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+static int purify_fixed_nonce_function(unsigned char *nonce32,
+                                       const unsigned char *msg, size_t msglen,
+                                       const unsigned char *key32,
+                                       const unsigned char *xonly_pk32,
+                                       const unsigned char *algo, size_t algolen,
+                                       void *data) {
+    (void)msg;
+    (void)msglen;
+    (void)key32;
+    (void)xonly_pk32;
+    (void)algo;
+    (void)algolen;
+
+    if (nonce32 == NULL || data == NULL) {
+        return 0;
+    }
+    memcpy(nonce32, data, 32);
+    return 1;
+}
+
+int purify_bip340_sign_with_fixed_nonce(unsigned char sig64[64],
+                                        const unsigned char* msg, size_t msglen,
+                                        const unsigned char seckey32[32],
+                                        const unsigned char nonce32[32]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_keypair keypair;
+    secp256k1_scalar nonce_scalar;
+    secp256k1_schnorrsig_extraparams extraparams = SECP256K1_SCHNORRSIG_EXTRAPARAMS_INIT;
+    unsigned char canonical_nonce32[32];
+    unsigned char xonly_nonce32[32];
+    int ok = 0;
+    int overflow = 0;
+
+    memset(&keypair, 0, sizeof(keypair));
+    memset(&nonce_scalar, 0, sizeof(nonce_scalar));
+    memset(canonical_nonce32, 0, sizeof(canonical_nonce32));
+    memset(xonly_nonce32, 0, sizeof(xonly_nonce32));
+    if (sig64 != NULL) {
+        memset(sig64, 0, 64);
+    }
+
+    if (ctx == NULL || sig64 == NULL || seckey32 == NULL || nonce32 == NULL || (msg == NULL && msglen != 0)) {
+        if (ctx != NULL) {
+            secp256k1_context_destroy(ctx);
+        }
+        return 0;
+    }
+
+    memcpy(canonical_nonce32, nonce32, 32);
+    ok = purify_bip340_nonce_from_scalar(canonical_nonce32, xonly_nonce32);
+    if (ok) {
+        ok = secp256k1_memcmp_var(canonical_nonce32, nonce32, 32) == 0;
+    }
+    secp256k1_scalar_set_b32(&nonce_scalar, nonce32, &overflow);
+    if (ok && !overflow && !secp256k1_scalar_is_zero(&nonce_scalar)) {
+        ok = secp256k1_keypair_create(ctx, &keypair, seckey32);
+        if (ok) {
+            extraparams.noncefp = purify_fixed_nonce_function;
+            extraparams.ndata = (void*)nonce32;
+            ok = secp256k1_schnorrsig_sign_custom(ctx, sig64, msg, msglen, &keypair, &extraparams);
+        }
+    }
+
+    memset(&keypair, 0, sizeof(keypair));
+    secp256k1_scalar_clear(&nonce_scalar);
+    secp256k1_memclear_explicit(canonical_nonce32, sizeof(canonical_nonce32));
+    secp256k1_memclear_explicit(xonly_nonce32, sizeof(xonly_nonce32));
+    if (!ok) {
+        memset(sig64, 0, 64);
+    }
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+int purify_bip340_verify(const unsigned char sig64[64],
+                         const unsigned char* msg, size_t msglen,
+                         const unsigned char xonly_pubkey32[32]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_xonly_pubkey pubkey;
+    int ok = 0;
+
+    memset(&pubkey, 0, sizeof(pubkey));
+    if (ctx == NULL || sig64 == NULL || xonly_pubkey32 == NULL || (msg == NULL && msglen != 0)) {
+        if (ctx != NULL) {
+            secp256k1_context_destroy(ctx);
+        }
+        return 0;
+    }
+
+    ok = secp256k1_xonly_pubkey_parse(ctx, &pubkey, xonly_pubkey32);
+    if (ok) {
+        ok = secp256k1_schnorrsig_verify(ctx, sig64, msg, msglen, &pubkey);
+    }
+
+    memset(&pubkey, 0, sizeof(pubkey));
+    secp256k1_context_destroy(ctx);
+    return ok;
 }
 
 static int purify_parse_scalar(const unsigned char input32[32], secp256k1_scalar* scalar, int reject_zero) {

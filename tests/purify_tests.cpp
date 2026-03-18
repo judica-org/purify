@@ -58,6 +58,10 @@ Result<UInt512> sample_secret() {
         "b3d2562f45fa8ecd711d1becc02fa348cf2187429228e7aac6644a3da2824e93");
 }
 
+std::string hex32(const std::array<unsigned char, 32>& bytes) {
+    return purify::UInt256::from_bytes_be(bytes.data(), bytes.size()).to_hex();
+}
+
 void test_known_sample(TestContext& ctx) {
     Result<UInt512> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses");
@@ -205,6 +209,38 @@ void test_library_key_generation(TestContext& ctx) {
     }
 }
 
+void test_bip340_key_derivation(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for BIP340 derivation");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Result<purify::Bip340Key> key_a = purify::derive_bip340_key(*secret);
+    expect_ok(ctx, key_a, "derive_bip340_key succeeds");
+    Result<purify::Bip340Key> key_b = purify::derive_bip340_key(*secret);
+    expect_ok(ctx, key_b, "derive_bip340_key is deterministic");
+    if (!key_a.has_value() || !key_b.has_value()) {
+        return;
+    }
+
+    ctx.expect(key_a->seckey == key_b->seckey, "derive_bip340_key returns a stable secret key");
+    ctx.expect(key_a->xonly_pubkey == key_b->xonly_pubkey, "derive_bip340_key returns a stable x-only pubkey");
+    ctx.expect(hex32(key_a->seckey) == "d63b91a76a1231be98f516d544312b7337ece46564e002ed50df0cd77a1b610e",
+               "derive_bip340_key matches the expected sample canonical seckey");
+    ctx.expect(hex32(key_a->xonly_pubkey) == "82b3533efb11978a9447ba70d452f022d10bd9b8347985fdc9b36aa984190856",
+               "derive_bip340_key matches the expected sample x-only pubkey");
+
+    std::array<unsigned char, 32> canonical = key_a->seckey;
+    std::array<unsigned char, 32> xonly = {};
+    ctx.expect(purify_bip340_key_from_seckey(canonical.data(), xonly.data()) == 1,
+               "bridge accepts the derived canonical BIP340 secret key");
+    ctx.expect(canonical == key_a->seckey,
+               "derive_bip340_key returns an idempotently canonicalized even-Y secret key");
+    ctx.expect(xonly == key_a->xonly_pubkey,
+               "derived x-only pubkey matches the canonical secret key");
+}
+
 void test_secret_key_validation(TestContext& ctx) {
     Bytes message = sample_message();
 
@@ -215,6 +251,8 @@ void test_secret_key_validation(TestContext& ctx) {
                  "eval rejects the packed-secret upper bound");
     expect_error(ctx, purify::prove_assignment_data(message, invalid), ErrorCode::RangeViolation,
                  "prove_assignment_data rejects the packed-secret upper bound");
+    expect_error(ctx, purify::derive_bip340_key(invalid), ErrorCode::RangeViolation,
+                 "derive_bip340_key rejects the packed-secret upper bound");
 
     UInt512 last_valid = purify::key_space_size();
     last_valid.sub_assign(purify::widen<8>(purify::half_n1()));
@@ -283,6 +321,146 @@ void test_bppp_move_overload(TestContext& ctx) {
     expect_error(ctx, proof, ErrorCode::EmptyInput, "rvalue prove_norm_arg overload preserves empty-input validation");
 }
 
+void test_puresign_message_signing(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for PureSign message signing");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+
+    Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(*secret);
+    expect_ok(ctx, public_key, "derive_public_key succeeds");
+    Result<purify::puresign::PreparedNonce> prepared_a = purify::puresign::prepare_message_nonce(*secret, message);
+    expect_ok(ctx, prepared_a, "prepare_message_nonce succeeds");
+    Result<purify::puresign::PreparedNonce> prepared_b = purify::puresign::prepare_message_nonce(*secret, message);
+    expect_ok(ctx, prepared_b, "prepare_message_nonce is deterministic");
+    if (!public_key.has_value() || !prepared_a.has_value() || !prepared_b.has_value()) {
+        return;
+    }
+
+    ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
+               "message-bound public nonces are deterministic");
+    ctx.expect(prepared_a->scalar() == prepared_b->scalar(),
+               "message-bound secret nonce scalars are deterministic");
+
+    Result<purify::puresign::Signature> direct = purify::puresign::sign_message(*secret, message);
+    expect_ok(ctx, direct, "sign_message succeeds");
+    Result<purify::puresign::Signature> cached =
+        purify::puresign::sign_message_with_prepared(*secret, message, std::move(*prepared_a));
+    expect_ok(ctx, cached, "sign_message_with_prepared succeeds");
+    if (!direct.has_value() || !cached.has_value()) {
+        return;
+    }
+
+    ctx.expect(direct->bytes == cached->bytes, "cached message-bound signing matches direct signing");
+    ctx.expect(direct->nonce().xonly == prepared_b->public_nonce().xonly,
+               "signature nonce matches the prepared public nonce");
+
+    Result<bool> verified = purify::puresign::verify_signature(*public_key, message, *direct);
+    expect_ok(ctx, verified, "verify_signature succeeds on a PureSign message signature");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "PureSign message signature verifies");
+    }
+
+    Bytes public_key_bytes = public_key->serialize();
+    ctx.expect(public_key_bytes.size() == purify::puresign::PublicKey::kSerializedSize,
+               "PureSign public key serialization has the expected size");
+    Result<purify::puresign::PublicKey> parsed_public_key = purify::puresign::PublicKey::deserialize(public_key_bytes);
+    expect_ok(ctx, parsed_public_key, "PureSign public key round-trips");
+
+    Bytes nonce_bytes = prepared_b->public_nonce().serialize();
+    ctx.expect(nonce_bytes.size() == purify::puresign::Nonce::kSerializedSize,
+               "PureSign nonce serialization has the expected size");
+    Result<purify::puresign::Nonce> parsed_nonce = purify::puresign::Nonce::deserialize(nonce_bytes);
+    expect_ok(ctx, parsed_nonce, "PureSign nonce round-trips");
+    if (parsed_nonce.has_value()) {
+        ctx.expect(parsed_nonce->xonly == prepared_b->public_nonce().xonly, "PureSign nonce deserialization preserves x-only bytes");
+    }
+
+    Bytes signature_bytes = direct->serialize();
+    ctx.expect(signature_bytes.size() == purify::puresign::Signature::kSerializedSize,
+               "PureSign signature serialization has the expected size");
+    Result<purify::puresign::Signature> parsed_signature = purify::puresign::Signature::deserialize(signature_bytes);
+    expect_ok(ctx, parsed_signature, "PureSign signature round-trips");
+    if (parsed_public_key.has_value() && parsed_signature.has_value()) {
+        Result<bool> reparsed_verified = purify::puresign::verify_signature(*parsed_public_key, message, *parsed_signature);
+        expect_ok(ctx, reparsed_verified, "verify_signature accepts parsed PureSign artifacts");
+        if (reparsed_verified.has_value()) {
+            ctx.expect(*reparsed_verified, "parsed PureSign artifacts verify");
+        }
+    }
+}
+
+void test_puresign_topic_signing(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for PureSign topic signing");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+    Bytes topic = purify::bytes_from_ascii("session-1");
+
+    Result<purify::puresign::PreparedNonce> prepared_a = purify::puresign::prepare_topic_nonce(*secret, topic);
+    expect_ok(ctx, prepared_a, "prepare_topic_nonce succeeds");
+    Result<purify::puresign::PreparedNonce> prepared_b = purify::puresign::prepare_topic_nonce(*secret, topic);
+    expect_ok(ctx, prepared_b, "prepare_topic_nonce is deterministic");
+    if (!prepared_a.has_value() || !prepared_b.has_value()) {
+        return;
+    }
+
+    ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
+               "topic-bound public nonces are deterministic");
+    ctx.expect(prepared_a->scalar() == prepared_b->scalar(),
+               "topic-bound secret nonce scalars are deterministic");
+
+    Result<purify::puresign::Signature> direct = purify::puresign::sign_with_topic(*secret, message, topic);
+    expect_ok(ctx, direct, "sign_with_topic succeeds");
+    Result<purify::puresign::Signature> cached =
+        purify::puresign::sign_with_prepared_topic(*secret, message, std::move(*prepared_a));
+    expect_ok(ctx, cached, "sign_with_prepared_topic succeeds");
+    if (!direct.has_value() || !cached.has_value()) {
+        return;
+    }
+
+    ctx.expect(direct->bytes == cached->bytes, "cached topic-bound signing matches direct signing");
+    ctx.expect(direct->nonce().xonly == prepared_b->public_nonce().xonly,
+               "topic-bound signature nonce matches the prepared public nonce");
+
+    expect_error(ctx, purify::puresign::prepare_topic_nonce(*secret, Bytes{}), ErrorCode::EmptyInput,
+                 "prepare_topic_nonce rejects an empty topic");
+}
+
+void test_puresign_binding_checks(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for PureSign binding checks");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+    Bytes wrong_message = Bytes{0x89, 0xab};
+    Bytes topic = purify::bytes_from_ascii("session-2");
+
+    Result<purify::puresign::PreparedNonce> message_nonce = purify::puresign::prepare_message_nonce(*secret, message);
+    expect_ok(ctx, message_nonce, "prepare_message_nonce succeeds for binding checks");
+    if (message_nonce.has_value()) {
+        expect_error(ctx, purify::puresign::sign_message_with_prepared(*secret, wrong_message, std::move(*message_nonce)),
+                     ErrorCode::BindingMismatch,
+                     "message-bound prepared nonces reject signing a different message");
+    }
+
+    Result<purify::puresign::PreparedNonce> topic_nonce = purify::puresign::prepare_topic_nonce(*secret, topic);
+    expect_ok(ctx, topic_nonce, "prepare_topic_nonce succeeds for binding checks");
+    if (topic_nonce.has_value()) {
+        expect_error(ctx, purify::puresign::sign_message_with_prepared(*secret, message, std::move(*topic_nonce)),
+                     ErrorCode::BindingMismatch,
+                     "topic-bound prepared nonces reject the message-bound signing API");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -291,11 +469,15 @@ int main() {
     test_known_sample(ctx);
     test_secret_hardening_path(ctx);
     test_library_key_generation(ctx);
+    test_bip340_key_derivation(ctx);
     test_secret_key_validation(ctx);
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);
     test_expr_builder(ctx);
     test_bppp_move_overload(ctx);
+    test_puresign_message_signing(ctx);
+    test_puresign_topic_signing(ctx);
+    test_puresign_binding_checks(ctx);
 
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " test(s) failed\n";

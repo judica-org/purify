@@ -28,6 +28,21 @@
 namespace purify {
 namespace {
 
+const UInt256& secp256k1_order() {
+    static const UInt256 value =
+        UInt256::from_hex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+    return value;
+}
+
+const UInt256& secp256k1_order_minus_one() {
+    static const UInt256 value = [] {
+        UInt256 out = secp256k1_order();
+        out.sub_assign(UInt256::one());
+        return out;
+    }();
+    return value;
+}
+
 Bytes tagged_message(std::string_view prefix, const Bytes& message) {
     Bytes out;
     out.reserve(prefix.size() + message.size());
@@ -122,6 +137,29 @@ Result<GeneratedKey> derive_key(const UInt512& secret) {
         return unexpected_error(p2.error(), "derive_key:mul_secret_affine_p2");
     }
     return GeneratedKey{secret, pack_public(p1->x.to_uint256(), p2->x.to_uint256())};
+}
+
+Result<Bip340Key> derive_bip340_key(const UInt512& secret) {
+    Status status = validate_secret_key(secret);
+    if (!status.has_value()) {
+        return unexpected_error(status.error(), "derive_bip340_key:validate_secret_key");
+    }
+
+    std::array<unsigned char, 64> packed_secret = secret.to_bytes_be();
+    Bytes ikm(packed_secret.begin(), packed_secret.end());
+    std::optional<UInt256> scalar =
+        hash_to_int<4>(ikm, secp256k1_order_minus_one(), bytes_from_ascii("Purify/BIP340/KeyGen"));
+    if (!scalar.has_value()) {
+        return unexpected_error(ErrorCode::InternalMismatch, "derive_bip340_key:hash_to_int");
+    }
+    scalar->add_small(1);
+
+    Bip340Key out{};
+    out.seckey = scalar->to_bytes_be();
+    if (purify_bip340_key_from_seckey(out.seckey.data(), out.xonly_pubkey.data()) == 0) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "derive_bip340_key:bip340_bridge");
+    }
+    return out;
 }
 
 Result<FieldElement> eval(const UInt512& secret, const Bytes& message) {

@@ -10,3 +10,4 @@
 #pragma once
 
 #include "purify/api.hpp"
+#include "purify/puresign.hpp"

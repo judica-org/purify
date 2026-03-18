@@ -104,15 +104,17 @@ Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs) {
         return unexpected_error(ErrorCode::SizeMismatch, "prove_norm_arg:l_c_size_mismatch");
     }
 
-    std::vector<PointBytes> generators = inputs.generators;
-    if (generators.empty()) {
+    const std::vector<PointBytes>* generators = &inputs.generators;
+    std::vector<PointBytes> generated_generators;
+    if (generators->empty()) {
         Result<std::vector<PointBytes>> generated = create_generators(inputs.n_vec.size() + inputs.l_vec.size());
         if (!generated.has_value()) {
             return unexpected_error(generated.error(), "prove_norm_arg:create_generators");
         }
-        generators = std::move(*generated);
+        generated_generators = std::move(*generated);
+        generators = &generated_generators;
     }
-    std::span<const unsigned char> generator_bytes = byte_span(generators);
+    std::span<const unsigned char> generator_bytes = byte_span(*generators);
     std::span<const unsigned char> n_vec = byte_span(inputs.n_vec);
     std::span<const unsigned char> l_vec = byte_span(inputs.l_vec);
     std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
@@ -123,14 +125,19 @@ Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs) {
     if (proof_len == 0) {
         return unexpected_error(ErrorCode::InvalidDimensions, "prove_norm_arg:proof_len_zero");
     }
-    if (!require_ok(purify_bppp_prove_norm_arg(inputs.rho.data(), generator_bytes.data(), generators.size(),
+    if (!require_ok(purify_bppp_prove_norm_arg(inputs.rho.data(), generator_bytes.data(), generators->size(),
                                                n_vec.data(), inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
                                                c_vec.data(), inputs.c_vec.size(), commitment.data(), proof.data(), &proof_len))) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "prove_norm_arg:backend");
     }
     proof.resize(proof_len);
 
-    return NormArgProof{inputs.rho, std::move(generators), inputs.c_vec, inputs.n_vec.size(), commitment, std::move(proof)};
+    return NormArgProof{inputs.rho,
+                        generated_generators.empty() ? inputs.generators : std::move(generated_generators),
+                        inputs.c_vec,
+                        inputs.n_vec.size(),
+                        commitment,
+                        std::move(proof)};
 }
 
 bool verify_norm_arg(const NormArgProof& proof) {

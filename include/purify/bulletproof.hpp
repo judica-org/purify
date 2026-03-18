@@ -248,38 +248,93 @@ public:
     }
 
     /** @brief Imports a symbolic transcript and pads it to a power-of-two multiplication count. */
-    void from_transcript(const Transcript& transcript, std::size_t n_bits) {
+    Status from_transcript(const Transcript& transcript, std::size_t n_bits) {
+        assignments_.clear();
+        constraints_.clear();
+        v_to_a_.clear();
+        v_to_a_order_.clear();
         n_bits_ = n_bits;
         std::size_t source_muls = transcript.muls().size();
-        n_muls_ = 1;
-        while (n_muls_ < std::max<std::size_t>(1, source_muls)) {
-            n_muls_ <<= 1;
-        }
         for (std::size_t i = 0; i < source_muls; ++i) {
             const auto& mul = transcript.muls()[i];
             add_assignment(std::format("L{}", i), mul.lhs);
             add_assignment(std::format("R{}", i), mul.rhs);
             add_assignment(std::format("O{}", i), mul.out);
         }
-        for (std::size_t i = source_muls; i < n_muls_; ++i) {
+
+        std::vector<std::string> unmapped_transcript_vars;
+        std::unordered_set<std::string> seen_transcript_vars;
+        for (const Expr& eq : transcript.eqs()) {
+            for (const auto& term : eq.linear()) {
+                if (!is_transcript_var(term.first)) {
+                    continue;
+                }
+                if (v_to_a_.count(term.first) != 0) {
+                    continue;
+                }
+                if (seen_transcript_vars.insert(term.first).second) {
+                    unmapped_transcript_vars.push_back(term.first);
+                }
+            }
+        }
+
+        std::size_t total_gates = source_muls + unmapped_transcript_vars.size();
+        n_muls_ = 1;
+        while (n_muls_ < std::max<std::size_t>(1, total_gates)) {
+            n_muls_ <<= 1;
+        }
+
+        for (std::size_t i = 0; i < unmapped_transcript_vars.size(); ++i) {
+            std::size_t gate_idx = source_muls + i;
+            add_assignment(std::format("L{}", gate_idx), Expr::variable(unmapped_transcript_vars[i]));
+            add_assignment(std::format("R{}", gate_idx), Expr(0));
+            add_assignment(std::format("O{}", gate_idx), Expr(0));
+        }
+
+        for (std::size_t i = total_gates; i < n_muls_; ++i) {
             add_assignment(std::format("L{}", i), Expr(0));
             add_assignment(std::format("R{}", i), Expr(0));
             add_assignment(std::format("O{}", i), Expr(0));
         }
+
+        for (const Expr& eq : transcript.eqs()) {
+            Expr lowered = eq;
+            replace_expr_v_with_bp_var(lowered);
+            if (contains_transcript_var(lowered)) {
+                return unexpected_error(ErrorCode::UnsupportedSymbol, "BulletproofTranscript::from_transcript:unmapped_eq_var");
+            }
+            constraints_.push_back({lowered, Expr(0)});
+        }
+        return {};
     }
 
     /** @brief Binds packed public-key coordinates and the output commitment into explicit constraints. */
-    void add_pubkey_and_out(const UInt512& pubkey, Expr p1x, Expr p2x, Expr out) {
-        auto unpacked = unpack_public(pubkey);
-        auto add_constraint = [&](const UInt256& packed, Expr expr) {
+    Status add_pubkey_and_out(const UInt512& pubkey, Expr p1x, Expr p2x, Expr out) {
+        Result<std::pair<UInt256, UInt256>> unpacked = unpack_public(pubkey);
+        if (!unpacked.has_value()) {
+            return unexpected_error(unpacked.error(), "BulletproofTranscript::add_pubkey_and_out:unpack_public");
+        }
+        auto add_constraint = [&](const UInt256& packed, Expr expr) -> Status {
             replace_expr_v_with_bp_var(expr);
             auto parts = expr.split();
-            constraints_.push_back({parts.second, Expr(FieldElement::from_uint256(packed)) - parts.first});
+            Result<FieldElement> constant = FieldElement::try_from_uint256(packed);
+            if (!constant.has_value()) {
+                return unexpected_error(constant.error(), "BulletproofTranscript::add_pubkey_and_out:field_constant");
+            }
+            constraints_.push_back({parts.second, Expr(*constant) - parts.first});
+            return {};
         };
-        add_constraint(unpacked.first, std::move(p1x));
-        add_constraint(unpacked.second, std::move(p2x));
+        Status p1_status = add_constraint(unpacked->first, std::move(p1x));
+        if (!p1_status.has_value()) {
+            return unexpected_error(p1_status.error(), "BulletproofTranscript::add_pubkey_and_out:p1x");
+        }
+        Status p2_status = add_constraint(unpacked->second, std::move(p2x));
+        if (!p2_status.has_value()) {
+            return unexpected_error(p2_status.error(), "BulletproofTranscript::add_pubkey_and_out:p2x");
+        }
         replace_expr_v_with_bp_var(out);
         constraints_.push_back({out - Expr::variable("V0"), Expr(0)});
+        return {};
     }
 
     /** @brief Renders the lowered circuit in the legacy textual verifier format. */
@@ -496,6 +551,15 @@ private:
         bool is_v;
     };
 
+    static bool is_transcript_var(std::string_view symbol) {
+        return symbol.starts_with("v[");
+    }
+
+    static bool contains_transcript_var(const Expr& expr) {
+        return std::any_of(expr.linear().begin(), expr.linear().end(),
+                           [](const auto& term) { return is_transcript_var(term.first); });
+    }
+
     /** @brief Evaluates an expression using a fully known variable map. */
     static Result<FieldElement> evaluate_known(const Expr& expr, const std::unordered_map<std::string, FieldElement>& values) {
         FieldElement out = expr.constant();
@@ -672,18 +736,22 @@ struct CircuitMainResult {
 };
 
 /** @brief Builds the full symbolic Purify circuit from message points and optional witness scalars. */
-inline CircuitMainResult circuit_main(Transcript& transcript, const JacobianPoint& m1, const JacobianPoint& m2,
-                                      const std::optional<UInt256>& z1 = std::nullopt,
-                                      const std::optional<UInt256>& z2 = std::nullopt) {
-    int z1_bits_len = static_cast<int>(order_n1().bit_length()) - 1;
-    int z2_bits_len = static_cast<int>(order_n2().bit_length()) - 1;
-    std::vector<int> z1_values(z1_bits_len, -1);
-    std::vector<int> z2_values(z2_bits_len, -1);
+inline Result<CircuitMainResult> circuit_main(Transcript& transcript, const JacobianPoint& m1, const JacobianPoint& m2,
+                                              const std::optional<UInt256>& z1 = std::nullopt,
+                                              const std::optional<UInt256>& z2 = std::nullopt) {
+    int z1_bits_len = static_cast<int>(half_n1().bit_length());
+    int z2_bits_len = static_cast<int>(half_n2().bit_length());
+    std::vector<int> z1_values(static_cast<std::size_t>(z1_bits_len), -1);
+    std::vector<int> z2_values(static_cast<std::size_t>(z2_bits_len), -1);
     if (z1.has_value() && z2.has_value()) {
-        Result<std::vector<int>> z1_result = key_to_bits(*z1, z1_bits_len);
-        Result<std::vector<int>> z2_result = key_to_bits(*z2, z2_bits_len);
-        assert(z1_result.has_value() && "circuit_main() expects z1 to be in range");
-        assert(z2_result.has_value() && "circuit_main() expects z2 to be in range");
+        Result<std::vector<int>> z1_result = key_to_bits(*z1, half_n1());
+        if (!z1_result.has_value()) {
+            return unexpected_error(z1_result.error(), "circuit_main:key_to_bits_z1");
+        }
+        Result<std::vector<int>> z2_result = key_to_bits(*z2, half_n2());
+        if (!z2_result.has_value()) {
+            return unexpected_error(z2_result.error(), "circuit_main:key_to_bits_z2");
+        }
         z1_values = *z1_result;
         z2_values = *z2_result;
     }
@@ -702,7 +770,7 @@ inline CircuitMainResult circuit_main(Transcript& transcript, const JacobianPoin
     Expr out_p2x = circuit_ec_multiply_x(curve2(), transcript, generator2(), z2_bits);
     Expr out_x1 = circuit_ec_multiply_x(curve1(), transcript, m1, z1_bits);
     Expr out_x2 = circuit_ec_multiply_x(curve2(), transcript, m2, z2_bits);
-    return {circuit_combine(transcript, out_x1, out_x2), out_p1x, out_p2x, n_bits};
+    return CircuitMainResult{circuit_combine(transcript, out_x1, out_x2), out_p1x, out_p2x, n_bits};
 }
 
 }  // namespace purify

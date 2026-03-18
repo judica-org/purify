@@ -20,6 +20,7 @@ get_property(PURIFY_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 option(PURIFY_BUILD_CLI "Build the purify_cpp CLI target." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_BENCH "Build the bench_purify benchmark target." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_DOCS "Build the Doxygen docs target when Doxygen is available." ${PURIFY_IS_TOP_LEVEL})
+option(PURIFY_BUILD_TESTS "Build the Purify regression test target." ${PURIFY_IS_TOP_LEVEL})
 
 if(PURIFY_IS_TOP_LEVEL AND NOT PURIFY_IS_MULTI_CONFIG)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
@@ -200,6 +201,23 @@ if(PURIFY_BUILD_BENCH)
 
     purify_enable_warnings(bench_purify)
     purify_enable_release_optimizations(bench_purify)
+endif()
+
+if(PURIFY_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(purify_tests
+        tests/purify_tests.cpp
+    )
+
+    target_link_libraries(purify_tests
+        PRIVATE
+            purify::purify
+    )
+
+    purify_enable_warnings(purify_tests)
+
+    add_test(NAME purify.tests COMMAND purify_tests)
 endif()
 
 if(PURIFY_BUILD_DOCS)

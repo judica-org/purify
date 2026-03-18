@@ -124,7 +124,7 @@ inline UInt512 random_below(const UInt512& range) {
  * @param secret_override Optional packed secret to reuse instead of sampling.
  * @return Generated keypair bundle.
  */
-inline GeneratedKey generate_key(const std::optional<UInt512>& secret_override = std::nullopt) {
+inline Result<GeneratedKey> generate_key(const std::optional<UInt512>& secret_override = std::nullopt) {
     UInt512 secret = secret_override.has_value() ? *secret_override : random_below(key_space_size());
     return derive_key(secret);
 }
@@ -195,9 +195,12 @@ inline int run_cli(int argc, char** argv) {
             }
             secret_override = *parsed;
         }
-        GeneratedKey key = generate_key(secret_override);
-        std::cout << "z=" << key.secret.to_hex() << " # private key\n";
-        std::cout << "x=" << key.public_key.to_hex() << " # public key\n";
+        Result<GeneratedKey> key = generate_key(secret_override);
+        if (!key.has_value()) {
+            return print_error(key.error());
+        }
+        std::cout << "z=" << key->secret.to_hex() << " # private key\n";
+        std::cout << "x=" << key->public_key.to_hex() << " # public key\n";
         return 0;
     }
     if (command == "eval") {

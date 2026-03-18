@@ -28,8 +28,7 @@ struct BulletproofWitnessData {
 
 /** @brief Returns the size of the packed Purify secret-key space. */
 inline UInt512 key_space_size() {
-    static const UInt512 value = multiply(half_n1(), half_n2());
-    return value;
+    return packed_secret_key_space_size();
 }
 
 /**
@@ -37,11 +36,14 @@ inline UInt512 key_space_size() {
  * @param secret Packed secret scalar pair.
  * @return Derived keypair bundle.
  */
-inline GeneratedKey derive_key(const UInt512& secret) {
-    auto unpacked = unpack_secret(secret);
-    AffinePoint p1 = curve1().affine(curve1().mul(generator1(), unpacked.first));
-    AffinePoint p2 = curve2().affine(curve2().mul(generator2(), unpacked.second));
-    return {secret, pack_public(p1.x.to_uint256(), p2.x.to_uint256())};
+inline Result<GeneratedKey> derive_key(const UInt512& secret) {
+    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
+    if (!unpacked.has_value()) {
+        return unexpected_error(unpacked.error(), "derive_key:unpack_secret");
+    }
+    AffinePoint p1 = curve1().affine(curve1().mul(generator1(), unpacked->first));
+    AffinePoint p2 = curve2().affine(curve2().mul(generator2(), unpacked->second));
+    return GeneratedKey{secret, pack_public(p1.x.to_uint256(), p2.x.to_uint256())};
 }
 
 /**
@@ -51,7 +53,10 @@ inline GeneratedKey derive_key(const UInt512& secret) {
  * @return Purify output as a field element, or `ErrorCode::HashToCurveExhausted`.
  */
 inline Result<FieldElement> eval(const UInt512& secret, const Bytes& message) {
-    auto unpacked = unpack_secret(secret);
+    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
+    if (!unpacked.has_value()) {
+        return unexpected_error(unpacked.error(), "eval:unpack_secret");
+    }
     Result<JacobianPoint> m1 = hash_to_curve(bytes_from_ascii("Eval/1/") + message, curve1());
     if (!m1.has_value()) {
         return unexpected_error(m1.error(), "eval:hash_to_curve_m1");
@@ -60,8 +65,8 @@ inline Result<FieldElement> eval(const UInt512& secret, const Bytes& message) {
     if (!m2.has_value()) {
         return unexpected_error(m2.error(), "eval:hash_to_curve_m2");
     }
-    AffinePoint q1 = curve1().affine(curve1().mul(*m1, unpacked.first));
-    AffinePoint q2 = curve2().affine(curve2().mul(*m2, unpacked.second));
+    AffinePoint q1 = curve1().affine(curve1().mul(*m1, unpacked->first));
+    AffinePoint q2 = curve2().affine(curve2().mul(*m2, unpacked->second));
     return combine(q1.x, q2.x);
 }
 
@@ -81,10 +86,19 @@ inline Result<std::string> verifier(const Bytes& message, const UInt512& pubkey)
         return unexpected_error(m2.error(), "verifier:hash_to_curve_m2");
     }
     Transcript transcript;
-    CircuitMainResult result = circuit_main(transcript, *m1, *m2);
+    Result<CircuitMainResult> result = circuit_main(transcript, *m1, *m2);
+    if (!result.has_value()) {
+        return unexpected_error(result.error(), "verifier:circuit_main");
+    }
     BulletproofTranscript bp;
-    bp.from_transcript(transcript, result.n_bits);
-    bp.add_pubkey_and_out(pubkey, result.p1x, result.p2x, result.out);
+    Status transcript_status = bp.from_transcript(transcript, result->n_bits);
+    if (!transcript_status.has_value()) {
+        return unexpected_error(transcript_status.error(), "verifier:from_transcript");
+    }
+    Status pubkey_status = bp.add_pubkey_and_out(pubkey, result->p1x, result->p2x, result->out);
+    if (!pubkey_status.has_value()) {
+        return unexpected_error(pubkey_status.error(), "verifier:add_pubkey_and_out");
+    }
     return bp.to_string();
 }
 
@@ -104,10 +118,19 @@ inline Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, c
         return unexpected_error(m2.error(), "verifier_circuit:hash_to_curve_m2");
     }
     Transcript transcript;
-    CircuitMainResult result = circuit_main(transcript, *m1, *m2);
+    Result<CircuitMainResult> result = circuit_main(transcript, *m1, *m2);
+    if (!result.has_value()) {
+        return unexpected_error(result.error(), "verifier_circuit:circuit_main");
+    }
     BulletproofTranscript bp;
-    bp.from_transcript(transcript, result.n_bits);
-    bp.add_pubkey_and_out(pubkey, result.p1x, result.p2x, result.out);
+    Status transcript_status = bp.from_transcript(transcript, result->n_bits);
+    if (!transcript_status.has_value()) {
+        return unexpected_error(transcript_status.error(), "verifier_circuit:from_transcript");
+    }
+    Status pubkey_status = bp.add_pubkey_and_out(pubkey, result->p1x, result->p2x, result->out);
+    if (!pubkey_status.has_value()) {
+        return unexpected_error(pubkey_status.error(), "verifier_circuit:add_pubkey_and_out");
+    }
     return bp.native_circuit();
 }
 
@@ -118,7 +141,10 @@ inline Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, c
  * @return Witness bundle containing public key, output, and assignment columns, or `ErrorCode::HashToCurveExhausted`.
  */
 inline Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const UInt512& secret) {
-    auto unpacked = unpack_secret(secret);
+    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
+    if (!unpacked.has_value()) {
+        return unexpected_error(unpacked.error(), "prove_assignment_data:unpack_secret");
+    }
     Result<JacobianPoint> m1 = hash_to_curve(bytes_from_ascii("Eval/1/") + message, curve1());
     if (!m1.has_value()) {
         return unexpected_error(m1.error(), "prove_assignment_data:hash_to_curve_m1");
@@ -127,23 +153,40 @@ inline Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message
     if (!m2.has_value()) {
         return unexpected_error(m2.error(), "prove_assignment_data:hash_to_curve_m2");
     }
-    AffinePoint p1 = curve1().affine(curve1().mul(generator1(), unpacked.first));
-    AffinePoint p2 = curve2().affine(curve2().mul(generator2(), unpacked.second));
-    AffinePoint q1 = curve1().affine(curve1().mul(*m1, unpacked.first));
-    AffinePoint q2 = curve2().affine(curve2().mul(*m2, unpacked.second));
+    AffinePoint p1 = curve1().affine(curve1().mul(generator1(), unpacked->first));
+    AffinePoint p2 = curve2().affine(curve2().mul(generator2(), unpacked->second));
+    AffinePoint q1 = curve1().affine(curve1().mul(*m1, unpacked->first));
+    AffinePoint q2 = curve2().affine(curve2().mul(*m2, unpacked->second));
     FieldElement native_out = combine(q1.x, q2.x);
 
     Transcript transcript;
-    CircuitMainResult result = circuit_main(transcript, *m1, *m2, unpacked.first, unpacked.second);
-    assert(transcript.evaluate(result.p1x) == std::optional<FieldElement>(p1.x) && "prove_assignment_data() p1x mismatch");
-    assert(transcript.evaluate(result.p2x) == std::optional<FieldElement>(p2.x) && "prove_assignment_data() p2x mismatch");
-    assert(transcript.evaluate(result.out) == std::optional<FieldElement>(native_out) && "prove_assignment_data() output mismatch");
+    Result<CircuitMainResult> result = circuit_main(transcript, *m1, *m2, unpacked->first, unpacked->second);
+    if (!result.has_value()) {
+        return unexpected_error(result.error(), "prove_assignment_data:circuit_main");
+    }
+    if (transcript.evaluate(result->p1x) != std::optional<FieldElement>(p1.x)) {
+        return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:p1x_mismatch");
+    }
+    if (transcript.evaluate(result->p2x) != std::optional<FieldElement>(p2.x)) {
+        return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:p2x_mismatch");
+    }
+    if (transcript.evaluate(result->out) != std::optional<FieldElement>(native_out)) {
+        return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:output_mismatch");
+    }
 
     UInt512 pubkey = pack_public(p1.x.to_uint256(), p2.x.to_uint256());
     BulletproofTranscript bp;
-    bp.from_transcript(transcript, result.n_bits);
-    bp.add_pubkey_and_out(pubkey, result.p1x, result.p2x, result.out);
-    assert(bp.evaluate(transcript.varmap(), native_out) && "prove_assignment_data() transcript self-check failed");
+    Status transcript_status = bp.from_transcript(transcript, result->n_bits);
+    if (!transcript_status.has_value()) {
+        return unexpected_error(transcript_status.error(), "prove_assignment_data:from_transcript");
+    }
+    Status pubkey_status = bp.add_pubkey_and_out(pubkey, result->p1x, result->p2x, result->out);
+    if (!pubkey_status.has_value()) {
+        return unexpected_error(pubkey_status.error(), "prove_assignment_data:add_pubkey_and_out");
+    }
+    if (!bp.evaluate(transcript.varmap(), native_out)) {
+        return unexpected_error(ErrorCode::TranscriptCheckFailed, "prove_assignment_data:transcript_check");
+    }
 
     auto vars = transcript.varmap();
     auto it = vars.find("V0");

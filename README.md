@@ -30,6 +30,7 @@ cmake --build build -j
 ```
 
 Top-level builds enable the CLI, benchmark, and docs targets by default. When this repository is added to another CMake project via `add_subdirectory(...)`, only the library target is enabled by default.
+Top-level builds also enable the regression test target by default.
 
 For multi-config generators such as Xcode, build benchmarks with `--config Release`.
 
@@ -67,6 +68,16 @@ git submodule update --init third_party/nanobench
 ```
 
 Then build `bench_purify` normally from the top-level project, or enable `PURIFY_BUILD_BENCH` before `add_subdirectory(...)` in a parent project.
+
+### Tests
+
+Build and run the regression suite with:
+
+```sh
+cmake -S . -B build -DPURIFY_BUILD_BENCH=OFF -DPURIFY_BUILD_DOCS=OFF -DPURIFY_BUILD_TESTS=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
 
 Generate API documentation with Doxygen:
 

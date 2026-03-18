@@ -310,6 +310,11 @@ public:
         return muls_;
     }
 
+    /** @brief Returns the linear equality constraints accumulated so far. */
+    const std::vector<Expr>& eqs() const {
+        return eqs_;
+    }
+
 private:
     std::unordered_map<std::string, std::optional<FieldElement>> varmap_;
     std::vector<MulConstraint> muls_;

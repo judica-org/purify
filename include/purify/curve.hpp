@@ -275,6 +275,18 @@ inline const UInt256& half_n2() {
     return value;
 }
 
+/** @brief Returns the size of the packed secret-key encoding space. */
+inline const UInt512& packed_secret_key_space_size() {
+    static const UInt512 value = multiply(half_n1(), half_n2());
+    return value;
+}
+
+/** @brief Returns the size of the packed public-key encoding space. */
+inline const UInt512& packed_public_key_space_size() {
+    static const UInt512 value = multiply(prime_p(), prime_p());
+    return value;
+}
+
 /** @brief Returns `2 * prime_p()` as a widened integer for hash-to-curve sampling. */
 inline const UInt320& two_p() {
     static const UInt320 value = [] {
@@ -374,20 +386,54 @@ inline const JacobianPoint& generator2() {
     return value;
 }
 
+/** @brief Returns true when a packed secret is encoded canonically. */
+inline bool is_valid_secret_key(const UInt512& z) {
+    return z.compare(packed_secret_key_space_size()) < 0;
+}
+
+/** @brief Returns true when a packed public key is encoded canonically. */
+inline bool is_valid_public_key(const UInt512& packed) {
+    return packed.compare(packed_public_key_space_size()) < 0;
+}
+
+/** @brief Validates the packed secret-key encoding range. */
+inline Status validate_secret_key(const UInt512& z) {
+    if (!is_valid_secret_key(z)) {
+        return unexpected_error(ErrorCode::RangeViolation, "validate_secret_key:out_of_range");
+    }
+    return {};
+}
+
+/** @brief Validates the packed public-key encoding range. */
+inline Status validate_public_key(const UInt512& packed) {
+    if (!is_valid_public_key(packed)) {
+        return unexpected_error(ErrorCode::RangeViolation, "validate_public_key:out_of_range");
+    }
+    return {};
+}
+
 /** @brief Splits a packed private key into its two per-curve secret scalars. */
-inline std::pair<UInt256, UInt256> unpack_secret(const UInt512& z) {
+inline Result<std::pair<UInt256, UInt256>> unpack_secret(const UInt512& z) {
+    Status status = validate_secret_key(z);
+    if (!status.has_value()) {
+        return unexpected_error(status.error(), "unpack_secret:validate_secret_key");
+    }
     auto qr = divmod_same(z, widen<8>(half_n1()));
     UInt256 z1 = narrow<4>(qr.second);
     UInt256 z2 = narrow<4>(qr.first);
     z1.add_small(1);
     z2.add_small(1);
-    return {z1, z2};
+    return std::make_pair(z1, z2);
 }
 
 /** @brief Splits a packed public key into its two x-coordinates. */
-inline std::pair<UInt256, UInt256> unpack_public(const UInt512& packed) {
+inline Result<std::pair<UInt256, UInt256>> unpack_public(const UInt512& packed) {
+    Status status = validate_public_key(packed);
+    if (!status.has_value()) {
+        return unexpected_error(status.error(), "unpack_public:validate_public_key");
+    }
     auto qr = divmod_same(packed, widen<8>(prime_p()));
-    return {narrow<4>(qr.second), narrow<4>(qr.first)};
+    return std::make_pair(narrow<4>(qr.second), narrow<4>(qr.first));
 }
 
 /** @brief Packs two x-coordinates into the reference 512-bit public-key encoding. */
@@ -406,11 +452,12 @@ inline FieldElement combine(const FieldElement& x1, const FieldElement& x2) {
 }
 
 /** @brief Encodes a scalar into the signed 3-bit window bit schedule used by the circuit. */
-inline Result<std::vector<int>> key_to_bits(UInt256 n, int bits) {
-    n.sub_assign(UInt256::one());
-    if (static_cast<int>(n.bit_length()) > bits) {
+inline Result<std::vector<int>> key_to_bits(UInt256 n, const UInt256& max_value) {
+    if (n.is_zero() || n.compare(max_value) > 0) {
         return unexpected_error(ErrorCode::RangeViolation, "key_to_bits:out_of_range");
     }
+    int bits = static_cast<int>(max_value.bit_length());
+    n.sub_assign(UInt256::one());
     std::vector<int> out(bits);
     for (int i = 0; i < bits; ++i) {
         out[i] = n.bit(static_cast<std::size_t>(i)) ? 1 : 0;

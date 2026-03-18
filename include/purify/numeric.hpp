@@ -548,17 +548,42 @@ public:
         return from_u64(static_cast<std::uint64_t>(-value)).negate();
     }
 
-    /** @brief Decodes a 32-byte big-endian field element. */
-    static FieldElement from_bytes32(const std::array<unsigned char, 32>& bytes) {
+    /** @brief Decodes a canonical 32-byte big-endian field element. */
+    static Result<FieldElement> try_from_bytes32(const std::array<unsigned char, 32>& bytes) {
         FieldElement out;
         int overflow = 0;
         purify_scalar_set_b32(&out.value_, bytes.data(), &overflow);
+        if (overflow != 0) {
+            return unexpected_error(ErrorCode::RangeViolation, "FieldElement::try_from_bytes32:out_of_range");
+        }
         return out;
     }
 
-    /** @brief Converts a 256-bit unsigned integer into the scalar field representation. */
+    /**
+     * @brief Decodes a 32-byte big-endian field element.
+     *
+     * Precondition: the input is canonical and strictly below the field modulus.
+     */
+    static FieldElement from_bytes32(const std::array<unsigned char, 32>& bytes) {
+        Result<FieldElement> out = try_from_bytes32(bytes);
+        assert(out.has_value() && "FieldElement::from_bytes32() requires a canonical field element");
+        return std::move(*out);
+    }
+
+    /** @brief Converts a canonical 256-bit unsigned integer into the scalar field representation. */
+    static Result<FieldElement> try_from_uint256(const UInt256& value) {
+        return try_from_bytes32(value.to_bytes_be());
+    }
+
+    /**
+     * @brief Converts a 256-bit unsigned integer into the scalar field representation.
+     *
+     * Precondition: the integer is strictly below the field modulus.
+     */
     static FieldElement from_uint256(const UInt256& value) {
-        return from_bytes32(narrow<4>(widen<4>(value)).to_bytes_be());
+        Result<FieldElement> out = try_from_uint256(value);
+        assert(out.has_value() && "FieldElement::from_uint256() requires a canonical field element");
+        return std::move(*out);
     }
 
     /** @brief Exports the field element as a canonical 256-bit unsigned integer. */

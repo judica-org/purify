@@ -268,9 +268,11 @@ public:
         if (bool_cache_.count(key) != 0) {
             return expr;
         }
+#ifndef NDEBUG
         std::optional<FieldElement> value = expr.evaluate(varmap_);
         assert((!value.has_value() || *value == FieldElement::zero() || *value == FieldElement::one())
                && "Transcript::boolean() requires a known value to be 0 or 1");
+#endif
         bool_cache_.insert(key);
         muls_.push_back({expr, expr - 1, Expr(0)});
         return expr;
@@ -279,8 +281,10 @@ public:
     /** @brief Records a linear equality constraint between two expressions. */
     void equal(const Expr& lhs, const Expr& rhs) {
         Expr diff = lhs - rhs;
+#ifndef NDEBUG
         std::optional<FieldElement> value = diff.evaluate(varmap_);
         assert((!value.has_value() || value->is_zero()) && "Transcript::equal() requires known values to match");
+#endif
         eqs_.push_back(diff);
     }
 

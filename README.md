@@ -8,7 +8,7 @@ Upstream reference material is available under [`reference/`](reference/) as opt
 
 - `include/`: public library headers intended for downstream consumers
 - `src/`: compiled support sources plus private headers
-- `cli/`: CLI entrypoint for `purify_cpp`
+- `cli/`: CLI entrypoint plus private CLI-only runtime wiring for `purify_cpp`
 - `bench/`: benchmark entrypoint for `bench_purify`
 - `reference/`: local guide plus optional reference submodules for upstream `purify` and the benchmark fork of `secp256k1-zkp`
 - `third_party/secp256k1-zkp`: cryptographic backend as a git submodule

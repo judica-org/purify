@@ -154,11 +154,6 @@ if(PURIFY_BUILD_CLI)
         cli/main.cpp
     )
 
-    target_include_directories(purify_cpp
-        PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    )
-
     target_link_libraries(purify_cpp
         PRIVATE
             purify::purify

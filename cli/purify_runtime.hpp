@@ -4,7 +4,7 @@
 
 /**
  * @file purify_runtime.hpp
- * @brief Runtime helpers and CLI wiring for the Purify executable.
+ * @brief CLI runtime helpers and command dispatch for the Purify executable.
  */
 
 #pragma once

@@ -21,6 +21,15 @@ option(PURIFY_BUILD_CLI "Build the purify_cpp CLI target." ${PURIFY_IS_TOP_LEVEL
 option(PURIFY_BUILD_BENCH "Build the bench_purify benchmark target." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_DOCS "Build the Doxygen docs target when Doxygen is available." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_TESTS "Build the Purify regression test target." ${PURIFY_IS_TOP_LEVEL})
+option(PURIFY_BUILD_REFERENCE_TESTS "Enable Python reference regression tests from reference/purify." OFF)
+
+if(PURIFY_BUILD_REFERENCE_TESTS AND NOT PURIFY_BUILD_TESTS)
+    message(FATAL_ERROR "PURIFY_BUILD_REFERENCE_TESTS requires PURIFY_BUILD_TESTS=ON")
+endif()
+
+if(PURIFY_BUILD_REFERENCE_TESTS AND NOT PURIFY_BUILD_CLI)
+    message(FATAL_ERROR "PURIFY_BUILD_REFERENCE_TESTS requires PURIFY_BUILD_CLI=ON")
+endif()
 
 if(PURIFY_IS_TOP_LEVEL AND NOT PURIFY_IS_MULTI_CONFIG)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
@@ -151,6 +160,10 @@ if(PURIFY_BUILD_CLI)
             purify::purify
     )
 
+    if(WIN32)
+        target_link_libraries(purify_cpp PRIVATE bcrypt)
+    endif()
+
     purify_enable_warnings(purify_cpp)
 endif()
 
@@ -218,6 +231,32 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_warnings(purify_tests)
 
     add_test(NAME purify.tests COMMAND purify_tests)
+
+    if(PURIFY_BUILD_BENCH)
+        add_test(NAME purify.bench COMMAND bench_purify --epochs 1 --min-epoch-ms 1)
+        set_tests_properties(purify.bench PROPERTIES TIMEOUT 300)
+    endif()
+
+    if(PURIFY_BUILD_REFERENCE_TESTS)
+        set(PURIFY_REFERENCE_PYTHON_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/reference/purify/purify.py")
+        if(NOT EXISTS "${PURIFY_REFERENCE_PYTHON_SCRIPT}")
+            message(FATAL_ERROR
+                "Missing reference/purify/purify.py. Run: git submodule update --init --depth 1 reference/purify"
+            )
+        endif()
+
+        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+        add_test(
+            NAME purify.reference_circuit
+            COMMAND
+                "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_circuit_regression.py"
+                --reference-script "${PURIFY_REFERENCE_PYTHON_SCRIPT}"
+                --purify-cpp "$<TARGET_FILE:purify_cpp>"
+        )
+        set_tests_properties(purify.reference_circuit PROPERTIES TIMEOUT 300)
+    endif()
 endif()
 
 if(PURIFY_BUILD_DOCS)

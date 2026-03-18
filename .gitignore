@@ -1,0 +1,21 @@
+/build/
+
+# Local one-off binaries and libraries from ad hoc builds
+/a.out
+/purify_cpp
+/bench_purify
+/libpurify_bppp_support.a
+
+# Compiler outputs
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS filesystem noise
+.DS_Store

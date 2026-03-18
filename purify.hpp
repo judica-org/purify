@@ -20,13 +20,7 @@
 #include <utility>
 #include <vector>
 
-#ifndef SECP256K1_BUILD
-#define SECP256K1_BUILD
-#endif
-
-#include "third_party/secp256k1-zkp/src/int128_impl.h"
-#include "third_party/secp256k1-zkp/src/scalar_impl.h"
-#include "third_party/secp256k1-zkp/src/hash_impl.h"
+#include "purify_secp_bridge.h"
 
 namespace purify {
 
@@ -396,7 +390,7 @@ int legendre_symbol(const FieldElement& value);
 class FieldElement {
 public:
     FieldElement() {
-        secp256k1_scalar_set_int(&value_, 0);
+        purify_scalar_set_int(&value_, 0);
     }
 
     static FieldElement zero() {
@@ -409,7 +403,7 @@ public:
 
     static FieldElement from_u64(std::uint64_t value) {
         FieldElement out;
-        secp256k1_scalar_set_u64(&out.value_, value);
+        purify_scalar_set_u64(&out.value_, value);
         return out;
     }
 
@@ -423,7 +417,7 @@ public:
     static FieldElement from_bytes32(const std::array<unsigned char, 32>& bytes) {
         FieldElement out;
         int overflow = 0;
-        secp256k1_scalar_set_b32(&out.value_, bytes.data(), &overflow);
+        purify_scalar_set_b32(&out.value_, bytes.data(), &overflow);
         return out;
     }
 
@@ -438,7 +432,7 @@ public:
 
     std::array<unsigned char, 32> to_bytes_be() const {
         std::array<unsigned char, 32> bytes{};
-        secp256k1_scalar_get_b32(bytes.data(), &value_);
+        purify_scalar_get_b32(bytes.data(), &value_);
         return bytes;
     }
 
@@ -457,15 +451,15 @@ public:
     }
 
     bool is_zero() const {
-        return secp256k1_scalar_is_zero(&value_) != 0;
+        return purify_scalar_is_zero(&value_) != 0;
     }
 
     bool is_one() const {
-        return secp256k1_scalar_is_one(&value_) != 0;
+        return purify_scalar_is_one(&value_) != 0;
     }
 
     bool is_odd() const {
-        return secp256k1_scalar_is_even(&value_) == 0;
+        return purify_scalar_is_even(&value_) == 0;
     }
 
     bool is_square() const {
@@ -481,13 +475,13 @@ public:
 
     FieldElement negate() const {
         FieldElement out;
-        secp256k1_scalar_negate(&out.value_, &value_);
+        purify_scalar_negate(&out.value_, &value_);
         return out;
     }
 
     FieldElement inverse() const {
         FieldElement out;
-        secp256k1_scalar_inverse_var(&out.value_, &value_);
+        purify_scalar_inverse_var(&out.value_, &value_);
         return out;
     }
 
@@ -557,7 +551,7 @@ public:
     }
 
     friend bool operator==(const FieldElement& lhs, const FieldElement& rhs) {
-        return secp256k1_scalar_eq(&lhs.value_, &rhs.value_) != 0;
+        return purify_scalar_eq(&lhs.value_, &rhs.value_) != 0;
     }
 
     friend bool operator!=(const FieldElement& lhs, const FieldElement& rhs) {
@@ -566,7 +560,7 @@ public:
 
     friend FieldElement operator+(const FieldElement& lhs, const FieldElement& rhs) {
         FieldElement out;
-        secp256k1_scalar_add(&out.value_, &lhs.value_, &rhs.value_);
+        purify_scalar_add(&out.value_, &lhs.value_, &rhs.value_);
         return out;
     }
 
@@ -576,14 +570,14 @@ public:
 
     friend FieldElement operator*(const FieldElement& lhs, const FieldElement& rhs) {
         FieldElement out;
-        secp256k1_scalar_mul(&out.value_, &lhs.value_, &rhs.value_);
+        purify_scalar_mul(&out.value_, &lhs.value_, &rhs.value_);
         return out;
     }
 
 private:
-    explicit FieldElement(const secp256k1_scalar& raw) : value_(raw) {}
+    explicit FieldElement(const purify_scalar& raw) : value_(raw) {}
 
-    secp256k1_scalar value_{};
+    purify_scalar value_{};
 };
 
 inline FieldElement square(const FieldElement& value) {
@@ -769,11 +763,7 @@ inline std::uint64_t ceil_div(std::uint64_t lhs, std::uint64_t rhs) {
 
 inline Bytes hmac_sha256(const Bytes& key, const Bytes& data) {
     Bytes out(32);
-    secp256k1_hmac_sha256 hmac;
-    secp256k1_hmac_sha256_initialize(&hmac, key.data(), key.size());
-    secp256k1_hmac_sha256_write(&hmac, data.data(), data.size());
-    secp256k1_hmac_sha256_finalize(&hmac, out.data());
-    secp256k1_hmac_sha256_clear(&hmac);
+    purify_hmac_sha256(out.data(), key.data(), key.size(), data.data(), data.size());
     return out;
 }
 

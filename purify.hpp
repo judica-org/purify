@@ -1537,6 +1537,10 @@ public:
         circuit.wr.resize(n_muls_);
         circuit.wo.resize(n_muls_);
         circuit.wv.resize(n_commitments_);
+        circuit.c.reserve(
+            std::count_if(assignments_.begin(), assignments_.end(),
+                          [](const auto& assignment) { return !assignment.is_v; })
+            + constraints_.size());
 
         auto parse_symbol = [](std::string_view symbol) -> std::pair<char, std::size_t> {
             if (symbol.size() < 2) {

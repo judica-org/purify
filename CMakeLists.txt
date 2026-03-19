@@ -233,7 +233,9 @@ if(PURIFY_BUILD_TESTS)
     enable_testing()
 
     add_executable(purify_tests
+        tests/purify_tests_main.cpp
         tests/purify_tests.cpp
+        tests/legacy_bulletproof_tests.cpp
     )
 
     target_link_libraries(purify_tests

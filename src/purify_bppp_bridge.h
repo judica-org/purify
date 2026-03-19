@@ -87,6 +87,54 @@ int purify_bppp_verify_norm_arg(const unsigned char rho32[32], const unsigned ch
                                 const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
                                 const unsigned char commitment33[33], const unsigned char* proof, size_t proof_len);
 
+typedef struct purify_bulletproof_row_view {
+    size_t size;
+    const size_t* indices;
+    const unsigned char* scalars32;
+} purify_bulletproof_row_view;
+
+typedef struct purify_bulletproof_circuit_view {
+    size_t n_gates;
+    size_t n_commits;
+    size_t n_bits;
+    size_t n_constraints;
+    const purify_bulletproof_row_view* wl;
+    const purify_bulletproof_row_view* wr;
+    const purify_bulletproof_row_view* wo;
+    const purify_bulletproof_row_view* wv;
+    const unsigned char* c32;
+} purify_bulletproof_circuit_view;
+
+typedef struct purify_bulletproof_assignment_view {
+    size_t n_gates;
+    size_t n_commits;
+    const unsigned char* al32;
+    const unsigned char* ar32;
+    const unsigned char* ao32;
+    const unsigned char* v32;
+} purify_bulletproof_assignment_view;
+
+size_t purify_bulletproof_required_proof_size(size_t n_gates);
+
+int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circuit,
+                                     const purify_bulletproof_assignment_view* assignment,
+                                     const unsigned char* blind32,
+                                     const unsigned char value_gen33[33],
+                                     const unsigned char nonce32[32],
+                                     const unsigned char* extra_commit,
+                                     size_t extra_commit_len,
+                                     unsigned char commitment_out33[33],
+                                     unsigned char* proof_out,
+                                     size_t* proof_len);
+
+int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* circuit,
+                                      const unsigned char commitment33[33],
+                                      const unsigned char value_gen33[33],
+                                      const unsigned char* extra_commit,
+                                      size_t extra_commit_len,
+                                      const unsigned char* proof,
+                                      size_t proof_len);
+
 #ifdef __cplusplus
 }
 #endif

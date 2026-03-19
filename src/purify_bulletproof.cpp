@@ -8,9 +8,11 @@
  */
 
 #include "purify/bulletproof.hpp"
+#include "purify_bppp_bridge.h"
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <format>
 #include <limits>
 #include <sstream>
@@ -23,6 +25,7 @@ using purify::Result;
 using purify::Symbol;
 using purify::SymbolKind;
 using purify::WitnessAssignments;
+using purify::Bytes;
 
 std::uint32_t narrow_symbol_index(std::size_t index) {
     assert(index <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())
@@ -120,6 +123,166 @@ Result<FieldElement> evaluate_known(const Expr& expr, const ResolvedValues& valu
         out = out + *value * term.second;
     }
     return out;
+}
+
+bool is_power_of_two(std::size_t value) {
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
+void append_u32_le(Bytes& out, std::uint32_t value) {
+    for (int i = 0; i < 4; ++i) {
+        out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
+    }
+}
+
+void append_u64_le(Bytes& out, std::uint64_t value) {
+    for (int i = 0; i < 8; ++i) {
+        out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
+    }
+}
+
+std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes, std::size_t offset) {
+    std::uint32_t value = 0;
+    if (offset + 4 > bytes.size()) {
+        return std::nullopt;
+    }
+    for (int i = 0; i < 4; ++i) {
+        value |= static_cast<std::uint32_t>(bytes[offset + i]) << (8 * i);
+    }
+    return value;
+}
+
+Bytes flatten_scalars32(const std::vector<FieldElement>& values) {
+    Bytes out;
+    out.reserve(values.size() * 32);
+    for (const FieldElement& value : values) {
+        auto bytes = value.to_bytes_be();
+        out.insert(out.end(), bytes.begin(), bytes.end());
+    }
+    return out;
+}
+
+void append_row_family_digest(Bytes& out, const std::vector<purify::NativeBulletproofCircuitRow>& rows) {
+    append_u64_le(out, static_cast<std::uint64_t>(rows.size()));
+    for (const auto& row : rows) {
+        append_u64_le(out, static_cast<std::uint64_t>(row.entries.size()));
+        for (const auto& entry : row.entries) {
+            append_u64_le(out, static_cast<std::uint64_t>(entry.idx));
+            auto scalar = entry.scalar.to_bytes_be();
+            out.insert(out.end(), scalar.begin(), scalar.end());
+        }
+    }
+}
+
+Bytes circuit_binding_digest(const purify::NativeBulletproofCircuit& circuit, std::span<const unsigned char> statement_binding) {
+    Bytes serialized;
+    serialized.reserve(64 + circuit.c.size() * 32);
+    append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_gates));
+    append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_commitments));
+    append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_bits));
+    append_u64_le(serialized, static_cast<std::uint64_t>(circuit.c.size()));
+    append_row_family_digest(serialized, circuit.wl);
+    append_row_family_digest(serialized, circuit.wr);
+    append_row_family_digest(serialized, circuit.wo);
+    append_row_family_digest(serialized, circuit.wv);
+    for (const FieldElement& constant : circuit.c) {
+        auto bytes = constant.to_bytes_be();
+        serialized.insert(serialized.end(), bytes.begin(), bytes.end());
+    }
+    append_u64_le(serialized, static_cast<std::uint64_t>(statement_binding.size()));
+    serialized.insert(serialized.end(), statement_binding.begin(), statement_binding.end());
+    return purify::hmac_sha256(purify::bytes_from_ascii("Purify/ExperimentalBulletproof/CircuitV1"), serialized);
+}
+
+struct FlattenedRowFamily {
+    std::vector<purify_bulletproof_row_view> views;
+    std::vector<std::size_t> indices;
+    Bytes scalars32;
+};
+
+FlattenedRowFamily flatten_row_family(const std::vector<purify::NativeBulletproofCircuitRow>& rows) {
+    FlattenedRowFamily flat;
+    std::vector<std::size_t> offsets;
+    offsets.reserve(rows.size());
+    flat.views.resize(rows.size());
+
+    std::size_t total_entries = 0;
+    for (const auto& row : rows) {
+        total_entries += row.entries.size();
+    }
+    flat.indices.reserve(total_entries);
+    flat.scalars32.reserve(total_entries * 32);
+
+    for (const auto& row : rows) {
+        offsets.push_back(flat.indices.size());
+        for (const auto& entry : row.entries) {
+            flat.indices.push_back(entry.idx);
+            auto bytes = entry.scalar.to_bytes_be();
+            flat.scalars32.insert(flat.scalars32.end(), bytes.begin(), bytes.end());
+        }
+    }
+
+    const std::size_t* indices_base = flat.indices.empty() ? nullptr : flat.indices.data();
+    const unsigned char* scalars_base = flat.scalars32.empty() ? nullptr : flat.scalars32.data();
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const std::size_t count = rows[i].entries.size();
+        const std::size_t start = offsets[i];
+        flat.views[i].size = count;
+        flat.views[i].indices = count == 0 ? nullptr : indices_base + start;
+        flat.views[i].scalars32 = count == 0 ? nullptr : scalars_base + start * 32;
+    }
+    return flat;
+}
+
+struct FlattenedCircuitView {
+    FlattenedRowFamily wl;
+    FlattenedRowFamily wr;
+    FlattenedRowFamily wo;
+    FlattenedRowFamily wv;
+    Bytes constants32;
+    purify_bulletproof_circuit_view view{};
+};
+
+FlattenedCircuitView flatten_circuit_view(const purify::NativeBulletproofCircuit& circuit) {
+    FlattenedCircuitView flat;
+    flat.wl = flatten_row_family(circuit.wl);
+    flat.wr = flatten_row_family(circuit.wr);
+    flat.wo = flatten_row_family(circuit.wo);
+    flat.wv = flatten_row_family(circuit.wv);
+    flat.constants32 = flatten_scalars32(circuit.c);
+    flat.view.n_gates = circuit.n_gates;
+    flat.view.n_commits = circuit.n_commitments;
+    flat.view.n_bits = circuit.n_bits;
+    flat.view.n_constraints = circuit.c.size();
+    flat.view.wl = flat.wl.views.data();
+    flat.view.wr = flat.wr.views.data();
+    flat.view.wo = flat.wo.views.data();
+    flat.view.wv = flat.wv.views.data();
+    flat.view.c32 = flat.constants32.empty() ? nullptr : flat.constants32.data();
+    return flat;
+}
+
+struct FlattenedAssignmentView {
+    Bytes left32;
+    Bytes right32;
+    Bytes output32;
+    Bytes commitments32;
+    purify_bulletproof_assignment_view view{};
+};
+
+FlattenedAssignmentView flatten_assignment_view(const purify::BulletproofAssignmentData& assignment) {
+    FlattenedAssignmentView flat;
+    flat.left32 = flatten_scalars32(assignment.left);
+    flat.right32 = flatten_scalars32(assignment.right);
+    flat.output32 = flatten_scalars32(assignment.output);
+    flat.commitments32 = flatten_scalars32(assignment.commitments);
+    flat.view.n_gates = assignment.left.size();
+    flat.view.n_commits = assignment.commitments.size();
+    flat.view.al32 = flat.left32.empty() ? nullptr : flat.left32.data();
+    flat.view.ar32 = flat.right32.empty() ? nullptr : flat.right32.data();
+    flat.view.ao32 = flat.output32.empty() ? nullptr : flat.output32.data();
+    flat.view.v32 = flat.commitments32.empty() ? nullptr : flat.commitments32.data();
+    return flat;
 }
 
 }  // namespace
@@ -274,6 +437,137 @@ void NativeBulletproofCircuit::add_row_term(std::vector<NativeBulletproofCircuit
     assert(rows.size() == expected_size && "NativeBulletproofCircuit rows must be initialized before adding terms");
     assert(row_idx < rows.size() && "NativeBulletproofCircuit row index out of range");
     rows[row_idx].add(constraint_idx, scalar);
+}
+
+Result<Bytes> ExperimentalBulletproofProof::serialize() const {
+    if (proof.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return unexpected_error(ErrorCode::UnexpectedSize, "ExperimentalBulletproofProof::serialize:proof_too_large");
+    }
+
+    Bytes out;
+    out.reserve(1 + 1 + 4 + (commitment.has_value() ? 33 : 0) + proof.size());
+    out.push_back(kSerializationVersion);
+    out.push_back(commitment.has_value() ? static_cast<unsigned char>(1) : static_cast<unsigned char>(0));
+    append_u32_le(out, static_cast<std::uint32_t>(proof.size()));
+    if (commitment.has_value()) {
+        out.insert(out.end(), commitment->begin(), commitment->end());
+    }
+    out.insert(out.end(), proof.begin(), proof.end());
+    return out;
+}
+
+Result<ExperimentalBulletproofProof> ExperimentalBulletproofProof::deserialize(std::span<const unsigned char> bytes) {
+    ExperimentalBulletproofProof out;
+    if (bytes.size() < 6) {
+        return unexpected_error(ErrorCode::InvalidFixedSize, "ExperimentalBulletproofProof::deserialize:header");
+    }
+    if (bytes[0] != kSerializationVersion) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "ExperimentalBulletproofProof::deserialize:version");
+    }
+    if (bytes[1] > 1) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "ExperimentalBulletproofProof::deserialize:flag");
+    }
+
+    std::optional<std::uint32_t> proof_size = read_u32_le(bytes, 2);
+    assert(proof_size.has_value() && "header length check should guarantee a proof length");
+    std::size_t offset = 6;
+    if (bytes[1] != 0) {
+        if (offset + 33 > bytes.size()) {
+            return unexpected_error(ErrorCode::InvalidFixedSize, "ExperimentalBulletproofProof::deserialize:commitment");
+        }
+        BulletproofPointBytes commitment_bytes{};
+        std::copy_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset), 33, commitment_bytes.begin());
+        out.commitment = commitment_bytes;
+        offset += 33;
+    }
+    if (offset + *proof_size != bytes.size()) {
+        return unexpected_error(ErrorCode::InvalidFixedSize, "ExperimentalBulletproofProof::deserialize:proof_length");
+    }
+    out.proof.assign(bytes.begin() + static_cast<std::ptrdiff_t>(offset), bytes.end());
+    return out;
+}
+
+Result<ExperimentalBulletproofProof> prove_experimental_circuit(
+    const NativeBulletproofCircuit& circuit,
+    const BulletproofAssignmentData& assignment,
+    const BulletproofScalarBytes& nonce,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding,
+    std::optional<BulletproofScalarBytes> blind) {
+    ExperimentalBulletproofProof out;
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:circuit_shape");
+    }
+    if (!is_power_of_two(circuit.n_gates)) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:n_gates_power_of_two");
+    }
+    if (circuit.n_commitments > 1) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:n_commitments");
+    }
+    if (assignment.left.size() != circuit.n_gates
+        || assignment.right.size() != circuit.n_gates
+        || assignment.output.size() != circuit.n_gates
+        || assignment.commitments.size() != circuit.n_commitments) {
+        return unexpected_error(ErrorCode::SizeMismatch, "prove_experimental_circuit:assignment_shape");
+    }
+    if (!circuit.evaluate(assignment)) {
+        return unexpected_error(ErrorCode::EquationMismatch, "prove_experimental_circuit:assignment_invalid");
+    }
+
+    FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
+    FlattenedAssignmentView flat_assignment = flatten_assignment_view(assignment);
+    Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
+    Bytes proof_bytes(purify_bulletproof_required_proof_size(circuit.n_gates), 0);
+    std::size_t proof_len = proof_bytes.size();
+    BulletproofPointBytes commitment{};
+    const unsigned char* blind_ptr = blind.has_value() ? blind->data() : nullptr;
+
+    if (proof_len == 0) {
+        return unexpected_error(ErrorCode::UnexpectedSize, "prove_experimental_circuit:proof_size");
+    }
+    if (!purify_bulletproof_prove_circuit(&flat_circuit.view, &flat_assignment.view, blind_ptr,
+                                          value_generator.data(), nonce.data(),
+                                          binding_digest.data(), binding_digest.size(),
+                                          commitment.data(), proof_bytes.data(), &proof_len)) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "prove_experimental_circuit:bridge");
+    }
+
+    proof_bytes.resize(proof_len);
+    if (circuit.n_commitments == 1) {
+        out.commitment = commitment;
+    }
+    out.proof = std::move(proof_bytes);
+    return out;
+}
+
+Result<bool> verify_experimental_circuit(
+    const NativeBulletproofCircuit& circuit,
+    const ExperimentalBulletproofProof& proof,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding) {
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:circuit_shape");
+    }
+    if (!is_power_of_two(circuit.n_gates)) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:n_gates_power_of_two");
+    }
+    if (circuit.n_commitments > 1) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:n_commitments");
+    }
+    if (proof.proof.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput, "verify_experimental_circuit:proof_empty");
+    }
+    if ((circuit.n_commitments == 1) != proof.commitment.has_value()) {
+        return unexpected_error(ErrorCode::BindingMismatch, "verify_experimental_circuit:commitment_presence");
+    }
+
+    FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
+    Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
+    const unsigned char* commitment_ptr = proof.commitment.has_value() ? proof.commitment->data() : nullptr;
+    bool ok = purify_bulletproof_verify_circuit(&flat_circuit.view, commitment_ptr, value_generator.data(),
+                                                binding_digest.data(), binding_digest.size(),
+                                                proof.proof.data(), proof.proof.size()) != 0;
+    return ok;
 }
 
 void BulletproofTranscript::replace_expr_v_with_bp_var(Expr& expr) {

@@ -172,17 +172,65 @@ puresign_plusplus_proven_signature_size_bytes=1146
 
 Nanobench now groups related rows by explicit unit, so the output is split into separate tables such as:
 
-|          ns/circuit |           circuit/s |    err% |     total | purify |
-|--------------------:|--------------------:|--------:|----------:|:-------|
-|       52,372,000.00 |               19.09 |    0.0% |      0.05 | `verifier_circuit.native.build` |
-|        3,898,250.00 |              256.53 |    0.0% |      0.00 | `verifier_circuit.template.instantiate_native` |
-|          968,917.00 |            1,032.08 |    0.0% |      0.00 | `verifier_circuit.template.instantiate_packed` |
 
-|            ns/proof |             proof/s |    err% |     total | purify |
-|--------------------:|--------------------:|--------:|----------:|:-------|
-|      829,548,458.00 |                1.21 |    0.0% |      0.83 | `experimental_circuit.legacy_bp.prove` |
-|      119,583,291.00 |                8.36 |    0.0% |      0.12 | `experimental_circuit.legacy_bp.verify` |
-|      107,984,375.00 |                9.26 |    0.0% |      0.11 | `bppp.norm_arg.prove` |
-|       21,056,959.00 |               47.49 |    0.0% |      0.02 | `bppp.norm_arg.verify` |
+|          ns/circuit |           circuit/s |    err% |     total | purify
+|--------------------:|--------------------:|--------:|----------:|:-------
+|       28,132,875.00 |               35.55 |    1.7% |      0.14 | `verifier_circuit.native.build`
+|          732,113.07 |            1,365.91 |   10.7% |      0.06 | :wavy_dash: `verifier_circuit.template.instantiate_native` (Unstable with ~14.6 iters. Increase `minEpochIterations` to e.g. 146)
+|          367,025.65 |            2,724.61 |    5.4% |      0.06 | :wavy_dash: `verifier_circuit.template.instantiate_packed` (Unstable with ~29.0 iters. Increase `minEpochIterations` to e.g. 290)
+
+|         ns/template |          template/s |    err% |     total | purify
+|--------------------:|--------------------:|--------:|----------:|:-------
+|       26,308,917.00 |               38.01 |    1.1% |      0.13 | `verifier_circuit.template.build`
+
+|       ns/evaluation |        evaluation/s |    err% |     total | purify
+|--------------------:|--------------------:|--------:|----------:|:-------
+|        3,257,541.67 |              306.98 |    0.9% |      0.06 | `verifier_circuit.template.evaluate_partial`
+|           20,213.51 |           49,471.85 |    0.6% |      0.05 | `verifier_circuit.template.evaluate_final`
+
+|            ns/cache |             cache/s |    err% |     total | purify
+|--------------------:|--------------------:|--------:|----------:|:-------
+|       25,737,834.00 |               38.85 |    1.5% |      0.13 | `puresign_legacy.message_proof_cache.build`
+
+|            ns/proof |             proof/s |    err% |     total | purify
+|--------------------:|--------------------:|--------:|----------:|:-------
+|      263,514,542.00 |                3.79 |    1.1% |      1.38 | `experimental_circuit.legacy_bp.prove`
+|       40,884,667.00 |               24.46 |    1.8% |      0.21 | `experimental_circuit.legacy_bp.verify`
+|      482,518,750.00 |                2.07 |    0.7% |      2.44 | `experimental_circuit.bppp_zk_norm_arg.prove`
+|       53,572,666.00 |               18.67 |    0.4% |      0.27 | `experimental_circuit.bppp_zk_norm_arg.verify`
+|       83,220,083.00 |               12.02 |    0.0% |      0.42 | `bppp.norm_arg.prove`
+|       10,959,459.00 |               91.25 |    0.4% |      0.05 | `bppp.norm_arg.verify`
+
+|     ns/resource_set |      resource_set/s |    err% |     total | purify
+|--------------------:|--------------------:|--------:|----------:|:-------
+|       82,586,208.00 |               12.11 |    0.3% |      0.41 | `experimental_circuit.legacy_bp_backend_resources.create`
+
+|            ns/nonce |             nonce/s |    err% |     total | purify
+|--------------------:|--------------------:|--------:|----------:|:-------
+|          702,825.00 |            1,422.83 |    0.0% |      0.05 | `puresign_legacy.nonce.prepare`
+|      317,086,083.00 |                3.15 |    3.0% |      1.68 | `puresign_legacy.nonce.prepare_with_proof`
+|      303,744,208.00 |                3.29 |    3.4% |      1.66 | `puresign_legacy.nonce.prepare_with_proof_cached_template`
+|      553,057,042.00 |                1.81 |    2.0% |      2.97 | `puresign_plusplus.nonce.prepare_with_proof`
+|      523,149,250.00 |                1.91 |    0.5% |      2.66 | `puresign_plusplus.nonce.prepare_with_proof_cached_template`
+|       66,666,083.00 |               15.00 |    1.7% |      0.34 | `puresign_legacy.nonce.verify_proof`
+|       40,534,958.00 |               24.67 |    0.6% |      0.20 | `puresign_legacy.nonce.verify_proof_cached_template`
+|       81,794,834.00 |               12.23 |    0.5% |      0.41 | `puresign_plusplus.nonce.verify_proof`
+|       56,843,542.00 |               17.59 |    0.2% |      0.28 | `puresign_plusplus.nonce.verify_proof_cached_template`
+
+|        ns/signature |         signature/s |    err% |     total | purify
+|--------------------:|--------------------:|--------:|----------:|:-------
+|          778,245.80 |            1,284.94 |    0.4% |      0.05 | `puresign_legacy.signature.sign`
+|      316,064,416.00 |                3.16 |    0.1% |      1.58 | `puresign_legacy.signature.sign_with_proof`
+|      284,111,375.00 |                3.52 |    0.4% |      1.53 | `puresign_legacy.signature.sign_with_proof_cached_template`
+|      534,007,334.00 |                1.87 |    0.8% |      2.69 | `puresign_plusplus.signature.sign_with_proof`
+|      506,387,791.00 |                1.97 |    0.7% |      2.74 | `puresign_plusplus.signature.sign_with_proof_cached_template`
+|           29,724.02 |           33,642.83 |   25.3% |      0.06 | :wavy_dash: `puresign_legacy.signature.verify` (Unstable with ~352.8 iters. Increase `minEpochIterations` to e.g. 3528)
+|       75,070,333.00 |               13.32 |    7.2% |      0.43 | :wavy_dash: `puresign_legacy.signature.verify_with_proof` (Unstable with ~1.0 iters. Increase `minEpochIterations` to e.g. 10)
+|       38,522,875.00 |               25.96 |    1.2% |      0.19 | `puresign_legacy.signature.verify_with_proof_cached_template`
+|       79,021,916.00 |               12.65 |    0.2% |      0.41 | `puresign_plusplus.signature.verify_with_proof`
+|       54,723,916.00 |               18.27 |    0.7% |      0.28 | `puresign_plusplus.signature.verify_with_proof_cached_template`
+
+
+
 
 The benchmark output still uses the `bppp` labels emitted by the `secp256k1-zkp` backend. In this repository's terminology, the implementation is against BPP.

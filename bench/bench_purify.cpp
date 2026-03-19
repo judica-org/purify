@@ -9,6 +9,7 @@
 
 #include <nanobench.h>
 
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -17,6 +18,7 @@
 #include <optional>
 #include <string_view>
 
+#include "purify.hpp"
 #include "purify_bppp.hpp"
 
 namespace {
@@ -25,6 +27,7 @@ using namespace std::chrono_literals;
 
 using purify::BulletproofWitnessData;
 using purify::Bytes;
+using purify::ExperimentalBulletproofProof;
 using purify::FieldElement;
 using purify::NativeBulletproofCircuit;
 using purify::NativeBulletproofCircuitRow;
@@ -53,6 +56,11 @@ struct PurifyBenchCase {
     Bytes message;
     UInt512 secret;
     BulletproofWitnessData witness;
+    NativeBulletproofCircuit circuit;
+    ExperimentalBulletproofProof experimental_proof;
+    purify::puresign::PublicKey public_key;
+    purify::puresign::Signature signature;
+    purify::puresign::ProvenSignature proven_signature;
     purify::bppp::NormArgInputs norm_arg_inputs;
     purify::bppp::NormArgProof norm_arg_proof;
 };
@@ -163,6 +171,49 @@ std::optional<PurifyBenchCase> make_case() {
     }
     out.witness = std::move(*witness);
 
+    purify::Result<NativeBulletproofCircuit> circuit = purify::verifier_circuit(out.message, out.witness.public_key);
+    if (!circuit.has_value()) {
+        std::cerr << circuit.error().message() << "\n";
+        return std::nullopt;
+    }
+    out.circuit = std::move(*circuit);
+
+    std::array<unsigned char, 32> proof_nonce{};
+    for (std::size_t i = 0; i < proof_nonce.size(); ++i) {
+        proof_nonce[i] = static_cast<unsigned char>(i + 17);
+    }
+    purify::Result<ExperimentalBulletproofProof> experimental_proof =
+        purify::prove_experimental_circuit(out.circuit, out.witness.assignment, proof_nonce,
+                                           purify::bppp::base_generator(),
+                                           purify::bytes_from_ascii("bench-experimental-proof"));
+    if (!experimental_proof.has_value()) {
+        std::cerr << experimental_proof.error().message() << "\n";
+        return std::nullopt;
+    }
+    out.experimental_proof = std::move(*experimental_proof);
+
+    purify::Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(out.secret);
+    if (!public_key.has_value()) {
+        std::cerr << public_key.error().message() << "\n";
+        return std::nullopt;
+    }
+    out.public_key = std::move(*public_key);
+
+    purify::Result<purify::puresign::Signature> signature = purify::puresign::sign_message(out.secret, out.message);
+    if (!signature.has_value()) {
+        std::cerr << signature.error().message() << "\n";
+        return std::nullopt;
+    }
+    out.signature = std::move(*signature);
+
+    purify::Result<purify::puresign::ProvenSignature> proven_signature =
+        purify::puresign::sign_message_with_proof(out.secret, out.message);
+    if (!proven_signature.has_value()) {
+        std::cerr << proven_signature.error().message() << "\n";
+        return std::nullopt;
+    }
+    out.proven_signature = std::move(*proven_signature);
+
     out.norm_arg_inputs.rho[31] = 1;
     purify::Result<std::vector<purify::bppp::PointBytes>> generators = purify::bppp::create_generators(
         out.witness.assignment.left.size() + out.witness.assignment.right.size());
@@ -228,31 +279,58 @@ int main(int argc, char** argv) {
     if (!bench_case.has_value()) {
         return 1;
     }
-
-    purify::Result<NativeBulletproofCircuit> circuit = purify::verifier_circuit(bench_case->message, bench_case->witness.public_key);
-    if (!circuit.has_value()) {
-        std::cerr << circuit.error().message() << "\n";
+    std::array<unsigned char, 32> experimental_nonce{};
+    for (std::size_t i = 0; i < experimental_nonce.size(); ++i) {
+        experimental_nonce[i] = static_cast<unsigned char>(i + 17);
+    }
+    Bytes experimental_binding = purify::bytes_from_ascii("bench-experimental-proof");
+    std::size_t circuit_bytes = estimate_bytes(bench_case->circuit);
+    purify::Result<Bytes> proven_signature_bytes = bench_case->proven_signature.serialize();
+    if (!proven_signature_bytes.has_value()) {
+        std::cerr << proven_signature_bytes.error().message() << "\n";
         return 1;
     }
-    std::size_t circuit_bytes = estimate_bytes(*circuit);
 
     std::cout << "purify benchmark setup\n";
-    std::cout << "proof_system=bppp_norm_arg\n";
+    std::cout << "proof_system=experimental_bulletproof_and_bppp_norm_arg\n";
     std::cout << "message_bytes=" << bench_case->message.size() << "\n";
-    std::cout << "gates=" << circuit->n_gates << "\n";
-    std::cout << "constraints=" << circuit->c.size() << "\n";
-    std::cout << "commitments=" << circuit->n_commitments << "\n";
+    std::cout << "gates=" << bench_case->circuit.n_gates << "\n";
+    std::cout << "constraints=" << bench_case->circuit.c.size() << "\n";
+    std::cout << "commitments=" << bench_case->circuit.n_commitments << "\n";
     std::cout << "circuit_size_bytes=" << circuit_bytes << "\n";
+    std::cout << "experimental_proof_size_bytes=" << bench_case->experimental_proof.proof.size() << "\n";
     std::cout << "norm_arg_n_vec_len=" << bench_case->norm_arg_inputs.n_vec.size() << "\n";
     std::cout << "norm_arg_l_vec_len=" << bench_case->norm_arg_inputs.l_vec.size() << "\n";
     std::cout << "norm_arg_c_vec_len=" << bench_case->norm_arg_inputs.c_vec.size() << "\n";
-    std::cout << "proof_size_bytes=" << bench_case->norm_arg_proof.proof.size() << "\n";
+    std::cout << "norm_arg_proof_size_bytes=" << bench_case->norm_arg_proof.proof.size() << "\n";
+    std::cout << "puresign_signature_size_bytes=" << bench_case->signature.bytes.size() << "\n";
+    std::cout << "puresign_proven_signature_size_bytes=" << proven_signature_bytes->size() << "\n";
 
     auto build_bench = make_bench(*config);
     build_bench.run("build native verifier circuit", [&] {
         purify::Result<NativeBulletproofCircuit> built = purify::verifier_circuit(bench_case->message, bench_case->witness.public_key);
         assert(built.has_value() && "benchmark verifier circuit build should succeed");
         ankerl::nanobench::doNotOptimizeAway(built->c.size());
+    });
+
+    auto experimental_prove_bench = make_bench(*config);
+    experimental_prove_bench.run("prove experimental circuit", [&] {
+        purify::Result<ExperimentalBulletproofProof> proof =
+            purify::prove_experimental_circuit(bench_case->circuit, bench_case->witness.assignment,
+                                               experimental_nonce, purify::bppp::base_generator(),
+                                               experimental_binding);
+        assert(proof.has_value() && "benchmark experimental circuit proof should succeed");
+        ankerl::nanobench::doNotOptimizeAway(proof->proof.data());
+        ankerl::nanobench::doNotOptimizeAway(proof->proof.size());
+    });
+
+    auto experimental_verify_bench = make_bench(*config);
+    experimental_verify_bench.run("verify experimental circuit", [&] {
+        purify::Result<bool> ok =
+            purify::verify_experimental_circuit(bench_case->circuit, bench_case->experimental_proof,
+                                                purify::bppp::base_generator(), experimental_binding);
+        assert(ok.has_value() && *ok && "benchmark experimental circuit verification should succeed");
+        ankerl::nanobench::doNotOptimizeAway(*ok);
     });
 
     auto prove_bench = make_bench(*config);
@@ -268,6 +346,47 @@ int main(int argc, char** argv) {
         bool ok = purify::bppp::verify_norm_arg(bench_case->norm_arg_proof);
         assert(ok && "benchmark verification should succeed");
         ankerl::nanobench::doNotOptimizeAway(ok);
+    });
+
+    auto prepare_nonce_bench = make_bench(*config);
+    prepare_nonce_bench.run("prepare puresign message nonce", [&] {
+        purify::Result<purify::puresign::PreparedNonce> prepared =
+            purify::puresign::prepare_message_nonce(bench_case->secret, bench_case->message);
+        assert(prepared.has_value() && "benchmark PureSign nonce preparation should succeed");
+        ankerl::nanobench::doNotOptimizeAway(prepared->public_nonce().xonly.data());
+    });
+
+    auto sign_bench = make_bench(*config);
+    sign_bench.run("sign puresign message", [&] {
+        purify::Result<purify::puresign::Signature> signature =
+            purify::puresign::sign_message(bench_case->secret, bench_case->message);
+        assert(signature.has_value() && "benchmark PureSign signing should succeed");
+        ankerl::nanobench::doNotOptimizeAway(signature->bytes.data());
+    });
+
+    auto sign_with_proof_bench = make_bench(*config);
+    sign_with_proof_bench.run("sign puresign message with proof", [&] {
+        purify::Result<purify::puresign::ProvenSignature> signature =
+            purify::puresign::sign_message_with_proof(bench_case->secret, bench_case->message);
+        assert(signature.has_value() && "benchmark PureSign proof signing should succeed");
+        ankerl::nanobench::doNotOptimizeAway(signature->signature.bytes.data());
+    });
+
+    auto verify_signature_bench = make_bench(*config);
+    verify_signature_bench.run("verify puresign signature", [&] {
+        purify::Result<bool> ok =
+            purify::puresign::verify_signature(bench_case->public_key, bench_case->message, bench_case->signature);
+        assert(ok.has_value() && *ok && "benchmark PureSign signature verification should succeed");
+        ankerl::nanobench::doNotOptimizeAway(*ok);
+    });
+
+    auto verify_with_proof_bench = make_bench(*config);
+    verify_with_proof_bench.run("verify puresign signature with proof", [&] {
+        purify::Result<bool> ok =
+            purify::puresign::verify_message_signature_with_proof(bench_case->public_key, bench_case->message,
+                                                                  bench_case->proven_signature);
+        assert(ok.has_value() && *ok && "benchmark PureSign proof verification should succeed");
+        ankerl::nanobench::doNotOptimizeAway(*ok);
     });
 
     return 0;

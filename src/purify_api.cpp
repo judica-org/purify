@@ -111,10 +111,7 @@ Result<GeneratedKey> generate_key() {
     return derive_key(*secret);
 }
 
-Result<GeneratedKey> generate_key(std::span<const unsigned char> seed) {
-    if (seed.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput, "generate_key:empty_seed");
-    }
+Result<GeneratedKey> generate_key(KeySeed seed) {
     Bytes seed_bytes(seed.begin(), seed.end());
     std::optional<UInt512> secret = hash_to_int<8>(seed_bytes, key_space_size(), bytes_from_ascii("Purify/KeyGen"));
     if (!secret.has_value()) {

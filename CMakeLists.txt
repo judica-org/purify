@@ -21,6 +21,7 @@ option(PURIFY_BUILD_CLI "Build the purify_cpp CLI target." ${PURIFY_IS_TOP_LEVEL
 option(PURIFY_BUILD_BENCH "Build the bench_purify benchmark target." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_DOCS "Build the Doxygen docs target when Doxygen is available." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_TESTS "Build the Purify regression test target." ${PURIFY_IS_TOP_LEVEL})
+option(PURIFY_BUILD_FUZZ "Build the deterministic fuzz/stress harness." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_REFERENCE_TESTS "Enable Python reference regression tests from reference/purify." OFF)
 
 if(PURIFY_BUILD_REFERENCE_TESTS AND NOT PURIFY_BUILD_TESTS)
@@ -239,9 +240,28 @@ if(PURIFY_BUILD_TESTS)
 
     add_test(NAME purify.tests COMMAND purify_tests)
 
+    add_executable(purify_property_tests
+        tests/purify_property_tests.cpp
+    )
+
+    target_link_libraries(purify_property_tests
+        PRIVATE
+            purify::purify
+    )
+
+    purify_enable_warnings(purify_property_tests)
+
+    add_test(NAME purify.property_tests COMMAND purify_property_tests)
+    set_tests_properties(purify.property_tests PROPERTIES TIMEOUT 300)
+
     if(PURIFY_BUILD_BENCH)
         add_test(NAME purify.bench COMMAND bench_purify --epochs 1 --min-epoch-ms 1)
         set_tests_properties(purify.bench PROPERTIES TIMEOUT 300)
+    endif()
+
+    if(PURIFY_BUILD_FUZZ)
+        add_test(NAME purify.fuzz_smoke COMMAND purify_fuzz --seed 1 --iterations 1 --proof-every 1)
+        set_tests_properties(purify.fuzz_smoke PROPERTIES TIMEOUT 300)
     endif()
 
     if(PURIFY_BUILD_REFERENCE_TESTS)
@@ -266,6 +286,20 @@ if(PURIFY_BUILD_TESTS)
     endif()
 endif()
 
+if(PURIFY_BUILD_FUZZ)
+    add_executable(purify_fuzz
+        fuzz/purify_fuzz.cpp
+    )
+
+    target_link_libraries(purify_fuzz
+        PRIVATE
+            purify::purify
+    )
+
+    purify_enable_warnings(purify_fuzz)
+    purify_enable_release_optimizations(purify_fuzz)
+endif()
+
 if(PURIFY_BUILD_DOCS)
     find_package(Doxygen QUIET)
 
@@ -280,6 +314,7 @@ if(PURIFY_BUILD_DOCS)
             "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/cli/*.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/bench/*.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/fuzz/*.cpp"
         )
 
         set(PURIFY_DOXYGEN_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/docs")

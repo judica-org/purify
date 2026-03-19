@@ -25,6 +25,9 @@ struct GeneratedKey {
     UInt512 public_key;
 };
 
+/** @brief Minimum-length checked wrapper for deterministic key-generation seed material. */
+using KeySeed = SpanAtLeast<16, const unsigned char>;
+
 /**
  * @brief Canonical BIP340 keypair derived deterministically from a packed Purify secret.
  *
@@ -147,10 +150,23 @@ Result<GeneratedKey> generate_key();
 
 /**
  * @brief Deterministically derives a Purify keypair from seed material.
- * @param seed Arbitrary seed bytes.
+ * @param seed Seed bytes. Inputs shorter than 16 bytes are rejected.
  * @return Generated keypair bundle.
  */
-Result<GeneratedKey> generate_key(std::span<const unsigned char> seed);
+Result<GeneratedKey> generate_key(KeySeed seed);
+
+/**
+ * @brief Deterministically derives a Purify keypair from seed material.
+ * @param seed Seed bytes. Inputs shorter than 16 bytes are rejected.
+ * @return Generated keypair bundle.
+ */
+inline Result<GeneratedKey> generate_key(std::span<const unsigned char> seed) {
+    Result<KeySeed> checked = KeySeed::try_from(seed);
+    if (!checked.has_value()) {
+        return unexpected_error(checked.error(), "generate_key:seed_too_short");
+    }
+    return generate_key(*checked);
+}
 
 /**
  * @brief Generates a random Purify keypair using a caller-supplied byte-fill routine.

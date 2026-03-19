@@ -175,6 +175,24 @@ void test_library_key_generation(TestContext& ctx) {
         ctx.expect(seeded_a->public_key == seeded_b->public_key, "seeded generate_key derives a stable public key");
     }
 
+    Bytes short_seed(15, 0x42);
+    expect_error(ctx, purify::generate_key(std::span<const unsigned char>(short_seed)), ErrorCode::RangeViolation,
+                 "generate_key rejects seed material shorter than 16 bytes");
+
+    std::array<unsigned char, 16> min_seed{};
+    for (std::size_t i = 0; i < min_seed.size(); ++i) {
+        min_seed[i] = static_cast<unsigned char>(0xa0 + i);
+    }
+    Result<purify::GeneratedKey> min_seed_a = purify::generate_key(std::span<const unsigned char>(min_seed));
+    expect_ok(ctx, min_seed_a, "minimum-length seeded generate_key succeeds");
+    Result<purify::GeneratedKey> min_seed_b = purify::generate_key(std::span<const unsigned char>(min_seed));
+    expect_ok(ctx, min_seed_b, "minimum-length seeded generate_key is repeatable");
+    if (min_seed_a.has_value() && min_seed_b.has_value()) {
+        ctx.expect(min_seed_a->secret == min_seed_b->secret, "minimum-length seeded generate_key is deterministic");
+        ctx.expect(min_seed_a->public_key == min_seed_b->public_key,
+                   "minimum-length seeded generate_key derives a stable public key");
+    }
+
     auto fill_one = [](std::span<unsigned char> bytes) noexcept {
         std::fill(bytes.begin(), bytes.end(), static_cast<unsigned char>(0));
         if (!bytes.empty()) {

@@ -447,6 +447,7 @@ bool NativeBulletproofCircuit::evaluate(const BulletproofAssignmentData& assignm
 
 void NativeBulletproofCircuit::add_row_term(std::vector<NativeBulletproofCircuitRow>& rows, std::size_t expected_size,
                                             std::size_t row_idx, std::size_t constraint_idx, const FieldElement& scalar) {
+    (void)expected_size;
     assert(rows.size() == expected_size && "NativeBulletproofCircuit rows must be initialized before adding terms");
     assert(row_idx < rows.size() && "NativeBulletproofCircuit row index out of range");
     rows[row_idx].add(constraint_idx, scalar);

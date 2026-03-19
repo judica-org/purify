@@ -1,0 +1,316 @@
+// Copyright (c) 2026 Judica, Inc.
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or https://opensource.org/license/mit/.
+
+#include <array>
+#include <cstdint>
+#include <iostream>
+#include <optional>
+#include <string_view>
+
+#include "purify.hpp"
+#include "purify_bppp.hpp"
+
+namespace {
+
+using purify::Bytes;
+using purify::ExperimentalBulletproofProof;
+using purify::GeneratedKey;
+using purify::NativeBulletproofCircuit;
+using purify::Result;
+using purify::UInt512;
+
+struct SplitMix64 {
+    std::uint64_t state;
+
+    explicit SplitMix64(std::uint64_t seed) : state(seed) {}
+
+    std::uint64_t next_u64() {
+        std::uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        return z ^ (z >> 31);
+    }
+
+    std::size_t bounded(std::size_t upper_bound) {
+        return upper_bound == 0 ? 0 : static_cast<std::size_t>(next_u64() % upper_bound);
+    }
+
+    unsigned char next_byte() {
+        return static_cast<unsigned char>(next_u64() & 0xffU);
+    }
+};
+
+struct TestContext {
+    int failures = 0;
+
+    void expect(bool condition, std::string_view message) {
+        if (!condition) {
+            ++failures;
+            std::cerr << "FAIL: " << message << "\n";
+        }
+    }
+};
+
+template <typename T>
+void expect_ok(TestContext& ctx, const Result<T>& result, std::string_view message) {
+    if (!result.has_value()) {
+        ++ctx.failures;
+        std::cerr << "FAIL: " << message << " (" << result.error().name() << ")\n";
+        return;
+    }
+    ctx.expect(true, message);
+}
+
+Bytes random_bytes(SplitMix64& rng, std::size_t min_size, std::size_t max_size) {
+    const std::size_t width = max_size >= min_size ? (max_size - min_size + 1) : 1;
+    const std::size_t size = min_size + rng.bounded(width);
+    Bytes out(size);
+    for (unsigned char& byte : out) {
+        byte = rng.next_byte();
+    }
+    return out;
+}
+
+template <std::size_t N>
+std::array<unsigned char, N> random_array(SplitMix64& rng) {
+    std::array<unsigned char, N> out{};
+    for (unsigned char& byte : out) {
+        byte = rng.next_byte();
+    }
+    return out;
+}
+
+Result<GeneratedKey> random_key(SplitMix64& rng) {
+    Bytes seed = random_bytes(rng, 16, 64);
+    return purify::generate_key(seed);
+}
+
+bool proof_rejected_after_tamper(const NativeBulletproofCircuit& circuit,
+                                 const ExperimentalBulletproofProof& proof,
+                                 std::span<const unsigned char> binding) {
+    Result<Bytes> serialized = proof.serialize();
+    if (!serialized.has_value() || serialized->empty()) {
+        return false;
+    }
+    Bytes tampered = *serialized;
+    tampered[tampered.size() - 1] ^= 0x01;
+    Result<ExperimentalBulletproofProof> parsed = ExperimentalBulletproofProof::deserialize(tampered);
+    if (!parsed.has_value()) {
+        return true;
+    }
+    Result<bool> verified = purify::verify_experimental_circuit(circuit, *parsed, purify::bppp::base_generator(), binding);
+    return !verified.has_value() || !*verified;
+}
+
+bool proven_signature_rejected_after_tamper(const purify::puresign::PublicKey& public_key,
+                                            std::span<const unsigned char> message,
+                                            const purify::puresign::ProvenSignature& signature) {
+    Result<Bytes> serialized = signature.serialize();
+    if (!serialized.has_value() || serialized->empty()) {
+        return false;
+    }
+    Bytes tampered = *serialized;
+    tampered[tampered.size() - 1] ^= 0x40;
+    Result<purify::puresign::ProvenSignature> parsed = purify::puresign::ProvenSignature::deserialize(tampered);
+    if (!parsed.has_value()) {
+        return true;
+    }
+    Result<bool> verified = purify::puresign::verify_message_signature_with_proof(public_key, message, *parsed);
+    return !verified.has_value() || !*verified;
+}
+
+void test_seeded_key_and_circuit_properties(TestContext& ctx) {
+    SplitMix64 rng(0x1234567890abcdefULL);
+
+    Bytes short_seed = random_bytes(rng, 0, 15);
+    Result<GeneratedKey> short_seed_key = purify::generate_key(short_seed);
+    ctx.expect(!short_seed_key.has_value() && short_seed_key.error().code == purify::ErrorCode::RangeViolation,
+               "generate_key rejects randomized seed material shorter than 16 bytes");
+
+    for (std::size_t i = 0; i < 12; ++i) {
+        Bytes seed = random_bytes(rng, 16, 64);
+        Result<GeneratedKey> first = purify::generate_key(seed);
+        Result<GeneratedKey> second = purify::generate_key(seed);
+        expect_ok(ctx, first, "generate_key(seed) succeeds");
+        expect_ok(ctx, second, "generate_key(seed) is repeatable");
+        if (!first.has_value() || !second.has_value()) {
+            continue;
+        }
+
+        ctx.expect(first->secret == second->secret, "seeded key generation is deterministic for the secret");
+        ctx.expect(first->public_key == second->public_key, "seeded key generation is deterministic for the public key");
+
+        Result<GeneratedKey> derived = purify::derive_key(first->secret);
+        expect_ok(ctx, derived, "derive_key succeeds on a generated secret");
+        if (derived.has_value()) {
+            ctx.expect(derived->public_key == first->public_key, "derive_key reproduces the generated public key");
+        }
+
+        Result<purify::Bip340Key> bip340 = purify::derive_bip340_key(first->secret);
+        expect_ok(ctx, bip340, "derive_bip340_key succeeds on a generated secret");
+
+        Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(first->secret);
+        expect_ok(ctx, public_key, "puresign::derive_public_key succeeds on a generated secret");
+        if (bip340.has_value() && public_key.has_value()) {
+            ctx.expect(public_key->bip340_pubkey == bip340->xonly_pubkey,
+                       "PureSign public key bundle matches derive_bip340_key");
+        }
+
+        Bytes message = random_bytes(rng, 0, 48);
+        Result<purify::FieldElement> value = purify::eval(first->secret, message);
+        expect_ok(ctx, value, "eval succeeds on a generated secret");
+
+        Result<purify::BulletproofWitnessData> witness = purify::prove_assignment_data(message, first->secret);
+        expect_ok(ctx, witness, "prove_assignment_data succeeds on a generated secret");
+        if (!value.has_value() || !witness.has_value()) {
+            continue;
+        }
+
+        ctx.expect(witness->public_key == first->public_key, "witness generation preserves the generated public key");
+        ctx.expect(witness->output == *value, "witness output matches direct eval");
+
+        Result<NativeBulletproofCircuit> circuit = purify::verifier_circuit(message, first->public_key);
+        expect_ok(ctx, circuit, "verifier_circuit succeeds on a generated public key");
+        if (circuit.has_value()) {
+            ctx.expect(circuit->evaluate(witness->assignment), "native verifier circuit accepts the generated witness");
+        }
+
+        Result<bool> verified = purify::evaluate_verifier_circuit(message, *witness);
+        expect_ok(ctx, verified, "evaluate_verifier_circuit succeeds on a generated witness");
+        if (verified.has_value()) {
+            ctx.expect(*verified, "evaluate_verifier_circuit accepts the generated witness");
+        }
+
+        Result<Bytes> assignment = witness->assignment.serialize();
+        expect_ok(ctx, assignment, "assignment serialization succeeds on randomized witness data");
+        if (assignment.has_value()) {
+            ctx.expect(!assignment->empty(), "assignment serialization is non-empty for randomized witness data");
+        }
+    }
+}
+
+void test_random_experimental_proof_properties(TestContext& ctx) {
+    SplitMix64 rng(0x0f0e0d0c0b0a0908ULL);
+
+    Result<GeneratedKey> key = random_key(rng);
+    expect_ok(ctx, key, "random_key succeeds for experimental proof properties");
+    if (!key.has_value()) {
+        return;
+    }
+
+    Bytes message = random_bytes(rng, 0, 48);
+    Result<purify::BulletproofWitnessData> witness = purify::prove_assignment_data(message, key->secret);
+    expect_ok(ctx, witness, "prove_assignment_data succeeds for experimental proof properties");
+    Result<NativeBulletproofCircuit> circuit = purify::verifier_circuit(message, key->public_key);
+    expect_ok(ctx, circuit, "verifier_circuit succeeds for experimental proof properties");
+    if (!witness.has_value() || !circuit.has_value()) {
+        return;
+    }
+
+    std::array<unsigned char, 32> nonce = random_array<32>(rng);
+    Bytes binding = random_bytes(rng, 0, 32);
+    Result<ExperimentalBulletproofProof> proof =
+        purify::prove_experimental_circuit(*circuit, witness->assignment, nonce, purify::bppp::base_generator(), binding);
+    expect_ok(ctx, proof, "prove_experimental_circuit succeeds on randomized Purify circuits");
+    if (!proof.has_value()) {
+        return;
+    }
+
+    Result<bool> verified =
+        purify::verify_experimental_circuit(*circuit, *proof, purify::bppp::base_generator(), binding);
+    expect_ok(ctx, verified, "verify_experimental_circuit succeeds on randomized Purify proofs");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "randomized experimental circuit proof verifies");
+    }
+
+    Result<Bytes> encoded = proof->serialize();
+    expect_ok(ctx, encoded, "ExperimentalBulletproofProof serializes in property coverage");
+    if (!encoded.has_value()) {
+        return;
+    }
+    Result<ExperimentalBulletproofProof> decoded = ExperimentalBulletproofProof::deserialize(*encoded);
+    expect_ok(ctx, decoded, "ExperimentalBulletproofProof deserializes in property coverage");
+    if (decoded.has_value()) {
+        Result<bool> reparsed =
+            purify::verify_experimental_circuit(*circuit, *decoded, purify::bppp::base_generator(), binding);
+        expect_ok(ctx, reparsed, "reparsed experimental proof verifies in property coverage");
+        if (reparsed.has_value()) {
+            ctx.expect(*reparsed, "reparsed experimental proof is accepted");
+        }
+    }
+
+    Result<bool> wrong_binding =
+        purify::verify_experimental_circuit(*circuit, *proof, purify::bppp::base_generator(),
+                                            purify::bytes_from_ascii("property-wrong-binding"));
+    expect_ok(ctx, wrong_binding, "verify_experimental_circuit runs with a wrong binding in property coverage");
+    if (wrong_binding.has_value()) {
+        ctx.expect(!*wrong_binding, "experimental proof rejects a mismatched statement binding");
+    }
+
+    ctx.expect(proof_rejected_after_tamper(*circuit, *proof, binding),
+               "tampering an experimental proof is rejected");
+}
+
+void test_random_puresign_proven_signature_properties(TestContext& ctx) {
+    SplitMix64 rng(0xfeedfacedeadbeefULL);
+
+    Result<GeneratedKey> key = random_key(rng);
+    expect_ok(ctx, key, "random_key succeeds for PureSign property coverage");
+    if (!key.has_value()) {
+        return;
+    }
+
+    Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(key->secret);
+    expect_ok(ctx, public_key, "derive_public_key succeeds for randomized PureSign coverage");
+    if (!public_key.has_value()) {
+        return;
+    }
+
+    Bytes message = random_bytes(rng, 1, 40);
+    Result<purify::puresign::Signature> direct = purify::puresign::sign_message(key->secret, message);
+    expect_ok(ctx, direct, "sign_message succeeds for randomized PureSign coverage");
+
+    Result<purify::puresign::ProvenSignature> proven = purify::puresign::sign_message_with_proof(key->secret, message);
+    expect_ok(ctx, proven, "sign_message_with_proof succeeds for randomized PureSign coverage");
+    if (!direct.has_value() || !proven.has_value()) {
+        return;
+    }
+
+    ctx.expect(direct->bytes == proven->signature.bytes,
+               "sign_message_with_proof preserves the deterministic BIP340 signature bytes");
+
+    Result<bool> verified = purify::puresign::verify_message_signature_with_proof(*public_key, message, *proven);
+    expect_ok(ctx, verified, "verify_message_signature_with_proof succeeds for randomized PureSign coverage");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "randomized PureSign message signature with proof verifies");
+    }
+
+    Result<bool> wrong_message =
+        purify::puresign::verify_message_signature_with_proof(*public_key, random_bytes(rng, 1, 24), *proven);
+    expect_ok(ctx, wrong_message, "verify_message_signature_with_proof runs on a wrong message in property coverage");
+    if (wrong_message.has_value()) {
+        ctx.expect(!*wrong_message, "PureSign message proof rejects a mismatched message");
+    }
+
+    ctx.expect(proven_signature_rejected_after_tamper(*public_key, message, *proven),
+               "tampering a ProvenSignature is rejected");
+}
+
+}  // namespace
+
+int main() {
+    TestContext ctx;
+
+    test_seeded_key_and_circuit_properties(ctx);
+    test_random_experimental_proof_properties(ctx);
+    test_random_puresign_proven_signature_properties(ctx);
+
+    if (ctx.failures != 0) {
+        std::cerr << ctx.failures << " property test(s) failed\n";
+        return 1;
+    }
+
+    std::cout << "all property tests passed\n";
+    return 0;
+}

@@ -148,26 +148,41 @@ Optional flags:
 --min-epoch-ms MS
 ```
 
-Example output from the default benchmark configuration on a Macbook Air M4 16GB:
+Example output excerpt from the default benchmark configuration on a Macbook Air M4 16GB:
 
 ```text
 purify benchmark setup
-proof_system=bppp_norm_arg
+proof_system=legacy_bp_and_bppp_with_puresign_legacy_and_plusplus
 message_bytes=4
 gates=2048
 constraints=4117
 commitments=1
-circuit_size_bytes=8547888
+circuit_size_bytes=5878528
+cache_eval_input_bytes=27
+experimental_proof_size_bytes=1124
+experimental_bppp_proof_size_bytes=909
 norm_arg_n_vec_len=2048
 norm_arg_l_vec_len=2048
 norm_arg_c_vec_len=2048
-proof_size_bytes=779
+norm_arg_proof_size_bytes=779
+puresign_signature_size_bytes=64
+puresign_legacy_proven_signature_size_bytes=1268
+puresign_plusplus_proven_signature_size_bytes=1146
 ```
 
-|               ns/op |                op/s |    err% |     total | purify |
-|--------------------:|--------------------:|--------:|----------:|:-------|
-|      120,609,208.00 |                8.29 |    0.0% |      0.12 | `build native verifier circuit` |
-|       96,214,500.00 |               10.39 |    0.0% |      0.10 | `prove bppp norm arg` |
-|       20,916,709.00 |               47.81 |    0.0% |      0.02 | `verify bppp norm arg` |
+Nanobench now groups related rows by explicit unit, so the output is split into separate tables such as:
 
-The benchmark output uses the `bppp_norm_arg` / `bppp` labels emitted by the `secp256k1-zkp` backend. In this repository's terminology, the implementation is against BPP.
+|          ns/circuit |           circuit/s |    err% |     total | purify |
+|--------------------:|--------------------:|--------:|----------:|:-------|
+|       52,372,000.00 |               19.09 |    0.0% |      0.05 | `verifier_circuit.native.build` |
+|        3,898,250.00 |              256.53 |    0.0% |      0.00 | `verifier_circuit.template.instantiate_native` |
+|          968,917.00 |            1,032.08 |    0.0% |      0.00 | `verifier_circuit.template.instantiate_packed` |
+
+|            ns/proof |             proof/s |    err% |     total | purify |
+|--------------------:|--------------------:|--------:|----------:|:-------|
+|      829,548,458.00 |                1.21 |    0.0% |      0.83 | `experimental_circuit.legacy_bp.prove` |
+|      119,583,291.00 |                8.36 |    0.0% |      0.12 | `experimental_circuit.legacy_bp.verify` |
+|      107,984,375.00 |                9.26 |    0.0% |      0.11 | `bppp.norm_arg.prove` |
+|       21,056,959.00 |               47.49 |    0.0% |      0.02 | `bppp.norm_arg.verify` |
+
+The benchmark output still uses the `bppp` labels emitted by the `secp256k1-zkp` backend. In this repository's terminology, the implementation is against BPP.

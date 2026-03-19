@@ -11,10 +11,13 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 #include "purify_bulletproof_internal.hpp"
@@ -56,6 +59,14 @@ bool require_ok(int ok) {
     return ok != 0;
 }
 
+struct BpppBackendResourceDeleter {
+    void operator()(purify_bppp_backend_resources* resources) const noexcept {
+        purify_bppp_backend_resources_destroy(resources);
+    }
+};
+
+using BpppBackendResourcePtr = std::unique_ptr<purify_bppp_backend_resources, BpppBackendResourceDeleter>;
+
 constexpr std::string_view kCircuitNormArgRhoTag = "Purify/BPPP/CircuitNormArg/Rho";
 constexpr std::string_view kCircuitNormArgMulTag = "Purify/BPPP/CircuitNormArg/Mul";
 constexpr std::string_view kCircuitNormArgConstraintTag = "Purify/BPPP/CircuitNormArg/Constraint";
@@ -64,6 +75,31 @@ constexpr std::string_view kCircuitZkBlindTag = "Purify/BPPP/CircuitNormArg/ZKBl
 constexpr std::string_view kCircuitZkMaskNTag = "Purify/BPPP/CircuitNormArg/ZKMaskN";
 constexpr std::string_view kCircuitZkMaskLTag = "Purify/BPPP/CircuitNormArg/ZKMaskL";
 constexpr std::string_view kCircuitZkChallengeTag = "Purify/BPPP/CircuitNormArg/ZKChallenge";
+
+std::string generator_cache_key(std::span<const PointBytes> generators) {
+    const auto* begin = reinterpret_cast<const char*>(generators.data());
+    return std::string(begin, begin + generators.size() * sizeof(PointBytes));
+}
+
+purify_bppp_backend_resources* cached_bppp_backend_resources(const std::vector<PointBytes>& generators) {
+    thread_local std::unordered_map<std::string, BpppBackendResourcePtr> cache;
+
+    if (generators.empty()) {
+        return nullptr;
+    }
+    std::string key = generator_cache_key(generators);
+    auto it = cache.find(key);
+    if (it == cache.end()) {
+        std::span<const unsigned char> serialized = byte_span(generators);
+        purify_bppp_backend_resources* created =
+            purify_bppp_backend_resources_create(serialized.data(), generators.size());
+        if (created == nullptr) {
+            return nullptr;
+        }
+        it = cache.emplace(std::move(key), BpppBackendResourcePtr(created)).first;
+    }
+    return it->second.get();
+}
 
 bool is_power_of_two(std::size_t value) {
     return value != 0 && (value & (value - 1)) == 0;
@@ -75,6 +111,16 @@ std::size_t round_up_power_of_two(std::size_t value) {
         out <<= 1;
     }
     return out;
+}
+
+std::string circuit_norm_arg_public_data_cache_key(std::span<const unsigned char> binding_digest,
+                                                   bool externalize_commitments) {
+    std::string key;
+    key.reserve(1 + binding_digest.size());
+    key.push_back(externalize_commitments ? '\x01' : '\x00');
+    key.append(reinterpret_cast<const char*>(binding_digest.data()),
+               reinterpret_cast<const char*>(binding_digest.data() + binding_digest.size()));
+    return key;
 }
 
 void append_u64_le(Bytes& out, std::uint64_t value) {
@@ -140,9 +186,11 @@ FieldElement weighted_bppp_inner_product(std::span<const FieldElement> lhs, std:
 
 struct CircuitNormArgPublicData {
     FieldElement rho = FieldElement::zero();
+    ScalarBytes rho_bytes{};
     FieldElement target = FieldElement::zero();
     std::vector<PointBytes> generators;
     std::vector<FieldElement> c_vec;
+    std::vector<ScalarBytes> c_vec_bytes;
     std::vector<FieldElement> public_commitment_coeffs;
     std::vector<std::array<FieldElement, 2>> plus_terms;
     std::vector<std::array<FieldElement, 2>> minus_terms;
@@ -150,16 +198,20 @@ struct CircuitNormArgPublicData {
     std::vector<FieldElement> minus_shift;
 };
 
+using CircuitNormArgPublicDataPtr = std::shared_ptr<const CircuitNormArgPublicData>;
+
 struct CircuitNormArgReduction {
-    CircuitNormArgPublicData public_data;
+    CircuitNormArgPublicDataPtr public_data;
     std::vector<FieldElement> n_vec;
     std::vector<FieldElement> l_vec;
 };
 
-Result<CircuitNormArgPublicData> build_circuit_norm_arg_public_data(
+Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
     const NativeBulletproofCircuit& circuit,
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments = false) {
+    thread_local std::unordered_map<std::string, CircuitNormArgPublicDataPtr> cache;
+
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, "build_circuit_norm_arg_public_data:circuit_shape");
     }
@@ -171,6 +223,11 @@ Result<CircuitNormArgPublicData> build_circuit_norm_arg_public_data(
     Result<FieldElement> rho = derive_nonzero_scalar(binding_digest, kCircuitNormArgRhoTag, 0);
     if (!rho.has_value()) {
         return unexpected_error(rho.error(), "build_circuit_norm_arg_public_data:rho");
+    }
+    std::string cache_key = circuit_norm_arg_public_data_cache_key(binding_digest, externalize_commitments);
+    auto cached = cache.find(cache_key);
+    if (cached != cache.end()) {
+        return cached->second;
     }
 
     std::optional<FieldElement> sqrt_minus_one = FieldElement::one().negate().sqrt();
@@ -231,12 +288,13 @@ Result<CircuitNormArgPublicData> build_circuit_norm_arg_public_data(
     accumulate_coeffs(circuit.wo, output_coeffs, false);
     accumulate_coeffs(circuit.wv, commitment_coeffs, true);
 
-    CircuitNormArgPublicData out;
-    out.rho = *rho;
-    out.plus_terms.resize(circuit.n_gates);
-    out.minus_terms.resize(circuit.n_gates);
-    out.plus_shift.resize(circuit.n_gates, zero);
-    out.minus_shift.resize(circuit.n_gates, zero);
+    auto out = std::make_shared<CircuitNormArgPublicData>();
+    out->rho = *rho;
+    out->rho_bytes = scalar_bytes(*rho);
+    out->plus_terms.resize(circuit.n_gates);
+    out->minus_terms.resize(circuit.n_gates);
+    out->plus_shift.resize(circuit.n_gates, zero);
+    out->minus_shift.resize(circuit.n_gates, zero);
 
     auto two_square_terms = [&](const FieldElement& coefficient) {
         const FieldElement first = (coefficient + one) * inv2;
@@ -250,35 +308,38 @@ Result<CircuitNormArgPublicData> build_circuit_norm_arg_public_data(
         const FieldElement e_plus = (left_coeffs[i] + right_coeffs[i]) * inv2;
         const FieldElement e_minus = (left_coeffs[i] - right_coeffs[i]) * inv2;
 
-        out.plus_shift[i] = e_plus * (two * d_plus).inverse();
-        out.minus_shift[i] = e_minus * (two * d_minus).inverse();
+        out->plus_shift[i] = e_plus * (two * d_plus).inverse();
+        out->minus_shift[i] = e_minus * (two * d_minus).inverse();
         constant = constant - ((e_plus * e_plus) * (four * d_plus).inverse());
         constant = constant - ((e_minus * e_minus) * (four * d_minus).inverse());
-        out.plus_terms[i] = two_square_terms(d_plus);
-        out.minus_terms[i] = two_square_terms(d_minus);
+        out->plus_terms[i] = two_square_terms(d_plus);
+        out->minus_terms[i] = two_square_terms(d_minus);
     }
 
     const std::size_t l_value_count = circuit.n_gates + (externalize_commitments ? 0 : circuit.n_commitments) + 1;
     const std::size_t l_vec_len = round_up_power_of_two(std::max<std::size_t>(1, l_value_count));
-    out.c_vec.assign(l_vec_len, zero);
+    out->c_vec.assign(l_vec_len, zero);
     for (std::size_t i = 0; i < circuit.n_gates; ++i) {
-        out.c_vec[i] = output_coeffs[i];
+        out->c_vec[i] = output_coeffs[i];
     }
     if (externalize_commitments) {
-        out.public_commitment_coeffs = std::move(commitment_coeffs);
+        out->public_commitment_coeffs = std::move(commitment_coeffs);
     } else {
         for (std::size_t i = 0; i < circuit.n_commitments; ++i) {
-            out.c_vec[circuit.n_gates + i] = commitment_coeffs[i];
+            out->c_vec[circuit.n_gates + i] = commitment_coeffs[i];
         }
     }
-    out.target = constant.negate();
+    out->target = constant.negate();
+    out->c_vec_bytes = scalar_bytes(out->c_vec);
 
-    Result<std::vector<PointBytes>> generators = create_generators(4 * circuit.n_gates + out.c_vec.size());
+    Result<std::vector<PointBytes>> generators = create_generators(4 * circuit.n_gates + out->c_vec.size());
     if (!generators.has_value()) {
         return unexpected_error(generators.error(), "build_circuit_norm_arg_public_data:create_generators");
     }
-    out.generators = std::move(*generators);
-    return out;
+    out->generators = std::move(*generators);
+    CircuitNormArgPublicDataPtr shared = out;
+    cache.emplace(std::move(cache_key), shared);
+    return shared;
 }
 
 Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
@@ -293,28 +354,28 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
         return unexpected_error(ErrorCode::SizeMismatch, "reduce_experimental_circuit_to_norm_arg:assignment_shape");
     }
 
-    Result<CircuitNormArgPublicData> public_data =
+    Result<CircuitNormArgPublicDataPtr> public_data =
         build_circuit_norm_arg_public_data(circuit, statement_binding, externalize_commitments);
     if (!public_data.has_value()) {
         return unexpected_error(public_data.error(), "reduce_experimental_circuit_to_norm_arg:public_data");
     }
 
     CircuitNormArgReduction out;
-    out.public_data = std::move(*public_data);
+    out.public_data = *public_data;
     out.n_vec.reserve(4 * circuit.n_gates);
-    out.l_vec.assign(out.public_data.c_vec.size(), FieldElement::zero());
+    out.l_vec.assign(out.public_data->c_vec.size(), FieldElement::zero());
 
-    const FieldElement rho_inv = out.public_data.rho.inverse();
+    const FieldElement rho_inv = out.public_data->rho.inverse();
     FieldElement rho_weight_inv = rho_inv;
     for (std::size_t i = 0; i < circuit.n_gates; ++i) {
-        const FieldElement plus_value = assignment.left[i] + assignment.right[i] + out.public_data.plus_shift[i];
-        for (const FieldElement& term : out.public_data.plus_terms[i]) {
+        const FieldElement plus_value = assignment.left[i] + assignment.right[i] + out.public_data->plus_shift[i];
+        for (const FieldElement& term : out.public_data->plus_terms[i]) {
             out.n_vec.push_back(term * plus_value * rho_weight_inv);
             rho_weight_inv = rho_weight_inv * rho_inv;
         }
 
-        const FieldElement minus_value = assignment.left[i] - assignment.right[i] + out.public_data.minus_shift[i];
-        for (const FieldElement& term : out.public_data.minus_terms[i]) {
+        const FieldElement minus_value = assignment.left[i] - assignment.right[i] + out.public_data->minus_shift[i];
+        for (const FieldElement& term : out.public_data->minus_terms[i]) {
             out.n_vec.push_back(term * minus_value * rho_weight_inv);
             rho_weight_inv = rho_weight_inv * rho_inv;
         }
@@ -331,11 +392,11 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
 
 NormArgInputs build_norm_arg_inputs(const CircuitNormArgReduction& reduction) {
     NormArgInputs inputs;
-    inputs.rho = scalar_bytes(reduction.public_data.rho);
-    inputs.generators = reduction.public_data.generators;
+    inputs.rho = reduction.public_data->rho_bytes;
+    inputs.generators = reduction.public_data->generators;
     inputs.n_vec = scalar_bytes(reduction.n_vec);
     inputs.l_vec = scalar_bytes(reduction.l_vec);
-    inputs.c_vec = scalar_bytes(reduction.public_data.c_vec);
+    inputs.c_vec = reduction.public_data->c_vec_bytes;
     return inputs;
 }
 
@@ -361,11 +422,15 @@ Result<PointBytes> commit_norm_arg_witness_only(const NormArgInputs& inputs) {
     std::span<const unsigned char> generator_bytes = byte_span(*generators);
     std::span<const unsigned char> n_vec = byte_span(inputs.n_vec);
     std::span<const unsigned char> l_vec = byte_span(inputs.l_vec);
+    purify_bppp_backend_resources* resources = cached_bppp_backend_resources(*generators);
     PointBytes commitment{};
-    if (!require_ok(purify_bppp_commit_witness_only(generator_bytes.data(), generators->size(),
-                                                    n_vec.data(), inputs.n_vec.size(),
-                                                    l_vec.data(), inputs.l_vec.size(),
-                                                    commitment.data()))) {
+    const int ok = resources != nullptr
+        ? purify_bppp_commit_witness_only_with_resources(resources, n_vec.data(), inputs.n_vec.size(),
+                                                         l_vec.data(), inputs.l_vec.size(), commitment.data())
+        : purify_bppp_commit_witness_only(generator_bytes.data(), generators->size(), n_vec.data(),
+                                          inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
+                                          commitment.data());
+    if (!require_ok(ok)) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "commit_norm_arg_witness_only:backend");
     }
     return commitment;
@@ -525,6 +590,7 @@ Result<NormArgProof> prove_norm_arg_impl(Inputs&& inputs) {
     std::span<const unsigned char> n_vec = byte_span(inputs.n_vec);
     std::span<const unsigned char> l_vec = byte_span(inputs.l_vec);
     std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
+    purify_bppp_backend_resources* resources = cached_bppp_backend_resources(*generators);
     std::size_t proof_len = purify_bppp_required_proof_size(inputs.n_vec.size(), inputs.c_vec.size());
     PointBytes commitment{};
     Bytes proof(proof_len);
@@ -532,9 +598,14 @@ Result<NormArgProof> prove_norm_arg_impl(Inputs&& inputs) {
     if (proof_len == 0) {
         return unexpected_error(ErrorCode::InvalidDimensions, "prove_norm_arg:proof_len_zero");
     }
-    if (!require_ok(purify_bppp_prove_norm_arg(inputs.rho.data(), generator_bytes.data(), generators->size(),
-                                               n_vec.data(), inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
-                                               c_vec.data(), inputs.c_vec.size(), commitment.data(), proof.data(), &proof_len))) {
+    const int ok = resources != nullptr
+        ? purify_bppp_prove_norm_arg_with_resources(resources, inputs.rho.data(), n_vec.data(), inputs.n_vec.size(),
+                                                    l_vec.data(), inputs.l_vec.size(), c_vec.data(),
+                                                    inputs.c_vec.size(), commitment.data(), proof.data(), &proof_len)
+        : purify_bppp_prove_norm_arg(inputs.rho.data(), generator_bytes.data(), generators->size(), n_vec.data(),
+                                     inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(), c_vec.data(),
+                                     inputs.c_vec.size(), commitment.data(), proof.data(), &proof_len);
+    if (!require_ok(ok)) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "prove_norm_arg:backend");
     }
     proof.resize(proof_len);
@@ -627,10 +698,16 @@ Result<PointBytes> commit_norm_arg(const NormArgInputs& inputs) {
     std::span<const unsigned char> n_vec = byte_span(inputs.n_vec);
     std::span<const unsigned char> l_vec = byte_span(inputs.l_vec);
     std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
+    purify_bppp_backend_resources* resources = cached_bppp_backend_resources(*generators);
     PointBytes commitment{};
-    if (!require_ok(purify_bppp_commit_norm_arg(inputs.rho.data(), generator_bytes.data(), generators->size(),
-                                                n_vec.data(), inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
-                                                c_vec.data(), inputs.c_vec.size(), commitment.data()))) {
+    const int ok = resources != nullptr
+        ? purify_bppp_commit_norm_arg_with_resources(resources, inputs.rho.data(), n_vec.data(), inputs.n_vec.size(),
+                                                     l_vec.data(), inputs.l_vec.size(), c_vec.data(),
+                                                     inputs.c_vec.size(), commitment.data())
+        : purify_bppp_commit_norm_arg(inputs.rho.data(), generator_bytes.data(), generators->size(), n_vec.data(),
+                                      inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(), c_vec.data(),
+                                      inputs.c_vec.size(), commitment.data());
+    if (!require_ok(ok)) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "commit_norm_arg:backend");
     }
     return commitment;
@@ -676,15 +753,23 @@ Result<NormArgProof> prove_norm_arg_to_commitment(const NormArgInputs& inputs, c
     std::span<const unsigned char> n_vec = byte_span(inputs.n_vec);
     std::span<const unsigned char> l_vec = byte_span(inputs.l_vec);
     std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
+    purify_bppp_backend_resources* resources = cached_bppp_backend_resources(*generators);
     std::size_t proof_len = purify_bppp_required_proof_size(inputs.n_vec.size(), inputs.c_vec.size());
     Bytes proof(proof_len);
     if (proof_len == 0) {
         return unexpected_error(ErrorCode::InvalidDimensions, "prove_norm_arg_to_commitment:proof_len_zero");
     }
-    if (!require_ok(purify_bppp_prove_norm_arg_to_commitment(inputs.rho.data(), generator_bytes.data(), generators->size(),
-                                                             n_vec.data(), inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
-                                                             c_vec.data(), inputs.c_vec.size(), commitment.data(),
-                                                             proof.data(), &proof_len))) {
+    const int ok = resources != nullptr
+        ? purify_bppp_prove_norm_arg_to_commitment_with_resources(resources, inputs.rho.data(), n_vec.data(),
+                                                                  inputs.n_vec.size(), l_vec.data(),
+                                                                  inputs.l_vec.size(), c_vec.data(),
+                                                                  inputs.c_vec.size(), commitment.data(),
+                                                                  proof.data(), &proof_len)
+        : purify_bppp_prove_norm_arg_to_commitment(inputs.rho.data(), generator_bytes.data(), generators->size(),
+                                                   n_vec.data(), inputs.n_vec.size(), l_vec.data(),
+                                                   inputs.l_vec.size(), c_vec.data(), inputs.c_vec.size(),
+                                                   commitment.data(), proof.data(), &proof_len);
+    if (!require_ok(ok)) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "prove_norm_arg_to_commitment:backend");
     }
     proof.resize(proof_len);
@@ -705,9 +790,15 @@ bool verify_norm_arg(const NormArgProof& proof) {
 
     std::span<const unsigned char> generator_bytes = byte_span(proof.generators);
     std::span<const unsigned char> c_vec = byte_span(proof.c_vec);
-    return purify_bppp_verify_norm_arg(proof.rho.data(), generator_bytes.data(), proof.generators.size(),
-                                       c_vec.data(), proof.c_vec.size(), proof.n_vec_len,
-                                       proof.commitment.data(), proof.proof.data(), proof.proof.size()) != 0;
+    purify_bppp_backend_resources* resources = cached_bppp_backend_resources(proof.generators);
+    const int ok = resources != nullptr
+        ? purify_bppp_verify_norm_arg_with_resources(resources, proof.rho.data(), c_vec.data(),
+                                                     proof.c_vec.size(), proof.n_vec_len, proof.commitment.data(),
+                                                     proof.proof.data(), proof.proof.size())
+        : purify_bppp_verify_norm_arg(proof.rho.data(), generator_bytes.data(), proof.generators.size(),
+                                      c_vec.data(), proof.c_vec.size(), proof.n_vec_len, proof.commitment.data(),
+                                      proof.proof.data(), proof.proof.size());
+    return ok != 0;
 }
 
 Result<PointBytes> commit_experimental_circuit_witness(
@@ -758,7 +849,7 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg_to_c
                                 "prove_experimental_circuit_norm_arg_to_commitment:witness_commitment_mismatch");
     }
 
-    Result<PointBytes> anchored_commitment = offset_commitment(witness_commitment, reduction->public_data.target);
+    Result<PointBytes> anchored_commitment = offset_commitment(witness_commitment, reduction->public_data->target);
     if (!anchored_commitment.has_value()) {
         return unexpected_error(anchored_commitment.error(),
                                 "prove_experimental_circuit_norm_arg_to_commitment:anchor");
@@ -796,19 +887,19 @@ Result<bool> verify_experimental_circuit_norm_arg(
         return unexpected_error(ErrorCode::EmptyInput, "verify_experimental_circuit_norm_arg:proof_empty");
     }
 
-    Result<CircuitNormArgPublicData> public_data = build_circuit_norm_arg_public_data(circuit, statement_binding);
+    Result<CircuitNormArgPublicDataPtr> public_data = build_circuit_norm_arg_public_data(circuit, statement_binding);
     if (!public_data.has_value()) {
         return unexpected_error(public_data.error(), "verify_experimental_circuit_norm_arg:public_data");
     }
-    Result<PointBytes> anchored_commitment = offset_commitment(proof.witness_commitment, public_data->target);
+    Result<PointBytes> anchored_commitment = offset_commitment(proof.witness_commitment, (*public_data)->target);
     if (!anchored_commitment.has_value()) {
         return unexpected_error(anchored_commitment.error(), "verify_experimental_circuit_norm_arg:anchor");
     }
 
     NormArgProof bundle;
-    bundle.rho = scalar_bytes(public_data->rho);
-    bundle.generators = public_data->generators;
-    bundle.c_vec = scalar_bytes(public_data->c_vec);
+    bundle.rho = (*public_data)->rho_bytes;
+    bundle.generators = (*public_data)->generators;
+    bundle.c_vec = (*public_data)->c_vec_bytes;
     bundle.n_vec_len = 4 * circuit.n_gates;
     bundle.commitment = *anchored_commitment;
     bundle.proof = proof.proof;
@@ -889,22 +980,22 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
             mask_l[i] = *value;
         }
 
-        const FieldElement t2 = weighted_bppp_inner_product(mask_n, mask_n, hidden.public_data.rho);
+        const FieldElement t2 = weighted_bppp_inner_product(mask_n, mask_n, hidden.public_data->rho);
         if (t2.is_zero()) {
             continue;
         }
-        FieldElement t1 = FieldElement::from_int(2) * weighted_bppp_inner_product(hidden.n_vec, mask_n, hidden.public_data.rho);
+        FieldElement t1 = FieldElement::from_int(2) * weighted_bppp_inner_product(hidden.n_vec, mask_n, hidden.public_data->rho);
         for (std::size_t i = 0; i < mask_l.size(); ++i) {
-            t1 = t1 + (mask_l[i] * hidden.public_data.c_vec[i]);
+            t1 = t1 + (mask_l[i] * hidden.public_data->c_vec[i]);
         }
 
         NormArgInputs hidden_inputs = build_norm_arg_inputs(hidden);
         NormArgInputs mask_inputs;
-        mask_inputs.rho = scalar_bytes(hidden.public_data.rho);
-        mask_inputs.generators = hidden.public_data.generators;
+        mask_inputs.rho = hidden.public_data->rho_bytes;
+        mask_inputs.generators = hidden.public_data->generators;
         mask_inputs.n_vec = scalar_bytes(mask_n);
         mask_inputs.l_vec = scalar_bytes(mask_l);
-        mask_inputs.c_vec = scalar_bytes(hidden.public_data.c_vec);
+        mask_inputs.c_vec = hidden.public_data->c_vec_bytes;
 
         Result<PointBytes> a_witness_commitment = commit_norm_arg_witness_only(hidden_inputs);
         if (!a_witness_commitment.has_value()) {
@@ -916,7 +1007,7 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
             continue;
         }
         Result<PointBytes> a_commitment =
-            anchor_zk_a_commitment(*a_witness_commitment, hidden.public_data, public_commitments);
+            anchor_zk_a_commitment(*a_witness_commitment, *hidden.public_data, public_commitments);
         if (!a_commitment.has_value()) {
             if (!masked_failure.has_value()) {
                 masked_failure = unexpected_error(a_commitment.error(),
@@ -1009,7 +1100,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
     Bytes bound_statement_binding = externalize_commitments
         ? bind_public_commitments(public_commitments, statement_binding)
         : Bytes(statement_binding.begin(), statement_binding.end());
-    Result<CircuitNormArgPublicData> public_data =
+    Result<CircuitNormArgPublicDataPtr> public_data =
         build_circuit_norm_arg_public_data(circuit, bound_statement_binding, externalize_commitments);
     if (!public_data.has_value()) {
         return unexpected_error(public_data.error(), "verify_experimental_circuit_zk_norm_arg_impl:public_data");
@@ -1019,7 +1110,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
         return unexpected_error(t2.error(), "verify_experimental_circuit_zk_norm_arg_impl:t2");
     }
     Result<PointBytes> a_commitment =
-        anchor_zk_a_commitment(proof.a_commitment, *public_data, public_commitments);
+        anchor_zk_a_commitment(proof.a_commitment, *(*public_data), public_commitments);
     if (!a_commitment.has_value()) {
         return unexpected_error(a_commitment.error(), "verify_experimental_circuit_zk_norm_arg_impl:a_commitment");
     }
@@ -1034,9 +1125,9 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
     }
 
     NormArgProof bundle;
-    bundle.rho = scalar_bytes(public_data->rho);
-    bundle.generators = public_data->generators;
-    bundle.c_vec = scalar_bytes(public_data->c_vec);
+    bundle.rho = (*public_data)->rho_bytes;
+    bundle.generators = (*public_data)->generators;
+    bundle.c_vec = (*public_data)->c_vec_bytes;
     bundle.n_vec_len = 4 * circuit.n_gates;
     bundle.commitment = *commitment;
     bundle.proof = proof.proof;

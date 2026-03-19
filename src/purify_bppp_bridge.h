@@ -15,6 +15,8 @@
 extern "C" {
 #endif
 
+typedef struct purify_bppp_backend_resources purify_bppp_backend_resources;
+
 /**
  * @brief Computes the maximum serialized size of a BPPP norm proof.
  * @param n_vec_len Length of the n vector.
@@ -36,14 +38,28 @@ int purify_bppp_value_generator_h(unsigned char out33[33]);
  */
 int purify_bppp_create_generators(size_t count, unsigned char* out, size_t* out_len);
 
+purify_bppp_backend_resources* purify_bppp_backend_resources_create(const unsigned char* generators33,
+                                                                    size_t generators_count);
+void purify_bppp_backend_resources_destroy(purify_bppp_backend_resources* resources);
+
 int purify_bppp_commit_norm_arg(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
                                 const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
                                 size_t l_vec_len, const unsigned char* c_vec32, size_t c_vec_len,
                                 unsigned char commitment_out33[33]);
+int purify_bppp_commit_norm_arg_with_resources(purify_bppp_backend_resources* resources,
+                                               const unsigned char rho32[32],
+                                               const unsigned char* n_vec32, size_t n_vec_len,
+                                               const unsigned char* l_vec32, size_t l_vec_len,
+                                               const unsigned char* c_vec32, size_t c_vec_len,
+                                               unsigned char commitment_out33[33]);
 
 int purify_bppp_commit_witness_only(const unsigned char* generators33, size_t generators_count,
                                     const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
                                     size_t l_vec_len, unsigned char commitment_out33[33]);
+int purify_bppp_commit_witness_only_with_resources(purify_bppp_backend_resources* resources,
+                                                   const unsigned char* n_vec32, size_t n_vec_len,
+                                                   const unsigned char* l_vec32, size_t l_vec_len,
+                                                   unsigned char commitment_out33[33]);
 
 int purify_bppp_offset_commitment(const unsigned char commitment33[33], const unsigned char scalar32[32],
                                   unsigned char commitment_out33[33]);
@@ -87,11 +103,25 @@ int purify_bppp_prove_norm_arg(const unsigned char rho32[32], const unsigned cha
                                const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
                                size_t l_vec_len, const unsigned char* c_vec32, size_t c_vec_len,
                                unsigned char commitment_out33[33], unsigned char* proof_out, size_t* proof_len);
+int purify_bppp_prove_norm_arg_with_resources(purify_bppp_backend_resources* resources,
+                                              const unsigned char rho32[32],
+                                              const unsigned char* n_vec32, size_t n_vec_len,
+                                              const unsigned char* l_vec32, size_t l_vec_len,
+                                              const unsigned char* c_vec32, size_t c_vec_len,
+                                              unsigned char commitment_out33[33], unsigned char* proof_out,
+                                              size_t* proof_len);
 
 int purify_bppp_prove_norm_arg_to_commitment(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
                                              const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
                                              size_t l_vec_len, const unsigned char* c_vec32, size_t c_vec_len,
                                              const unsigned char commitment33[33], unsigned char* proof_out, size_t* proof_len);
+int purify_bppp_prove_norm_arg_to_commitment_with_resources(purify_bppp_backend_resources* resources,
+                                                            const unsigned char rho32[32],
+                                                            const unsigned char* n_vec32, size_t n_vec_len,
+                                                            const unsigned char* l_vec32, size_t l_vec_len,
+                                                            const unsigned char* c_vec32, size_t c_vec_len,
+                                                            const unsigned char commitment33[33],
+                                                            unsigned char* proof_out, size_t* proof_len);
 
 /**
  * @brief Verifies a standalone BPPP norm argument.
@@ -109,6 +139,11 @@ int purify_bppp_prove_norm_arg_to_commitment(const unsigned char rho32[32], cons
 int purify_bppp_verify_norm_arg(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
                                 const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
                                 const unsigned char commitment33[33], const unsigned char* proof, size_t proof_len);
+int purify_bppp_verify_norm_arg_with_resources(purify_bppp_backend_resources* resources,
+                                               const unsigned char rho32[32],
+                                               const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
+                                               const unsigned char commitment33[33], const unsigned char* proof,
+                                               size_t proof_len);
 
 typedef struct purify_bulletproof_row_view {
     size_t size;

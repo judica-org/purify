@@ -55,14 +55,31 @@ bool is_power_of_two_size(std::size_t value) {
     return value != 0 && (value & (value - 1)) == 0;
 }
 
-Status validate_proof_cache_circuit(const NativeBulletproofCircuit& circuit, const char* context) {
+std::size_t circuit_n_gates(const NativeBulletproofCircuit& circuit) {
+    return circuit.n_gates;
+}
+
+std::size_t circuit_n_gates(const NativeBulletproofCircuit::PackedWithSlack& circuit) {
+    return circuit.n_gates();
+}
+
+std::size_t circuit_n_commitments(const NativeBulletproofCircuit& circuit) {
+    return circuit.n_commitments;
+}
+
+std::size_t circuit_n_commitments(const NativeBulletproofCircuit::PackedWithSlack& circuit) {
+    return circuit.n_commitments();
+}
+
+template <typename CircuitLike>
+Status validate_proof_cache_circuit(const CircuitLike& circuit, const char* context) {
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, context);
     }
-    if (!is_power_of_two_size(circuit.n_gates)) {
+    if (!is_power_of_two_size(circuit_n_gates(circuit))) {
         return unexpected_error(ErrorCode::InvalidDimensions, context);
     }
-    if (circuit.n_commitments != 1) {
+    if (circuit_n_commitments(circuit) != 1) {
         return unexpected_error(ErrorCode::InvalidDimensions, context);
     }
     return {};
@@ -171,9 +188,9 @@ Result<NonceProof> build_nonce_proof_from_template(const UInt512& secret, const 
     if (!witness.has_value()) {
         return unexpected_error(witness.error(), "build_nonce_proof_from_template:prove_assignment_data");
     }
-    Result<NativeBulletproofCircuit> circuit = circuit_template.instantiate(witness->public_key);
+    Result<NativeBulletproofCircuit::PackedWithSlack> circuit = circuit_template.instantiate_packed(witness->public_key);
     if (!circuit.has_value()) {
-        return unexpected_error(circuit.error(), "build_nonce_proof_from_template:instantiate");
+        return unexpected_error(circuit.error(), "build_nonce_proof_from_template:instantiate_packed");
     }
     Status circuit_status = validate_proof_cache_circuit(*circuit, "build_nonce_proof_from_template:circuit_shape");
     if (!circuit_status.has_value()) {
@@ -266,6 +283,29 @@ Result<DerivedNonceData> prepare_nonce_data_impl(const UInt512& secret, Prepared
 }
 
 Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key, const NativeBulletproofCircuit& circuit,
+                                             const NonceProof& nonce_proof, PreparedNonce::Scope scope,
+                                             const char* context) {
+    Status key_status = validate_public_key_bundle(public_key);
+    if (!key_status.has_value()) {
+        return unexpected_error(key_status.error(), context);
+    }
+    Status circuit_status = validate_proof_cache_circuit(circuit, context);
+    if (!circuit_status.has_value()) {
+        return unexpected_error(circuit_status.error(), context);
+    }
+    Result<bool> match = nonce_proof_matches_nonce(nonce_proof);
+    if (!match.has_value()) {
+        return unexpected_error(match.error(), context);
+    }
+    if (!*match) {
+        return false;
+    }
+    Bytes statement_binding = proof_statement_binding(scope);
+    return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(), statement_binding);
+}
+
+Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
+                                             const NativeBulletproofCircuit::PackedWithSlack& circuit,
                                              const NonceProof& nonce_proof, PreparedNonce::Scope scope,
                                              const char* context) {
     Status key_status = validate_public_key_bundle(public_key);
@@ -773,9 +813,10 @@ Result<bool> verify_message_nonce_proof(const MessageProofCache& cache, const Pu
     if (!cache_status.has_value()) {
         return unexpected_error(cache_status.error(), "verify_message_nonce_proof:validate_message_proof_cache");
     }
-    Result<NativeBulletproofCircuit> circuit = cache.circuit_template.instantiate(public_key.purify_pubkey);
+    Result<NativeBulletproofCircuit::PackedWithSlack> circuit =
+        cache.circuit_template.instantiate_packed(public_key.purify_pubkey);
     if (!circuit.has_value()) {
-        return unexpected_error(circuit.error(), "verify_message_nonce_proof:instantiate");
+        return unexpected_error(circuit.error(), "verify_message_nonce_proof:instantiate_packed");
     }
     return verify_nonce_proof_with_circuit(public_key, *circuit, nonce_proof, PreparedNonce::Scope::Message,
                                            "verify_message_nonce_proof:verify_nonce_proof_with_circuit");
@@ -801,9 +842,10 @@ Result<bool> verify_topic_nonce_proof(const TopicProofCache& cache, const Public
     if (!cache_status.has_value()) {
         return unexpected_error(cache_status.error(), "verify_topic_nonce_proof:validate_topic_proof_cache");
     }
-    Result<NativeBulletproofCircuit> circuit = cache.circuit_template.instantiate(public_key.purify_pubkey);
+    Result<NativeBulletproofCircuit::PackedWithSlack> circuit =
+        cache.circuit_template.instantiate_packed(public_key.purify_pubkey);
     if (!circuit.has_value()) {
-        return unexpected_error(circuit.error(), "verify_topic_nonce_proof:instantiate");
+        return unexpected_error(circuit.error(), "verify_topic_nonce_proof:instantiate_packed");
     }
     return verify_nonce_proof_with_circuit(public_key, *circuit, nonce_proof, PreparedNonce::Scope::Topic,
                                            "verify_topic_nonce_proof:verify_nonce_proof_with_circuit");

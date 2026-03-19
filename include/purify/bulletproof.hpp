@@ -49,6 +49,21 @@ struct NativeBulletproofCircuitRow {
 
     /** @brief Appends a sparse coefficient to the row, skipping zero entries. */
     void add(std::size_t idx, const FieldElement& scalar);
+
+    /**
+     * @brief Non-owning packed row view used by `NativeBulletproofCircuit::PackedWithSlack`.
+     *
+     * The underlying storage lives inside the packed circuit slab.
+     */
+    struct PackedWithSlack {
+        const NativeBulletproofCircuitTerm* data = nullptr;
+        std::size_t size = 0;
+        std::size_t capacity = 0;
+
+        [[nodiscard]] std::span<const NativeBulletproofCircuitTerm> entries_view() const noexcept {
+            return std::span<const NativeBulletproofCircuitTerm>(data, size);
+        }
+    };
 };
 
 /**
@@ -58,6 +73,123 @@ struct NativeBulletproofCircuitRow {
  * built directly in C++ without parser round-trips.
  */
 struct NativeBulletproofCircuit {
+    struct PackedSlack {
+        std::size_t constraint_slack = 0;
+        std::vector<std::size_t> wl;
+        std::vector<std::size_t> wr;
+        std::vector<std::size_t> wo;
+        std::vector<std::size_t> wv;
+    };
+
+    /**
+     * @brief Resettable packed circuit representation backed by one aligned slab allocation.
+     *
+     * This keeps row metadata, sparse terms, and constants in a single allocation sized for the
+     * base circuit plus caller-supplied slack. It supports two cache-friendly modes:
+     * copying the object cheaply as one slab for const use, or mutating it in place and then
+     * calling `reset()` to return to the original packed base shape.
+     */
+    class PackedWithSlack {
+    public:
+        PackedWithSlack() = default;
+
+        [[nodiscard]] std::size_t n_gates() const noexcept {
+            return n_gates_;
+        }
+
+        [[nodiscard]] std::size_t n_commitments() const noexcept {
+            return n_commitments_;
+        }
+
+        [[nodiscard]] std::size_t n_bits() const noexcept {
+            return n_bits_;
+        }
+
+        [[nodiscard]] std::size_t constraint_count() const noexcept {
+            return constraint_size_;
+        }
+
+        [[nodiscard]] std::size_t constraint_capacity() const noexcept {
+            return constraint_capacity_;
+        }
+
+        [[nodiscard]] bool has_valid_shape() const noexcept;
+
+        /** @brief Restores the packed circuit to its original base row sizes and constraint count. */
+        void reset() noexcept;
+
+        /** @brief Appends a new linear constraint constant term and returns its index. */
+        std::size_t add_constraint(const FieldElement& constant = FieldElement::zero());
+
+        /** @brief Adds a coefficient to the left-wire matrix. */
+        void add_left_term(std::size_t gate_idx, std::size_t constraint_idx, const FieldElement& scalar);
+
+        /** @brief Adds a coefficient to the right-wire matrix. */
+        void add_right_term(std::size_t gate_idx, std::size_t constraint_idx, const FieldElement& scalar);
+
+        /** @brief Adds a coefficient to the output-wire matrix. */
+        void add_output_term(std::size_t gate_idx, std::size_t constraint_idx, const FieldElement& scalar);
+
+        /** @brief Adds a coefficient to the commitment matrix using the Bulletproof sign convention. */
+        void add_commitment_term(std::size_t commitment_idx, std::size_t constraint_idx, const FieldElement& scalar);
+
+        /** @brief Evaluates the packed circuit directly against a witness assignment. */
+        [[nodiscard]] bool evaluate(const BulletproofAssignmentData& assignment) const;
+
+        /** @brief Materializes the packed circuit back into the ergonomic row-vector representation. */
+        [[nodiscard]] Result<NativeBulletproofCircuit> unpack() const;
+
+        /** @brief Returns a read-only packed left-wire row view. */
+        [[nodiscard]] NativeBulletproofCircuitRow::PackedWithSlack left_row(std::size_t gate_idx) const noexcept;
+        /** @brief Returns a read-only packed right-wire row view. */
+        [[nodiscard]] NativeBulletproofCircuitRow::PackedWithSlack right_row(std::size_t gate_idx) const noexcept;
+        /** @brief Returns a read-only packed output-wire row view. */
+        [[nodiscard]] NativeBulletproofCircuitRow::PackedWithSlack output_row(std::size_t gate_idx) const noexcept;
+        /** @brief Returns a read-only packed commitment row view. */
+        [[nodiscard]] NativeBulletproofCircuitRow::PackedWithSlack commitment_row(std::size_t commitment_idx) const noexcept;
+
+        /** @brief Returns the live constraint constants stored in the slab. */
+        [[nodiscard]] std::span<const FieldElement> constants() const noexcept;
+
+    private:
+        struct PackedRowHeader {
+            std::size_t offset = 0;
+            std::size_t size = 0;
+            std::size_t base_size = 0;
+            std::size_t capacity = 0;
+        };
+
+        enum class RowFamily : unsigned char {
+            Left,
+            Right,
+            Output,
+            Commitment,
+        };
+
+        PackedRowHeader& row_header(RowFamily family, std::size_t idx) noexcept;
+        const PackedRowHeader& row_header(RowFamily family, std::size_t idx) const noexcept;
+        NativeBulletproofCircuitTerm* term_data() noexcept;
+        const NativeBulletproofCircuitTerm* term_data() const noexcept;
+        FieldElement* constant_data() noexcept;
+        const FieldElement* constant_data() const noexcept;
+        NativeBulletproofCircuitRow::PackedWithSlack row_view(const PackedRowHeader& header) const noexcept;
+        void add_row_term(RowFamily family, std::size_t expected_size, std::size_t row_idx,
+                          std::size_t constraint_idx, const FieldElement& scalar);
+
+        std::size_t n_gates_ = 0;
+        std::size_t n_commitments_ = 0;
+        std::size_t n_bits_ = 0;
+        std::size_t constraint_size_ = 0;
+        std::size_t constraint_base_size_ = 0;
+        std::size_t constraint_capacity_ = 0;
+        std::size_t term_bytes_offset_ = 0;
+        std::size_t constant_bytes_offset_ = 0;
+        std::vector<std::max_align_t> storage_;
+
+        friend struct NativeBulletproofCircuit;
+        friend class NativeBulletproofCircuitTemplate;
+    };
+
     std::size_t n_gates = 0;
     std::size_t n_commitments = 0;
     std::size_t n_bits = 0;
@@ -94,6 +226,11 @@ struct NativeBulletproofCircuit {
     /** @brief Evaluates the circuit against a witness assignment and checks all gate and row equations. */
     bool evaluate(const BulletproofAssignmentData& assignment) const;
 
+    /** @brief Packs the circuit into one aligned slab with no additional row or constraint slack. */
+    Result<PackedWithSlack> pack_with_slack() const;
+    /** @brief Packs the circuit into one aligned slab with caller-specified slack for later mutation. */
+    Result<PackedWithSlack> pack_with_slack(const PackedSlack& slack) const;
+
 private:
     /** @brief Shared bounds-checked helper for appending a sparse term to one matrix family. */
     static void add_row_term(std::vector<NativeBulletproofCircuitRow>& rows, std::size_t expected_size,
@@ -127,10 +264,11 @@ struct ExperimentalBulletproofProof {
  */
 class NativeBulletproofCircuitTemplate {
 public:
+    Result<NativeBulletproofCircuit::PackedWithSlack> instantiate_packed(const UInt512& pubkey) const;
     Result<NativeBulletproofCircuit> instantiate(const UInt512& pubkey) const;
 
 private:
-    NativeBulletproofCircuit base_circuit_;
+    NativeBulletproofCircuit::PackedWithSlack base_packed_;
     Expr p1x_;
     Expr p2x_;
     Expr out_;
@@ -152,10 +290,22 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding = {},
     std::optional<BulletproofScalarBytes> blind = std::nullopt);
+Result<ExperimentalBulletproofProof> prove_experimental_circuit(
+    const NativeBulletproofCircuit::PackedWithSlack& circuit,
+    const BulletproofAssignmentData& assignment,
+    const BulletproofScalarBytes& nonce,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding = {},
+    std::optional<BulletproofScalarBytes> blind = std::nullopt);
 
 /** @brief Verifies a proof produced by `prove_experimental_circuit` against the same one-commitment native circuit. */
 Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
+    const ExperimentalBulletproofProof& proof,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding = {});
+Result<bool> verify_experimental_circuit(
+    const NativeBulletproofCircuit::PackedWithSlack& circuit,
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding = {});

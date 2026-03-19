@@ -10,6 +10,7 @@
 #include "purify/api.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cerrno>
 #include <cstdlib>
 #include <fstream>
@@ -49,6 +50,53 @@ Bytes tagged_message(std::string_view prefix, const Bytes& message) {
     out.insert(out.end(), prefix.begin(), prefix.end());
     out.insert(out.end(), message.begin(), message.end());
     return out;
+}
+
+void add_expr_slack(NativeBulletproofCircuit::PackedSlack& slack, const Expr& expr) {
+    for (const auto& term : expr.linear()) {
+        switch (term.first.kind) {
+        case SymbolKind::Left:
+            if (term.first.index < slack.wl.size()) {
+                ++slack.wl[term.first.index];
+            }
+            break;
+        case SymbolKind::Right:
+            if (term.first.index < slack.wr.size()) {
+                ++slack.wr[term.first.index];
+            }
+            break;
+        case SymbolKind::Output:
+            if (term.first.index < slack.wo.size()) {
+                ++slack.wo[term.first.index];
+            }
+            break;
+        case SymbolKind::Commitment:
+            if (term.first.index < slack.wv.size()) {
+                ++slack.wv[term.first.index];
+            }
+            break;
+        case SymbolKind::Witness:
+            assert(false && "verifier_circuit_template should not pack raw witness symbols");
+            break;
+        }
+    }
+}
+
+NativeBulletproofCircuit::PackedSlack build_template_slack(std::size_t n_gates, std::size_t n_commitments,
+                                                           const Expr& p1x, const Expr& p2x, const Expr& out) {
+    NativeBulletproofCircuit::PackedSlack slack;
+    slack.constraint_slack = 3;
+    slack.wl.assign(n_gates, 0);
+    slack.wr.assign(n_gates, 0);
+    slack.wo.assign(n_gates, 0);
+    slack.wv.assign(n_commitments, 0);
+    add_expr_slack(slack, p1x.split().second);
+    add_expr_slack(slack, p2x.split().second);
+    add_expr_slack(slack, out);
+    if (!slack.wv.empty()) {
+        ++slack.wv[0];
+    }
+    return slack;
 }
 
 }  // namespace
@@ -244,7 +292,13 @@ Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& 
     bp.replace_expr_v_with_bp_var(out);
 
     NativeBulletproofCircuitTemplate template_circuit;
-    template_circuit.base_circuit_ = bp.native_circuit();
+    NativeBulletproofCircuit base_circuit = bp.native_circuit();
+    Result<NativeBulletproofCircuit::PackedWithSlack> packed =
+        base_circuit.pack_with_slack(build_template_slack(base_circuit.n_gates, base_circuit.n_commitments, p1x, p2x, out));
+    if (!packed.has_value()) {
+        return unexpected_error(packed.error(), "verifier_circuit_template:pack_with_slack");
+    }
+    template_circuit.base_packed_ = std::move(*packed);
     template_circuit.p1x_ = std::move(p1x);
     template_circuit.p2x_ = std::move(p2x);
     template_circuit.out_ = std::move(out);

@@ -355,6 +355,14 @@ int main(int argc, char** argv) {
         ankerl::nanobench::doNotOptimizeAway(built->c.size());
     });
 
+    auto instantiate_packed_bench = make_bench(*config);
+    instantiate_packed_bench.run("instantiate packed verifier circuit from template", [&] {
+        purify::Result<NativeBulletproofCircuit::PackedWithSlack> built =
+            bench_case->circuit_template.instantiate_packed(bench_case->witness.public_key);
+        assert(built.has_value() && "benchmark packed verifier circuit template instantiation should succeed");
+        ankerl::nanobench::doNotOptimizeAway(built->constraint_count());
+    });
+
     auto experimental_prove_bench = make_bench(*config);
     experimental_prove_bench.run("prove experimental circuit", [&] {
         purify::Result<ExperimentalBulletproofProof> proof =

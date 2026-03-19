@@ -407,6 +407,48 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
     }
 }
 
+void test_packed_circuit_with_slack(TestContext& ctx) {
+    NativeBulletproofCircuit circuit(1, 1, 0);
+    std::size_t base_constraint = circuit.add_constraint(FieldElement::zero());
+    circuit.add_output_term(0, base_constraint, FieldElement::one());
+    circuit.add_commitment_term(0, base_constraint, FieldElement::from_int(-1));
+
+    BulletproofAssignmentData assignment;
+    assignment.left = {FieldElement::from_int(3)};
+    assignment.right = {FieldElement::from_int(4)};
+    assignment.output = {FieldElement::from_int(12)};
+    assignment.commitments = {FieldElement::from_int(12)};
+
+    NativeBulletproofCircuit::PackedSlack slack;
+    slack.constraint_slack = 1;
+    slack.wo = {1};
+    slack.wv = {1};
+
+    Result<NativeBulletproofCircuit::PackedWithSlack> packed = circuit.pack_with_slack(slack);
+    expect_ok(ctx, packed, "pack_with_slack succeeds on a one-gate circuit");
+    if (!packed.has_value()) {
+        return;
+    }
+
+    ctx.expect(packed->constraint_count() == 1, "packed circuit starts at the base constraint count");
+    std::size_t extra_constraint = packed->add_constraint(FieldElement::zero());
+    packed->add_output_term(0, extra_constraint, FieldElement::one());
+    packed->add_commitment_term(0, extra_constraint, FieldElement::from_int(-1));
+    ctx.expect(packed->constraint_count() == 2, "packed circuit can append one extra constraint inside slack");
+    ctx.expect(packed->evaluate(assignment), "packed circuit evaluates successfully after in-place mutation");
+
+    packed->reset();
+    ctx.expect(packed->constraint_count() == 1, "packed circuit reset restores the base constraint count");
+
+    Result<NativeBulletproofCircuit> unpacked = packed->unpack();
+    expect_ok(ctx, unpacked, "packed circuit unpacks after reset");
+    if (!unpacked.has_value()) {
+        return;
+    }
+    ctx.expect(unpacked->c.size() == circuit.c.size(), "unpacked reset circuit restores the original constraint count");
+    ctx.expect(unpacked->evaluate(assignment), "unpacked reset circuit still accepts the original witness");
+}
+
 void test_puresign_message_signing(TestContext& ctx) {
     Result<UInt512> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for PureSign message signing");
@@ -704,6 +746,7 @@ int main() {
     test_expr_builder(ctx);
     test_bppp_move_overload(ctx);
     test_experimental_bulletproof_roundtrip(ctx);
+    test_packed_circuit_with_slack(ctx);
     test_puresign_message_signing(ctx);
     test_puresign_topic_signing(ctx);
     test_puresign_binding_checks(ctx);

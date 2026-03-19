@@ -13,9 +13,11 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <limits>
 #include <sstream>
+#include <type_traits>
 
 namespace {
 
@@ -26,6 +28,16 @@ using purify::Symbol;
 using purify::SymbolKind;
 using purify::WitnessAssignments;
 using purify::Bytes;
+using PackedCircuit = purify::NativeBulletproofCircuit::PackedWithSlack;
+
+static_assert(std::is_trivially_copyable_v<purify::NativeBulletproofCircuitTerm>,
+              "Packed circuit storage requires trivially copyable terms");
+static_assert(std::is_trivially_copyable_v<purify::FieldElement>,
+              "Packed circuit storage requires trivially copyable field elements");
+static_assert(alignof(purify::FieldElement) <= alignof(std::max_align_t),
+              "Packed circuit slab assumes max_align_t-aligned field elements");
+static_assert(alignof(purify::NativeBulletproofCircuitTerm) <= alignof(std::max_align_t),
+              "Packed circuit slab assumes max_align_t-aligned terms");
 
 std::uint32_t narrow_symbol_index(std::size_t index) {
     assert(index <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())
@@ -129,6 +141,17 @@ bool is_power_of_two(std::size_t value) {
     return value != 0 && (value & (value - 1)) == 0;
 }
 
+std::size_t align_up(std::size_t value, std::size_t alignment) {
+    assert(alignment != 0 && "alignment must be non-zero");
+    const std::size_t remainder = value % alignment;
+    return remainder == 0 ? value : value + (alignment - remainder);
+}
+
+std::size_t storage_units_for_bytes(std::size_t bytes) {
+    const std::size_t word = sizeof(std::max_align_t);
+    return (bytes + word - 1) / word;
+}
+
 void append_u32_le(Bytes& out, std::uint32_t value) {
     for (int i = 0; i < 4; ++i) {
         out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
@@ -162,11 +185,13 @@ Bytes flatten_scalars32(const std::vector<FieldElement>& values) {
     return out;
 }
 
-void append_row_family_digest(Bytes& out, const std::vector<purify::NativeBulletproofCircuitRow>& rows) {
-    append_u64_le(out, static_cast<std::uint64_t>(rows.size()));
-    for (const auto& row : rows) {
-        append_u64_le(out, static_cast<std::uint64_t>(row.entries.size()));
-        for (const auto& entry : row.entries) {
+template <typename RowEntriesFn>
+void append_row_family_digest_generic(Bytes& out, std::size_t row_count, const RowEntriesFn& row_entries) {
+    append_u64_le(out, static_cast<std::uint64_t>(row_count));
+    for (std::size_t i = 0; i < row_count; ++i) {
+        std::span<const purify::NativeBulletproofCircuitTerm> entries = row_entries(i);
+        append_u64_le(out, static_cast<std::uint64_t>(entries.size()));
+        for (const auto& entry : entries) {
             append_u64_le(out, static_cast<std::uint64_t>(entry.idx));
             auto scalar = entry.scalar.to_bytes_be();
             out.insert(out.end(), scalar.begin(), scalar.end());
@@ -181,10 +206,14 @@ Bytes circuit_binding_digest(const purify::NativeBulletproofCircuit& circuit, st
     append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_commitments));
     append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_bits));
     append_u64_le(serialized, static_cast<std::uint64_t>(circuit.c.size()));
-    append_row_family_digest(serialized, circuit.wl);
-    append_row_family_digest(serialized, circuit.wr);
-    append_row_family_digest(serialized, circuit.wo);
-    append_row_family_digest(serialized, circuit.wv);
+    append_row_family_digest_generic(serialized, circuit.wl.size(),
+                                     [&](std::size_t i) { return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wl[i].entries); });
+    append_row_family_digest_generic(serialized, circuit.wr.size(),
+                                     [&](std::size_t i) { return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wr[i].entries); });
+    append_row_family_digest_generic(serialized, circuit.wo.size(),
+                                     [&](std::size_t i) { return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wo[i].entries); });
+    append_row_family_digest_generic(serialized, circuit.wv.size(),
+                                     [&](std::size_t i) { return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wv[i].entries); });
     for (const FieldElement& constant : circuit.c) {
         auto bytes = constant.to_bytes_be();
         serialized.insert(serialized.end(), bytes.begin(), bytes.end());
@@ -194,28 +223,48 @@ Bytes circuit_binding_digest(const purify::NativeBulletproofCircuit& circuit, st
     return purify::hmac_sha256(purify::bytes_from_ascii("Purify/ExperimentalBulletproof/CircuitV1"), serialized);
 }
 
-void append_constraint_to_circuit(purify::NativeBulletproofCircuit& circuit, const Expr& lhs, const Expr& rhs) {
+Bytes circuit_binding_digest(const PackedCircuit& circuit, std::span<const unsigned char> statement_binding) {
+    Bytes serialized;
+    serialized.reserve(64 + circuit.constraint_count() * 32);
+    append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_gates()));
+    append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_commitments()));
+    append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_bits()));
+    append_u64_le(serialized, static_cast<std::uint64_t>(circuit.constraint_count()));
+    append_row_family_digest_generic(serialized, circuit.n_gates(),
+                                     [&](std::size_t i) { return circuit.left_row(i).entries_view(); });
+    append_row_family_digest_generic(serialized, circuit.n_gates(),
+                                     [&](std::size_t i) { return circuit.right_row(i).entries_view(); });
+    append_row_family_digest_generic(serialized, circuit.n_gates(),
+                                     [&](std::size_t i) { return circuit.output_row(i).entries_view(); });
+    append_row_family_digest_generic(serialized, circuit.n_commitments(),
+                                     [&](std::size_t i) { return circuit.commitment_row(i).entries_view(); });
+    for (const FieldElement& constant : circuit.constants()) {
+        auto bytes = constant.to_bytes_be();
+        serialized.insert(serialized.end(), bytes.begin(), bytes.end());
+    }
+    append_u64_le(serialized, static_cast<std::uint64_t>(statement_binding.size()));
+    serialized.insert(serialized.end(), statement_binding.begin(), statement_binding.end());
+    return purify::hmac_sha256(purify::bytes_from_ascii("Purify/ExperimentalBulletproof/CircuitV1"), serialized);
+}
+
+template <typename CircuitLike>
+void append_constraint_to_circuit(CircuitLike& circuit, const Expr& lhs, const Expr& rhs) {
     Expr combined = lhs - rhs;
-    std::size_t constraint_idx = circuit.c.size();
-    circuit.c.push_back(combined.constant().negate());
+    std::size_t constraint_idx = circuit.add_constraint(combined.constant().negate());
     for (const auto& term : combined.linear()) {
         std::size_t index = term.first.index;
         switch (term.first.kind) {
         case SymbolKind::Left:
-            assert(index < circuit.wl.size() && "append_constraint_to_circuit() L index out of range");
-            circuit.wl[index].add(constraint_idx, term.second);
+            circuit.add_left_term(index, constraint_idx, term.second);
             break;
         case SymbolKind::Right:
-            assert(index < circuit.wr.size() && "append_constraint_to_circuit() R index out of range");
-            circuit.wr[index].add(constraint_idx, term.second);
+            circuit.add_right_term(index, constraint_idx, term.second);
             break;
         case SymbolKind::Output:
-            assert(index < circuit.wo.size() && "append_constraint_to_circuit() O index out of range");
-            circuit.wo[index].add(constraint_idx, term.second);
+            circuit.add_output_term(index, constraint_idx, term.second);
             break;
         case SymbolKind::Commitment:
-            assert(index < circuit.wv.size() && "append_constraint_to_circuit() V index out of range");
-            circuit.wv[index].add(constraint_idx, term.second.negate());
+            circuit.add_commitment_term(index, constraint_idx, term.second);
             break;
         case SymbolKind::Witness:
             assert(false && "append_constraint_to_circuit() encountered an unmapped witness symbol");
@@ -230,27 +279,30 @@ struct FlattenedRowFamily {
     Bytes scalars32;
 };
 
-FlattenedRowFamily flatten_row_family(const std::vector<purify::NativeBulletproofCircuitRow>& rows,
-                                      std::size_t constraint_offset) {
+template <typename RowEntriesFn>
+FlattenedRowFamily flatten_row_family_generic(std::size_t row_count, const RowEntriesFn& row_entries,
+                                              std::size_t constraint_offset) {
     FlattenedRowFamily flat;
     std::vector<std::size_t> offsets;
     std::vector<std::size_t> counts;
-    offsets.reserve(rows.size());
-    counts.reserve(rows.size());
-    flat.views.resize(rows.size());
+    offsets.reserve(row_count);
+    counts.reserve(row_count);
+    flat.views.resize(row_count);
 
     std::size_t total_entries = 0;
-    for (const auto& row : rows) {
-        total_entries += std::count_if(row.entries.begin(), row.entries.end(),
+    for (std::size_t i = 0; i < row_count; ++i) {
+        std::span<const purify::NativeBulletproofCircuitTerm> entries = row_entries(i);
+        total_entries += std::count_if(entries.begin(), entries.end(),
                                        [&](const auto& entry) { return entry.idx >= constraint_offset; });
     }
     flat.indices.reserve(total_entries);
     flat.scalars32.reserve(total_entries * 32);
 
-    for (const auto& row : rows) {
+    for (std::size_t i = 0; i < row_count; ++i) {
+        std::span<const purify::NativeBulletproofCircuitTerm> entries = row_entries(i);
         std::size_t kept = 0;
         offsets.push_back(flat.indices.size());
-        for (const auto& entry : row.entries) {
+        for (const auto& entry : entries) {
             if (entry.idx < constraint_offset) {
                 continue;
             }
@@ -264,7 +316,7 @@ FlattenedRowFamily flatten_row_family(const std::vector<purify::NativeBulletproo
 
     const std::size_t* indices_base = flat.indices.empty() ? nullptr : flat.indices.data();
     const unsigned char* scalars_base = flat.scalars32.empty() ? nullptr : flat.scalars32.data();
-    for (std::size_t i = 0; i < rows.size(); ++i) {
+    for (std::size_t i = 0; i < row_count; ++i) {
         const std::size_t count = counts[i];
         const std::size_t start = offsets[i];
         flat.views[i].size = count;
@@ -287,15 +339,55 @@ FlattenedCircuitView flatten_circuit_view(const purify::NativeBulletproofCircuit
     FlattenedCircuitView flat;
     const std::size_t implicit_bit_constraints = 2 * circuit.n_bits;
     assert(circuit.c.size() >= implicit_bit_constraints && "native circuit must contain all implicit bit constraints");
-    flat.wl = flatten_row_family(circuit.wl, implicit_bit_constraints);
-    flat.wr = flatten_row_family(circuit.wr, implicit_bit_constraints);
-    flat.wo = flatten_row_family(circuit.wo, implicit_bit_constraints);
-    flat.wv = flatten_row_family(circuit.wv, implicit_bit_constraints);
+    flat.wl = flatten_row_family_generic(circuit.wl.size(),
+                                         [&](std::size_t i) { return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wl[i].entries); },
+                                         implicit_bit_constraints);
+    flat.wr = flatten_row_family_generic(circuit.wr.size(),
+                                         [&](std::size_t i) { return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wr[i].entries); },
+                                         implicit_bit_constraints);
+    flat.wo = flatten_row_family_generic(circuit.wo.size(),
+                                         [&](std::size_t i) { return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wo[i].entries); },
+                                         implicit_bit_constraints);
+    flat.wv = flatten_row_family_generic(circuit.wv.size(),
+                                         [&](std::size_t i) { return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wv[i].entries); },
+                                         implicit_bit_constraints);
     std::vector<FieldElement> explicit_constants(circuit.c.begin() + static_cast<std::ptrdiff_t>(implicit_bit_constraints), circuit.c.end());
     flat.constants32 = flatten_scalars32(explicit_constants);
     flat.view.n_gates = circuit.n_gates;
     flat.view.n_commits = circuit.n_commitments;
     flat.view.n_bits = circuit.n_bits;
+    flat.view.n_constraints = explicit_constants.size();
+    flat.view.wl = flat.wl.views.data();
+    flat.view.wr = flat.wr.views.data();
+    flat.view.wo = flat.wo.views.data();
+    flat.view.wv = flat.wv.views.data();
+    flat.view.c32 = flat.constants32.empty() ? nullptr : flat.constants32.data();
+    return flat;
+}
+
+FlattenedCircuitView flatten_circuit_view(const PackedCircuit& circuit) {
+    FlattenedCircuitView flat;
+    const std::size_t implicit_bit_constraints = 2 * circuit.n_bits();
+    assert(circuit.constraint_count() >= implicit_bit_constraints
+           && "packed circuit must contain all implicit bit constraints");
+    flat.wl = flatten_row_family_generic(circuit.n_gates(),
+                                         [&](std::size_t i) { return circuit.left_row(i).entries_view(); },
+                                         implicit_bit_constraints);
+    flat.wr = flatten_row_family_generic(circuit.n_gates(),
+                                         [&](std::size_t i) { return circuit.right_row(i).entries_view(); },
+                                         implicit_bit_constraints);
+    flat.wo = flatten_row_family_generic(circuit.n_gates(),
+                                         [&](std::size_t i) { return circuit.output_row(i).entries_view(); },
+                                         implicit_bit_constraints);
+    flat.wv = flatten_row_family_generic(circuit.n_commitments(),
+                                         [&](std::size_t i) { return circuit.commitment_row(i).entries_view(); },
+                                         implicit_bit_constraints);
+    std::vector<FieldElement> explicit_constants(circuit.constants().begin() + static_cast<std::ptrdiff_t>(implicit_bit_constraints),
+                                                 circuit.constants().end());
+    flat.constants32 = flatten_scalars32(explicit_constants);
+    flat.view.n_gates = circuit.n_gates();
+    flat.view.n_commits = circuit.n_commitments();
+    flat.view.n_bits = circuit.n_bits();
     flat.view.n_constraints = explicit_constants.size();
     flat.view.wl = flat.wl.views.data();
     flat.view.wr = flat.wr.views.data();
@@ -483,6 +575,339 @@ void NativeBulletproofCircuit::add_row_term(std::vector<NativeBulletproofCircuit
     rows[row_idx].add(constraint_idx, scalar);
 }
 
+bool NativeBulletproofCircuit::PackedWithSlack::has_valid_shape() const noexcept {
+    if (n_gates_ == 0 && n_commitments_ == 0 && constraint_capacity_ == 0) {
+        return true;
+    }
+    if (constraint_base_size_ > constraint_size_ || constraint_size_ > constraint_capacity_) {
+        return false;
+    }
+    const std::size_t row_count = (3 * n_gates_) + n_commitments_;
+    if (storage_.empty() && row_count != 0) {
+        return false;
+    }
+    for (std::size_t i = 0; i < row_count; ++i) {
+        const PackedRowHeader& header = reinterpret_cast<const PackedRowHeader*>(storage_.data())[i];
+        if (header.base_size > header.size || header.size > header.capacity) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void NativeBulletproofCircuit::PackedWithSlack::reset() noexcept {
+    if (storage_.empty()) {
+        constraint_size_ = 0;
+        return;
+    }
+    constraint_size_ = constraint_base_size_;
+    const std::size_t row_count = (3 * n_gates_) + n_commitments_;
+    PackedRowHeader* headers = reinterpret_cast<PackedRowHeader*>(storage_.data());
+    for (std::size_t i = 0; i < row_count; ++i) {
+        headers[i].size = headers[i].base_size;
+    }
+}
+
+NativeBulletproofCircuit::PackedWithSlack::PackedRowHeader&
+NativeBulletproofCircuit::PackedWithSlack::row_header(RowFamily family, std::size_t idx) noexcept {
+    PackedRowHeader* headers = reinterpret_cast<PackedRowHeader*>(storage_.data());
+    std::size_t base = 0;
+    switch (family) {
+    case RowFamily::Left:
+        base = 0;
+        break;
+    case RowFamily::Right:
+        base = n_gates_;
+        break;
+    case RowFamily::Output:
+        base = 2 * n_gates_;
+        break;
+    case RowFamily::Commitment:
+        base = 3 * n_gates_;
+        break;
+    }
+    return headers[base + idx];
+}
+
+const NativeBulletproofCircuit::PackedWithSlack::PackedRowHeader&
+NativeBulletproofCircuit::PackedWithSlack::row_header(RowFamily family, std::size_t idx) const noexcept {
+    const PackedRowHeader* headers = reinterpret_cast<const PackedRowHeader*>(storage_.data());
+    std::size_t base = 0;
+    switch (family) {
+    case RowFamily::Left:
+        base = 0;
+        break;
+    case RowFamily::Right:
+        base = n_gates_;
+        break;
+    case RowFamily::Output:
+        base = 2 * n_gates_;
+        break;
+    case RowFamily::Commitment:
+        base = 3 * n_gates_;
+        break;
+    }
+    return headers[base + idx];
+}
+
+NativeBulletproofCircuitTerm* NativeBulletproofCircuit::PackedWithSlack::term_data() noexcept {
+    unsigned char* bytes = reinterpret_cast<unsigned char*>(storage_.data());
+    return reinterpret_cast<NativeBulletproofCircuitTerm*>(bytes + term_bytes_offset_);
+}
+
+const NativeBulletproofCircuitTerm* NativeBulletproofCircuit::PackedWithSlack::term_data() const noexcept {
+    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(storage_.data());
+    return reinterpret_cast<const NativeBulletproofCircuitTerm*>(bytes + term_bytes_offset_);
+}
+
+FieldElement* NativeBulletproofCircuit::PackedWithSlack::constant_data() noexcept {
+    unsigned char* bytes = reinterpret_cast<unsigned char*>(storage_.data());
+    return reinterpret_cast<FieldElement*>(bytes + constant_bytes_offset_);
+}
+
+const FieldElement* NativeBulletproofCircuit::PackedWithSlack::constant_data() const noexcept {
+    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(storage_.data());
+    return reinterpret_cast<const FieldElement*>(bytes + constant_bytes_offset_);
+}
+
+NativeBulletproofCircuitRow::PackedWithSlack
+NativeBulletproofCircuit::PackedWithSlack::row_view(const PackedRowHeader& header) const noexcept {
+    return {term_data() + header.offset, header.size, header.capacity};
+}
+
+std::size_t NativeBulletproofCircuit::PackedWithSlack::add_constraint(const FieldElement& constant) {
+    assert(constraint_size_ < constraint_capacity_ && "PackedWithSlack constraint capacity exceeded");
+    FieldElement* constants = constant_data();
+    constants[constraint_size_] = constant;
+    ++constraint_size_;
+    return constraint_size_ - 1;
+}
+
+void NativeBulletproofCircuit::PackedWithSlack::add_row_term(RowFamily family, std::size_t expected_size,
+                                                             std::size_t row_idx, std::size_t constraint_idx,
+                                                             const FieldElement& scalar) {
+    (void)expected_size;
+    if (scalar.is_zero()) {
+        return;
+    }
+    assert(constraint_idx < constraint_size_ && "PackedWithSlack constraint index out of range");
+    assert(((family == RowFamily::Commitment) ? n_commitments_ : n_gates_) == expected_size
+           && "PackedWithSlack expected row family size mismatch");
+    assert(row_idx < expected_size && "PackedWithSlack row index out of range");
+    PackedRowHeader& header = row_header(family, row_idx);
+    assert(header.size < header.capacity && "PackedWithSlack row capacity exceeded");
+    term_data()[header.offset + header.size] = {constraint_idx, scalar};
+    ++header.size;
+}
+
+void NativeBulletproofCircuit::PackedWithSlack::add_left_term(std::size_t gate_idx, std::size_t constraint_idx,
+                                                              const FieldElement& scalar) {
+    add_row_term(RowFamily::Left, n_gates_, gate_idx, constraint_idx, scalar);
+}
+
+void NativeBulletproofCircuit::PackedWithSlack::add_right_term(std::size_t gate_idx, std::size_t constraint_idx,
+                                                               const FieldElement& scalar) {
+    add_row_term(RowFamily::Right, n_gates_, gate_idx, constraint_idx, scalar);
+}
+
+void NativeBulletproofCircuit::PackedWithSlack::add_output_term(std::size_t gate_idx, std::size_t constraint_idx,
+                                                                const FieldElement& scalar) {
+    add_row_term(RowFamily::Output, n_gates_, gate_idx, constraint_idx, scalar);
+}
+
+void NativeBulletproofCircuit::PackedWithSlack::add_commitment_term(std::size_t commitment_idx, std::size_t constraint_idx,
+                                                                    const FieldElement& scalar) {
+    add_row_term(RowFamily::Commitment, n_commitments_, commitment_idx, constraint_idx, scalar.negate());
+}
+
+NativeBulletproofCircuitRow::PackedWithSlack
+NativeBulletproofCircuit::PackedWithSlack::left_row(std::size_t gate_idx) const noexcept {
+    return row_view(row_header(RowFamily::Left, gate_idx));
+}
+
+NativeBulletproofCircuitRow::PackedWithSlack
+NativeBulletproofCircuit::PackedWithSlack::right_row(std::size_t gate_idx) const noexcept {
+    return row_view(row_header(RowFamily::Right, gate_idx));
+}
+
+NativeBulletproofCircuitRow::PackedWithSlack
+NativeBulletproofCircuit::PackedWithSlack::output_row(std::size_t gate_idx) const noexcept {
+    return row_view(row_header(RowFamily::Output, gate_idx));
+}
+
+NativeBulletproofCircuitRow::PackedWithSlack
+NativeBulletproofCircuit::PackedWithSlack::commitment_row(std::size_t commitment_idx) const noexcept {
+    return row_view(row_header(RowFamily::Commitment, commitment_idx));
+}
+
+std::span<const FieldElement> NativeBulletproofCircuit::PackedWithSlack::constants() const noexcept {
+    return std::span<const FieldElement>(constant_data(), constraint_size_);
+}
+
+bool NativeBulletproofCircuit::PackedWithSlack::evaluate(const BulletproofAssignmentData& assignment) const {
+    if (!has_valid_shape()) {
+        return false;
+    }
+    if (assignment.left.size() != n_gates_ || assignment.right.size() != n_gates_ || assignment.output.size() != n_gates_) {
+        return false;
+    }
+    if (assignment.commitments.size() != n_commitments_) {
+        return false;
+    }
+    for (std::size_t i = 0; i < n_gates_; ++i) {
+        if (assignment.left[i] * assignment.right[i] != assignment.output[i]) {
+            return false;
+        }
+    }
+
+    std::vector<FieldElement> acc(constraint_size_, FieldElement::zero());
+    auto accumulate = [&](RowFamily family, std::size_t row_count, const std::vector<FieldElement>& values,
+                          bool negate_values = false) {
+        if (values.size() != row_count) {
+            return false;
+        }
+        for (std::size_t i = 0; i < row_count; ++i) {
+            const PackedRowHeader& header = row_header(family, i);
+            FieldElement factor = negate_values ? values[i].negate() : values[i];
+            const NativeBulletproofCircuitTerm* row_terms = term_data() + header.offset;
+            for (std::size_t j = 0; j < header.size; ++j) {
+                const NativeBulletproofCircuitTerm& entry = row_terms[j];
+                if (entry.idx >= acc.size()) {
+                    return false;
+                }
+                acc[entry.idx] = acc[entry.idx] + (entry.scalar * factor);
+            }
+        }
+        return true;
+    };
+    if (!accumulate(RowFamily::Left, n_gates_, assignment.left)
+        || !accumulate(RowFamily::Right, n_gates_, assignment.right)
+        || !accumulate(RowFamily::Output, n_gates_, assignment.output)
+        || !accumulate(RowFamily::Commitment, n_commitments_, assignment.commitments, true)) {
+        return false;
+    }
+    for (std::size_t i = 0; i < constraint_size_; ++i) {
+        if (acc[i] != constant_data()[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+Result<NativeBulletproofCircuit> NativeBulletproofCircuit::PackedWithSlack::unpack() const {
+    if (!has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "NativeBulletproofCircuit::PackedWithSlack::unpack:shape");
+    }
+    NativeBulletproofCircuit out(n_gates_, n_commitments_, n_bits_);
+    out.c.assign(constant_data(), constant_data() + static_cast<std::ptrdiff_t>(constraint_size_));
+    auto unpack_family = [&](RowFamily family, std::vector<NativeBulletproofCircuitRow>& rows, std::size_t row_count) {
+        for (std::size_t i = 0; i < row_count; ++i) {
+            const PackedRowHeader& header = row_header(family, i);
+            rows[i].entries.assign(term_data() + header.offset,
+                                   term_data() + header.offset + static_cast<std::ptrdiff_t>(header.size));
+        }
+    };
+    unpack_family(RowFamily::Left, out.wl, n_gates_);
+    unpack_family(RowFamily::Right, out.wr, n_gates_);
+    unpack_family(RowFamily::Output, out.wo, n_gates_);
+    unpack_family(RowFamily::Commitment, out.wv, n_commitments_);
+    return out;
+}
+
+Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack_with_slack(const PackedSlack& slack) const {
+    if (!has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "NativeBulletproofCircuit::pack_with_slack:shape");
+    }
+    auto validate_family_slack = [](const std::vector<std::size_t>& family_slack, std::size_t expected,
+                                    const char* context) -> Status {
+        if (!family_slack.empty() && family_slack.size() != expected) {
+            return unexpected_error(ErrorCode::SizeMismatch, context);
+        }
+        return {};
+    };
+    Status wl_status = validate_family_slack(slack.wl, n_gates, "NativeBulletproofCircuit::pack_with_slack:wl");
+    if (!wl_status.has_value()) {
+        return unexpected_error(wl_status.error(), "NativeBulletproofCircuit::pack_with_slack:wl");
+    }
+    Status wr_status = validate_family_slack(slack.wr, n_gates, "NativeBulletproofCircuit::pack_with_slack:wr");
+    if (!wr_status.has_value()) {
+        return unexpected_error(wr_status.error(), "NativeBulletproofCircuit::pack_with_slack:wr");
+    }
+    Status wo_status = validate_family_slack(slack.wo, n_gates, "NativeBulletproofCircuit::pack_with_slack:wo");
+    if (!wo_status.has_value()) {
+        return unexpected_error(wo_status.error(), "NativeBulletproofCircuit::pack_with_slack:wo");
+    }
+    Status wv_status = validate_family_slack(slack.wv, n_commitments, "NativeBulletproofCircuit::pack_with_slack:wv");
+    if (!wv_status.has_value()) {
+        return unexpected_error(wv_status.error(), "NativeBulletproofCircuit::pack_with_slack:wv");
+    }
+
+    PackedWithSlack packed;
+    packed.n_gates_ = n_gates;
+    packed.n_commitments_ = n_commitments;
+    packed.n_bits_ = n_bits;
+    packed.constraint_size_ = c.size();
+    packed.constraint_base_size_ = c.size();
+    packed.constraint_capacity_ = c.size() + slack.constraint_slack;
+
+    const std::size_t row_count = (3 * n_gates) + n_commitments;
+    std::size_t total_term_capacity = 0;
+    auto sum_capacity = [&](const std::vector<NativeBulletproofCircuitRow>& rows,
+                            const std::vector<std::size_t>& family_slack) {
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const std::size_t extra = family_slack.empty() ? 0 : family_slack[i];
+            total_term_capacity += rows[i].entries.size() + extra;
+        }
+    };
+    sum_capacity(wl, slack.wl);
+    sum_capacity(wr, slack.wr);
+    sum_capacity(wo, slack.wo);
+    sum_capacity(wv, slack.wv);
+
+    const std::size_t row_headers_bytes = row_count * sizeof(PackedWithSlack::PackedRowHeader);
+    packed.term_bytes_offset_ = align_up(row_headers_bytes, alignof(NativeBulletproofCircuitTerm));
+    const std::size_t terms_bytes = total_term_capacity * sizeof(NativeBulletproofCircuitTerm);
+    packed.constant_bytes_offset_ = align_up(packed.term_bytes_offset_ + terms_bytes, alignof(FieldElement));
+    const std::size_t constants_bytes = packed.constraint_capacity_ * sizeof(FieldElement);
+    const std::size_t total_bytes = packed.constant_bytes_offset_ + constants_bytes;
+    packed.storage_.resize(storage_units_for_bytes(total_bytes));
+    std::memset(packed.storage_.data(), 0, packed.storage_.size() * sizeof(std::max_align_t));
+
+    PackedWithSlack::PackedRowHeader* headers =
+        reinterpret_cast<PackedWithSlack::PackedRowHeader*>(packed.storage_.data());
+    NativeBulletproofCircuitTerm* terms = packed.term_data();
+    FieldElement* constants = packed.constant_data();
+
+    std::copy(c.begin(), c.end(), constants);
+
+    std::size_t row_cursor = 0;
+    std::size_t term_cursor = 0;
+    auto fill_family = [&](const std::vector<NativeBulletproofCircuitRow>& rows,
+                           const std::vector<std::size_t>& family_slack) {
+        for (std::size_t i = 0; i < rows.size(); ++i, ++row_cursor) {
+            const std::size_t extra = family_slack.empty() ? 0 : family_slack[i];
+            headers[row_cursor].offset = term_cursor;
+            headers[row_cursor].size = rows[i].entries.size();
+            headers[row_cursor].base_size = rows[i].entries.size();
+            headers[row_cursor].capacity = rows[i].entries.size() + extra;
+            if (!rows[i].entries.empty()) {
+                std::copy(rows[i].entries.begin(), rows[i].entries.end(), terms + term_cursor);
+            }
+            term_cursor += headers[row_cursor].capacity;
+        }
+    };
+    fill_family(wl, slack.wl);
+    fill_family(wr, slack.wr);
+    fill_family(wo, slack.wo);
+    fill_family(wv, slack.wv);
+
+    return packed;
+}
+
+Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack_with_slack() const {
+    return pack_with_slack(PackedSlack{});
+}
+
 Result<Bytes> ExperimentalBulletproofProof::serialize() const {
     if (proof.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return unexpected_error(ErrorCode::UnexpectedSize, "ExperimentalBulletproofProof::serialize:proof_too_large");
@@ -572,6 +997,57 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     return out;
 }
 
+Result<ExperimentalBulletproofProof> prove_experimental_circuit(
+    const NativeBulletproofCircuit::PackedWithSlack& circuit,
+    const BulletproofAssignmentData& assignment,
+    const BulletproofScalarBytes& nonce,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding,
+    std::optional<BulletproofScalarBytes> blind) {
+    ExperimentalBulletproofProof out;
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:packed_circuit_shape");
+    }
+    if (!is_power_of_two(circuit.n_gates())) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:packed_n_gates_power_of_two");
+    }
+    if (circuit.n_commitments() != 1) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:packed_n_commitments");
+    }
+    if (assignment.left.size() != circuit.n_gates()
+        || assignment.right.size() != circuit.n_gates()
+        || assignment.output.size() != circuit.n_gates()
+        || assignment.commitments.size() != circuit.n_commitments()) {
+        return unexpected_error(ErrorCode::SizeMismatch, "prove_experimental_circuit:packed_assignment_shape");
+    }
+    if (!circuit.evaluate(assignment)) {
+        return unexpected_error(ErrorCode::EquationMismatch, "prove_experimental_circuit:packed_assignment_invalid");
+    }
+
+    FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
+    FlattenedAssignmentView flat_assignment = flatten_assignment_view(assignment);
+    Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
+    Bytes proof_bytes(std::max<std::size_t>(purify_bulletproof_required_proof_size(circuit.n_gates()), 4096), 0);
+    std::size_t proof_len = proof_bytes.size();
+    BulletproofPointBytes commitment{};
+    const unsigned char* blind_ptr = blind.has_value() ? blind->data() : nullptr;
+
+    if (proof_len == 0) {
+        return unexpected_error(ErrorCode::UnexpectedSize, "prove_experimental_circuit:packed_proof_size");
+    }
+    if (!purify_bulletproof_prove_circuit(&flat_circuit.view, &flat_assignment.view, blind_ptr,
+                                          value_generator.data(), nonce.data(),
+                                          binding_digest.data(), binding_digest.size(),
+                                          commitment.data(), proof_bytes.data(), &proof_len)) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "prove_experimental_circuit:packed_bridge");
+    }
+
+    proof_bytes.resize(proof_len);
+    out.commitment = commitment;
+    out.proof = std::move(proof_bytes);
+    return out;
+}
+
 Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalBulletproofProof& proof,
@@ -588,6 +1064,32 @@ Result<bool> verify_experimental_circuit(
     }
     if (proof.proof.empty()) {
         return unexpected_error(ErrorCode::EmptyInput, "verify_experimental_circuit:proof_empty");
+    }
+
+    FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
+    Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
+    bool ok = purify_bulletproof_verify_circuit(&flat_circuit.view, proof.commitment.data(), value_generator.data(),
+                                                binding_digest.data(), binding_digest.size(),
+                                                proof.proof.data(), proof.proof.size()) != 0;
+    return ok;
+}
+
+Result<bool> verify_experimental_circuit(
+    const NativeBulletproofCircuit::PackedWithSlack& circuit,
+    const ExperimentalBulletproofProof& proof,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding) {
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:packed_circuit_shape");
+    }
+    if (!is_power_of_two(circuit.n_gates())) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:packed_n_gates_power_of_two");
+    }
+    if (circuit.n_commitments() != 1) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:packed_n_commitments");
+    }
+    if (proof.proof.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput, "verify_experimental_circuit:packed_proof_empty");
     }
 
     FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
@@ -823,18 +1325,19 @@ NativeBulletproofCircuit BulletproofTranscript::native_circuit() const {
     return circuit;
 }
 
-Result<NativeBulletproofCircuit> NativeBulletproofCircuitTemplate::instantiate(const UInt512& pubkey) const {
+Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuitTemplate::instantiate_packed(const UInt512& pubkey) const {
     Result<std::pair<UInt256, UInt256>> unpacked = unpack_public(pubkey);
     if (!unpacked.has_value()) {
-        return unexpected_error(unpacked.error(), "NativeBulletproofCircuitTemplate::instantiate:unpack_public");
+        return unexpected_error(unpacked.error(), "NativeBulletproofCircuitTemplate::instantiate_packed:unpack_public");
     }
 
-    NativeBulletproofCircuit circuit = base_circuit_;
+    NativeBulletproofCircuit::PackedWithSlack circuit = base_packed_;
+    circuit.reset();
     auto append_pubkey_constraint = [&](const UInt256& packed, const Expr& expr) -> Status {
         auto parts = expr.split();
         Result<FieldElement> constant = FieldElement::try_from_uint256(packed);
         if (!constant.has_value()) {
-            return unexpected_error(constant.error(), "NativeBulletproofCircuitTemplate::instantiate:field_constant");
+            return unexpected_error(constant.error(), "NativeBulletproofCircuitTemplate::instantiate_packed:field_constant");
         }
         append_constraint_to_circuit(circuit, parts.second, Expr(*constant) - parts.first);
         return {};
@@ -842,14 +1345,22 @@ Result<NativeBulletproofCircuit> NativeBulletproofCircuitTemplate::instantiate(c
 
     Status p1_status = append_pubkey_constraint(unpacked->first, p1x_);
     if (!p1_status.has_value()) {
-        return unexpected_error(p1_status.error(), "NativeBulletproofCircuitTemplate::instantiate:p1x");
+        return unexpected_error(p1_status.error(), "NativeBulletproofCircuitTemplate::instantiate_packed:p1x");
     }
     Status p2_status = append_pubkey_constraint(unpacked->second, p2x_);
     if (!p2_status.has_value()) {
-        return unexpected_error(p2_status.error(), "NativeBulletproofCircuitTemplate::instantiate:p2x");
+        return unexpected_error(p2_status.error(), "NativeBulletproofCircuitTemplate::instantiate_packed:p2x");
     }
     append_constraint_to_circuit(circuit, out_, Expr::variable(Symbol::commitment(0)));
     return circuit;
+}
+
+Result<NativeBulletproofCircuit> NativeBulletproofCircuitTemplate::instantiate(const UInt512& pubkey) const {
+    Result<NativeBulletproofCircuit::PackedWithSlack> packed = instantiate_packed(pubkey);
+    if (!packed.has_value()) {
+        return unexpected_error(packed.error(), "NativeBulletproofCircuitTemplate::instantiate:instantiate_packed");
+    }
+    return packed->unpack();
 }
 
 Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data(const WitnessAssignments& vars) const {

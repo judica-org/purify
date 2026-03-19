@@ -121,6 +121,25 @@ bool proven_signature_rejected_after_tamper(const purify::puresign::PublicKey& p
     return !verified.has_value() || !*verified;
 }
 
+bool proven_signature_plusplus_rejected_after_tamper(const purify::puresign_plusplus::PublicKey& public_key,
+                                                     std::span<const unsigned char> message,
+                                                     const purify::puresign_plusplus::ProvenSignature& signature) {
+    Result<Bytes> serialized = signature.serialize();
+    if (!serialized.has_value() || serialized->empty()) {
+        return false;
+    }
+    Bytes tampered = *serialized;
+    tampered[tampered.size() - 1] ^= 0x20;
+    Result<purify::puresign_plusplus::ProvenSignature> parsed =
+        purify::puresign_plusplus::ProvenSignature::deserialize(tampered);
+    if (!parsed.has_value()) {
+        return true;
+    }
+    Result<bool> verified =
+        purify::puresign_plusplus::verify_message_signature_with_proof(public_key, message, *parsed);
+    return !verified.has_value() || !*verified;
+}
+
 void test_seeded_key_and_circuit_properties(TestContext& ctx) {
     SplitMix64 rng(0x1234567890abcdefULL);
 
@@ -424,6 +443,55 @@ void test_random_puresign_proven_signature_properties(TestContext& ctx) {
                "tampering a ProvenSignature is rejected");
 }
 
+void test_random_puresign_plusplus_proven_signature_properties(TestContext& ctx) {
+    SplitMix64 rng(0xdecafbad12345678ULL);
+
+    Result<GeneratedKey> key = random_key(rng);
+    expect_ok(ctx, key, "random_key succeeds for PureSign++ property coverage");
+    if (!key.has_value()) {
+        return;
+    }
+
+    Result<purify::puresign_plusplus::PublicKey> public_key =
+        purify::puresign_plusplus::derive_public_key(key->secret);
+    expect_ok(ctx, public_key, "PureSign++ derive_public_key succeeds for randomized coverage");
+    if (!public_key.has_value()) {
+        return;
+    }
+
+    Bytes message = random_bytes(rng, 1, 40);
+    Result<purify::puresign_plusplus::Signature> direct =
+        purify::puresign_plusplus::sign_message(key->secret, message);
+    expect_ok(ctx, direct, "PureSign++ sign_message succeeds for randomized coverage");
+
+    Result<purify::puresign_plusplus::ProvenSignature> proven =
+        purify::puresign_plusplus::sign_message_with_proof(key->secret, message);
+    expect_ok(ctx, proven, "PureSign++ sign_message_with_proof succeeds for randomized coverage");
+    if (!direct.has_value() || !proven.has_value()) {
+        return;
+    }
+
+    ctx.expect(direct->bytes == proven->signature.bytes,
+               "PureSign++ sign_message_with_proof preserves deterministic BIP340 bytes");
+
+    Result<bool> verified =
+        purify::puresign_plusplus::verify_message_signature_with_proof(*public_key, message, *proven);
+    expect_ok(ctx, verified, "PureSign++ verify_message_signature_with_proof succeeds");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "randomized PureSign++ message signature with proof verifies");
+    }
+
+    Result<bool> wrong_message =
+        purify::puresign_plusplus::verify_message_signature_with_proof(*public_key, random_bytes(rng, 1, 24), *proven);
+    expect_ok(ctx, wrong_message, "PureSign++ verify_message_signature_with_proof runs on a wrong message");
+    if (wrong_message.has_value()) {
+        ctx.expect(!*wrong_message, "PureSign++ message proof rejects a mismatched message");
+    }
+
+    ctx.expect(proven_signature_plusplus_rejected_after_tamper(*public_key, message, *proven),
+               "tampering a PureSign++ ProvenSignature is rejected");
+}
+
 }  // namespace
 
 int main() {
@@ -434,6 +502,7 @@ int main() {
     test_template_split_eval_differential(ctx);
     test_assume_valid_proof_matches_validated_proof(ctx);
     test_random_puresign_proven_signature_properties(ctx);
+    test_random_puresign_plusplus_proven_signature_properties(ctx);
 
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " property test(s) failed\n";

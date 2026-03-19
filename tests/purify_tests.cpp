@@ -1010,6 +1010,154 @@ void test_puresign_binding_checks(TestContext& ctx) {
     }
 }
 
+void test_puresign_plusplus_message_signing(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for PureSign++ message signing");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+
+    Result<purify::puresign_plusplus::PublicKey> public_key = purify::puresign_plusplus::derive_public_key(*secret);
+    expect_ok(ctx, public_key, "PureSign++ derive_public_key succeeds");
+    Result<purify::puresign_plusplus::MessageProofCache> proof_cache =
+        purify::puresign_plusplus::build_message_proof_cache(message);
+    expect_ok(ctx, proof_cache, "PureSign++ build_message_proof_cache succeeds");
+    Result<purify::puresign_plusplus::PreparedNonceWithProof> prepared_with_proof =
+        purify::puresign_plusplus::prepare_message_nonce_with_proof(*secret, message);
+    expect_ok(ctx, prepared_with_proof, "PureSign++ prepare_message_nonce_with_proof succeeds");
+    if (!public_key.has_value() || !proof_cache.has_value() || !prepared_with_proof.has_value()) {
+        return;
+    }
+
+    Result<bool> nonce_proof_ok =
+        purify::puresign_plusplus::verify_message_nonce_proof(*public_key, message, prepared_with_proof->proof());
+    expect_ok(ctx, nonce_proof_ok, "PureSign++ verify_message_nonce_proof succeeds");
+    if (nonce_proof_ok.has_value()) {
+        ctx.expect(*nonce_proof_ok, "PureSign++ generated nonce proof verifies");
+    }
+    Result<bool> wrong_nonce_proof =
+        purify::puresign_plusplus::verify_message_nonce_proof(*public_key, Bytes{0x89}, prepared_with_proof->proof());
+    expect_ok(ctx, wrong_nonce_proof, "PureSign++ verify_message_nonce_proof runs on a wrong message");
+    if (wrong_nonce_proof.has_value()) {
+        ctx.expect(!*wrong_nonce_proof, "PureSign++ nonce proof rejects a different message");
+    }
+
+    Result<purify::puresign_plusplus::PreparedNonceWithProof> cached_prepared_with_proof =
+        purify::puresign_plusplus::prepare_message_nonce_with_proof(*secret, *proof_cache);
+    expect_ok(ctx, cached_prepared_with_proof,
+              "PureSign++ prepare_message_nonce_with_proof succeeds with a cached template");
+
+    Result<purify::puresign_plusplus::Signature> direct =
+        purify::puresign_plusplus::sign_message(*secret, message);
+    expect_ok(ctx, direct, "PureSign++ sign_message succeeds");
+    Result<purify::puresign_plusplus::ProvenSignature> proven =
+        purify::puresign_plusplus::sign_message_with_prepared_proof(*secret, message, std::move(*prepared_with_proof));
+    expect_ok(ctx, proven, "PureSign++ sign_message_with_prepared_proof succeeds");
+    Result<purify::puresign_plusplus::ProvenSignature> cached_proven =
+        purify::puresign_plusplus::sign_message_with_proof(*secret, *proof_cache);
+    expect_ok(ctx, cached_proven, "PureSign++ sign_message_with_proof succeeds with a cached template");
+    if (!direct.has_value() || !proven.has_value() || !cached_proven.has_value()) {
+        return;
+    }
+
+    Result<bool> proven_ok =
+        purify::puresign_plusplus::verify_message_signature_with_proof(*public_key, message, *proven);
+    expect_ok(ctx, proven_ok, "PureSign++ verify_message_signature_with_proof succeeds");
+    if (proven_ok.has_value()) {
+        ctx.expect(*proven_ok, "PureSign++ message signature with proof verifies");
+    }
+    Result<bool> cached_proven_ok =
+        purify::puresign_plusplus::verify_message_signature_with_proof(*proof_cache, *public_key, *cached_proven);
+    expect_ok(ctx, cached_proven_ok,
+              "PureSign++ verify_message_signature_with_proof succeeds with a cached template");
+    if (cached_proven_ok.has_value()) {
+        ctx.expect(*cached_proven_ok, "PureSign++ cached message signature with proof verifies");
+    }
+
+    ctx.expect(direct->bytes == proven->signature.bytes,
+               "PureSign++ proof signing preserves the deterministic BIP340 signature bytes");
+
+    Result<Bytes> nonce_proof_bytes = proven->nonce_proof.serialize();
+    expect_ok(ctx, nonce_proof_bytes, "PureSign++ NonceProof serializes");
+    if (nonce_proof_bytes.has_value()) {
+        Result<purify::puresign_plusplus::NonceProof> parsed_nonce_proof =
+            purify::puresign_plusplus::NonceProof::deserialize(*nonce_proof_bytes);
+        expect_ok(ctx, parsed_nonce_proof, "PureSign++ NonceProof round-trips");
+    }
+
+    Result<Bytes> proven_bytes = proven->serialize();
+    expect_ok(ctx, proven_bytes, "PureSign++ ProvenSignature serializes");
+    if (proven_bytes.has_value()) {
+        Result<purify::puresign_plusplus::ProvenSignature> parsed_proven =
+            purify::puresign_plusplus::ProvenSignature::deserialize(*proven_bytes);
+        expect_ok(ctx, parsed_proven, "PureSign++ ProvenSignature round-trips");
+        if (parsed_proven.has_value()) {
+            Result<bool> parsed_ok =
+                purify::puresign_plusplus::verify_message_signature_with_proof(*public_key, message, *parsed_proven);
+            expect_ok(ctx, parsed_ok, "PureSign++ parsed message signature with proof verifies");
+            if (parsed_ok.has_value()) {
+                ctx.expect(*parsed_ok, "PureSign++ parsed message signature with proof is accepted");
+            }
+        }
+    }
+}
+
+void test_puresign_plusplus_topic_signing(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for PureSign++ topic signing");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+    Bytes topic = purify::bytes_from_ascii("session-pp");
+
+    Result<purify::puresign_plusplus::PublicKey> public_key = purify::puresign_plusplus::derive_public_key(*secret);
+    expect_ok(ctx, public_key, "PureSign++ derive_public_key succeeds for topic signing");
+    Result<purify::puresign_plusplus::TopicProofCache> proof_cache =
+        purify::puresign_plusplus::build_topic_proof_cache(topic);
+    expect_ok(ctx, proof_cache, "PureSign++ build_topic_proof_cache succeeds");
+    Result<purify::puresign_plusplus::PreparedNonceWithProof> prepared_with_proof =
+        purify::puresign_plusplus::prepare_topic_nonce_with_proof(*secret, topic);
+    expect_ok(ctx, prepared_with_proof, "PureSign++ prepare_topic_nonce_with_proof succeeds");
+    if (!public_key.has_value() || !proof_cache.has_value() || !prepared_with_proof.has_value()) {
+        return;
+    }
+
+    Result<bool> nonce_proof_ok =
+        purify::puresign_plusplus::verify_topic_nonce_proof(*public_key, topic, prepared_with_proof->proof());
+    expect_ok(ctx, nonce_proof_ok, "PureSign++ verify_topic_nonce_proof succeeds");
+    if (nonce_proof_ok.has_value()) {
+        ctx.expect(*nonce_proof_ok, "PureSign++ generated topic nonce proof verifies");
+    }
+
+    Result<purify::puresign_plusplus::ProvenSignature> proven =
+        purify::puresign_plusplus::sign_with_prepared_topic_proof(*secret, message, std::move(*prepared_with_proof));
+    expect_ok(ctx, proven, "PureSign++ sign_with_prepared_topic_proof succeeds");
+    Result<purify::puresign_plusplus::ProvenSignature> cached_proven =
+        purify::puresign_plusplus::sign_with_topic_proof(*secret, message, *proof_cache);
+    expect_ok(ctx, cached_proven, "PureSign++ sign_with_topic_proof succeeds with a cached template");
+    if (!proven.has_value() || !cached_proven.has_value()) {
+        return;
+    }
+
+    Result<bool> proven_ok =
+        purify::puresign_plusplus::verify_topic_signature_with_proof(*public_key, message, topic, *proven);
+    expect_ok(ctx, proven_ok, "PureSign++ verify_topic_signature_with_proof succeeds");
+    if (proven_ok.has_value()) {
+        ctx.expect(*proven_ok, "PureSign++ topic signature with proof verifies");
+    }
+    Result<bool> cached_proven_ok =
+        purify::puresign_plusplus::verify_topic_signature_with_proof(*proof_cache, *public_key, message, *cached_proven);
+    expect_ok(ctx, cached_proven_ok,
+              "PureSign++ verify_topic_signature_with_proof succeeds with a cached template");
+    if (cached_proven_ok.has_value()) {
+        ctx.expect(*cached_proven_ok, "PureSign++ cached topic signature with proof verifies");
+    }
+}
+
 }  // namespace
 
 void run_purify_tests(TestContext& ctx) {
@@ -1032,4 +1180,6 @@ void run_purify_tests(TestContext& ctx) {
     test_puresign_message_signing(ctx);
     test_puresign_topic_signing(ctx);
     test_puresign_binding_checks(ctx);
+    test_puresign_plusplus_message_signing(ctx);
+    test_puresign_plusplus_topic_signing(ctx);
 }

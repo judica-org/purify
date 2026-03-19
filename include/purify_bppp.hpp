@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "purify.hpp"
+#include "purify/api.hpp"
 
 namespace purify::bppp {
 
@@ -119,6 +119,7 @@ struct ExperimentalCircuitNormArgProof {
 
 /** @brief Experimental masked circuit proof that hides the reduced witness before the final BPPP argument. */
 struct ExperimentalCircuitZkNormArgProof {
+    /** @brief Witness-only outer A commitment; verifiers re-anchor it to the public statement. */
     PointBytes a_commitment{};
     PointBytes s_commitment{};
     ScalarBytes t2{};
@@ -205,6 +206,32 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
 Result<bool> verify_experimental_circuit_zk_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitZkNormArgProof& proof,
+    std::span<const unsigned char> statement_binding = {});
+
+/**
+ * @brief Produces an experimental masked circuit proof bound to explicit public commitment points.
+ *
+ * This variant removes the circuit commitment scalars from the hidden reduced witness and instead
+ * binds them through caller-supplied compressed secp256k1 points. Each point must equal the exact
+ * public commitment `assignment.commitments[i] * G` for the matching circuit commitment wire.
+ */
+Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg_with_public_commitments(
+    const NativeBulletproofCircuit& circuit,
+    const BulletproofAssignmentData& assignment,
+    const ScalarBytes& nonce,
+    std::span<const PointBytes> public_commitments,
+    std::span<const unsigned char> statement_binding = {});
+
+/**
+ * @brief Verifies an experimental masked circuit proof against explicit public commitment points.
+ *
+ * The verifier reconstructs the anchored outer commitment from `proof.a_commitment`, the folded
+ * circuit target, and the supplied public commitment points before checking the inner BPPP proof.
+ */
+Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
+    const NativeBulletproofCircuit& circuit,
+    const ExperimentalCircuitZkNormArgProof& proof,
+    std::span<const PointBytes> public_commitments,
     std::span<const unsigned char> statement_binding = {});
 
 /** @brief Purify witness bundle together with a Pedersen commitment to the output. */

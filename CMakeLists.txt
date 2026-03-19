@@ -105,6 +105,7 @@ add_library(purify
     src/legacy_bulletproof/scratch_frames.c
     src/purify_numeric.cpp
     src/purify_puresign.cpp
+    src/purify_puresign_plusplus.cpp
     src/purify_bppp.cpp
     src/purify_bppp_bridge.c
 )
@@ -184,6 +185,7 @@ if(PURIFY_BUILD_BENCH)
         src/legacy_bulletproof/scratch_frames.c
         src/purify_numeric.cpp
         src/purify_puresign.cpp
+        src/purify_puresign_plusplus.cpp
         src/purify_bppp.cpp
         src/purify_bppp_bridge.c
     )

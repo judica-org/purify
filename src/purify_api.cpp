@@ -210,29 +210,45 @@ Result<std::string> verifier(const Bytes& message, const UInt512& pubkey) {
 }
 
 Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UInt512& pubkey) {
+    Result<NativeBulletproofCircuitTemplate> template_circuit = verifier_circuit_template(message);
+    if (!template_circuit.has_value()) {
+        return unexpected_error(template_circuit.error(), "verifier_circuit:verifier_circuit_template");
+    }
+    return template_circuit->instantiate(pubkey);
+}
+
+Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message) {
     Result<JacobianPoint> m1 = hash_to_curve(tagged_message("Eval/1/", message), curve1());
     if (!m1.has_value()) {
-        return unexpected_error(m1.error(), "verifier_circuit:hash_to_curve_m1");
+        return unexpected_error(m1.error(), "verifier_circuit_template:hash_to_curve_m1");
     }
     Result<JacobianPoint> m2 = hash_to_curve(tagged_message("Eval/2/", message), curve2());
     if (!m2.has_value()) {
-        return unexpected_error(m2.error(), "verifier_circuit:hash_to_curve_m2");
+        return unexpected_error(m2.error(), "verifier_circuit_template:hash_to_curve_m2");
     }
     Transcript transcript;
     Result<CircuitMainResult> result = circuit_main(transcript, *m1, *m2);
     if (!result.has_value()) {
-        return unexpected_error(result.error(), "verifier_circuit:circuit_main");
+        return unexpected_error(result.error(), "verifier_circuit_template:circuit_main");
     }
     BulletproofTranscript bp;
     Status transcript_status = bp.from_transcript(transcript, result->n_bits);
     if (!transcript_status.has_value()) {
-        return unexpected_error(transcript_status.error(), "verifier_circuit:from_transcript");
+        return unexpected_error(transcript_status.error(), "verifier_circuit_template:from_transcript");
     }
-    Status pubkey_status = bp.add_pubkey_and_out(pubkey, result->p1x, result->p2x, result->out);
-    if (!pubkey_status.has_value()) {
-        return unexpected_error(pubkey_status.error(), "verifier_circuit:add_pubkey_and_out");
-    }
-    return bp.native_circuit();
+    Expr p1x = result->p1x;
+    Expr p2x = result->p2x;
+    Expr out = result->out;
+    bp.replace_expr_v_with_bp_var(p1x);
+    bp.replace_expr_v_with_bp_var(p2x);
+    bp.replace_expr_v_with_bp_var(out);
+
+    NativeBulletproofCircuitTemplate template_circuit;
+    template_circuit.base_circuit_ = bp.native_circuit();
+    template_circuit.p1x_ = std::move(p1x);
+    template_circuit.p2x_ = std::move(p2x);
+    template_circuit.out_ = std::move(out);
+    return template_circuit;
 }
 
 Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const UInt512& secret) {

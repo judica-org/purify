@@ -418,6 +418,9 @@ void test_puresign_message_signing(TestContext& ctx) {
 
     Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(*secret);
     expect_ok(ctx, public_key, "derive_public_key succeeds");
+    Result<purify::puresign::MessageProofCache> proof_cache =
+        purify::puresign::build_message_proof_cache(message);
+    expect_ok(ctx, proof_cache, "build_message_proof_cache succeeds");
     Result<purify::puresign::PreparedNonceWithProof> prepared_with_proof =
         purify::puresign::prepare_message_nonce_with_proof(*secret, message);
     expect_ok(ctx, prepared_with_proof, "prepare_message_nonce_with_proof succeeds");
@@ -425,7 +428,8 @@ void test_puresign_message_signing(TestContext& ctx) {
     expect_ok(ctx, prepared_a, "prepare_message_nonce succeeds");
     Result<purify::puresign::PreparedNonce> prepared_b = purify::puresign::prepare_message_nonce(*secret, message);
     expect_ok(ctx, prepared_b, "prepare_message_nonce is deterministic");
-    if (!public_key.has_value() || !prepared_with_proof.has_value() || !prepared_a.has_value() || !prepared_b.has_value()) {
+    if (!public_key.has_value() || !proof_cache.has_value()
+        || !prepared_with_proof.has_value() || !prepared_a.has_value() || !prepared_b.has_value()) {
         return;
     }
 
@@ -440,6 +444,20 @@ void test_puresign_message_signing(TestContext& ctx) {
     expect_ok(ctx, wrong_nonce_proof, "verify_message_nonce_proof runs on a wrong message");
     if (wrong_nonce_proof.has_value()) {
         ctx.expect(!*wrong_nonce_proof, "message-bound nonce proof rejects a different message");
+    }
+
+    Result<purify::puresign::PreparedNonceWithProof> cached_prepared_with_proof =
+        purify::puresign::prepare_message_nonce_with_proof(*secret, *proof_cache);
+    expect_ok(ctx, cached_prepared_with_proof, "prepare_message_nonce_with_proof succeeds with a cached template");
+    if (cached_prepared_with_proof.has_value()) {
+        ctx.expect(cached_prepared_with_proof->public_nonce().xonly == prepared_with_proof->public_nonce().xonly,
+                   "cached message proof preparation preserves the deterministic public nonce");
+        Result<bool> cached_nonce_proof_ok =
+            purify::puresign::verify_message_nonce_proof(*proof_cache, *public_key, cached_prepared_with_proof->proof());
+        expect_ok(ctx, cached_nonce_proof_ok, "verify_message_nonce_proof succeeds with a cached template");
+        if (cached_nonce_proof_ok.has_value()) {
+            ctx.expect(*cached_nonce_proof_ok, "cached message-bound nonce proof verifies");
+        }
     }
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
@@ -459,6 +477,9 @@ void test_puresign_message_signing(TestContext& ctx) {
     Result<purify::puresign::ProvenSignature> proven =
         purify::puresign::sign_message_with_prepared_proof(*secret, message, std::move(*prepared_with_proof));
     expect_ok(ctx, proven, "sign_message_with_prepared_proof succeeds");
+    Result<purify::puresign::ProvenSignature> cached_proven =
+        purify::puresign::sign_message_with_proof(*secret, *proof_cache);
+    expect_ok(ctx, cached_proven, "sign_message_with_proof succeeds with a cached template");
     if (proven.has_value()) {
         Result<bool> proven_ok =
             purify::puresign::verify_message_signature_with_proof(*public_key, message, *proven);
@@ -497,6 +518,14 @@ void test_puresign_message_signing(TestContext& ctx) {
                     ctx.expect(*parsed_ok, "parsed message signature with proof is accepted");
                 }
             }
+        }
+    }
+    if (cached_proven.has_value()) {
+        Result<bool> cached_proven_ok =
+            purify::puresign::verify_message_signature_with_proof(*proof_cache, *public_key, *cached_proven);
+        expect_ok(ctx, cached_proven_ok, "verify_message_signature_with_proof succeeds with a cached template");
+        if (cached_proven_ok.has_value()) {
+            ctx.expect(*cached_proven_ok, "cached message signature with proof verifies");
         }
     }
 
@@ -551,6 +580,9 @@ void test_puresign_topic_signing(TestContext& ctx) {
 
     Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(*secret);
     expect_ok(ctx, public_key, "derive_public_key succeeds for topic signing");
+    Result<purify::puresign::TopicProofCache> proof_cache =
+        purify::puresign::build_topic_proof_cache(topic);
+    expect_ok(ctx, proof_cache, "build_topic_proof_cache succeeds");
     Result<purify::puresign::PreparedNonceWithProof> prepared_with_proof =
         purify::puresign::prepare_topic_nonce_with_proof(*secret, topic);
     expect_ok(ctx, prepared_with_proof, "prepare_topic_nonce_with_proof succeeds");
@@ -558,7 +590,8 @@ void test_puresign_topic_signing(TestContext& ctx) {
     expect_ok(ctx, prepared_a, "prepare_topic_nonce succeeds");
     Result<purify::puresign::PreparedNonce> prepared_b = purify::puresign::prepare_topic_nonce(*secret, topic);
     expect_ok(ctx, prepared_b, "prepare_topic_nonce is deterministic");
-    if (!public_key.has_value() || !prepared_with_proof.has_value() || !prepared_a.has_value() || !prepared_b.has_value()) {
+    if (!public_key.has_value() || !proof_cache.has_value()
+        || !prepared_with_proof.has_value() || !prepared_a.has_value() || !prepared_b.has_value()) {
         return;
     }
 
@@ -567,6 +600,20 @@ void test_puresign_topic_signing(TestContext& ctx) {
     expect_ok(ctx, nonce_proof_ok, "verify_topic_nonce_proof succeeds on the generated proof");
     if (nonce_proof_ok.has_value()) {
         ctx.expect(*nonce_proof_ok, "generated topic-bound nonce proof verifies");
+    }
+
+    Result<purify::puresign::PreparedNonceWithProof> cached_prepared_with_proof =
+        purify::puresign::prepare_topic_nonce_with_proof(*secret, *proof_cache);
+    expect_ok(ctx, cached_prepared_with_proof, "prepare_topic_nonce_with_proof succeeds with a cached template");
+    if (cached_prepared_with_proof.has_value()) {
+        ctx.expect(cached_prepared_with_proof->public_nonce().xonly == prepared_with_proof->public_nonce().xonly,
+                   "cached topic proof preparation preserves the deterministic public nonce");
+        Result<bool> cached_nonce_proof_ok =
+            purify::puresign::verify_topic_nonce_proof(*proof_cache, *public_key, cached_prepared_with_proof->proof());
+        expect_ok(ctx, cached_nonce_proof_ok, "verify_topic_nonce_proof succeeds with a cached template");
+        if (cached_nonce_proof_ok.has_value()) {
+            ctx.expect(*cached_nonce_proof_ok, "cached topic-bound nonce proof verifies");
+        }
     }
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
@@ -586,12 +633,23 @@ void test_puresign_topic_signing(TestContext& ctx) {
     Result<purify::puresign::ProvenSignature> proven =
         purify::puresign::sign_with_prepared_topic_proof(*secret, message, std::move(*prepared_with_proof));
     expect_ok(ctx, proven, "sign_with_prepared_topic_proof succeeds");
+    Result<purify::puresign::ProvenSignature> cached_proven =
+        purify::puresign::sign_with_topic_proof(*secret, message, *proof_cache);
+    expect_ok(ctx, cached_proven, "sign_with_topic_proof succeeds with a cached template");
     if (proven.has_value()) {
         Result<bool> proven_ok =
             purify::puresign::verify_topic_signature_with_proof(*public_key, message, topic, *proven);
         expect_ok(ctx, proven_ok, "verify_topic_signature_with_proof succeeds");
         if (proven_ok.has_value()) {
             ctx.expect(*proven_ok, "topic-bound signature with proof verifies");
+        }
+    }
+    if (cached_proven.has_value()) {
+        Result<bool> cached_proven_ok =
+            purify::puresign::verify_topic_signature_with_proof(*proof_cache, *public_key, message, *cached_proven);
+        expect_ok(ctx, cached_proven_ok, "verify_topic_signature_with_proof succeeds with a cached template");
+        if (cached_proven_ok.has_value()) {
+            ctx.expect(*cached_proven_ok, "cached topic-bound signature with proof verifies");
         }
     }
 

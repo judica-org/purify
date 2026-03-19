@@ -40,6 +40,34 @@ Status validate_puresign_field_alignment() {
     return {};
 }
 
+Status validate_public_key_bundle(const PublicKey& public_key) {
+    Status pubkey_status = validate_public_key(public_key.purify_pubkey);
+    if (!pubkey_status.has_value()) {
+        return unexpected_error(pubkey_status.error(), "puresign:validate_public_key_bundle:purify_pubkey");
+    }
+    if (purify_bip340_validate_xonly_pubkey(public_key.bip340_pubkey.data()) == 0) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "puresign:validate_public_key_bundle:bip340_pubkey");
+    }
+    return {};
+}
+
+bool is_power_of_two_size(std::size_t value) {
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
+Status validate_proof_cache_circuit(const NativeBulletproofCircuit& circuit, const char* context) {
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, context);
+    }
+    if (!is_power_of_two_size(circuit.n_gates)) {
+        return unexpected_error(ErrorCode::InvalidDimensions, context);
+    }
+    if (circuit.n_commitments != 1) {
+        return unexpected_error(ErrorCode::InvalidDimensions, context);
+    }
+    return {};
+}
+
 Bytes copy_bytes(std::span<const unsigned char> input) {
     return Bytes(input.begin(), input.end());
 }
@@ -111,6 +139,23 @@ Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof) {
     return xonly == nonce_proof.nonce.xonly;
 }
 
+Status validate_message_proof_cache(const MessageProofCache& cache) {
+    if (cache.eval_input != tagged_eval_input(kMessageNonceTag, cache.message)) {
+        return unexpected_error(ErrorCode::BindingMismatch, "validate_message_proof_cache:eval_input");
+    }
+    return {};
+}
+
+Status validate_topic_proof_cache(const TopicProofCache& cache) {
+    if (cache.topic.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput, "validate_topic_proof_cache:empty_topic");
+    }
+    if (cache.eval_input != tagged_eval_input(kTopicNonceTag, cache.topic)) {
+        return unexpected_error(ErrorCode::BindingMismatch, "validate_topic_proof_cache:eval_input");
+    }
+    return {};
+}
+
 struct DerivedNonceData {
     PreparedNonce::Scope scope;
     Scalar32 scalar{};
@@ -119,6 +164,45 @@ struct DerivedNonceData {
     XOnly32 binding_digest{};
     Bytes eval_input;
 };
+
+Result<NonceProof> build_nonce_proof_from_template(const UInt512& secret, const DerivedNonceData& nonce_data,
+                                                   const NativeBulletproofCircuitTemplate& circuit_template) {
+    Result<BulletproofWitnessData> witness = prove_assignment_data(nonce_data.eval_input, secret);
+    if (!witness.has_value()) {
+        return unexpected_error(witness.error(), "build_nonce_proof_from_template:prove_assignment_data");
+    }
+    Result<NativeBulletproofCircuit> circuit = circuit_template.instantiate(witness->public_key);
+    if (!circuit.has_value()) {
+        return unexpected_error(circuit.error(), "build_nonce_proof_from_template:instantiate");
+    }
+    Status circuit_status = validate_proof_cache_circuit(*circuit, "build_nonce_proof_from_template:circuit_shape");
+    if (!circuit_status.has_value()) {
+        return unexpected_error(circuit_status.error(), "build_nonce_proof_from_template:validate_proof_cache_circuit");
+    }
+    if (!circuit->evaluate(witness->assignment)) {
+        return unexpected_error(ErrorCode::BindingMismatch, "build_nonce_proof_from_template:circuit");
+    }
+
+    Scalar32 proof_nonce = derive_proof_nonce_seed(secret, nonce_data.scope, nonce_data.eval_input);
+    Bytes statement_binding = proof_statement_binding(nonce_data.scope);
+    Result<ExperimentalBulletproofProof> proof =
+        prove_experimental_circuit(*circuit, witness->assignment, proof_nonce, bppp::base_generator(), statement_binding);
+    if (!proof.has_value()) {
+        return unexpected_error(proof.error(), "build_nonce_proof_from_template:prove_experimental_circuit");
+    }
+
+    NonceProof out{};
+    out.nonce = nonce_data.nonce;
+    out.proof = std::move(*proof);
+    Result<bool> match = nonce_proof_matches_nonce(out);
+    if (!match.has_value()) {
+        return unexpected_error(match.error(), "build_nonce_proof_from_template:nonce_proof_matches_nonce");
+    }
+    if (!*match) {
+        return unexpected_error(ErrorCode::InternalMismatch, "build_nonce_proof_from_template:nonce_mismatch");
+    }
+    return out;
+}
 
 Result<DerivedNonceData> derive_nonce_data(const UInt512& secret, PreparedNonce::Scope scope,
                                            std::span<const unsigned char> input) {
@@ -161,34 +245,11 @@ Result<DerivedNonceData> derive_nonce_data(const UInt512& secret, PreparedNonce:
 }
 
 Result<NonceProof> build_nonce_proof(const UInt512& secret, const DerivedNonceData& nonce_data) {
-    Result<BulletproofWitnessData> witness = prove_assignment_data(nonce_data.eval_input, secret);
-    if (!witness.has_value()) {
-        return unexpected_error(witness.error(), "build_nonce_proof:prove_assignment_data");
+    Result<NativeBulletproofCircuitTemplate> circuit_template = verifier_circuit_template(nonce_data.eval_input);
+    if (!circuit_template.has_value()) {
+        return unexpected_error(circuit_template.error(), "build_nonce_proof:verifier_circuit_template");
     }
-    Result<NativeBulletproofCircuit> circuit = verifier_circuit(nonce_data.eval_input, witness->public_key);
-    if (!circuit.has_value()) {
-        return unexpected_error(circuit.error(), "build_nonce_proof:verifier_circuit");
-    }
-
-    Scalar32 proof_nonce = derive_proof_nonce_seed(secret, nonce_data.scope, nonce_data.eval_input);
-    Bytes statement_binding = proof_statement_binding(nonce_data.scope);
-    Result<ExperimentalBulletproofProof> proof =
-        prove_experimental_circuit(*circuit, witness->assignment, proof_nonce, bppp::base_generator(), statement_binding);
-    if (!proof.has_value()) {
-        return unexpected_error(proof.error(), "build_nonce_proof:prove_experimental_circuit");
-    }
-
-    NonceProof out{};
-    out.nonce = nonce_data.nonce;
-    out.proof = std::move(*proof);
-    Result<bool> match = nonce_proof_matches_nonce(out);
-    if (!match.has_value()) {
-        return unexpected_error(match.error(), "build_nonce_proof:nonce_proof_matches_nonce");
-    }
-    if (!*match) {
-        return unexpected_error(ErrorCode::InternalMismatch, "build_nonce_proof:nonce_mismatch");
-    }
-    return out;
+    return build_nonce_proof_from_template(secret, nonce_data, *circuit_template);
 }
 
 Result<DerivedNonceData> prepare_nonce_data_impl(const UInt512& secret, PreparedNonce::Scope scope,
@@ -202,6 +263,28 @@ Result<DerivedNonceData> prepare_nonce_data_impl(const UInt512& secret, Prepared
         return unexpected_error(nonce_data.error(), "prepare_nonce_data_impl:derive_nonce_data");
     }
     return nonce_data;
+}
+
+Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key, const NativeBulletproofCircuit& circuit,
+                                             const NonceProof& nonce_proof, PreparedNonce::Scope scope,
+                                             const char* context) {
+    Status key_status = validate_public_key_bundle(public_key);
+    if (!key_status.has_value()) {
+        return unexpected_error(key_status.error(), context);
+    }
+    Status circuit_status = validate_proof_cache_circuit(circuit, context);
+    if (!circuit_status.has_value()) {
+        return unexpected_error(circuit_status.error(), context);
+    }
+    Result<bool> match = nonce_proof_matches_nonce(nonce_proof);
+    if (!match.has_value()) {
+        return unexpected_error(match.error(), context);
+    }
+    if (!*match) {
+        return false;
+    }
+    Bytes statement_binding = proof_statement_binding(scope);
+    return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(), statement_binding);
 }
 
 }  // namespace
@@ -412,6 +495,35 @@ Result<PublicKey> derive_public_key(const UInt512& secret) {
     return PublicKey{purify_key->public_key, bip340_key->xonly_pubkey};
 }
 
+Result<MessageProofCache> build_message_proof_cache(std::span<const unsigned char> message) {
+    Bytes eval_input = tagged_eval_input(kMessageNonceTag, message);
+    Result<NativeBulletproofCircuitTemplate> circuit_template = verifier_circuit_template(eval_input);
+    if (!circuit_template.has_value()) {
+        return unexpected_error(circuit_template.error(), "build_message_proof_cache:verifier_circuit_template");
+    }
+    MessageProofCache cache{};
+    cache.message = copy_bytes(message);
+    cache.eval_input = std::move(eval_input);
+    cache.circuit_template = std::move(*circuit_template);
+    return cache;
+}
+
+Result<TopicProofCache> build_topic_proof_cache(std::span<const unsigned char> topic) {
+    if (topic.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput, "build_topic_proof_cache:empty_topic");
+    }
+    Bytes eval_input = tagged_eval_input(kTopicNonceTag, topic);
+    Result<NativeBulletproofCircuitTemplate> circuit_template = verifier_circuit_template(eval_input);
+    if (!circuit_template.has_value()) {
+        return unexpected_error(circuit_template.error(), "build_topic_proof_cache:verifier_circuit_template");
+    }
+    TopicProofCache cache{};
+    cache.topic = copy_bytes(topic);
+    cache.eval_input = std::move(eval_input);
+    cache.circuit_template = std::move(*circuit_template);
+    return cache;
+}
+
 Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<const unsigned char> message) {
     Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message);
     if (!nonce_data.has_value()) {
@@ -435,6 +547,24 @@ Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& s
     return PreparedNonceWithProof(std::move(prepared), std::move(*proof));
 }
 
+Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret, const MessageProofCache& cache) {
+    Status cache_status = validate_message_proof_cache(cache);
+    if (!cache_status.has_value()) {
+        return unexpected_error(cache_status.error(), "prepare_message_nonce_with_proof:validate_message_proof_cache");
+    }
+    Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, cache.message);
+    if (!nonce_data.has_value()) {
+        return unexpected_error(nonce_data.error(), "prepare_message_nonce_with_proof:prepare_nonce_data_impl");
+    }
+    PreparedNonce prepared(PreparedNonce::Scope::Message, nonce_data->scalar, nonce_data->nonce,
+                           nonce_data->signer_pubkey, nonce_data->binding_digest);
+    Result<NonceProof> proof = build_nonce_proof_from_template(secret, *nonce_data, cache.circuit_template);
+    if (!proof.has_value()) {
+        return unexpected_error(proof.error(), "prepare_message_nonce_with_proof:build_nonce_proof_from_template");
+    }
+    return PreparedNonceWithProof(std::move(prepared), std::move(*proof));
+}
+
 Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const unsigned char> topic) {
     Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic);
     if (!nonce_data.has_value()) {
@@ -454,6 +584,24 @@ Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& sec
     Result<NonceProof> proof = build_nonce_proof(secret, *nonce_data);
     if (!proof.has_value()) {
         return unexpected_error(proof.error(), "prepare_topic_nonce_with_proof:build_nonce_proof");
+    }
+    return PreparedNonceWithProof(std::move(prepared), std::move(*proof));
+}
+
+Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret, const TopicProofCache& cache) {
+    Status cache_status = validate_topic_proof_cache(cache);
+    if (!cache_status.has_value()) {
+        return unexpected_error(cache_status.error(), "prepare_topic_nonce_with_proof:validate_topic_proof_cache");
+    }
+    Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, cache.topic);
+    if (!nonce_data.has_value()) {
+        return unexpected_error(nonce_data.error(), "prepare_topic_nonce_with_proof:prepare_nonce_data_impl");
+    }
+    PreparedNonce prepared(PreparedNonce::Scope::Topic, nonce_data->scalar, nonce_data->nonce,
+                           nonce_data->signer_pubkey, nonce_data->binding_digest);
+    Result<NonceProof> proof = build_nonce_proof_from_template(secret, *nonce_data, cache.circuit_template);
+    if (!proof.has_value()) {
+        return unexpected_error(proof.error(), "prepare_topic_nonce_with_proof:build_nonce_proof_from_template");
     }
     return PreparedNonceWithProof(std::move(prepared), std::move(*proof));
 }
@@ -566,11 +714,28 @@ Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span
     return sign_message_with_prepared_proof(secret, message, std::move(*prepared));
 }
 
+Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, const MessageProofCache& cache) {
+    Result<PreparedNonceWithProof> prepared = prepare_message_nonce_with_proof(secret, cache);
+    if (!prepared.has_value()) {
+        return unexpected_error(prepared.error(), "sign_message_with_proof:prepare_message_nonce_with_proof_cache");
+    }
+    return sign_message_with_prepared_proof(secret, cache.message, std::move(*prepared));
+}
+
 Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
                                               std::span<const unsigned char> topic) {
     Result<PreparedNonceWithProof> prepared = prepare_topic_nonce_with_proof(secret, topic);
     if (!prepared.has_value()) {
         return unexpected_error(prepared.error(), "sign_with_topic_proof:prepare_topic_nonce_with_proof");
+    }
+    return sign_with_prepared_topic_proof(secret, message, std::move(*prepared));
+}
+
+Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                              const TopicProofCache& cache) {
+    Result<PreparedNonceWithProof> prepared = prepare_topic_nonce_with_proof(secret, cache);
+    if (!prepared.has_value()) {
+        return unexpected_error(prepared.error(), "sign_with_topic_proof:prepare_topic_nonce_with_proof_cache");
     }
     return sign_with_prepared_topic_proof(secret, message, std::move(*prepared));
 }
@@ -593,25 +758,27 @@ Result<bool> verify_signature(const PublicKey& public_key, std::span<const unsig
 
 Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> message,
                                         const NonceProof& nonce_proof) {
-    Status pubkey_status = validate_public_key(public_key.purify_pubkey);
-    if (!pubkey_status.has_value()) {
-        return unexpected_error(pubkey_status.error(), "verify_message_nonce_proof:validate_public_key");
-    }
-    Result<bool> match = nonce_proof_matches_nonce(nonce_proof);
-    if (!match.has_value()) {
-        return unexpected_error(match.error(), "verify_message_nonce_proof:nonce_proof_matches_nonce");
-    }
-    if (!*match) {
-        return false;
-    }
-
     Result<NativeBulletproofCircuit> circuit =
         verifier_circuit(tagged_eval_input(kMessageNonceTag, message), public_key.purify_pubkey);
     if (!circuit.has_value()) {
         return unexpected_error(circuit.error(), "verify_message_nonce_proof:verifier_circuit");
     }
-    Bytes statement_binding = proof_statement_binding(PreparedNonce::Scope::Message);
-    return verify_experimental_circuit(*circuit, nonce_proof.proof, bppp::base_generator(), statement_binding);
+    return verify_nonce_proof_with_circuit(public_key, *circuit, nonce_proof, PreparedNonce::Scope::Message,
+                                           "verify_message_nonce_proof:verify_nonce_proof_with_circuit");
+}
+
+Result<bool> verify_message_nonce_proof(const MessageProofCache& cache, const PublicKey& public_key,
+                                        const NonceProof& nonce_proof) {
+    Status cache_status = validate_message_proof_cache(cache);
+    if (!cache_status.has_value()) {
+        return unexpected_error(cache_status.error(), "verify_message_nonce_proof:validate_message_proof_cache");
+    }
+    Result<NativeBulletproofCircuit> circuit = cache.circuit_template.instantiate(public_key.purify_pubkey);
+    if (!circuit.has_value()) {
+        return unexpected_error(circuit.error(), "verify_message_nonce_proof:instantiate");
+    }
+    return verify_nonce_proof_with_circuit(public_key, *circuit, nonce_proof, PreparedNonce::Scope::Message,
+                                           "verify_message_nonce_proof:verify_nonce_proof_with_circuit");
 }
 
 Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> topic,
@@ -619,25 +786,27 @@ Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<con
     if (topic.empty()) {
         return unexpected_error(ErrorCode::EmptyInput, "verify_topic_nonce_proof:empty_topic");
     }
-    Status pubkey_status = validate_public_key(public_key.purify_pubkey);
-    if (!pubkey_status.has_value()) {
-        return unexpected_error(pubkey_status.error(), "verify_topic_nonce_proof:validate_public_key");
-    }
-    Result<bool> match = nonce_proof_matches_nonce(nonce_proof);
-    if (!match.has_value()) {
-        return unexpected_error(match.error(), "verify_topic_nonce_proof:nonce_proof_matches_nonce");
-    }
-    if (!*match) {
-        return false;
-    }
-
     Result<NativeBulletproofCircuit> circuit =
         verifier_circuit(tagged_eval_input(kTopicNonceTag, topic), public_key.purify_pubkey);
     if (!circuit.has_value()) {
         return unexpected_error(circuit.error(), "verify_topic_nonce_proof:verifier_circuit");
     }
-    Bytes statement_binding = proof_statement_binding(PreparedNonce::Scope::Topic);
-    return verify_experimental_circuit(*circuit, nonce_proof.proof, bppp::base_generator(), statement_binding);
+    return verify_nonce_proof_with_circuit(public_key, *circuit, nonce_proof, PreparedNonce::Scope::Topic,
+                                           "verify_topic_nonce_proof:verify_nonce_proof_with_circuit");
+}
+
+Result<bool> verify_topic_nonce_proof(const TopicProofCache& cache, const PublicKey& public_key,
+                                      const NonceProof& nonce_proof) {
+    Status cache_status = validate_topic_proof_cache(cache);
+    if (!cache_status.has_value()) {
+        return unexpected_error(cache_status.error(), "verify_topic_nonce_proof:validate_topic_proof_cache");
+    }
+    Result<NativeBulletproofCircuit> circuit = cache.circuit_template.instantiate(public_key.purify_pubkey);
+    if (!circuit.has_value()) {
+        return unexpected_error(circuit.error(), "verify_topic_nonce_proof:instantiate");
+    }
+    return verify_nonce_proof_with_circuit(public_key, *circuit, nonce_proof, PreparedNonce::Scope::Topic,
+                                           "verify_topic_nonce_proof:verify_nonce_proof_with_circuit");
 }
 
 Result<bool> verify_message_signature_with_proof(const PublicKey& public_key, std::span<const unsigned char> message,
@@ -655,6 +824,21 @@ Result<bool> verify_message_signature_with_proof(const PublicKey& public_key, st
     return verify_message_nonce_proof(public_key, message, signature.nonce_proof);
 }
 
+Result<bool> verify_message_signature_with_proof(const MessageProofCache& cache, const PublicKey& public_key,
+                                                 const ProvenSignature& signature) {
+    Result<bool> sig_ok = verify_signature(public_key, cache.message, signature.signature);
+    if (!sig_ok.has_value()) {
+        return unexpected_error(sig_ok.error(), "verify_message_signature_with_proof:verify_signature");
+    }
+    if (!*sig_ok) {
+        return false;
+    }
+    if (signature.signature.nonce().xonly != signature.nonce_proof.nonce.xonly) {
+        return false;
+    }
+    return verify_message_nonce_proof(cache, public_key, signature.nonce_proof);
+}
+
 Result<bool> verify_topic_signature_with_proof(const PublicKey& public_key, std::span<const unsigned char> message,
                                                std::span<const unsigned char> topic,
                                                const ProvenSignature& signature) {
@@ -669,6 +853,22 @@ Result<bool> verify_topic_signature_with_proof(const PublicKey& public_key, std:
         return false;
     }
     return verify_topic_nonce_proof(public_key, topic, signature.nonce_proof);
+}
+
+Result<bool> verify_topic_signature_with_proof(const TopicProofCache& cache, const PublicKey& public_key,
+                                               std::span<const unsigned char> message,
+                                               const ProvenSignature& signature) {
+    Result<bool> sig_ok = verify_signature(public_key, message, signature.signature);
+    if (!sig_ok.has_value()) {
+        return unexpected_error(sig_ok.error(), "verify_topic_signature_with_proof:verify_signature");
+    }
+    if (!*sig_ok) {
+        return false;
+    }
+    if (signature.signature.nonce().xonly != signature.nonce_proof.nonce.xonly) {
+        return false;
+    }
+    return verify_topic_nonce_proof(cache, public_key, signature.nonce_proof);
 }
 
 }  // namespace purify::puresign

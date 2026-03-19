@@ -194,6 +194,36 @@ Bytes circuit_binding_digest(const purify::NativeBulletproofCircuit& circuit, st
     return purify::hmac_sha256(purify::bytes_from_ascii("Purify/ExperimentalBulletproof/CircuitV1"), serialized);
 }
 
+void append_constraint_to_circuit(purify::NativeBulletproofCircuit& circuit, const Expr& lhs, const Expr& rhs) {
+    Expr combined = lhs - rhs;
+    std::size_t constraint_idx = circuit.c.size();
+    circuit.c.push_back(combined.constant().negate());
+    for (const auto& term : combined.linear()) {
+        std::size_t index = term.first.index;
+        switch (term.first.kind) {
+        case SymbolKind::Left:
+            assert(index < circuit.wl.size() && "append_constraint_to_circuit() L index out of range");
+            circuit.wl[index].add(constraint_idx, term.second);
+            break;
+        case SymbolKind::Right:
+            assert(index < circuit.wr.size() && "append_constraint_to_circuit() R index out of range");
+            circuit.wr[index].add(constraint_idx, term.second);
+            break;
+        case SymbolKind::Output:
+            assert(index < circuit.wo.size() && "append_constraint_to_circuit() O index out of range");
+            circuit.wo[index].add(constraint_idx, term.second);
+            break;
+        case SymbolKind::Commitment:
+            assert(index < circuit.wv.size() && "append_constraint_to_circuit() V index out of range");
+            circuit.wv[index].add(constraint_idx, term.second.negate());
+            break;
+        case SymbolKind::Witness:
+            assert(false && "append_constraint_to_circuit() encountered an unmapped witness symbol");
+            break;
+        }
+    }
+}
+
 struct FlattenedRowFamily {
     std::vector<purify_bulletproof_row_view> views;
     std::vector<std::size_t> indices;
@@ -782,44 +812,43 @@ NativeBulletproofCircuit BulletproofTranscript::native_circuit() const {
                       [](const auto& assignment) { return !assignment.is_v; })
         + constraints_.size());
 
-    auto append_constraint = [&](const Expr& lhs, const Expr& rhs) {
-        Expr combined = lhs - rhs;
-        std::size_t constraint_idx = circuit.c.size();
-        circuit.c.push_back(combined.constant().negate());
-        for (const auto& term : combined.linear()) {
-            std::size_t index = term.first.index;
-            switch (term.first.kind) {
-            case SymbolKind::Left:
-                assert(index < circuit.wl.size() && "native_circuit() L index out of range");
-                circuit.wl[index].add(constraint_idx, term.second);
-                break;
-            case SymbolKind::Right:
-                assert(index < circuit.wr.size() && "native_circuit() R index out of range");
-                circuit.wr[index].add(constraint_idx, term.second);
-                break;
-            case SymbolKind::Output:
-                assert(index < circuit.wo.size() && "native_circuit() O index out of range");
-                circuit.wo[index].add(constraint_idx, term.second);
-                break;
-            case SymbolKind::Commitment:
-                assert(index < circuit.wv.size() && "native_circuit() V index out of range");
-                circuit.wv[index].add(constraint_idx, term.second.negate());
-                break;
-            case SymbolKind::Witness:
-                assert(false && "native_circuit() encountered an unmapped witness symbol");
-                break;
-            }
-        }
-    };
-
     for (const auto& assignment : assignments_) {
         if (!assignment.is_v) {
-            append_constraint(Expr::variable(assignment.symbol), assignment.expr);
+            append_constraint_to_circuit(circuit, Expr::variable(assignment.symbol), assignment.expr);
         }
     }
     for (const auto& constraint : constraints_) {
-        append_constraint(constraint.first, constraint.second);
+        append_constraint_to_circuit(circuit, constraint.first, constraint.second);
     }
+    return circuit;
+}
+
+Result<NativeBulletproofCircuit> NativeBulletproofCircuitTemplate::instantiate(const UInt512& pubkey) const {
+    Result<std::pair<UInt256, UInt256>> unpacked = unpack_public(pubkey);
+    if (!unpacked.has_value()) {
+        return unexpected_error(unpacked.error(), "NativeBulletproofCircuitTemplate::instantiate:unpack_public");
+    }
+
+    NativeBulletproofCircuit circuit = base_circuit_;
+    auto append_pubkey_constraint = [&](const UInt256& packed, const Expr& expr) -> Status {
+        auto parts = expr.split();
+        Result<FieldElement> constant = FieldElement::try_from_uint256(packed);
+        if (!constant.has_value()) {
+            return unexpected_error(constant.error(), "NativeBulletproofCircuitTemplate::instantiate:field_constant");
+        }
+        append_constraint_to_circuit(circuit, parts.second, Expr(*constant) - parts.first);
+        return {};
+    };
+
+    Status p1_status = append_pubkey_constraint(unpacked->first, p1x_);
+    if (!p1_status.has_value()) {
+        return unexpected_error(p1_status.error(), "NativeBulletproofCircuitTemplate::instantiate:p1x");
+    }
+    Status p2_status = append_pubkey_constraint(unpacked->second, p2x_);
+    if (!p2_status.has_value()) {
+        return unexpected_error(p2_status.error(), "NativeBulletproofCircuitTemplate::instantiate:p2x");
+    }
+    append_constraint_to_circuit(circuit, out_, Expr::variable(Symbol::commitment(0)));
     return circuit;
 }
 

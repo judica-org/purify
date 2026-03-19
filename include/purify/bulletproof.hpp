@@ -119,6 +119,26 @@ struct ExperimentalBulletproofProof {
 };
 
 /**
+ * @brief Public-key-agnostic native verifier-circuit template.
+ *
+ * This caches the message/topic-dependent lowering work up to, but not including, the final
+ * public-key binding step. Instantiate it with a packed Purify public key when you need the exact
+ * native circuit for a specific user.
+ */
+class NativeBulletproofCircuitTemplate {
+public:
+    Result<NativeBulletproofCircuit> instantiate(const UInt512& pubkey) const;
+
+private:
+    NativeBulletproofCircuit base_circuit_;
+    Expr p1x_;
+    Expr p2x_;
+    Expr out_;
+
+    friend Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message);
+};
+
+/**
  * @brief Proves a native circuit with the experimental imported Bulletproof circuit backend.
  *
  * This wrapper only supports circuits with exactly one committed scalar. Providing `blind =
@@ -139,6 +159,9 @@ Result<bool> verify_experimental_circuit(
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding = {});
+
+/** @brief Builds a reusable public-key-agnostic verifier-circuit template for a message. */
+Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message);
 
 /**
  * @brief Lowering helper that converts a symbolic transcript into native Bulletproof witness and circuit forms.

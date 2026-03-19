@@ -8,6 +8,7 @@
 #ifndef PURIFY_LEGACY_BULLETPROOF_CORE_H
 #define PURIFY_LEGACY_BULLETPROOF_CORE_H
 
+#include <stdlib.h>
 #include <string.h>
 
 #define SECP256K1_BULLETPROOF_MAX_DEPTH 60
@@ -15,57 +16,11 @@
 
 typedef secp256k1_callback secp256k1_ecmult_context;
 
-typedef struct {
-    secp256k1_scratch *scratch;
-    size_t depth;
-    size_t checkpoints[32];
-} purify_bulletproof_scratch_frames;
-
-static purify_bulletproof_scratch_frames *purify_bulletproof_scratch_frames_for(secp256k1_scratch *scratch) {
-    static purify_bulletproof_scratch_frames slots[8];
-    size_t i;
-
-    for (i = 0; i < sizeof(slots) / sizeof(slots[0]); ++i) {
-        if (slots[i].scratch == scratch) {
-            return &slots[i];
-        }
-    }
-    for (i = 0; i < sizeof(slots) / sizeof(slots[0]); ++i) {
-        if (slots[i].scratch == NULL) {
-            slots[i].scratch = scratch;
-            slots[i].depth = 0;
-            return &slots[i];
-        }
-    }
-    return NULL;
-}
-
-static int secp256k1_scratch_allocate_frame(secp256k1_scratch *scratch, size_t n, size_t objects) {
-    purify_bulletproof_scratch_frames *frames;
-    if (scratch == NULL) {
-        return 0;
-    }
-    frames = purify_bulletproof_scratch_frames_for(scratch);
-    if (frames == NULL || frames->depth >= sizeof(frames->checkpoints) / sizeof(frames->checkpoints[0])) {
-        return 0;
-    }
-    if (n > secp256k1_scratch_max_allocation(&default_error_callback, scratch, objects)) {
-        return 0;
-    }
-    frames->checkpoints[frames->depth++] = secp256k1_scratch_checkpoint(&default_error_callback, scratch);
-    return 1;
-}
-
-static void secp256k1_scratch_deallocate_frame(secp256k1_scratch *scratch) {
-    purify_bulletproof_scratch_frames *frames;
-    VERIFY_CHECK(scratch != NULL);
-    frames = purify_bulletproof_scratch_frames_for(scratch);
-    VERIFY_CHECK(frames != NULL && frames->depth > 0);
-    secp256k1_scratch_apply_checkpoint(&default_error_callback, scratch, frames->checkpoints[--frames->depth]);
-    if (frames->depth == 0) {
-        frames->scratch = NULL;
-    }
-}
+/* Defined in src/legacy_bulletproof/scratch_frames.c. This stays out of the
+ * header so the mutable side-table state has one definition per linked target.
+ */
+int secp256k1_scratch_allocate_frame(secp256k1_scratch *scratch, size_t n, size_t objects);
+void secp256k1_scratch_deallocate_frame(secp256k1_scratch *scratch);
 
 #define secp256k1_scratch_alloc(scratch, size) secp256k1_scratch_alloc(&default_error_callback, scratch, size)
 

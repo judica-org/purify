@@ -82,7 +82,10 @@ static int secp256k1_bulletproof_relation66_prove_impl(const secp256k1_ecmult_co
         secp256k1_bulletproof_update_commit_n(commit, commitp, nc);
     }
     secp256k1_bulletproof_update_commit_n(commit, value_gen, 1);
-    /* TODO commit to circuit */
+    /* The legacy transcript must bind the circuit on its own; extra_commit is
+     * optional caller context, not the only circuit binding.
+     */
+    secp256k1_bulletproof_update_commit_circuit(commit, circ);
     if (extra_commit != NULL) {
         secp256k1_sha256_initialize(&sha256);
         secp256k1_sha256_write(&sha256, commit, 32);
@@ -318,6 +321,16 @@ typedef struct  {
     size_t n_commits;
 } secp256k1_bulletproof_circuit_vfy_ecmult_context;
 
+/* Batch verification shares scratch sizing and inner-product dimensions across
+ * proofs, so heterogeneous circuit shapes must be rejected up front.
+ */
+static int secp256k1_bulletproof_circuit_same_batch_shape(const secp256k1_bulletproof_circuit *a, const secp256k1_bulletproof_circuit *b) {
+    return a->n_gates == b->n_gates
+        && a->n_commits == b->n_commits
+        && a->n_constraints == b->n_constraints
+        && a->n_bits == b->n_bits;
+}
+
 static int secp256k1_bulletproof_circuit_vfy_callback(secp256k1_scalar *sc, secp256k1_ge *pt, secp256k1_scalar *randomizer, size_t idx, void *data) {
     secp256k1_bulletproof_circuit_vfy_ecmult_context *ctx = (secp256k1_bulletproof_circuit_vfy_ecmult_context *) data;
 
@@ -400,12 +413,20 @@ static int secp256k1_bulletproof_relation66_verify_impl(const secp256k1_ecmult_c
     if (plen > SECP256K1_BULLETPROOF_MAX_PROOF) {
         return 0;
     }
+    for (i = 1; i < n_proofs; i++) {
+        if (!secp256k1_bulletproof_circuit_same_batch_shape(circ[0], circ[i])) {
+            return 0;
+        }
+    }
 
     if (!secp256k1_scratch_allocate_frame(scratch, n_proofs * (sizeof(*ecmult_data) + sizeof(*innp_ctx)), 2)) {
         return 0;
     }
     ecmult_data = (secp256k1_bulletproof_circuit_vfy_ecmult_context *)secp256k1_scratch_alloc(scratch, n_proofs * sizeof(*ecmult_data));
     innp_ctx = (secp256k1_bulletproof_innerproduct_context *)secp256k1_scratch_alloc(scratch, n_proofs * sizeof(*innp_ctx));
+    /* This opens a second nested frame for the compressed-circuit buffers, so
+     * any later error path in this function must pop scratch twice.
+     */
     if (!secp256k1_bulletproof_vfy_compressed_circuit_allocate_frame(scratch, circ[0], n_proofs)) {
         secp256k1_scratch_deallocate_frame(scratch);
         return 0;
@@ -418,12 +439,30 @@ static int secp256k1_bulletproof_relation66_verify_impl(const secp256k1_ecmult_c
         secp256k1_scalar taux, mu;
         secp256k1_scalar y;
         int overflow;
+        size_t point_idx;
+        struct {
+            secp256k1_ge *pt;
+            size_t ser_idx;
+        } proof_points[] = {
+            { &ecmult_data[i].age[0], 0 },
+            { &ecmult_data[i].age[1], 1 },
+            { &ecmult_data[i].age[2], 2 },
+            { &ecmult_data[i].tge[0], 3 },
+            { &ecmult_data[i].tge[1], 4 },
+            { &ecmult_data[i].tge[2], 5 },
+            { &ecmult_data[i].tge[3], 6 },
+            { &ecmult_data[i].tge[4], 7 },
+        };
 
         /* Commit to all input data: pedersen commit, asset generator, extra_commit */
         if (nc != NULL) {
             secp256k1_bulletproof_update_commit_n(commit, commitp[i], nc[i]);
         }
         secp256k1_bulletproof_update_commit_n(commit, value_gen, 1);
+        /* Match the prover: circuit bytes are always part of the base transcript,
+         * even if the caller does not provide any extra statement commitment.
+         */
+        secp256k1_bulletproof_update_commit_circuit(commit, circ[i]);
         if (extra_commit != NULL && extra_commit[i] != NULL) {
             secp256k1_sha256_initialize(&sha256);
             secp256k1_sha256_write(&sha256, commit, 32);
@@ -432,14 +471,17 @@ static int secp256k1_bulletproof_relation66_verify_impl(const secp256k1_ecmult_c
         }
 
         /* Deserialize everything */
-        secp256k1_bulletproof_deserialize_point(&ecmult_data[i].age[0], &proof[i][64], 0, 8);
-        secp256k1_bulletproof_deserialize_point(&ecmult_data[i].age[1], &proof[i][64], 1, 8);
-        secp256k1_bulletproof_deserialize_point(&ecmult_data[i].age[2], &proof[i][64], 2, 8);
-        secp256k1_bulletproof_deserialize_point(&ecmult_data[i].tge[0], &proof[i][64], 3, 8);
-        secp256k1_bulletproof_deserialize_point(&ecmult_data[i].tge[1], &proof[i][64], 4, 8);
-        secp256k1_bulletproof_deserialize_point(&ecmult_data[i].tge[2], &proof[i][64], 5, 8);
-        secp256k1_bulletproof_deserialize_point(&ecmult_data[i].tge[3], &proof[i][64], 6, 8);
-        secp256k1_bulletproof_deserialize_point(&ecmult_data[i].tge[4], &proof[i][64], 7, 8);
+        /* Reject malformed point encodings before any Fiat-Shamir updates so the
+         * transcript cannot be driven by bytes that decode to no valid point.
+         */
+        for (point_idx = 0; point_idx < sizeof(proof_points) / sizeof(proof_points[0]); ++point_idx) {
+            if (!secp256k1_bulletproof_deserialize_point(proof_points[point_idx].pt, &proof[i][64], proof_points[point_idx].ser_idx, 8)) {
+                /* Pop the compressed-circuit frame first, then the outer verifier frame. */
+                secp256k1_scratch_deallocate_frame(scratch);
+                secp256k1_scratch_deallocate_frame(scratch);
+                return 0;
+            }
+        }
 
         /* Compute y, z, x */
         secp256k1_bulletproof_update_commit_n(commit, ecmult_data[i].age, 3);
@@ -470,14 +512,15 @@ static int secp256k1_bulletproof_relation66_verify_impl(const secp256k1_ecmult_c
         ecmult_data[i].comp_circ = secp256k1_bulletproof_vfy_compress_circuit(scratch, circ[i], &ecmult_data[i].x, &ecmult_data[i].y, &ecmult_data[i].yinv, &ecmult_data[i].z);
 
         /* Extract scalars */
+        /* Zero taux, mu, and t are valid. Only malformed scalar encodings fail. */
         secp256k1_scalar_set_b32(&taux, &proof[i][0], &overflow);
-        if (overflow || secp256k1_scalar_is_zero(&taux)) {
+        if (overflow) {
             secp256k1_scratch_deallocate_frame(scratch);
             secp256k1_scratch_deallocate_frame(scratch);
             return 0;
         }
         secp256k1_scalar_set_b32(&mu, &proof[i][32], &overflow);
-        if (overflow || secp256k1_scalar_is_zero(&mu)) {
+        if (overflow) {
             secp256k1_scratch_deallocate_frame(scratch);
             secp256k1_scratch_deallocate_frame(scratch);
             return 0;
@@ -485,7 +528,7 @@ static int secp256k1_bulletproof_relation66_verify_impl(const secp256k1_ecmult_c
         /* A little sketchy, we read t (l(x) . r(x)) off the front of the inner product proof,
          * which we otherwise treat as a black box */
         secp256k1_scalar_set_b32(&ecmult_data[i].t, &proof[i][64 + 256 + 1], &overflow);
-        if (overflow || secp256k1_scalar_is_zero(&ecmult_data[i].t)) {
+        if (overflow) {
             secp256k1_scratch_deallocate_frame(scratch);
             secp256k1_scratch_deallocate_frame(scratch);
             return 0;
@@ -534,7 +577,11 @@ static int secp256k1_bulletproof_relation66_verify_impl(const secp256k1_ecmult_c
         innp_ctx[i].rangeproof_cb_data = (void *) &ecmult_data[i];
         innp_ctx[i].n_extra_rangeproof_points = 9 + ecmult_data[i].n_commits;
     }
+    /* Safe to size the shared inner-product verifier from circ[0] after the
+     * same_batch_shape() check above.
+     */
     ret = secp256k1_bulletproof_inner_product_verify_impl(ecmult_ctx, scratch, gens, circ[0]->n_gates, innp_ctx, n_proofs, plen - (64 + 256 + 1), 1);
+    /* Pop the compressed-circuit frame first, then the outer verifier frame. */
     secp256k1_scratch_deallocate_frame(scratch);
     secp256k1_scratch_deallocate_frame(scratch);
     return ret;

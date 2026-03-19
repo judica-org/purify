@@ -60,6 +60,9 @@ if(NOT MSVC)
     set_source_files_properties(src/purify_bppp_bridge.c PROPERTIES
         COMPILE_OPTIONS "-Wno-unused-function"
     )
+    set_source_files_properties(src/legacy_bulletproof/scratch_frames.c PROPERTIES
+        COMPILE_OPTIONS "-Wno-unused-function"
+    )
 endif()
 
 function(purify_configure_library_target target)
@@ -99,6 +102,7 @@ add_library(purify
     src/purify_bulletproof.cpp
     src/purify_curve.cpp
     src/purify_expr.cpp
+    src/legacy_bulletproof/scratch_frames.c
     src/purify_numeric.cpp
     src/purify_puresign.cpp
     src/purify_bppp.cpp
@@ -177,6 +181,7 @@ if(PURIFY_BUILD_BENCH)
         src/purify_bulletproof.cpp
         src/purify_curve.cpp
         src/purify_expr.cpp
+        src/legacy_bulletproof/scratch_frames.c
         src/purify_numeric.cpp
         src/purify_puresign.cpp
         src/purify_bppp.cpp

@@ -171,19 +171,27 @@ SECP256K1_INLINE static void secp256k1_bulletproof_serialize_points(unsigned cha
     }
 }
 
-SECP256K1_INLINE static void secp256k1_bulletproof_deserialize_point(secp256k1_ge *pt, const unsigned char *data, size_t i, size_t n) {
+/* Fail closed on malformed encodings. The verifier later hashes parsed points
+ * into Fiat-Shamir, so it cannot safely accept bytes that do not decode to a
+ * unique curve point.
+ */
+SECP256K1_INLINE static int secp256k1_bulletproof_deserialize_point(secp256k1_ge *pt, const unsigned char *data, size_t i, size_t n) {
     const size_t bitveclen = (n + 7) / 8;
     const size_t offset = bitveclen + i*32;
     secp256k1_fe fe;
 
     if (!secp256k1_fe_set_b32_limit(&fe, &data[offset])) {
         secp256k1_ge_clear(pt);
-        return;
+        return 0;
     }
-    secp256k1_ge_set_xquad(pt, &fe);
+    if (!secp256k1_ge_set_xquad(pt, &fe)) {
+        secp256k1_ge_clear(pt);
+        return 0;
+    }
     if (data[i / 8] & (1 << (i % 8))) {
         secp256k1_ge_neg(pt, pt);
     }
+    return 1;
 }
 
 static void secp256k1_bulletproof_update_commit(unsigned char *commit, const secp256k1_ge *lpt, const secp256k1_ge *rpt) {
@@ -225,6 +233,63 @@ static void secp256k1_bulletproof_update_commit_n(unsigned char *commit, const s
         secp256k1_fe_normalize(&pointx);
         secp256k1_fe_get_b32(commit, &pointx);
         secp256k1_sha256_write(&sha256, commit, 32);
+    }
+    secp256k1_sha256_finalize(&sha256, commit);
+}
+
+/* Hash primitive values in a stable byte format so prover and verifier commit
+ * to the exact same circuit structure and coefficients.
+ */
+static void secp256k1_bulletproof_sha256_write_size(secp256k1_sha256 *sha256, size_t n) {
+    unsigned char ser[8];
+    size_t i;
+    for (i = 0; i < sizeof(ser); i++) {
+        ser[i] = (unsigned char)(n & 0xffu);
+        n >>= 8;
+    }
+    secp256k1_sha256_write(sha256, ser, sizeof(ser));
+}
+
+static void secp256k1_bulletproof_sha256_write_fast_scalar(secp256k1_sha256 *sha256, const secp256k1_fast_scalar *scal) {
+    unsigned char ser[32];
+    secp256k1_scalar_get_b32(ser, &scal->scal);
+    secp256k1_sha256_write(sha256, ser, sizeof(ser));
+}
+
+static void secp256k1_bulletproof_sha256_write_row_family(secp256k1_sha256 *sha256, const secp256k1_bulletproof_wmatrix_row *rows, size_t n_rows) {
+    size_t i;
+    secp256k1_bulletproof_sha256_write_size(sha256, n_rows);
+    for (i = 0; i < n_rows; i++) {
+        size_t j;
+        secp256k1_bulletproof_sha256_write_size(sha256, rows[i].size);
+        for (j = 0; j < rows[i].size; j++) {
+            secp256k1_bulletproof_sha256_write_size(sha256, rows[i].entry[j].idx);
+            secp256k1_bulletproof_sha256_write_fast_scalar(sha256, &rows[i].entry[j].scal);
+        }
+    }
+}
+
+/* Bind the full circuit into the legacy transcript. extra_commit still layers
+ * on top, but callers should not need to supply circuit bytes just to make the
+ * base protocol sound.
+ */
+static void secp256k1_bulletproof_update_commit_circuit(unsigned char *commit, const secp256k1_bulletproof_circuit *circ) {
+    secp256k1_sha256 sha256;
+    size_t i;
+
+    secp256k1_sha256_initialize(&sha256);
+    secp256k1_sha256_write(&sha256, commit, 32);
+    secp256k1_bulletproof_sha256_write_size(&sha256, circ->n_gates);
+    secp256k1_bulletproof_sha256_write_size(&sha256, circ->n_commits);
+    secp256k1_bulletproof_sha256_write_size(&sha256, circ->n_constraints);
+    secp256k1_bulletproof_sha256_write_size(&sha256, circ->n_bits);
+    secp256k1_bulletproof_sha256_write_row_family(&sha256, circ->wl, circ->n_gates);
+    secp256k1_bulletproof_sha256_write_row_family(&sha256, circ->wr, circ->n_gates);
+    secp256k1_bulletproof_sha256_write_row_family(&sha256, circ->wo, circ->n_gates);
+    secp256k1_bulletproof_sha256_write_row_family(&sha256, circ->wv, circ->n_commits);
+    secp256k1_bulletproof_sha256_write_size(&sha256, circ->n_constraints);
+    for (i = 0; i < circ->n_constraints; i++) {
+        secp256k1_bulletproof_sha256_write_fast_scalar(&sha256, &circ->c[i]);
     }
     secp256k1_sha256_finalize(&sha256, commit);
 }

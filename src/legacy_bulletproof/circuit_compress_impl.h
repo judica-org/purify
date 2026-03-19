@@ -91,10 +91,15 @@ secp256k1_bulletproof_vfy_compressed_circuit *secp256k1_bulletproof_vfy_compress
     ret->wl_wo = &ss[0 * circ->n_gates];
     ret->wr = &ss[1 * circ->n_gates];
     ret->wv = &ss[2 * circ->n_gates];
-    ret->zn = &ss[2 * circ->n_gates + circ->n_commits];
+    /* Some circuits only use implicit bit constraints. In that case there is
+     * no z^n vector to materialize, so keep zn absent instead of touching zn[0].
+     */
+    ret->zn = circ->n_constraints == 0 ? NULL : &ss[2 * circ->n_gates + circ->n_commits];
 
     secp256k1_scalar_sqr(&zsqr, z); /* z^1 and z^2 are reserved for bits */
-    secp256k1_scalar_mul(&ret->zn[0], &zsqr, z);
+    if (circ->n_constraints != 0) {
+        secp256k1_scalar_mul(&ret->zn[0], &zsqr, z);
+    }
     for (i = 1; i < circ->n_constraints; i++) {
         secp256k1_scalar_mul(&ret->zn[i], &ret->zn[i - 1], z);
     }
@@ -180,7 +185,8 @@ secp256k1_bulletproof_pf_compressed_circuit *secp256k1_bulletproof_pf_slsr(secp2
     ret->r1 = &ss[3 * circ->n_gates];
     ret->r3 = &ss[4 * circ->n_gates];
     ret->wv = &ss[5 * circ->n_gates];
-    ret->zn = &ss[5 * circ->n_gates + circ->n_commits];
+    /* Match verifier-side handling for circuits with no explicit constraint rows. */
+    ret->zn = circ->n_constraints == 0 ? NULL : &ss[5 * circ->n_gates + circ->n_commits];
 
     for (i = 0; i < circ->n_gates; i++) {
         secp256k1_scalar_chacha20(&ret->l3[i], &ret->r3[i], nonce, 4 + i);
@@ -195,7 +201,9 @@ void secp256k1_bulletproof_pf_compress_circuit(secp256k1_bulletproof_pf_compress
     size_t i;
 
     secp256k1_scalar_sqr(&zsqr, z); /* z^1 and z^2 are reserved for bits */
-    secp256k1_scalar_mul(&ret->zn[0], &zsqr, z);
+    if (circ->n_constraints != 0) {
+        secp256k1_scalar_mul(&ret->zn[0], &zsqr, z);
+    }
     for (i = 1; i < circ->n_constraints; i++) {
         secp256k1_scalar_mul(&ret->zn[i], &ret->zn[i - 1], z);
     }

@@ -459,41 +459,31 @@ Result<Bytes> ExperimentalBulletproofProof::serialize() const {
     }
 
     Bytes out;
-    out.reserve(1 + 1 + 4 + (commitment.has_value() ? 33 : 0) + proof.size());
+    out.reserve(1 + 4 + 33 + proof.size());
     out.push_back(kSerializationVersion);
-    out.push_back(commitment.has_value() ? static_cast<unsigned char>(1) : static_cast<unsigned char>(0));
     append_u32_le(out, static_cast<std::uint32_t>(proof.size()));
-    if (commitment.has_value()) {
-        out.insert(out.end(), commitment->begin(), commitment->end());
-    }
+    out.insert(out.end(), commitment.begin(), commitment.end());
     out.insert(out.end(), proof.begin(), proof.end());
     return out;
 }
 
 Result<ExperimentalBulletproofProof> ExperimentalBulletproofProof::deserialize(std::span<const unsigned char> bytes) {
     ExperimentalBulletproofProof out;
-    if (bytes.size() < 6) {
+    if (bytes.size() < 38) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "ExperimentalBulletproofProof::deserialize:header");
     }
     if (bytes[0] != kSerializationVersion) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "ExperimentalBulletproofProof::deserialize:version");
     }
-    if (bytes[1] > 1) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "ExperimentalBulletproofProof::deserialize:flag");
-    }
 
-    std::optional<std::uint32_t> proof_size = read_u32_le(bytes, 2);
+    std::optional<std::uint32_t> proof_size = read_u32_le(bytes, 1);
     assert(proof_size.has_value() && "header length check should guarantee a proof length");
-    std::size_t offset = 6;
-    if (bytes[1] != 0) {
-        if (offset + 33 > bytes.size()) {
-            return unexpected_error(ErrorCode::InvalidFixedSize, "ExperimentalBulletproofProof::deserialize:commitment");
-        }
-        BulletproofPointBytes commitment_bytes{};
-        std::copy_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset), 33, commitment_bytes.begin());
-        out.commitment = commitment_bytes;
-        offset += 33;
+    std::size_t offset = 5;
+    if (offset + 33 > bytes.size()) {
+        return unexpected_error(ErrorCode::InvalidFixedSize, "ExperimentalBulletproofProof::deserialize:commitment");
     }
+    std::copy_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset), 33, out.commitment.begin());
+    offset += 33;
     if (offset + *proof_size != bytes.size()) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "ExperimentalBulletproofProof::deserialize:proof_length");
     }
@@ -515,7 +505,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     if (!is_power_of_two(circuit.n_gates)) {
         return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:n_gates_power_of_two");
     }
-    if (circuit.n_commitments > 1) {
+    if (circuit.n_commitments != 1) {
         return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:n_commitments");
     }
     if (assignment.left.size() != circuit.n_gates
@@ -547,9 +537,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     }
 
     proof_bytes.resize(proof_len);
-    if (circuit.n_commitments == 1) {
-        out.commitment = commitment;
-    }
+    out.commitment = commitment;
     out.proof = std::move(proof_bytes);
     return out;
 }
@@ -565,20 +553,16 @@ Result<bool> verify_experimental_circuit(
     if (!is_power_of_two(circuit.n_gates)) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:n_gates_power_of_two");
     }
-    if (circuit.n_commitments > 1) {
+    if (circuit.n_commitments != 1) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:n_commitments");
     }
     if (proof.proof.empty()) {
         return unexpected_error(ErrorCode::EmptyInput, "verify_experimental_circuit:proof_empty");
     }
-    if ((circuit.n_commitments == 1) != proof.commitment.has_value()) {
-        return unexpected_error(ErrorCode::BindingMismatch, "verify_experimental_circuit:commitment_presence");
-    }
 
     FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
     Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
-    const unsigned char* commitment_ptr = proof.commitment.has_value() ? proof.commitment->data() : nullptr;
-    bool ok = purify_bulletproof_verify_circuit(&flat_circuit.view, commitment_ptr, value_generator.data(),
+    bool ok = purify_bulletproof_verify_circuit(&flat_circuit.view, proof.commitment.data(), value_generator.data(),
                                                 binding_digest.data(), binding_digest.size(),
                                                 proof.proof.data(), proof.proof.size()) != 0;
     return ok;

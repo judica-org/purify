@@ -15,8 +15,8 @@
 
 #include <array>
 #include <cstdint>
-#include <optional>
 #include <span>
+#include <utility>
 
 #include "purify/api.hpp"
 
@@ -90,6 +90,8 @@ struct ProvenSignature {
     [[nodiscard]] static Result<ProvenSignature> deserialize(std::span<const unsigned char> serialized);
 };
 
+class PreparedNonceWithProof;
+
 /**
  * @brief Move-only prepared nonce bound to either a message or a topic.
  *
@@ -114,10 +116,6 @@ public:
         return nonce_;
     }
 
-    [[nodiscard]] const std::optional<NonceProof>& public_proof() const noexcept {
-        return proof_;
-    }
-
     /**
      * @brief Explicitly exports the secret nonce scalar.
      *
@@ -137,22 +135,67 @@ private:
     Scope scope_{Scope::Message};
     Scalar32 scalar_{};
     Nonce nonce_{};
-    std::optional<NonceProof> proof_;
     XOnly32 signer_pubkey_{};
     XOnly32 binding_digest_{};
 
+    friend class PreparedNonceWithProof;
     friend Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<const unsigned char> message);
     friend Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const unsigned char> topic);
-    friend Result<PreparedNonce> prepare_message_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> message);
-    friend Result<PreparedNonce> prepare_topic_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> topic);
+    friend Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret,
+                                                                           std::span<const unsigned char> message);
+    friend Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret,
+                                                                         std::span<const unsigned char> topic);
     friend Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<const unsigned char> message,
                                                         PreparedNonce&& prepared);
     friend Result<Signature> sign_with_prepared_topic(const UInt512& secret, std::span<const unsigned char> message,
                                                       PreparedNonce&& prepared);
-    friend Result<ProvenSignature> sign_message_with_prepared_proof(const UInt512& secret, std::span<const unsigned char> message,
-                                                                    PreparedNonce&& prepared);
-    friend Result<ProvenSignature> sign_with_prepared_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
-                                                                  PreparedNonce&& prepared);
+};
+
+/**
+ * @brief Move-only prepared nonce bundled with its public statement proof.
+ *
+ * The proof is always present and the secret nonce scalar remains non-serializable. This avoids
+ * forcing callers to branch on a maybe-present proof after the type has already crossed an API
+ * boundary.
+ */
+class PreparedNonceWithProof {
+public:
+    PreparedNonceWithProof(const PreparedNonceWithProof&) = delete;
+    PreparedNonceWithProof& operator=(const PreparedNonceWithProof&) = delete;
+
+    PreparedNonceWithProof(PreparedNonceWithProof&& other) noexcept = default;
+    PreparedNonceWithProof& operator=(PreparedNonceWithProof&& other) noexcept = default;
+    ~PreparedNonceWithProof() = default;
+
+    [[nodiscard]] const Nonce& public_nonce() const noexcept {
+        return prepared_.public_nonce();
+    }
+
+    [[nodiscard]] const NonceProof& proof() const noexcept {
+        return proof_;
+    }
+
+    [[nodiscard]] Scalar32 scalar() const {
+        return prepared_.scalar();
+    }
+
+private:
+    PreparedNonceWithProof(PreparedNonce prepared, NonceProof proof)
+        : prepared_(std::move(prepared)), proof_(std::move(proof)) {}
+
+    PreparedNonce prepared_;
+    NonceProof proof_;
+
+    friend Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret,
+                                                                           std::span<const unsigned char> message);
+    friend Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret,
+                                                                         std::span<const unsigned char> topic);
+    friend Result<ProvenSignature> sign_message_with_prepared_proof(const UInt512& secret,
+                                                                    std::span<const unsigned char> message,
+                                                                    PreparedNonceWithProof&& prepared);
+    friend Result<ProvenSignature> sign_with_prepared_topic_proof(const UInt512& secret,
+                                                                  std::span<const unsigned char> message,
+                                                                  PreparedNonceWithProof&& prepared);
 };
 
 /** @brief Derives the public PureSign key bundle from a packed Purify secret. */
@@ -161,7 +204,7 @@ Result<PublicKey> derive_public_key(const UInt512& secret);
 /** @brief Derives a deterministic nonce bound to an exact message. */
 Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<const unsigned char> message);
 /** @brief Derives a deterministic message-bound nonce and proves its public point `R`. */
-Result<PreparedNonce> prepare_message_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> message);
+Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> message);
 /**
  * @brief Derives a deterministic nonce bound to a caller-chosen topic.
  *
@@ -170,7 +213,7 @@ Result<PreparedNonce> prepare_message_nonce_with_proof(const UInt512& secret, st
  */
 Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const unsigned char> topic);
 /** @brief Derives a deterministic topic-bound nonce and proves its public point `R`. */
-Result<PreparedNonce> prepare_topic_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> topic);
+Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> topic);
 
 /** @brief Signs a message using a Purify-derived nonce bound to that same message. */
 Result<Signature> sign_message(const UInt512& secret, std::span<const unsigned char> message);
@@ -179,7 +222,7 @@ Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<co
                                              PreparedNonce&& prepared);
 /** @brief Signs a message and returns the signature bundled with the prepared public nonce proof. */
 Result<ProvenSignature> sign_message_with_prepared_proof(const UInt512& secret, std::span<const unsigned char> message,
-                                                         PreparedNonce&& prepared);
+                                                         PreparedNonceWithProof&& prepared);
 /**
  * @brief Signs a message using a Purify-derived nonce bound only to the supplied topic.
  *
@@ -197,7 +240,7 @@ Result<Signature> sign_with_prepared_topic(const UInt512& secret, std::span<cons
                                            PreparedNonce&& prepared);
 /** @brief Signs with a prepared topic-bound nonce and returns the bundled public nonce proof. */
 Result<ProvenSignature> sign_with_prepared_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
-                                                       PreparedNonce&& prepared);
+                                                       PreparedNonceWithProof&& prepared);
 
 /** @brief Prepares, signs, and returns the bundled message-bound nonce proof and signature. */
 Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span<const unsigned char> message);

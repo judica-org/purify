@@ -369,7 +369,8 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
         return;
     }
 
-    ctx.expect(proof->commitment.has_value(), "experimental circuit proof includes the exact public commitment");
+    ctx.expect(proof->commitment != purify::BulletproofPointBytes{},
+               "experimental circuit proof includes a concrete public commitment");
 
     Result<bool> verified =
         purify::verify_experimental_circuit(circuit, *proof, purify::bppp::base_generator(), binding);
@@ -417,7 +418,7 @@ void test_puresign_message_signing(TestContext& ctx) {
 
     Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(*secret);
     expect_ok(ctx, public_key, "derive_public_key succeeds");
-    Result<purify::puresign::PreparedNonce> prepared_with_proof =
+    Result<purify::puresign::PreparedNonceWithProof> prepared_with_proof =
         purify::puresign::prepare_message_nonce_with_proof(*secret, message);
     expect_ok(ctx, prepared_with_proof, "prepare_message_nonce_with_proof succeeds");
     Result<purify::puresign::PreparedNonce> prepared_a = purify::puresign::prepare_message_nonce(*secret, message);
@@ -428,20 +429,17 @@ void test_puresign_message_signing(TestContext& ctx) {
         return;
     }
 
-    ctx.expect(prepared_with_proof->public_proof().has_value(), "prepare_message_nonce_with_proof exposes a public nonce proof");
-    if (prepared_with_proof->public_proof().has_value()) {
-        Result<bool> nonce_proof_ok =
-            purify::puresign::verify_message_nonce_proof(*public_key, message, *prepared_with_proof->public_proof());
-        expect_ok(ctx, nonce_proof_ok, "verify_message_nonce_proof succeeds on the generated proof");
-        if (nonce_proof_ok.has_value()) {
-            ctx.expect(*nonce_proof_ok, "generated message-bound nonce proof verifies");
-        }
-        Result<bool> wrong_nonce_proof =
-            purify::puresign::verify_message_nonce_proof(*public_key, Bytes{0x89}, *prepared_with_proof->public_proof());
-        expect_ok(ctx, wrong_nonce_proof, "verify_message_nonce_proof runs on a wrong message");
-        if (wrong_nonce_proof.has_value()) {
-            ctx.expect(!*wrong_nonce_proof, "message-bound nonce proof rejects a different message");
-        }
+    Result<bool> nonce_proof_ok =
+        purify::puresign::verify_message_nonce_proof(*public_key, message, prepared_with_proof->proof());
+    expect_ok(ctx, nonce_proof_ok, "verify_message_nonce_proof succeeds on the generated proof");
+    if (nonce_proof_ok.has_value()) {
+        ctx.expect(*nonce_proof_ok, "generated message-bound nonce proof verifies");
+    }
+    Result<bool> wrong_nonce_proof =
+        purify::puresign::verify_message_nonce_proof(*public_key, Bytes{0x89}, prepared_with_proof->proof());
+    expect_ok(ctx, wrong_nonce_proof, "verify_message_nonce_proof runs on a wrong message");
+    if (wrong_nonce_proof.has_value()) {
+        ctx.expect(!*wrong_nonce_proof, "message-bound nonce proof rejects a different message");
     }
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
@@ -553,7 +551,7 @@ void test_puresign_topic_signing(TestContext& ctx) {
 
     Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(*secret);
     expect_ok(ctx, public_key, "derive_public_key succeeds for topic signing");
-    Result<purify::puresign::PreparedNonce> prepared_with_proof =
+    Result<purify::puresign::PreparedNonceWithProof> prepared_with_proof =
         purify::puresign::prepare_topic_nonce_with_proof(*secret, topic);
     expect_ok(ctx, prepared_with_proof, "prepare_topic_nonce_with_proof succeeds");
     Result<purify::puresign::PreparedNonce> prepared_a = purify::puresign::prepare_topic_nonce(*secret, topic);
@@ -564,14 +562,11 @@ void test_puresign_topic_signing(TestContext& ctx) {
         return;
     }
 
-    ctx.expect(prepared_with_proof->public_proof().has_value(), "prepare_topic_nonce_with_proof exposes a public nonce proof");
-    if (prepared_with_proof->public_proof().has_value()) {
-        Result<bool> nonce_proof_ok =
-            purify::puresign::verify_topic_nonce_proof(*public_key, topic, *prepared_with_proof->public_proof());
-        expect_ok(ctx, nonce_proof_ok, "verify_topic_nonce_proof succeeds on the generated proof");
-        if (nonce_proof_ok.has_value()) {
-            ctx.expect(*nonce_proof_ok, "generated topic-bound nonce proof verifies");
-        }
+    Result<bool> nonce_proof_ok =
+        purify::puresign::verify_topic_nonce_proof(*public_key, topic, prepared_with_proof->proof());
+    expect_ok(ctx, nonce_proof_ok, "verify_topic_nonce_proof succeeds on the generated proof");
+    if (nonce_proof_ok.has_value()) {
+        ctx.expect(*nonce_proof_ok, "generated topic-bound nonce proof verifies");
     }
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,

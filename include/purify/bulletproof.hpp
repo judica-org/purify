@@ -109,9 +109,9 @@ private:
  * prove/verify helpers below.
  */
 struct ExperimentalBulletproofProof {
-    static constexpr unsigned char kSerializationVersion = 1;
+    static constexpr unsigned char kSerializationVersion = 2;
 
-    std::optional<BulletproofPointBytes> commitment;
+    BulletproofPointBytes commitment{};
     Bytes proof;
 
     Result<Bytes> serialize() const;
@@ -121,9 +121,9 @@ struct ExperimentalBulletproofProof {
 /**
  * @brief Proves a native circuit with the experimental imported Bulletproof circuit backend.
  *
- * When `circuit.n_commitments == 1`, providing `blind = std::nullopt` yields an exact public point
- * commitment `assignment.commitments[0] * value_generator`, which is the form needed for `R = rG`
- * style statements.
+ * This wrapper only supports circuits with exactly one committed scalar. Providing `blind =
+ * std::nullopt` yields the exact public point commitment `assignment.commitments[0] *
+ * value_generator`, which is the form needed for `R = rG` style statements.
  */
 Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
@@ -133,7 +133,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     std::span<const unsigned char> statement_binding = {},
     std::optional<BulletproofScalarBytes> blind = std::nullopt);
 
-/** @brief Verifies a proof produced by `prove_experimental_circuit` against the same native circuit and statement binding. */
+/** @brief Verifies a proof produced by `prove_experimental_circuit` against the same one-commitment native circuit. */
 Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalBulletproofProof& proof,

@@ -104,10 +104,7 @@ Scalar32 derive_proof_nonce_seed(const UInt512& secret, PreparedNonce::Scope sco
 Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof) {
     XOnly32 xonly{};
     int parity = 0;
-    if (!nonce_proof.proof.commitment.has_value()) {
-        return unexpected_error(ErrorCode::MissingValue, "nonce_proof_matches_nonce:missing_commitment");
-    }
-    if (purify_bip340_xonly_from_point(nonce_proof.proof.commitment->data(), xonly.data(), &parity) == 0) {
+    if (purify_bip340_xonly_from_point(nonce_proof.proof.commitment.data(), xonly.data(), &parity) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "nonce_proof_matches_nonce:invalid_commitment");
     }
     (void)parity;
@@ -205,25 +202,6 @@ Result<DerivedNonceData> prepare_nonce_data_impl(const UInt512& secret, Prepared
         return unexpected_error(nonce_data.error(), "prepare_nonce_data_impl:derive_nonce_data");
     }
     return nonce_data;
-}
-
-Result<ProvenSignature> sign_with_prepared_proof_impl(const UInt512& secret, std::span<const unsigned char> message,
-                                                      PreparedNonce&& prepared, PreparedNonce::Scope expected_scope,
-                                                      const char* context) {
-    if (!prepared.public_proof().has_value()) {
-        return unexpected_error(ErrorCode::MissingValue, context);
-    }
-    NonceProof nonce_proof = *prepared.public_proof();
-    Result<Signature> signature = expected_scope == PreparedNonce::Scope::Message
-        ? sign_message_with_prepared(secret, message, std::move(prepared))
-        : sign_with_prepared_topic(secret, message, std::move(prepared));
-    if (!signature.has_value()) {
-        return unexpected_error(signature.error(), context);
-    }
-    if (signature->nonce().xonly != nonce_proof.nonce.xonly) {
-        return unexpected_error(ErrorCode::InternalMismatch, context);
-    }
-    return ProvenSignature{*signature, std::move(nonce_proof)};
 }
 
 }  // namespace
@@ -397,7 +375,7 @@ PreparedNonce::PreparedNonce(Scope scope, const Scalar32& scalar, const Nonce& n
 
 PreparedNonce::PreparedNonce(PreparedNonce&& other) noexcept
     : scope_(other.scope_), scalar_(other.scalar_), nonce_(other.nonce_),
-      proof_(std::move(other.proof_)), signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_) {
+      signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_) {
     other.clear();
 }
 
@@ -407,7 +385,6 @@ PreparedNonce& PreparedNonce::operator=(PreparedNonce&& other) noexcept {
         scope_ = other.scope_;
         scalar_ = other.scalar_;
         nonce_ = other.nonce_;
-        proof_ = std::move(other.proof_);
         signer_pubkey_ = other.signer_pubkey_;
         binding_digest_ = other.binding_digest_;
         other.clear();
@@ -421,7 +398,6 @@ PreparedNonce::~PreparedNonce() {
 
 void PreparedNonce::clear() noexcept {
     std::fill(scalar_.begin(), scalar_.end(), 0);
-    proof_.reset();
 }
 
 Result<PublicKey> derive_public_key(const UInt512& secret) {
@@ -445,7 +421,7 @@ Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<con
                          nonce_data->signer_pubkey, nonce_data->binding_digest);
 }
 
-Result<PreparedNonce> prepare_message_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> message) {
+Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> message) {
     Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message);
     if (!nonce_data.has_value()) {
         return unexpected_error(nonce_data.error(), "prepare_message_nonce_with_proof:prepare_nonce_data_impl");
@@ -456,8 +432,7 @@ Result<PreparedNonce> prepare_message_nonce_with_proof(const UInt512& secret, st
     if (!proof.has_value()) {
         return unexpected_error(proof.error(), "prepare_message_nonce_with_proof:build_nonce_proof");
     }
-    prepared.proof_ = std::move(*proof);
-    return prepared;
+    return PreparedNonceWithProof(std::move(prepared), std::move(*proof));
 }
 
 Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const unsigned char> topic) {
@@ -469,7 +444,7 @@ Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const
                          nonce_data->signer_pubkey, nonce_data->binding_digest);
 }
 
-Result<PreparedNonce> prepare_topic_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> topic) {
+Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> topic) {
     Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic);
     if (!nonce_data.has_value()) {
         return unexpected_error(nonce_data.error(), "prepare_topic_nonce_with_proof:prepare_nonce_data_impl");
@@ -480,8 +455,7 @@ Result<PreparedNonce> prepare_topic_nonce_with_proof(const UInt512& secret, std:
     if (!proof.has_value()) {
         return unexpected_error(proof.error(), "prepare_topic_nonce_with_proof:build_nonce_proof");
     }
-    prepared.proof_ = std::move(*proof);
-    return prepared;
+    return PreparedNonceWithProof(std::move(prepared), std::move(*proof));
 }
 
 Result<Signature> sign_message(const UInt512& secret, std::span<const unsigned char> message) {
@@ -523,14 +497,16 @@ Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<co
 }
 
 Result<ProvenSignature> sign_message_with_prepared_proof(const UInt512& secret, std::span<const unsigned char> message,
-                                                         PreparedNonce&& prepared) {
-    Result<ProvenSignature> signature =
-        sign_with_prepared_proof_impl(secret, message, std::move(prepared), PreparedNonce::Scope::Message,
-                                      "sign_message_with_prepared_proof");
+                                                         PreparedNonceWithProof&& prepared) {
+    NonceProof nonce_proof = prepared.proof_;
+    Result<Signature> signature = sign_message_with_prepared(secret, message, std::move(prepared.prepared_));
     if (!signature.has_value()) {
-        return unexpected_error(signature.error(), "sign_message_with_prepared_proof:sign_with_prepared_proof_impl");
+        return unexpected_error(signature.error(), "sign_message_with_prepared_proof:sign_message_with_prepared");
     }
-    return signature;
+    if (signature->nonce().xonly != nonce_proof.nonce.xonly) {
+        return unexpected_error(ErrorCode::InternalMismatch, "sign_message_with_prepared_proof:nonce_mismatch");
+    }
+    return ProvenSignature{*signature, std::move(nonce_proof)};
 }
 
 Result<Signature> sign_with_topic(const UInt512& secret, std::span<const unsigned char> message,
@@ -570,18 +546,20 @@ Result<Signature> sign_with_prepared_topic(const UInt512& secret, std::span<cons
 }
 
 Result<ProvenSignature> sign_with_prepared_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
-                                                       PreparedNonce&& prepared) {
-    Result<ProvenSignature> signature =
-        sign_with_prepared_proof_impl(secret, message, std::move(prepared), PreparedNonce::Scope::Topic,
-                                      "sign_with_prepared_topic_proof");
+                                                       PreparedNonceWithProof&& prepared) {
+    NonceProof nonce_proof = prepared.proof_;
+    Result<Signature> signature = sign_with_prepared_topic(secret, message, std::move(prepared.prepared_));
     if (!signature.has_value()) {
-        return unexpected_error(signature.error(), "sign_with_prepared_topic_proof:sign_with_prepared_proof_impl");
+        return unexpected_error(signature.error(), "sign_with_prepared_topic_proof:sign_with_prepared_topic");
     }
-    return signature;
+    if (signature->nonce().xonly != nonce_proof.nonce.xonly) {
+        return unexpected_error(ErrorCode::InternalMismatch, "sign_with_prepared_topic_proof:nonce_mismatch");
+    }
+    return ProvenSignature{*signature, std::move(nonce_proof)};
 }
 
 Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span<const unsigned char> message) {
-    Result<PreparedNonce> prepared = prepare_message_nonce_with_proof(secret, message);
+    Result<PreparedNonceWithProof> prepared = prepare_message_nonce_with_proof(secret, message);
     if (!prepared.has_value()) {
         return unexpected_error(prepared.error(), "sign_message_with_proof:prepare_message_nonce_with_proof");
     }
@@ -590,7 +568,7 @@ Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span
 
 Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
                                               std::span<const unsigned char> topic) {
-    Result<PreparedNonce> prepared = prepare_topic_nonce_with_proof(secret, topic);
+    Result<PreparedNonceWithProof> prepared = prepare_topic_nonce_with_proof(secret, topic);
     if (!prepared.has_value()) {
         return unexpected_error(prepared.error(), "sign_with_topic_proof:prepare_topic_nonce_with_proof");
     }

@@ -8,6 +8,7 @@
  */
 
 #include "purify/bulletproof.hpp"
+#include "purify_bulletproof_internal.hpp"
 #include "purify_bppp_bridge.h"
 
 #include <algorithm>
@@ -22,12 +23,18 @@
 namespace {
 
 using purify::Expr;
+using purify::ErrorCode;
+using purify::ExperimentalBulletproofProof;
 using purify::FieldElement;
 using purify::Result;
 using purify::Symbol;
 using purify::SymbolKind;
 using purify::WitnessAssignments;
 using purify::Bytes;
+using purify::BulletproofAssignmentData;
+using purify::BulletproofGeneratorBytes;
+using purify::BulletproofPointBytes;
+using purify::BulletproofScalarBytes;
 using PackedCircuit = purify::NativeBulletproofCircuit::PackedWithSlack;
 
 static_assert(std::is_trivially_copyable_v<purify::NativeBulletproofCircuitTerm>,
@@ -418,6 +425,88 @@ FlattenedAssignmentView flatten_assignment_view(const purify::BulletproofAssignm
     flat.view.ao32 = flat.output32.empty() ? nullptr : flat.output32.data();
     flat.view.v32 = flat.commitments32.empty() ? nullptr : flat.commitments32.data();
     return flat;
+}
+
+std::size_t circuit_n_gates(const purify::NativeBulletproofCircuit& circuit) {
+    return circuit.n_gates;
+}
+
+std::size_t circuit_n_gates(const PackedCircuit& circuit) {
+    return circuit.n_gates();
+}
+
+std::size_t circuit_n_commitments(const purify::NativeBulletproofCircuit& circuit) {
+    return circuit.n_commitments;
+}
+
+std::size_t circuit_n_commitments(const PackedCircuit& circuit) {
+    return circuit.n_commitments();
+}
+
+template <typename CircuitLike>
+Result<ExperimentalBulletproofProof> prove_experimental_circuit_impl(
+    const CircuitLike& circuit,
+    const BulletproofAssignmentData& assignment,
+    const BulletproofScalarBytes& nonce,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding,
+    std::optional<BulletproofScalarBytes> blind,
+    bool require_assignment_validation,
+    const char* shape_context,
+    const char* gates_context,
+    const char* commitments_context,
+    const char* assignment_shape_context,
+    const char* assignment_invalid_context,
+    const char* proof_size_context,
+    const char* bridge_context) {
+    ExperimentalBulletproofProof out;
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, shape_context);
+    }
+    if (!is_power_of_two(circuit_n_gates(circuit))) {
+        return unexpected_error(ErrorCode::InvalidDimensions, gates_context);
+    }
+    if (circuit_n_commitments(circuit) != 1) {
+        return unexpected_error(ErrorCode::InvalidDimensions, commitments_context);
+    }
+    if (assignment.left.size() != circuit_n_gates(circuit)
+        || assignment.right.size() != circuit_n_gates(circuit)
+        || assignment.output.size() != circuit_n_gates(circuit)
+        || assignment.commitments.size() != circuit_n_commitments(circuit)) {
+        return unexpected_error(ErrorCode::SizeMismatch, assignment_shape_context);
+    }
+    if (require_assignment_validation && !circuit.evaluate(assignment)) {
+        return unexpected_error(ErrorCode::EquationMismatch, assignment_invalid_context);
+    }
+
+    FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
+    FlattenedAssignmentView flat_assignment = flatten_assignment_view(assignment);
+    Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
+    Bytes proof_bytes(std::max<std::size_t>(purify_bulletproof_required_proof_size(circuit_n_gates(circuit)), 4096), 0);
+    std::size_t proof_len = proof_bytes.size();
+    BulletproofPointBytes commitment{};
+    const unsigned char* blind_ptr = blind.has_value() ? blind->data() : nullptr;
+
+    if (proof_len == 0) {
+        return unexpected_error(ErrorCode::UnexpectedSize, proof_size_context);
+    }
+    const int ok = require_assignment_validation
+        ? purify_bulletproof_prove_circuit(&flat_circuit.view, &flat_assignment.view, blind_ptr,
+                                           value_generator.data(), nonce.data(),
+                                           binding_digest.data(), binding_digest.size(),
+                                           commitment.data(), proof_bytes.data(), &proof_len)
+        : purify_bulletproof_prove_circuit_assume_valid(&flat_circuit.view, &flat_assignment.view, blind_ptr,
+                                                        value_generator.data(), nonce.data(),
+                                                        binding_digest.data(), binding_digest.size(),
+                                                        commitment.data(), proof_bytes.data(), &proof_len);
+    if (!ok) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, bridge_context);
+    }
+
+    proof_bytes.resize(proof_len);
+    out.commitment = commitment;
+    out.proof = std::move(proof_bytes);
+    return out;
 }
 
 Result<FieldElement> evaluate_expr_with_assignment(const Expr& expr,
@@ -995,48 +1084,14 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding,
     std::optional<BulletproofScalarBytes> blind) {
-    ExperimentalBulletproofProof out;
-    if (!circuit.has_valid_shape()) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:circuit_shape");
-    }
-    if (!is_power_of_two(circuit.n_gates)) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:n_gates_power_of_two");
-    }
-    if (circuit.n_commitments != 1) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:n_commitments");
-    }
-    if (assignment.left.size() != circuit.n_gates
-        || assignment.right.size() != circuit.n_gates
-        || assignment.output.size() != circuit.n_gates
-        || assignment.commitments.size() != circuit.n_commitments) {
-        return unexpected_error(ErrorCode::SizeMismatch, "prove_experimental_circuit:assignment_shape");
-    }
-    if (!circuit.evaluate(assignment)) {
-        return unexpected_error(ErrorCode::EquationMismatch, "prove_experimental_circuit:assignment_invalid");
-    }
-
-    FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
-    FlattenedAssignmentView flat_assignment = flatten_assignment_view(assignment);
-    Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
-    Bytes proof_bytes(std::max<std::size_t>(purify_bulletproof_required_proof_size(circuit.n_gates), 4096), 0);
-    std::size_t proof_len = proof_bytes.size();
-    BulletproofPointBytes commitment{};
-    const unsigned char* blind_ptr = blind.has_value() ? blind->data() : nullptr;
-
-    if (proof_len == 0) {
-        return unexpected_error(ErrorCode::UnexpectedSize, "prove_experimental_circuit:proof_size");
-    }
-    if (!purify_bulletproof_prove_circuit(&flat_circuit.view, &flat_assignment.view, blind_ptr,
-                                          value_generator.data(), nonce.data(),
-                                          binding_digest.data(), binding_digest.size(),
-                                          commitment.data(), proof_bytes.data(), &proof_len)) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "prove_experimental_circuit:bridge");
-    }
-
-    proof_bytes.resize(proof_len);
-    out.commitment = commitment;
-    out.proof = std::move(proof_bytes);
-    return out;
+    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding, blind, true,
+                                           "prove_experimental_circuit:circuit_shape",
+                                           "prove_experimental_circuit:n_gates_power_of_two",
+                                           "prove_experimental_circuit:n_commitments",
+                                           "prove_experimental_circuit:assignment_shape",
+                                           "prove_experimental_circuit:assignment_invalid",
+                                           "prove_experimental_circuit:proof_size",
+                                           "prove_experimental_circuit:bridge");
 }
 
 Result<ExperimentalBulletproofProof> prove_experimental_circuit(
@@ -1046,48 +1101,31 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding,
     std::optional<BulletproofScalarBytes> blind) {
-    ExperimentalBulletproofProof out;
-    if (!circuit.has_valid_shape()) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:packed_circuit_shape");
-    }
-    if (!is_power_of_two(circuit.n_gates())) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:packed_n_gates_power_of_two");
-    }
-    if (circuit.n_commitments() != 1) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "prove_experimental_circuit:packed_n_commitments");
-    }
-    if (assignment.left.size() != circuit.n_gates()
-        || assignment.right.size() != circuit.n_gates()
-        || assignment.output.size() != circuit.n_gates()
-        || assignment.commitments.size() != circuit.n_commitments()) {
-        return unexpected_error(ErrorCode::SizeMismatch, "prove_experimental_circuit:packed_assignment_shape");
-    }
-    if (!circuit.evaluate(assignment)) {
-        return unexpected_error(ErrorCode::EquationMismatch, "prove_experimental_circuit:packed_assignment_invalid");
-    }
+    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding, blind, true,
+                                           "prove_experimental_circuit:packed_circuit_shape",
+                                           "prove_experimental_circuit:packed_n_gates_power_of_two",
+                                           "prove_experimental_circuit:packed_n_commitments",
+                                           "prove_experimental_circuit:packed_assignment_shape",
+                                           "prove_experimental_circuit:packed_assignment_invalid",
+                                           "prove_experimental_circuit:packed_proof_size",
+                                           "prove_experimental_circuit:packed_bridge");
+}
 
-    FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
-    FlattenedAssignmentView flat_assignment = flatten_assignment_view(assignment);
-    Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
-    Bytes proof_bytes(std::max<std::size_t>(purify_bulletproof_required_proof_size(circuit.n_gates()), 4096), 0);
-    std::size_t proof_len = proof_bytes.size();
-    BulletproofPointBytes commitment{};
-    const unsigned char* blind_ptr = blind.has_value() ? blind->data() : nullptr;
-
-    if (proof_len == 0) {
-        return unexpected_error(ErrorCode::UnexpectedSize, "prove_experimental_circuit:packed_proof_size");
-    }
-    if (!purify_bulletproof_prove_circuit(&flat_circuit.view, &flat_assignment.view, blind_ptr,
-                                          value_generator.data(), nonce.data(),
-                                          binding_digest.data(), binding_digest.size(),
-                                          commitment.data(), proof_bytes.data(), &proof_len)) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "prove_experimental_circuit:packed_bridge");
-    }
-
-    proof_bytes.resize(proof_len);
-    out.commitment = commitment;
-    out.proof = std::move(proof_bytes);
-    return out;
+Result<ExperimentalBulletproofProof> prove_experimental_circuit_assume_valid(
+    const NativeBulletproofCircuit::PackedWithSlack& circuit,
+    const BulletproofAssignmentData& assignment,
+    const BulletproofScalarBytes& nonce,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding,
+    std::optional<BulletproofScalarBytes> blind) {
+    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding, blind, false,
+                                           "prove_experimental_circuit_assume_valid:packed_circuit_shape",
+                                           "prove_experimental_circuit_assume_valid:packed_n_gates_power_of_two",
+                                           "prove_experimental_circuit_assume_valid:packed_n_commitments",
+                                           "prove_experimental_circuit_assume_valid:packed_assignment_shape",
+                                           "prove_experimental_circuit_assume_valid:packed_assignment_invalid",
+                                           "prove_experimental_circuit_assume_valid:packed_proof_size",
+                                           "prove_experimental_circuit_assume_valid:packed_bridge");
 }
 
 Result<bool> verify_experimental_circuit(

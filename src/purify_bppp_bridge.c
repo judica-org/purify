@@ -709,16 +709,17 @@ size_t purify_bulletproof_required_proof_size(size_t n_gates) {
     return 64 + 256 + 1 + secp256k1_bulletproof_innerproduct_proof_length(n_gates);
 }
 
-int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circuit,
-                                     const purify_bulletproof_assignment_view* assignment,
-                                     const unsigned char* blind32,
-                                     const unsigned char value_gen33[33],
-                                     const unsigned char nonce32[32],
-                                     const unsigned char* extra_commit,
-                                     size_t extra_commit_len,
-                                     unsigned char commitment_out33[33],
-                                     unsigned char* proof_out,
-                                     size_t* proof_len) {
+static int purify_bulletproof_prove_circuit_impl(const purify_bulletproof_circuit_view* circuit,
+                                                 const purify_bulletproof_assignment_view* assignment,
+                                                 const unsigned char* blind32,
+                                                 const unsigned char value_gen33[33],
+                                                 const unsigned char nonce32[32],
+                                                 const unsigned char* extra_commit,
+                                                 size_t extra_commit_len,
+                                                 unsigned char commitment_out33[33],
+                                                 unsigned char* proof_out,
+                                                 size_t* proof_len,
+                                                 int require_valid_assignment) {
     secp256k1_context* ctx = NULL;
     secp256k1_scratch_space* scratch = NULL;
     secp256k1_bulletproof_generators* gens = NULL;
@@ -748,7 +749,7 @@ int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circ
         !purify_build_bulletproof_assignment(assignment, &bp_assignment)) {
         goto done;
     }
-    if (!purify_bulletproof_circuit_evaluate(&bp_circuit, &bp_assignment)) {
+    if (require_valid_assignment && !purify_bulletproof_circuit_evaluate(&bp_circuit, &bp_assignment)) {
         goto done;
     }
     ctx = purify_create_context();
@@ -820,6 +821,36 @@ done:
         secp256k1_context_destroy(ctx);
     }
     return ok;
+}
+
+int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circuit,
+                                     const purify_bulletproof_assignment_view* assignment,
+                                     const unsigned char* blind32,
+                                     const unsigned char value_gen33[33],
+                                     const unsigned char nonce32[32],
+                                     const unsigned char* extra_commit,
+                                     size_t extra_commit_len,
+                                     unsigned char commitment_out33[33],
+                                     unsigned char* proof_out,
+                                     size_t* proof_len) {
+    return purify_bulletproof_prove_circuit_impl(circuit, assignment, blind32, value_gen33, nonce32,
+                                                 extra_commit, extra_commit_len, commitment_out33,
+                                                 proof_out, proof_len, 1);
+}
+
+int purify_bulletproof_prove_circuit_assume_valid(const purify_bulletproof_circuit_view* circuit,
+                                                  const purify_bulletproof_assignment_view* assignment,
+                                                  const unsigned char* blind32,
+                                                  const unsigned char value_gen33[33],
+                                                  const unsigned char nonce32[32],
+                                                  const unsigned char* extra_commit,
+                                                  size_t extra_commit_len,
+                                                  unsigned char commitment_out33[33],
+                                                  unsigned char* proof_out,
+                                                  size_t* proof_len) {
+    return purify_bulletproof_prove_circuit_impl(circuit, assignment, blind32, value_gen33, nonce32,
+                                                 extra_commit, extra_commit_len, commitment_out33,
+                                                 proof_out, proof_len, 0);
 }
 
 int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* circuit,

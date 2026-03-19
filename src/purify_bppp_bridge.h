@@ -127,6 +127,17 @@ int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circ
                                      unsigned char* proof_out,
                                      size_t* proof_len);
 
+int purify_bulletproof_prove_circuit_assume_valid(const purify_bulletproof_circuit_view* circuit,
+                                                  const purify_bulletproof_assignment_view* assignment,
+                                                  const unsigned char* blind32,
+                                                  const unsigned char value_gen33[33],
+                                                  const unsigned char nonce32[32],
+                                                  const unsigned char* extra_commit,
+                                                  size_t extra_commit_len,
+                                                  unsigned char commitment_out33[33],
+                                                  unsigned char* proof_out,
+                                                  size_t* proof_len);
+
 int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* circuit,
                                       const unsigned char commitment33[33],
                                       const unsigned char value_gen33[33],

@@ -14,6 +14,7 @@
 #include <cstring>
 #include <limits>
 
+#include "purify_bulletproof_internal.hpp"
 #include "purify_bppp.hpp"
 #include "purify/curve.hpp"
 
@@ -188,6 +189,20 @@ Result<NonceProof> build_nonce_proof_from_template(const UInt512& secret, const 
     if (!witness.has_value()) {
         return unexpected_error(witness.error(), "build_nonce_proof_from_template:prove_assignment_data");
     }
+    Result<bool> partial_ok = circuit_template.partial_evaluate(witness->assignment);
+    if (!partial_ok.has_value()) {
+        return unexpected_error(partial_ok.error(), "build_nonce_proof_from_template:partial_evaluate");
+    }
+    if (!*partial_ok) {
+        return unexpected_error(ErrorCode::BindingMismatch, "build_nonce_proof_from_template:partial_evaluate_false");
+    }
+    Result<bool> final_ok = circuit_template.final_evaluate(witness->assignment, witness->public_key);
+    if (!final_ok.has_value()) {
+        return unexpected_error(final_ok.error(), "build_nonce_proof_from_template:final_evaluate");
+    }
+    if (!*final_ok) {
+        return unexpected_error(ErrorCode::BindingMismatch, "build_nonce_proof_from_template:final_evaluate_false");
+    }
     Result<NativeBulletproofCircuit::PackedWithSlack> circuit = circuit_template.instantiate_packed(witness->public_key);
     if (!circuit.has_value()) {
         return unexpected_error(circuit.error(), "build_nonce_proof_from_template:instantiate_packed");
@@ -196,14 +211,12 @@ Result<NonceProof> build_nonce_proof_from_template(const UInt512& secret, const 
     if (!circuit_status.has_value()) {
         return unexpected_error(circuit_status.error(), "build_nonce_proof_from_template:validate_proof_cache_circuit");
     }
-    if (!circuit->evaluate(witness->assignment)) {
-        return unexpected_error(ErrorCode::BindingMismatch, "build_nonce_proof_from_template:circuit");
-    }
 
     Scalar32 proof_nonce = derive_proof_nonce_seed(secret, nonce_data.scope, nonce_data.eval_input);
     Bytes statement_binding = proof_statement_binding(nonce_data.scope);
     Result<ExperimentalBulletproofProof> proof =
-        prove_experimental_circuit(*circuit, witness->assignment, proof_nonce, bppp::base_generator(), statement_binding);
+        prove_experimental_circuit_assume_valid(*circuit, witness->assignment, proof_nonce,
+                                                bppp::base_generator(), statement_binding);
     if (!proof.has_value()) {
         return unexpected_error(proof.error(), "build_nonce_proof_from_template:prove_experimental_circuit");
     }

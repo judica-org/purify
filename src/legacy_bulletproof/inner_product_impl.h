@@ -13,8 +13,8 @@
 #include "src/legacy_bulletproof/core.h"
 #include "src/legacy_bulletproof/util.h"
 
-#define POPCOUNT(x)	(__builtin_popcountl((unsigned long)(x)))  /* TODO make these portable */
-#define CTZ(x)	(__builtin_ctzl((unsigned long)(x)))
+#define POPCOUNT(x) (secp256k1_popcount_size_t((size_t)(x)))
+#define CTZ(x) (secp256k1_ctz_size_t((size_t)(x)))
 
 #define IP_AB_SCALARS	4
 

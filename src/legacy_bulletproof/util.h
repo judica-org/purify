@@ -7,27 +7,116 @@
 #ifndef SECP256K1_MODULE_BULLETPROOF_UTIL
 #define SECP256K1_MODULE_BULLETPROOF_UTIL
 
+#include <limits.h>
+#include <stdint.h>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
+SECP256K1_INLINE static size_t secp256k1_popcount_size_t(size_t n) {
+#if defined(__GNUC__) || defined(__clang__)
+#if SIZE_MAX <= UINT_MAX
+    return (size_t)__builtin_popcount((unsigned int)n);
+#elif SIZE_MAX <= ULONG_MAX
+    return (size_t)__builtin_popcountl((unsigned long)n);
+#elif SIZE_MAX <= ULLONG_MAX
+    return (size_t)__builtin_popcountll((unsigned long long)n);
+#else
+#error "size_t wider than unsigned long long is unsupported"
+#endif
+#elif defined(_MSC_VER)
+#if SIZE_MAX > UINT_MAX
+    return (size_t)__popcnt64((unsigned __int64)n);
+#else
+    return (size_t)__popcnt((unsigned int)n);
+#endif
+#else
+    size_t count = 0;
+    while (n != 0) {
+        count += n & 1u;
+        n >>= 1;
+    }
+    return count;
+#endif
+}
+
+SECP256K1_INLINE static size_t secp256k1_ctz_size_t(size_t n) {
+    if (n == 0) {
+        return sizeof(size_t) * CHAR_BIT;
+    }
+#if defined(__GNUC__) || defined(__clang__)
+#if SIZE_MAX <= UINT_MAX
+    return (size_t)__builtin_ctz((unsigned int)n);
+#elif SIZE_MAX <= ULONG_MAX
+    return (size_t)__builtin_ctzl((unsigned long)n);
+#elif SIZE_MAX <= ULLONG_MAX
+    return (size_t)__builtin_ctzll((unsigned long long)n);
+#else
+#error "size_t wider than unsigned long long is unsupported"
+#endif
+#elif defined(_MSC_VER)
+    {
+        unsigned long index;
+#if SIZE_MAX > UINT_MAX
+        if (_BitScanForward64(&index, (unsigned __int64)n) != 0) {
+            return (size_t)index;
+        }
+#else
+        if (_BitScanForward(&index, (unsigned long)n) != 0) {
+            return (size_t)index;
+        }
+#endif
+    }
+    return sizeof(size_t) * CHAR_BIT;
+#else
+    {
+        size_t count = 0;
+        while ((n & 1u) == 0) {
+            ++count;
+            n >>= 1;
+        }
+        return count;
+    }
+#endif
+}
+
 /* floor(log2(n)) which returns 0 for 0, since this is used to estimate proof sizes */
 SECP256K1_INLINE static size_t secp256k1_floor_lg(size_t n) {
-    switch (n) {
-    case 0: return 0;
-    case 1: return 0;
-    case 2: return 1;
-    case 3: return 1;
-    case 4: return 2;
-    case 5: return 2;
-    case 6: return 2;
-    case 7: return 2;
-    case 8: return 3;
-    default: {
-        size_t i = 0;
-        while (n > 1) {
-            n /= 2;
-            i++;
+    if (n == 0) {
+        return 0;
+    }
+#if defined(__GNUC__) || defined(__clang__)
+#if SIZE_MAX <= UINT_MAX
+    return (sizeof(unsigned int) * CHAR_BIT - 1u) - (size_t)__builtin_clz((unsigned int)n);
+#elif SIZE_MAX <= ULONG_MAX
+    return (sizeof(unsigned long) * CHAR_BIT - 1u) - (size_t)__builtin_clzl((unsigned long)n);
+#elif SIZE_MAX <= ULLONG_MAX
+    return (sizeof(unsigned long long) * CHAR_BIT - 1u) - (size_t)__builtin_clzll((unsigned long long)n);
+#else
+#error "size_t wider than unsigned long long is unsupported"
+#endif
+#elif defined(_MSC_VER)
+    {
+        unsigned long index;
+#if SIZE_MAX > UINT_MAX
+        if (_BitScanReverse64(&index, (unsigned __int64)n) != 0) {
+            return (size_t)index;
         }
-        return i;
+#else
+        if (_BitScanReverse(&index, (unsigned long)n) != 0) {
+            return (size_t)index;
+        }
+#endif
     }
+    return 0;
+#else
+    size_t i = 0;
+    while (n >>= 1) {
+        ++i;
     }
+    return i;
+#endif
 }
 
 static void secp256k1_scalar_dot_product(secp256k1_scalar *r, const secp256k1_scalar *a, const secp256k1_scalar *b, size_t n) {

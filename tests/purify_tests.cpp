@@ -2,15 +2,18 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
-#include <iostream>
 #include <string_view>
 #include <utility>
 
 #include "purify.hpp"
 #include "purify_bppp.hpp"
+#include "test_harness.hpp"
 
 namespace {
 
+using purify_test::TestContext;
+using purify_test::expect_error;
+using purify_test::expect_ok;
 using purify::BulletproofAssignmentData;
 using purify::BulletproofTranscript;
 using purify::Bytes;
@@ -22,36 +25,6 @@ using purify::Result;
 using purify::Status;
 using purify::Transcript;
 using purify::UInt512;
-
-struct TestContext {
-    int failures = 0;
-
-    void expect(bool condition, std::string_view message) {
-        if (!condition) {
-            ++failures;
-            std::cerr << "FAIL: " << message << "\n";
-        }
-    }
-};
-
-template <typename T>
-void expect_ok(TestContext& ctx, const Result<T>& result, std::string_view message) {
-    if (!result.has_value()) {
-        std::cerr << "FAIL: " << message << " (" << result.error().name() << ")\n";
-        ++ctx.failures;
-        return;
-    }
-    ctx.expect(true, message);
-}
-
-void expect_ok(TestContext& ctx, const Status& status, std::string_view message) {
-    ctx.expect(status.has_value(), message);
-}
-
-template <typename T>
-void expect_error(TestContext& ctx, const Result<T>& result, ErrorCode code, std::string_view message) {
-    ctx.expect(!result.has_value() && result.error().code == code, message);
-}
 
 Bytes sample_message() {
     return Bytes{0x01, 0x23, 0x45, 0x67};
@@ -65,6 +38,86 @@ Result<UInt512> sample_secret() {
 
 std::string hex32(const std::array<unsigned char, 32>& bytes) {
     return purify::UInt256::from_bytes_be(bytes.data(), bytes.size()).to_hex();
+}
+
+FieldElement inverse_small(std::int64_t value) {
+    return FieldElement::from_int(value).inverse();
+}
+
+FieldElement weighted_bppp_norm(std::span<const FieldElement> values, const FieldElement& rho) {
+    FieldElement mu = rho * rho;
+    FieldElement weight = mu;
+    FieldElement total = FieldElement::zero();
+    for (const FieldElement& value : values) {
+        total = total + (weight * value * value);
+        weight = weight * mu;
+    }
+    return total;
+}
+
+struct ToyBpppReduction {
+    purify::bppp::NormArgInputs inputs;
+    std::vector<FieldElement> n_vec;
+    std::vector<FieldElement> l_vec;
+    std::vector<FieldElement> c_vec;
+    FieldElement rho = FieldElement::zero();
+    FieldElement folded_value = FieldElement::zero();
+};
+
+ToyBpppReduction reduce_single_mul_gate_to_bppp(const FieldElement& left,
+                                                const FieldElement& right,
+                                                const FieldElement& output,
+                                                const FieldElement& rho,
+                                                const FieldElement& sqrt_minus_one) {
+    const FieldElement one = FieldElement::one();
+    const FieldElement inv2 = inverse_small(2);
+    const FieldElement inv4 = inverse_small(4);
+    const FieldElement rho_inv = rho.inverse();
+
+    const FieldElement u = left + right;
+    const FieldElement v = left - right;
+    const FieldElement d_plus = inv4;
+    const FieldElement d_minus = inv4.negate();
+
+    auto two_square_terms = [&](const FieldElement& coefficient) {
+        const FieldElement first = (coefficient + one) * inv2;
+        const FieldElement second = sqrt_minus_one * (coefficient - one) * inv2;
+        return std::array<FieldElement, 2>{first, second};
+    };
+
+    const std::array<FieldElement, 2> plus_terms = two_square_terms(d_plus);
+    const std::array<FieldElement, 2> minus_terms = two_square_terms(d_minus);
+
+    ToyBpppReduction out;
+    out.rho = rho;
+    out.folded_value = (left * right) - output;
+    out.n_vec.reserve(4);
+    out.l_vec = {output};
+    out.c_vec = {FieldElement::from_int(-1)};
+
+    FieldElement rho_weight_inv = rho_inv;
+    for (const FieldElement& term : plus_terms) {
+        out.n_vec.push_back(term * u * rho_weight_inv);
+        rho_weight_inv = rho_weight_inv * rho_inv;
+    }
+    for (const FieldElement& term : minus_terms) {
+        out.n_vec.push_back(term * v * rho_weight_inv);
+        rho_weight_inv = rho_weight_inv * rho_inv;
+    }
+
+    out.inputs.rho = purify::bppp::scalar_bytes(rho);
+    out.inputs.n_vec = purify::bppp::scalar_bytes(out.n_vec);
+    out.inputs.l_vec = purify::bppp::scalar_bytes(out.l_vec);
+    out.inputs.c_vec = purify::bppp::scalar_bytes(out.c_vec);
+    return out;
+}
+
+FieldElement evaluate_toy_bppp_relation(const ToyBpppReduction& reduction) {
+    FieldElement total = weighted_bppp_norm(reduction.n_vec, reduction.rho);
+    for (std::size_t i = 0; i < reduction.l_vec.size(); ++i) {
+        total = total + (reduction.l_vec[i] * reduction.c_vec[i]);
+    }
+    return total;
 }
 
 void test_known_sample(TestContext& ctx) {
@@ -344,7 +397,75 @@ void test_bppp_move_overload(TestContext& ctx) {
     expect_error(ctx, proof, ErrorCode::EmptyInput, "rvalue prove_norm_arg overload preserves empty-input validation");
 }
 
-void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
+void test_toy_bppp_circuit_reduction(TestContext& ctx) {
+    std::optional<FieldElement> sqrt_minus_one = FieldElement::from_int(-1).sqrt();
+    ctx.expect(sqrt_minus_one.has_value(), "the secp256k1 scalar field admits sqrt(-1) for the toy BPPP reduction");
+    if (!sqrt_minus_one.has_value()) {
+        return;
+    }
+
+    const FieldElement rho = FieldElement::from_int(7);
+    const ToyBpppReduction valid =
+        reduce_single_mul_gate_to_bppp(FieldElement::from_int(3), FieldElement::from_int(4),
+                                       FieldElement::from_int(12), rho, *sqrt_minus_one);
+    const FieldElement valid_relation = evaluate_toy_bppp_relation(valid);
+    ctx.expect(valid_relation == valid.folded_value,
+               "toy BPPP reduction preserves the one-gate folded relation for a satisfying witness");
+    ctx.expect(valid.folded_value.is_zero(),
+               "the satisfying one-gate witness reduces to a zero folded scalar");
+
+    Result<purify::bppp::NormArgProof> valid_proof = purify::bppp::prove_norm_arg(valid.inputs);
+    expect_ok(ctx, valid_proof, "toy BPPP reduction proves a satisfying one-gate relation");
+    if (!valid_proof.has_value()) {
+        return;
+    }
+    ctx.expect(purify::bppp::verify_norm_arg(*valid_proof),
+               "toy BPPP reduction verifies for a satisfying one-gate witness");
+
+    const ToyBpppReduction invalid =
+        reduce_single_mul_gate_to_bppp(FieldElement::from_int(3), FieldElement::from_int(4),
+                                       FieldElement::from_int(11), rho, *sqrt_minus_one);
+    const FieldElement invalid_relation = evaluate_toy_bppp_relation(invalid);
+    ctx.expect(invalid_relation == invalid.folded_value,
+               "toy BPPP reduction preserves the one-gate folded relation for a non-satisfying witness");
+    ctx.expect(!invalid.folded_value.is_zero(),
+               "the non-satisfying one-gate witness reduces to a non-zero folded scalar");
+
+    Result<purify::bppp::NormArgProof> invalid_proof = purify::bppp::prove_norm_arg(invalid.inputs);
+    expect_ok(ctx, invalid_proof, "toy BPPP reduction also proves a non-satisfying witness under its own commitment");
+    if (!invalid_proof.has_value()) {
+        return;
+    }
+    ctx.expect(purify::bppp::verify_norm_arg(*invalid_proof),
+               "standalone BPPP accepts the non-satisfying toy witness because it proves the committed relation value");
+
+    purify::bppp::NormArgProof rebound = *invalid_proof;
+    rebound.commitment = valid_proof->commitment;
+    ctx.expect(!purify::bppp::verify_norm_arg(rebound),
+               "swapping in the satisfying commitment rejects the non-satisfying toy witness proof");
+
+    Result<purify::bppp::PointBytes> anchored_commitment = purify::bppp::commit_norm_arg(valid.inputs);
+    expect_ok(ctx, anchored_commitment, "toy BPPP reduction computes an external satisfying commitment");
+    if (!anchored_commitment.has_value()) {
+        return;
+    }
+
+    Result<purify::bppp::NormArgProof> anchored_valid =
+        purify::bppp::prove_norm_arg_to_commitment(valid.inputs, *anchored_commitment);
+    expect_ok(ctx, anchored_valid, "toy BPPP reduction proves against an external satisfying commitment");
+    if (!anchored_valid.has_value()) {
+        return;
+    }
+    ctx.expect(purify::bppp::verify_norm_arg(*anchored_valid),
+               "anchored toy BPPP proof verifies against the external satisfying commitment");
+
+    Result<purify::bppp::NormArgProof> anchored_invalid =
+        purify::bppp::prove_norm_arg_to_commitment(invalid.inputs, *anchored_commitment);
+    expect_error(ctx, anchored_invalid, ErrorCode::BackendRejectedInput,
+                 "toy BPPP reduction rejects a non-satisfying witness against the satisfying commitment");
+}
+
+void test_experimental_circuit_norm_arg_one_gate(TestContext& ctx) {
     NativeBulletproofCircuit circuit(1, 1, 0);
     std::size_t constraint = circuit.add_constraint(FieldElement::zero());
     circuit.add_output_term(0, constraint, FieldElement::one());
@@ -356,54 +477,179 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
     assignment.output = {FieldElement::from_int(12)};
     assignment.commitments = {FieldElement::from_int(12)};
 
-    std::array<unsigned char, 32> nonce{};
-    for (std::size_t i = 0; i < nonce.size(); ++i) {
-        nonce[i] = static_cast<unsigned char>(i + 1);
-    }
-    Bytes binding = purify::bytes_from_ascii("toy-circuit-binding");
+    Bytes binding = purify::bytes_from_ascii("one-gate-norm-arg-binding");
 
-    Result<purify::ExperimentalBulletproofProof> proof =
-        purify::prove_experimental_circuit(circuit, assignment, nonce, purify::bppp::base_generator(), binding);
-    expect_ok(ctx, proof, "prove_experimental_circuit succeeds on a one-gate circuit");
+    Result<purify::bppp::PointBytes> witness_commitment =
+        purify::bppp::commit_experimental_circuit_witness(circuit, assignment, binding);
+    expect_ok(ctx, witness_commitment, "commit_experimental_circuit_witness commits the reduced one-gate witness");
+    if (!witness_commitment.has_value()) {
+        return;
+    }
+
+    Result<purify::bppp::ExperimentalCircuitNormArgProof> proof =
+        purify::bppp::prove_experimental_circuit_norm_arg_to_commitment(circuit, assignment, *witness_commitment, binding);
+    expect_ok(ctx, proof, "prove_experimental_circuit_norm_arg_to_commitment proves a satisfying one-gate circuit");
+    if (!proof.has_value()) {
+        return;
+    }
+    ctx.expect(proof->witness_commitment == *witness_commitment,
+               "experimental circuit norm argument preserves the caller-supplied reduced witness commitment");
+
+    Result<bool> verified = purify::bppp::verify_experimental_circuit_norm_arg(circuit, *proof, binding);
+    expect_ok(ctx, verified, "verify_experimental_circuit_norm_arg succeeds on the one-gate proof");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "experimental circuit norm argument verifies on the one-gate circuit");
+    }
+
+    Result<bool> wrong_binding =
+        purify::bppp::verify_experimental_circuit_norm_arg(circuit, *proof,
+                                                           purify::bytes_from_ascii("one-gate-norm-arg-binding-wrong"));
+    expect_ok(ctx, wrong_binding, "verify_experimental_circuit_norm_arg runs with a wrong one-gate binding");
+    if (wrong_binding.has_value()) {
+        ctx.expect(!*wrong_binding, "experimental circuit norm argument is bound to the supplied one-gate statement bytes");
+    }
+
+    BulletproofAssignmentData invalid = assignment;
+    invalid.output[0] = FieldElement::from_int(11);
+    Result<purify::bppp::ExperimentalCircuitNormArgProof> invalid_proof =
+        purify::bppp::prove_experimental_circuit_norm_arg(circuit, invalid, binding);
+    expect_error(ctx, invalid_proof, ErrorCode::EquationMismatch,
+                 "prove_experimental_circuit_norm_arg rejects a non-satisfying one-gate witness");
+}
+
+void test_experimental_circuit_norm_arg_sample_verifier(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for the experimental circuit norm argument");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+    Result<purify::BulletproofWitnessData> witness = purify::prove_assignment_data(message, *secret);
+    expect_ok(ctx, witness, "prove_assignment_data succeeds for the experimental circuit norm argument");
+    if (!witness.has_value()) {
+        return;
+    }
+
+    Result<NativeBulletproofCircuit> circuit = purify::verifier_circuit(message, witness->public_key);
+    expect_ok(ctx, circuit, "verifier_circuit succeeds for the experimental circuit norm argument");
+    if (!circuit.has_value()) {
+        return;
+    }
+
+    Bytes binding = purify::bytes_from_ascii("sample-verifier-norm-arg-binding");
+    Result<purify::bppp::ExperimentalCircuitNormArgProof> proof =
+        purify::bppp::prove_experimental_circuit_norm_arg(*circuit, witness->assignment, binding);
+    expect_ok(ctx, proof, "prove_experimental_circuit_norm_arg proves the sample verifier circuit");
     if (!proof.has_value()) {
         return;
     }
 
-    ctx.expect(proof->commitment != purify::BulletproofPointBytes{},
-               "experimental circuit proof includes a concrete public commitment");
-
-    Result<bool> verified =
-        purify::verify_experimental_circuit(circuit, *proof, purify::bppp::base_generator(), binding);
-    expect_ok(ctx, verified, "verify_experimental_circuit succeeds on the generated proof");
+    Result<bool> verified = purify::bppp::verify_experimental_circuit_norm_arg(*circuit, *proof, binding);
+    expect_ok(ctx, verified, "verify_experimental_circuit_norm_arg succeeds on the sample verifier circuit");
     if (verified.has_value()) {
-        ctx.expect(*verified, "experimental circuit proof verifies");
+        ctx.expect(*verified, "experimental circuit norm argument verifies on the sample verifier circuit");
     }
 
-    Result<Bytes> encoded = proof->serialize();
-    expect_ok(ctx, encoded, "ExperimentalBulletproofProof serializes");
-    if (!encoded.has_value()) {
-        return;
+    purify::bppp::ExperimentalCircuitNormArgProof tampered = *proof;
+    tampered.proof.back() ^= 0x01;
+    Result<bool> tampered_ok = purify::bppp::verify_experimental_circuit_norm_arg(*circuit, tampered, binding);
+    expect_ok(ctx, tampered_ok, "verify_experimental_circuit_norm_arg runs on a tampered sample proof");
+    if (tampered_ok.has_value()) {
+        ctx.expect(!*tampered_ok, "tampering the sample norm-argument proof is detected");
     }
-    Result<purify::ExperimentalBulletproofProof> decoded =
-        purify::ExperimentalBulletproofProof::deserialize(*encoded);
-    expect_ok(ctx, decoded, "ExperimentalBulletproofProof round-trips");
-    if (!decoded.has_value()) {
+}
+
+void test_experimental_circuit_zk_norm_arg_one_gate(TestContext& ctx) {
+    NativeBulletproofCircuit circuit(1, 1, 0);
+    std::size_t constraint = circuit.add_constraint(FieldElement::zero());
+    circuit.add_output_term(0, constraint, FieldElement::one());
+    circuit.add_commitment_term(0, constraint, FieldElement::from_int(-1));
+
+    BulletproofAssignmentData assignment;
+    assignment.left = {FieldElement::from_int(3)};
+    assignment.right = {FieldElement::from_int(4)};
+    assignment.output = {FieldElement::from_int(12)};
+    assignment.commitments = {FieldElement::from_int(12)};
+
+    purify::bppp::ScalarBytes nonce{};
+    for (std::size_t i = 0; i < nonce.size(); ++i) {
+        nonce[i] = static_cast<unsigned char>(0x21 + i);
+    }
+    Bytes binding = purify::bytes_from_ascii("one-gate-zk-norm-arg-binding");
+
+    Result<purify::bppp::ExperimentalCircuitZkNormArgProof> proof =
+        purify::bppp::prove_experimental_circuit_zk_norm_arg(circuit, assignment, nonce, binding);
+    expect_ok(ctx, proof, "prove_experimental_circuit_zk_norm_arg proves a satisfying one-gate circuit");
+    if (!proof.has_value()) {
         return;
     }
 
-    Result<bool> reparsed =
-        purify::verify_experimental_circuit(circuit, *decoded, purify::bppp::base_generator(), binding);
-    expect_ok(ctx, reparsed, "verify_experimental_circuit accepts the reparsed proof");
-    if (reparsed.has_value()) {
-        ctx.expect(*reparsed, "reparsed experimental circuit proof verifies");
+    ctx.expect(proof->a_commitment != purify::bppp::PointBytes{},
+               "experimental circuit ZK proof carries a non-empty A commitment");
+    ctx.expect(proof->s_commitment != purify::bppp::PointBytes{},
+               "experimental circuit ZK proof carries a non-empty S commitment");
+
+    Result<bool> verified = purify::bppp::verify_experimental_circuit_zk_norm_arg(circuit, *proof, binding);
+    expect_ok(ctx, verified, "verify_experimental_circuit_zk_norm_arg succeeds on the one-gate proof");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "experimental circuit ZK norm argument verifies on the one-gate circuit");
     }
 
     Result<bool> wrong_binding =
-        purify::verify_experimental_circuit(circuit, *proof, purify::bppp::base_generator(),
-                                            purify::bytes_from_ascii("toy-circuit-binding-wrong"));
-    expect_ok(ctx, wrong_binding, "verify_experimental_circuit runs with a wrong binding");
+        purify::bppp::verify_experimental_circuit_zk_norm_arg(circuit, *proof,
+                                                              purify::bytes_from_ascii("one-gate-zk-norm-arg-binding-wrong"));
+    expect_ok(ctx, wrong_binding, "verify_experimental_circuit_zk_norm_arg runs with a wrong one-gate binding");
     if (wrong_binding.has_value()) {
-        ctx.expect(!*wrong_binding, "experimental circuit proof is bound to the supplied statement bytes");
+        ctx.expect(!*wrong_binding, "experimental circuit ZK norm argument is bound to the supplied one-gate statement bytes");
+    }
+}
+
+void test_experimental_circuit_zk_norm_arg_sample_verifier(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for the experimental circuit ZK norm argument");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+    Result<purify::BulletproofWitnessData> witness = purify::prove_assignment_data(message, *secret);
+    expect_ok(ctx, witness, "prove_assignment_data succeeds for the experimental circuit ZK norm argument");
+    if (!witness.has_value()) {
+        return;
+    }
+
+    Result<NativeBulletproofCircuit> circuit = purify::verifier_circuit(message, witness->public_key);
+    expect_ok(ctx, circuit, "verifier_circuit succeeds for the experimental circuit ZK norm argument");
+    if (!circuit.has_value()) {
+        return;
+    }
+
+    purify::bppp::ScalarBytes nonce{};
+    for (std::size_t i = 0; i < nonce.size(); ++i) {
+        nonce[i] = static_cast<unsigned char>(0x80 + i);
+    }
+    Bytes binding = purify::bytes_from_ascii("sample-verifier-zk-norm-arg-binding");
+
+    Result<purify::bppp::ExperimentalCircuitZkNormArgProof> proof =
+        purify::bppp::prove_experimental_circuit_zk_norm_arg(*circuit, witness->assignment, nonce, binding);
+    expect_ok(ctx, proof, "prove_experimental_circuit_zk_norm_arg proves the sample verifier circuit");
+    if (!proof.has_value()) {
+        return;
+    }
+
+    Result<bool> verified = purify::bppp::verify_experimental_circuit_zk_norm_arg(*circuit, *proof, binding);
+    expect_ok(ctx, verified, "verify_experimental_circuit_zk_norm_arg succeeds on the sample verifier circuit");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "experimental circuit ZK norm argument verifies on the sample verifier circuit");
+    }
+
+    purify::bppp::ExperimentalCircuitZkNormArgProof tampered = *proof;
+    tampered.proof.back() ^= 0x01;
+    Result<bool> tampered_ok = purify::bppp::verify_experimental_circuit_zk_norm_arg(*circuit, tampered, binding);
+    expect_ok(ctx, tampered_ok, "verify_experimental_circuit_zk_norm_arg runs on a tampered sample proof");
+    if (tampered_ok.has_value()) {
+        ctx.expect(!*tampered_ok, "tampering the sample ZK norm-argument proof is detected");
     }
 }
 
@@ -766,9 +1012,7 @@ void test_puresign_binding_checks(TestContext& ctx) {
 
 }  // namespace
 
-int main() {
-    TestContext ctx;
-
+void run_purify_tests(TestContext& ctx) {
     test_known_sample(ctx);
     test_secret_hardening_path(ctx);
     test_library_key_generation(ctx);
@@ -778,18 +1022,14 @@ int main() {
     test_equal_lowering(ctx);
     test_expr_builder(ctx);
     test_bppp_move_overload(ctx);
-    test_experimental_bulletproof_roundtrip(ctx);
+    test_toy_bppp_circuit_reduction(ctx);
+    test_experimental_circuit_norm_arg_one_gate(ctx);
+    test_experimental_circuit_norm_arg_sample_verifier(ctx);
+    test_experimental_circuit_zk_norm_arg_one_gate(ctx);
+    test_experimental_circuit_zk_norm_arg_sample_verifier(ctx);
     test_packed_circuit_with_slack(ctx);
     test_circuit_template_partial_final_eval(ctx);
     test_puresign_message_signing(ctx);
     test_puresign_topic_signing(ctx);
     test_puresign_binding_checks(ctx);
-
-    if (ctx.failures != 0) {
-        std::cerr << ctx.failures << " test(s) failed\n";
-        return 1;
-    }
-
-    std::cout << "all tests passed\n";
-    return 0;
 }

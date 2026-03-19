@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstddef>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -80,6 +81,9 @@ struct NormArgInputs {
     std::vector<ScalarBytes> c_vec;
 };
 
+/** @brief Computes the public BPPP commitment for a standalone norm-argument input bundle. */
+Result<PointBytes> commit_norm_arg(const NormArgInputs& inputs);
+
 /** @brief Standalone BPPP norm-argument proof bundle with all verifier-side inputs. */
 struct NormArgProof {
     ScalarBytes rho{};
@@ -98,12 +102,110 @@ struct NormArgProof {
 Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs);
 /** @brief Produces a standalone BPPP norm argument, moving large inputs into the returned proof when possible. */
 Result<NormArgProof> prove_norm_arg(NormArgInputs&& inputs);
+/** @brief Produces a standalone BPPP norm argument anchored to a caller-supplied public commitment. */
+Result<NormArgProof> prove_norm_arg_to_commitment(const NormArgInputs& inputs, const PointBytes& commitment);
 /**
  * @brief Verifies a standalone BPPP norm argument.
  * @param proof Proof bundle returned by prove_norm_arg.
  * @return True when the proof verifies.
  */
 bool verify_norm_arg(const NormArgProof& proof);
+
+/** @brief Experimental transparent circuit proof backed by the standalone BPPP norm argument. */
+struct ExperimentalCircuitNormArgProof {
+    PointBytes witness_commitment{};
+    Bytes proof;
+};
+
+/** @brief Experimental masked circuit proof that hides the reduced witness before the final BPPP argument. */
+struct ExperimentalCircuitZkNormArgProof {
+    PointBytes a_commitment{};
+    PointBytes s_commitment{};
+    ScalarBytes t2{};
+    Bytes proof;
+};
+
+/**
+ * @brief Commits to the reduced witness coordinates used by the experimental circuit-to-BPPP reduction.
+ * @param circuit Native circuit to reduce.
+ * @param assignment Witness assignment to commit.
+ * @param statement_binding Optional statement bytes folded into the public reduction challenges.
+ * @return Commitment to the reduced hidden witness coordinates.
+ */
+Result<PointBytes> commit_experimental_circuit_witness(
+    const NativeBulletproofCircuit& circuit,
+    const BulletproofAssignmentData& assignment,
+    std::span<const unsigned char> statement_binding = {});
+
+/**
+ * @brief Produces an anchored transparent circuit proof using the experimental circuit-to-BPPP reduction.
+ * @param circuit Native circuit to reduce.
+ * @param assignment Witness assignment to prove.
+ * @param statement_binding Optional statement bytes folded into the public reduction challenges.
+ * @return Proof carrying the reduced witness commitment and BPPP proof bytes.
+ */
+Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
+    const NativeBulletproofCircuit& circuit,
+    const BulletproofAssignmentData& assignment,
+    std::span<const unsigned char> statement_binding = {});
+
+/**
+ * @brief Produces an anchored transparent circuit proof against a caller-supplied reduced witness commitment.
+ * @param circuit Native circuit to reduce.
+ * @param assignment Witness assignment to prove.
+ * @param witness_commitment Public reduced witness commitment expected by the verifier.
+ * @param statement_binding Optional statement bytes folded into the public reduction challenges.
+ * @return Proof carrying the supplied reduced witness commitment and BPPP proof bytes.
+ */
+Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg_to_commitment(
+    const NativeBulletproofCircuit& circuit,
+    const BulletproofAssignmentData& assignment,
+    const PointBytes& witness_commitment,
+    std::span<const unsigned char> statement_binding = {});
+
+/**
+ * @brief Verifies an experimental transparent circuit proof produced by `prove_experimental_circuit_norm_arg`.
+ * @param circuit Native circuit to reduce.
+ * @param proof Reduced witness commitment plus proof bytes.
+ * @param statement_binding Optional statement bytes folded into the public reduction challenges.
+ * @return True when the proof verifies against the public circuit statement.
+ */
+Result<bool> verify_experimental_circuit_norm_arg(
+    const NativeBulletproofCircuit& circuit,
+    const ExperimentalCircuitNormArgProof& proof,
+    std::span<const unsigned char> statement_binding = {});
+
+/**
+ * @brief Produces an experimental masked circuit proof over the reduced BPPP relation.
+ *
+ * This wrapper is intended to mimic the outer masking strategy of Bulletproof-style protocols:
+ * it commits to the reduced witness, commits to a random mask, derives a challenge, and only
+ * proves the challenge-combined witness with the inner BPPP norm argument. The inner BPPP
+ * implementation remains variable-time and should still be treated as experimental for secret data.
+ *
+ * @param circuit Native circuit to reduce.
+ * @param assignment Witness assignment to prove.
+ * @param nonce Deterministic prover randomness used to derive the outer masking vectors.
+ * @param statement_binding Optional statement bytes folded into the public reduction challenges.
+ * @return Masked proof bundle, or a reduction/backend error.
+ */
+Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg(
+    const NativeBulletproofCircuit& circuit,
+    const BulletproofAssignmentData& assignment,
+    const ScalarBytes& nonce,
+    std::span<const unsigned char> statement_binding = {});
+
+/**
+ * @brief Verifies an experimental masked circuit proof produced by `prove_experimental_circuit_zk_norm_arg`.
+ * @param circuit Native circuit to reduce.
+ * @param proof Outer commitments plus the inner masked BPPP proof.
+ * @param statement_binding Optional statement bytes folded into the public reduction challenges.
+ * @return True when the masked proof verifies against the public circuit statement.
+ */
+Result<bool> verify_experimental_circuit_zk_norm_arg(
+    const NativeBulletproofCircuit& circuit,
+    const ExperimentalCircuitZkNormArgProof& proof,
+    std::span<const unsigned char> statement_binding = {});
 
 /** @brief Purify witness bundle together with a Pedersen commitment to the output. */
 struct CommittedPurifyWitness {

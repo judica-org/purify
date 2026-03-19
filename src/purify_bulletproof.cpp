@@ -1837,4 +1837,20 @@ Result<CircuitMainResult> circuit_main(Transcript& transcript, const JacobianPoi
     return CircuitMainResult{circuit_combine(transcript, out_x1, out_x2), out_p1x, out_p2x, n_bits};
 }
 
+}  // namespace
+
+namespace purify {
+
+Bytes experimental_circuit_binding_digest(
+    const NativeBulletproofCircuit& circuit,
+    std::span<const unsigned char> statement_binding) {
+    return ::circuit_binding_digest(circuit, statement_binding);
+}
+
+Bytes experimental_circuit_binding_digest(
+    const NativeBulletproofCircuit::PackedWithSlack& circuit,
+    std::span<const unsigned char> statement_binding) {
+    return ::circuit_binding_digest(circuit, statement_binding);
+}
+
 }  // namespace purify

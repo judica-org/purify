@@ -4,11 +4,11 @@
 
 /**
  * @file puresign.hpp
- * @brief Purify-derived BIP340 signing helpers with prepared nonces and wire-format artifacts.
+ * @brief Legacy Bulletproof-backed Purify-derived BIP340 signing helpers with prepared nonces.
  *
  * This layer exposes deterministic nonces, signatures, and experimental `proof(R)` artifacts
  * derived from a packed Purify secret and intended to be ready for transport or direct
- * secp256k1 use.
+ * secp256k1 use. This is the legacy Bulletproof-backed `proof(R)` surface.
  */
 
 #pragma once

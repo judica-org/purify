@@ -3,12 +3,16 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify.hpp
- * @brief Umbrella header that re-exports the public Purify API.
+ * @file puresign_legacy.hpp
+ * @brief Explicit alias for the legacy Bulletproof-backed PureSign API.
  */
 
 #pragma once
 
-#include "purify/api.hpp"
 #include "purify/puresign.hpp"
-#include "purify/puresign_legacy.hpp"
+
+namespace purify {
+
+namespace puresign_legacy = puresign;
+
+}  // namespace purify

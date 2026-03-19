@@ -676,7 +676,10 @@ static int purify_build_bulletproof_circuit(const purify_bulletproof_circuit_vie
     size_t offset = 0;
     size_t i;
 
-    if (view == NULL || out == NULL || view->n_constraints == 0 || view->c32 == NULL) {
+    /* Bit/range-style circuits can have no explicit constraint rows, so the
+     * constant vector is optional when n_constraints == 0.
+     */
+    if (view == NULL || out == NULL || (view->n_constraints != 0 && view->c32 == NULL)) {
         return 0;
     }
     if (!secp256k1_is_power_of_two(view->n_gates) || view->n_commits > 1) {
@@ -701,11 +704,14 @@ static int purify_build_bulletproof_circuit(const purify_bulletproof_circuit_vie
     out->wr = view->n_gates == 0 ? NULL : (secp256k1_bulletproof_wmatrix_row*)calloc(view->n_gates, sizeof(*out->wr));
     out->wo = view->n_gates == 0 ? NULL : (secp256k1_bulletproof_wmatrix_row*)calloc(view->n_gates, sizeof(*out->wo));
     out->wv = view->n_commits == 0 ? NULL : (secp256k1_bulletproof_wmatrix_row*)calloc(view->n_commits, sizeof(*out->wv));
-    out->c = (secp256k1_fast_scalar*)malloc(view->n_constraints * sizeof(*out->c));
+    /* Mirror the legacy circuit representation: no explicit constraints means
+     * no c vector allocation either.
+     */
+    out->c = view->n_constraints == 0 ? NULL : (secp256k1_fast_scalar*)malloc(view->n_constraints * sizeof(*out->c));
     out->entries = total_entries == 0 ? NULL : (secp256k1_bulletproof_wmatrix_entry*)malloc(total_entries * sizeof(*out->entries));
     if ((view->n_gates != 0 && (out->wl == NULL || out->wr == NULL || out->wo == NULL)) ||
         (view->n_commits != 0 && out->wv == NULL) ||
-        out->c == NULL ||
+        (view->n_constraints != 0 && out->c == NULL) ||
         (total_entries != 0 && out->entries == NULL)) {
         purify_free_bulletproof_circuit(out);
         return 0;
@@ -1211,6 +1217,205 @@ int purify_pedersen_commit_char(const unsigned char blind32[32], const unsigned 
     return ok;
 }
 
+int purify_bppp_commit_norm_arg(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
+                                const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
+                                size_t l_vec_len, const unsigned char* c_vec32, size_t c_vec_len,
+                                unsigned char commitment_out33[33]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_scratch_space* scratch = NULL;
+    secp256k1_bppp_generators* gens = NULL;
+    secp256k1_scalar rho, mu;
+    secp256k1_scalar *n_vec = NULL, *l_vec = NULL, *c_vec = NULL;
+    secp256k1_ge commit;
+    int ok = 0;
+
+    if (ctx == NULL || rho32 == NULL || generators33 == NULL || n_vec32 == NULL || l_vec32 == NULL || c_vec32 == NULL ||
+        commitment_out33 == NULL) {
+        if (ctx != NULL) secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (n_vec_len == 0 || l_vec_len == 0 || c_vec_len == 0 || l_vec_len != c_vec_len) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (!secp256k1_is_power_of_two(n_vec_len) || !secp256k1_is_power_of_two(c_vec_len) || generators_count != n_vec_len + l_vec_len) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (!purify_parse_scalar(rho32, &rho, 1)) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
+    gens = secp256k1_bppp_generators_parse(ctx, generators33, generators_count * 33);
+    n_vec = (secp256k1_scalar*)malloc(n_vec_len * sizeof(*n_vec));
+    l_vec = (secp256k1_scalar*)malloc(l_vec_len * sizeof(*l_vec));
+    c_vec = (secp256k1_scalar*)malloc(c_vec_len * sizeof(*c_vec));
+    if (scratch == NULL || gens == NULL || n_vec == NULL || l_vec == NULL || c_vec == NULL) {
+        goto cleanup;
+    }
+    if (!purify_parse_scalar_array(n_vec32, n_vec_len, n_vec) ||
+        !purify_parse_scalar_array(l_vec32, l_vec_len, l_vec) ||
+        !purify_parse_scalar_array(c_vec32, c_vec_len, c_vec)) {
+        goto cleanup;
+    }
+    secp256k1_scalar_sqr(&mu, &rho);
+    if (!secp256k1_bppp_commit(ctx, scratch, &commit, gens, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len, &mu)) {
+        goto cleanup;
+    }
+    ok = purify_serialize_point(commitment_out33, &commit);
+
+cleanup:
+    if (n_vec != NULL) free(n_vec);
+    if (l_vec != NULL) free(l_vec);
+    if (c_vec != NULL) free(c_vec);
+    if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
+    if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+int purify_bppp_commit_witness_only(const unsigned char* generators33, size_t generators_count,
+                                    const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
+                                    size_t l_vec_len, unsigned char commitment_out33[33]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_scratch_space* scratch = NULL;
+    secp256k1_bppp_generators* gens = NULL;
+    secp256k1_scalar zero;
+    secp256k1_scalar *n_vec = NULL, *l_vec = NULL;
+    secp256k1_ge commit;
+    secp256k1_gej commitj;
+    ecmult_bp_commit_cb_data data;
+    int ok = 0;
+
+    if (ctx == NULL || generators33 == NULL || n_vec32 == NULL || l_vec32 == NULL || commitment_out33 == NULL) {
+        if (ctx != NULL) secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (n_vec_len == 0 || l_vec_len == 0 || generators_count != n_vec_len + l_vec_len) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+
+    scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
+    gens = secp256k1_bppp_generators_parse(ctx, generators33, generators_count * 33);
+    n_vec = (secp256k1_scalar*)malloc(n_vec_len * sizeof(*n_vec));
+    l_vec = (secp256k1_scalar*)malloc(l_vec_len * sizeof(*l_vec));
+    if (scratch == NULL || gens == NULL || n_vec == NULL || l_vec == NULL) {
+        goto cleanup;
+    }
+    if (!purify_parse_scalar_array(n_vec32, n_vec_len, n_vec) ||
+        !purify_parse_scalar_array(l_vec32, l_vec_len, l_vec)) {
+        goto cleanup;
+    }
+
+    secp256k1_scalar_set_int(&zero, 0);
+    data.g = gens->gens;
+    data.n = n_vec;
+    data.l = l_vec;
+    data.g_len = n_vec_len;
+    if (!secp256k1_ecmult_multi_var(&ctx->error_callback, scratch, &commitj, &zero, ecmult_bp_commit_cb,
+                                    (void*)&data, n_vec_len + l_vec_len)) {
+        goto cleanup;
+    }
+    if (secp256k1_gej_is_infinity(&commitj)) {
+        goto cleanup;
+    }
+    secp256k1_ge_set_gej_var(&commit, &commitj);
+    ok = purify_serialize_point(commitment_out33, &commit);
+
+cleanup:
+    if (n_vec != NULL) free(n_vec);
+    if (l_vec != NULL) free(l_vec);
+    if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
+    if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+int purify_bppp_offset_commitment(const unsigned char commitment33[33], const unsigned char scalar32[32],
+                                  unsigned char commitment_out33[33]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_scalar scalar;
+    secp256k1_ge commitment_ge, result_ge;
+    secp256k1_gej commitment_j, offset_j, result_j;
+    int ok = 0;
+
+    if (ctx == NULL || commitment33 == NULL || scalar32 == NULL || commitment_out33 == NULL) {
+        if (ctx != NULL) secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (!purify_parse_point_as_ge(commitment33, &commitment_ge) ||
+        !purify_parse_scalar(scalar32, &scalar, 0)) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+
+    secp256k1_gej_set_ge(&commitment_j, &commitment_ge);
+    secp256k1_ecmult_const(&offset_j, &secp256k1_ge_const_g, &scalar);
+    secp256k1_gej_add_var(&result_j, &commitment_j, &offset_j, NULL);
+    if (!secp256k1_gej_is_infinity(&result_j)) {
+        secp256k1_ge_set_gej(&result_ge, &result_j);
+        ok = purify_serialize_point(commitment_out33, &result_ge);
+    }
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+int purify_point_scale(const unsigned char point33[33], const unsigned char scalar32[32],
+                       unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_scalar scalar;
+    secp256k1_ge point_ge, result_ge;
+    secp256k1_gej result_j;
+    int ok = 0;
+
+    if (ctx == NULL || point33 == NULL || scalar32 == NULL || out33 == NULL) {
+        if (ctx != NULL) secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (!purify_parse_point_as_ge(point33, &point_ge) ||
+        !purify_parse_scalar(scalar32, &scalar, 0)) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+
+    secp256k1_ecmult_const(&result_j, &point_ge, &scalar);
+    if (!secp256k1_gej_is_infinity(&result_j)) {
+        secp256k1_ge_set_gej(&result_ge, &result_j);
+        ok = purify_serialize_point(out33, &result_ge);
+    }
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+int purify_point_add(const unsigned char lhs33[33], const unsigned char rhs33[33],
+                     unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_ge lhs_ge, rhs_ge, result_ge;
+    secp256k1_gej lhs_j, result_j;
+    int ok = 0;
+
+    if (ctx == NULL || lhs33 == NULL || rhs33 == NULL || out33 == NULL) {
+        if (ctx != NULL) secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (!purify_parse_point_as_ge(lhs33, &lhs_ge) ||
+        !purify_parse_point_as_ge(rhs33, &rhs_ge)) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+
+    secp256k1_gej_set_ge(&lhs_j, &lhs_ge);
+    secp256k1_gej_add_ge_var(&result_j, &lhs_j, &rhs_ge, NULL);
+    if (!secp256k1_gej_is_infinity(&result_j)) {
+        secp256k1_ge_set_gej(&result_ge, &result_j);
+        ok = purify_serialize_point(out33, &result_ge);
+    }
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
 int purify_bppp_prove_norm_arg(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
                                const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
                                size_t l_vec_len, const unsigned char* c_vec32, size_t c_vec_len,
@@ -1247,7 +1452,7 @@ int purify_bppp_prove_norm_arg(const unsigned char rho32[32], const unsigned cha
         secp256k1_context_destroy(ctx);
         return 0;
     }
-    scratch = secp256k1_scratch_space_create(ctx, 1u << 20);
+    scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
     gens = secp256k1_bppp_generators_parse(ctx, generators33, generators_count * 33);
     n_vec = (secp256k1_scalar*)malloc(n_vec_len * sizeof(*n_vec));
     l_vec = (secp256k1_scalar*)malloc(l_vec_len * sizeof(*l_vec));
@@ -1268,6 +1473,81 @@ int purify_bppp_prove_norm_arg(const unsigned char rho32[32], const unsigned cha
         goto cleanup;
     }
     purify_norm_arg_commit_initial_data(&transcript, &rho, gens, n_vec_len, c_vec, c_vec_len, &commit);
+    ok = purify_bppp_rangeproof_norm_product_prove_const(ctx, scratch, proof_out, proof_len, &transcript, &rho,
+                                                         gens->gens, gens->n, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len);
+
+cleanup:
+    if (n_vec != NULL) free(n_vec);
+    if (l_vec != NULL) free(l_vec);
+    if (c_vec != NULL) free(c_vec);
+    if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
+    if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
+int purify_bppp_prove_norm_arg_to_commitment(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
+                                             const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
+                                             size_t l_vec_len, const unsigned char* c_vec32, size_t c_vec_len,
+                                             const unsigned char commitment33[33], unsigned char* proof_out, size_t* proof_len) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_scratch_space* scratch = NULL;
+    secp256k1_bppp_generators* gens = NULL;
+    secp256k1_scalar rho, mu;
+    secp256k1_scalar *n_vec = NULL, *l_vec = NULL, *c_vec = NULL;
+    secp256k1_ge expected_commit, commitment_ge;
+    secp256k1_sha256 transcript;
+    unsigned char expected_commitment33[33];
+    size_t required = purify_bppp_required_proof_size(n_vec_len, c_vec_len);
+    int ok = 0;
+
+    memset(expected_commitment33, 0, sizeof(expected_commitment33));
+    if (ctx == NULL || rho32 == NULL || generators33 == NULL || n_vec32 == NULL || l_vec32 == NULL || c_vec32 == NULL ||
+        commitment33 == NULL || proof_out == NULL || proof_len == NULL) {
+        if (ctx != NULL) secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (n_vec_len == 0 || l_vec_len == 0 || c_vec_len == 0 || l_vec_len != c_vec_len) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (!secp256k1_is_power_of_two(n_vec_len) || !secp256k1_is_power_of_two(c_vec_len) || generators_count != n_vec_len + l_vec_len) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (*proof_len < required) {
+        *proof_len = required;
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    if (!purify_parse_scalar(rho32, &rho, 1) || !purify_parse_point_as_ge(commitment33, &commitment_ge)) {
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
+    scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
+    gens = secp256k1_bppp_generators_parse(ctx, generators33, generators_count * 33);
+    n_vec = (secp256k1_scalar*)malloc(n_vec_len * sizeof(*n_vec));
+    l_vec = (secp256k1_scalar*)malloc(l_vec_len * sizeof(*l_vec));
+    c_vec = (secp256k1_scalar*)malloc(c_vec_len * sizeof(*c_vec));
+    if (scratch == NULL || gens == NULL || n_vec == NULL || l_vec == NULL || c_vec == NULL) {
+        goto cleanup;
+    }
+    if (!purify_parse_scalar_array(n_vec32, n_vec_len, n_vec) ||
+        !purify_parse_scalar_array(l_vec32, l_vec_len, l_vec) ||
+        !purify_parse_scalar_array(c_vec32, c_vec_len, c_vec)) {
+        goto cleanup;
+    }
+    secp256k1_scalar_sqr(&mu, &rho);
+    if (!secp256k1_bppp_commit(ctx, scratch, &expected_commit, gens, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len, &mu)) {
+        goto cleanup;
+    }
+    if (!purify_serialize_point(expected_commitment33, &expected_commit)) {
+        goto cleanup;
+    }
+    if (secp256k1_memcmp_var(expected_commitment33, commitment33, sizeof(expected_commitment33)) != 0) {
+        goto cleanup;
+    }
+    purify_norm_arg_commit_initial_data(&transcript, &rho, gens, n_vec_len, c_vec, c_vec_len, &commitment_ge);
     ok = purify_bppp_rangeproof_norm_product_prove_const(ctx, scratch, proof_out, proof_len, &transcript, &rho,
                                                          gens->gens, gens->n, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len);
 
@@ -1308,7 +1588,7 @@ int purify_bppp_verify_norm_arg(const unsigned char rho32[32], const unsigned ch
         secp256k1_context_destroy(ctx);
         return 0;
     }
-    scratch = secp256k1_scratch_space_create(ctx, 1u << 20);
+    scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
     gens = secp256k1_bppp_generators_parse(ctx, generators33, generators_count * 33);
     c_vec = (secp256k1_scalar*)malloc(c_vec_len * sizeof(*c_vec));
     if (scratch == NULL || gens == NULL || c_vec == NULL) {

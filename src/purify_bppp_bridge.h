@@ -114,7 +114,12 @@ typedef struct purify_bulletproof_assignment_view {
     const unsigned char* v32;
 } purify_bulletproof_assignment_view;
 
+typedef struct purify_bulletproof_backend_resources purify_bulletproof_backend_resources;
+
 size_t purify_bulletproof_required_proof_size(size_t n_gates);
+
+purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_create(size_t n_gates);
+void purify_bulletproof_backend_resources_destroy(purify_bulletproof_backend_resources* resources);
 
 int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circuit,
                                      const purify_bulletproof_assignment_view* assignment,
@@ -126,6 +131,17 @@ int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circ
                                      unsigned char commitment_out33[33],
                                      unsigned char* proof_out,
                                      size_t* proof_len);
+int purify_bulletproof_prove_circuit_with_resources(purify_bulletproof_backend_resources* resources,
+                                                    const purify_bulletproof_circuit_view* circuit,
+                                                    const purify_bulletproof_assignment_view* assignment,
+                                                    const unsigned char* blind32,
+                                                    const unsigned char value_gen33[33],
+                                                    const unsigned char nonce32[32],
+                                                    const unsigned char* extra_commit,
+                                                    size_t extra_commit_len,
+                                                    unsigned char commitment_out33[33],
+                                                    unsigned char* proof_out,
+                                                    size_t* proof_len);
 
 int purify_bulletproof_prove_circuit_assume_valid(const purify_bulletproof_circuit_view* circuit,
                                                   const purify_bulletproof_assignment_view* assignment,
@@ -137,6 +153,17 @@ int purify_bulletproof_prove_circuit_assume_valid(const purify_bulletproof_circu
                                                   unsigned char commitment_out33[33],
                                                   unsigned char* proof_out,
                                                   size_t* proof_len);
+int purify_bulletproof_prove_circuit_assume_valid_with_resources(purify_bulletproof_backend_resources* resources,
+                                                                 const purify_bulletproof_circuit_view* circuit,
+                                                                 const purify_bulletproof_assignment_view* assignment,
+                                                                 const unsigned char* blind32,
+                                                                 const unsigned char value_gen33[33],
+                                                                 const unsigned char nonce32[32],
+                                                                 const unsigned char* extra_commit,
+                                                                 size_t extra_commit_len,
+                                                                 unsigned char commitment_out33[33],
+                                                                 unsigned char* proof_out,
+                                                                 size_t* proof_len);
 
 int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* circuit,
                                       const unsigned char commitment33[33],
@@ -145,6 +172,14 @@ int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* cir
                                       size_t extra_commit_len,
                                       const unsigned char* proof,
                                       size_t proof_len);
+int purify_bulletproof_verify_circuit_with_resources(purify_bulletproof_backend_resources* resources,
+                                                     const purify_bulletproof_circuit_view* circuit,
+                                                     const unsigned char commitment33[33],
+                                                     const unsigned char value_gen33[33],
+                                                     const unsigned char* extra_commit,
+                                                     size_t extra_commit_len,
+                                                     const unsigned char* proof,
+                                                     size_t proof_len);
 
 #ifdef __cplusplus
 }

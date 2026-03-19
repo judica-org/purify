@@ -20,6 +20,7 @@
 
 #include "purify.hpp"
 #include "purify_bppp.hpp"
+#include "../src/purify_bppp_bridge.h"
 
 namespace {
 
@@ -387,6 +388,15 @@ int main(int argc, char** argv) {
         assert(proof.has_value() && "benchmark experimental circuit proof should succeed");
         ankerl::nanobench::doNotOptimizeAway(proof->proof.data());
         ankerl::nanobench::doNotOptimizeAway(proof->proof.size());
+    });
+
+    auto experimental_backend_bench = make_bench(*config);
+    experimental_backend_bench.run("create experimental bulletproof backend resources", [&] {
+        purify_bulletproof_backend_resources* resources =
+            purify_bulletproof_backend_resources_create(bench_case->circuit.n_gates);
+        assert(resources != nullptr && "benchmark experimental backend resource creation should succeed");
+        ankerl::nanobench::doNotOptimizeAway(resources);
+        purify_bulletproof_backend_resources_destroy(resources);
     });
 
     auto experimental_verify_bench = make_bench(*config);

@@ -17,8 +17,10 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <type_traits>
+#include <unordered_map>
 
 namespace {
 
@@ -36,6 +38,15 @@ using purify::BulletproofGeneratorBytes;
 using purify::BulletproofPointBytes;
 using purify::BulletproofScalarBytes;
 using PackedCircuit = purify::NativeBulletproofCircuit::PackedWithSlack;
+
+struct BulletproofBackendResourceDeleter {
+    void operator()(purify_bulletproof_backend_resources* resources) const noexcept {
+        purify_bulletproof_backend_resources_destroy(resources);
+    }
+};
+
+using BulletproofBackendResourcePtr =
+    std::unique_ptr<purify_bulletproof_backend_resources, BulletproofBackendResourceDeleter>;
 
 static_assert(std::is_trivially_copyable_v<purify::NativeBulletproofCircuitTerm>,
               "Packed circuit storage requires trivially copyable terms");
@@ -443,6 +454,20 @@ std::size_t circuit_n_commitments(const PackedCircuit& circuit) {
     return circuit.n_commitments();
 }
 
+purify_bulletproof_backend_resources* cached_bulletproof_backend_resources(std::size_t n_gates) {
+    thread_local std::unordered_map<std::size_t, BulletproofBackendResourcePtr> cache;
+
+    auto it = cache.find(n_gates);
+    if (it == cache.end()) {
+        purify_bulletproof_backend_resources* created = purify_bulletproof_backend_resources_create(n_gates);
+        if (created == nullptr) {
+            return nullptr;
+        }
+        it = cache.emplace(n_gates, BulletproofBackendResourcePtr(created)).first;
+    }
+    return it->second.get();
+}
+
 template <typename CircuitLike>
 Result<ExperimentalBulletproofProof> prove_experimental_circuit_impl(
     const CircuitLike& circuit,
@@ -486,19 +511,20 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_impl(
     std::size_t proof_len = proof_bytes.size();
     BulletproofPointBytes commitment{};
     const unsigned char* blind_ptr = blind.has_value() ? blind->data() : nullptr;
+    purify_bulletproof_backend_resources* resources = cached_bulletproof_backend_resources(circuit_n_gates(circuit));
 
-    if (proof_len == 0) {
+    if (proof_len == 0 || resources == nullptr) {
         return unexpected_error(ErrorCode::UnexpectedSize, proof_size_context);
     }
     const int ok = require_assignment_validation
-        ? purify_bulletproof_prove_circuit(&flat_circuit.view, &flat_assignment.view, blind_ptr,
-                                           value_generator.data(), nonce.data(),
-                                           binding_digest.data(), binding_digest.size(),
-                                           commitment.data(), proof_bytes.data(), &proof_len)
-        : purify_bulletproof_prove_circuit_assume_valid(&flat_circuit.view, &flat_assignment.view, blind_ptr,
-                                                        value_generator.data(), nonce.data(),
-                                                        binding_digest.data(), binding_digest.size(),
-                                                        commitment.data(), proof_bytes.data(), &proof_len);
+        ? purify_bulletproof_prove_circuit_with_resources(resources, &flat_circuit.view, &flat_assignment.view, blind_ptr,
+                                                          value_generator.data(), nonce.data(),
+                                                          binding_digest.data(), binding_digest.size(),
+                                                          commitment.data(), proof_bytes.data(), &proof_len)
+        : purify_bulletproof_prove_circuit_assume_valid_with_resources(resources, &flat_circuit.view, &flat_assignment.view, blind_ptr,
+                                                                       value_generator.data(), nonce.data(),
+                                                                       binding_digest.data(), binding_digest.size(),
+                                                                       commitment.data(), proof_bytes.data(), &proof_len);
     if (!ok) {
         return unexpected_error(ErrorCode::BackendRejectedInput, bridge_context);
     }
@@ -1148,9 +1174,14 @@ Result<bool> verify_experimental_circuit(
 
     FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
     Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
-    bool ok = purify_bulletproof_verify_circuit(&flat_circuit.view, proof.commitment.data(), value_generator.data(),
-                                                binding_digest.data(), binding_digest.size(),
-                                                proof.proof.data(), proof.proof.size()) != 0;
+    purify_bulletproof_backend_resources* resources = cached_bulletproof_backend_resources(circuit.n_gates);
+    if (resources == nullptr) {
+        return unexpected_error(ErrorCode::UnexpectedSize, "verify_experimental_circuit:backend_resources");
+    }
+    bool ok = purify_bulletproof_verify_circuit_with_resources(resources, &flat_circuit.view, proof.commitment.data(),
+                                                               value_generator.data(), binding_digest.data(),
+                                                               binding_digest.size(), proof.proof.data(),
+                                                               proof.proof.size()) != 0;
     return ok;
 }
 
@@ -1174,9 +1205,14 @@ Result<bool> verify_experimental_circuit(
 
     FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
     Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
-    bool ok = purify_bulletproof_verify_circuit(&flat_circuit.view, proof.commitment.data(), value_generator.data(),
-                                                binding_digest.data(), binding_digest.size(),
-                                                proof.proof.data(), proof.proof.size()) != 0;
+    purify_bulletproof_backend_resources* resources = cached_bulletproof_backend_resources(circuit.n_gates());
+    if (resources == nullptr) {
+        return unexpected_error(ErrorCode::UnexpectedSize, "verify_experimental_circuit:packed_backend_resources");
+    }
+    bool ok = purify_bulletproof_verify_circuit_with_resources(resources, &flat_circuit.view, proof.commitment.data(),
+                                                               value_generator.data(), binding_digest.data(),
+                                                               binding_digest.size(), proof.proof.data(),
+                                                               proof.proof.size()) != 0;
     return ok;
 }
 

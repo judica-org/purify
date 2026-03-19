@@ -35,6 +35,63 @@ static secp256k1_context* purify_create_context(void) {
     return secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
 }
 
+struct purify_bulletproof_backend_resources {
+    size_t n_gates;
+    secp256k1_context* ctx;
+    secp256k1_scratch_space* scratch;
+    secp256k1_bulletproof_generators* gens;
+};
+
+purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_create(size_t n_gates) {
+    purify_bulletproof_backend_resources* resources;
+
+    if (n_gates == 0 || !secp256k1_is_power_of_two(n_gates)) {
+        return NULL;
+    }
+
+    resources = (purify_bulletproof_backend_resources*)calloc(1, sizeof(*resources));
+    if (resources == NULL) {
+        return NULL;
+    }
+
+    resources->ctx = purify_create_context();
+    if (resources->ctx == NULL) {
+        purify_bulletproof_backend_resources_destroy(resources);
+        return NULL;
+    }
+
+    resources->scratch = secp256k1_scratch_space_create(resources->ctx, 1u << 24);
+    if (resources->scratch == NULL) {
+        purify_bulletproof_backend_resources_destroy(resources);
+        return NULL;
+    }
+
+    resources->gens = secp256k1_bulletproof_generators_create(resources->ctx, secp256k1_generator_h, 2 * n_gates, 1);
+    if (resources->gens == NULL || resources->gens->n < 2 * n_gates) {
+        purify_bulletproof_backend_resources_destroy(resources);
+        return NULL;
+    }
+
+    resources->n_gates = n_gates;
+    return resources;
+}
+
+void purify_bulletproof_backend_resources_destroy(purify_bulletproof_backend_resources* resources) {
+    if (resources == NULL) {
+        return;
+    }
+    if (resources->gens != NULL && resources->ctx != NULL) {
+        secp256k1_bulletproof_generators_destroy(resources->ctx, resources->gens);
+    }
+    if (resources->scratch != NULL && resources->ctx != NULL) {
+        secp256k1_scratch_space_destroy(resources->ctx, resources->scratch);
+    }
+    if (resources->ctx != NULL) {
+        secp256k1_context_destroy(resources->ctx);
+    }
+    free(resources);
+}
+
 static secp256k1_scalar* purify_scalar_cast(purify_scalar* scalar) {
     return (secp256k1_scalar*)scalar;
 }
@@ -719,7 +776,8 @@ static int purify_bulletproof_prove_circuit_impl(const purify_bulletproof_circui
                                                  unsigned char commitment_out33[33],
                                                  unsigned char* proof_out,
                                                  size_t* proof_len,
-                                                 int require_valid_assignment) {
+                                                 int require_valid_assignment,
+                                                 purify_bulletproof_backend_resources* resources) {
     secp256k1_context* ctx = NULL;
     secp256k1_scratch_space* scratch = NULL;
     secp256k1_bulletproof_generators* gens = NULL;
@@ -730,6 +788,7 @@ static int purify_bulletproof_prove_circuit_impl(const purify_bulletproof_circui
     secp256k1_scalar blinds[1];
     size_t n_commits = 0;
     int ok = 0;
+    int owns_resources = 0;
 
     memset(&bp_circuit, 0, sizeof(bp_circuit));
     memset(&bp_assignment, 0, sizeof(bp_assignment));
@@ -752,16 +811,20 @@ static int purify_bulletproof_prove_circuit_impl(const purify_bulletproof_circui
     if (require_valid_assignment && !purify_bulletproof_circuit_evaluate(&bp_circuit, &bp_assignment)) {
         goto done;
     }
-    ctx = purify_create_context();
-    if (ctx == NULL) {
+    if (resources == NULL) {
+        resources = purify_bulletproof_backend_resources_create(bp_circuit.n_gates);
+        if (resources == NULL) {
+            goto done;
+        }
+        owns_resources = 1;
+    }
+    if (resources->n_gates < bp_circuit.n_gates || resources->ctx == NULL || resources->scratch == NULL || resources->gens == NULL) {
         goto done;
     }
-    scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
-    if (scratch == NULL) {
-        goto done;
-    }
-    gens = secp256k1_bulletproof_generators_create(ctx, secp256k1_generator_h, 2 * bp_circuit.n_gates, 1);
-    if (gens == NULL || gens->n < 2 * bp_circuit.n_gates) {
+    ctx = resources->ctx;
+    scratch = resources->scratch;
+    gens = resources->gens;
+    if (gens->n < 2 * bp_circuit.n_gates) {
         goto done;
     }
     if (!purify_parse_generator_as_ge(ctx, value_gen33, &value_gen)) {
@@ -811,14 +874,8 @@ static int purify_bulletproof_prove_circuit_impl(const purify_bulletproof_circui
 done:
     purify_free_bulletproof_assignment(&bp_assignment);
     purify_free_bulletproof_circuit(&bp_circuit);
-    if (gens != NULL && ctx != NULL) {
-        secp256k1_bulletproof_generators_destroy(ctx, gens);
-    }
-    if (scratch != NULL && ctx != NULL) {
-        secp256k1_scratch_space_destroy(ctx, scratch);
-    }
-    if (ctx != NULL) {
-        secp256k1_context_destroy(ctx);
+    if (owns_resources) {
+        purify_bulletproof_backend_resources_destroy(resources);
     }
     return ok;
 }
@@ -835,7 +892,23 @@ int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circ
                                      size_t* proof_len) {
     return purify_bulletproof_prove_circuit_impl(circuit, assignment, blind32, value_gen33, nonce32,
                                                  extra_commit, extra_commit_len, commitment_out33,
-                                                 proof_out, proof_len, 1);
+                                                 proof_out, proof_len, 1, NULL);
+}
+
+int purify_bulletproof_prove_circuit_with_resources(purify_bulletproof_backend_resources* resources,
+                                                    const purify_bulletproof_circuit_view* circuit,
+                                                    const purify_bulletproof_assignment_view* assignment,
+                                                    const unsigned char* blind32,
+                                                    const unsigned char value_gen33[33],
+                                                    const unsigned char nonce32[32],
+                                                    const unsigned char* extra_commit,
+                                                    size_t extra_commit_len,
+                                                    unsigned char commitment_out33[33],
+                                                    unsigned char* proof_out,
+                                                    size_t* proof_len) {
+    return purify_bulletproof_prove_circuit_impl(circuit, assignment, blind32, value_gen33, nonce32,
+                                                 extra_commit, extra_commit_len, commitment_out33,
+                                                 proof_out, proof_len, 1, resources);
 }
 
 int purify_bulletproof_prove_circuit_assume_valid(const purify_bulletproof_circuit_view* circuit,
@@ -850,7 +923,23 @@ int purify_bulletproof_prove_circuit_assume_valid(const purify_bulletproof_circu
                                                   size_t* proof_len) {
     return purify_bulletproof_prove_circuit_impl(circuit, assignment, blind32, value_gen33, nonce32,
                                                  extra_commit, extra_commit_len, commitment_out33,
-                                                 proof_out, proof_len, 0);
+                                                 proof_out, proof_len, 0, NULL);
+}
+
+int purify_bulletproof_prove_circuit_assume_valid_with_resources(purify_bulletproof_backend_resources* resources,
+                                                                 const purify_bulletproof_circuit_view* circuit,
+                                                                 const purify_bulletproof_assignment_view* assignment,
+                                                                 const unsigned char* blind32,
+                                                                 const unsigned char value_gen33[33],
+                                                                 const unsigned char nonce32[32],
+                                                                 const unsigned char* extra_commit,
+                                                                 size_t extra_commit_len,
+                                                                 unsigned char commitment_out33[33],
+                                                                 unsigned char* proof_out,
+                                                                 size_t* proof_len) {
+    return purify_bulletproof_prove_circuit_impl(circuit, assignment, blind32, value_gen33, nonce32,
+                                                 extra_commit, extra_commit_len, commitment_out33,
+                                                 proof_out, proof_len, 0, resources);
 }
 
 int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* circuit,
@@ -860,6 +949,18 @@ int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* cir
                                       size_t extra_commit_len,
                                       const unsigned char* proof,
                                       size_t proof_len) {
+    return purify_bulletproof_verify_circuit_with_resources(NULL, circuit, commitment33, value_gen33,
+                                                            extra_commit, extra_commit_len, proof, proof_len);
+}
+
+int purify_bulletproof_verify_circuit_with_resources(purify_bulletproof_backend_resources* resources,
+                                                     const purify_bulletproof_circuit_view* circuit,
+                                                     const unsigned char commitment33[33],
+                                                     const unsigned char value_gen33[33],
+                                                     const unsigned char* extra_commit,
+                                                     size_t extra_commit_len,
+                                                     const unsigned char* proof,
+                                                     size_t proof_len) {
     secp256k1_context* ctx = NULL;
     secp256k1_scratch_space* scratch = NULL;
     secp256k1_bulletproof_generators* gens = NULL;
@@ -872,6 +973,7 @@ int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* cir
     const unsigned char* extra_commit_ptr = NULL;
     size_t n_commits = 0;
     int ok = 0;
+    int owns_resources = 0;
 
     memset(&bp_circuit, 0, sizeof(bp_circuit));
     memset(commit_points, 0, sizeof(commit_points));
@@ -884,16 +986,20 @@ int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* cir
     if (!purify_build_bulletproof_circuit(circuit, &bp_circuit)) {
         goto done;
     }
-    ctx = purify_create_context();
-    if (ctx == NULL) {
+    if (resources == NULL) {
+        resources = purify_bulletproof_backend_resources_create(bp_circuit.n_gates);
+        if (resources == NULL) {
+            goto done;
+        }
+        owns_resources = 1;
+    }
+    if (resources->n_gates < bp_circuit.n_gates || resources->ctx == NULL || resources->scratch == NULL || resources->gens == NULL) {
         goto done;
     }
-    scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
-    if (scratch == NULL) {
-        goto done;
-    }
-    gens = secp256k1_bulletproof_generators_create(ctx, secp256k1_generator_h, 2 * bp_circuit.n_gates, 1);
-    if (gens == NULL || gens->n < 2 * bp_circuit.n_gates) {
+    ctx = resources->ctx;
+    scratch = resources->scratch;
+    gens = resources->gens;
+    if (gens->n < 2 * bp_circuit.n_gates) {
         goto done;
     }
     if (!purify_parse_generator_as_ge(ctx, value_gen33, &value_gen)) {
@@ -930,14 +1036,8 @@ int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* cir
 
 done:
     purify_free_bulletproof_circuit(&bp_circuit);
-    if (gens != NULL && ctx != NULL) {
-        secp256k1_bulletproof_generators_destroy(ctx, gens);
-    }
-    if (scratch != NULL && ctx != NULL) {
-        secp256k1_scratch_space_destroy(ctx, scratch);
-    }
-    if (ctx != NULL) {
-        secp256k1_context_destroy(ctx);
+    if (owns_resources) {
+        purify_bulletproof_backend_resources_destroy(resources);
     }
     return ok;
 }

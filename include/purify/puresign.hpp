@@ -65,9 +65,15 @@ struct Signature {
     [[nodiscard]] static Result<Signature> deserialize(std::span<const unsigned char> serialized);
 };
 
-/** @brief Public nonce together with its experimental Purify statement proof. */
+/**
+ * @brief Public nonce together with its experimental Purify statement proof.
+ *
+ * The proved statement binds `nonce` to the unique Purify evaluation for the supplied
+ * `(secret, scope, input)`. There is intentionally no public retry selector in this format:
+ * if the derived scalar is zero, preparation fails instead of allowing multiple valid public
+ * nonces for the same input. That failure occurs with negligible probability, about `2^-256`.
+ */
 struct NonceProof {
-    std::uint8_t counter = 0;
     Nonce nonce;
     ExperimentalBulletproofProof proof;
 

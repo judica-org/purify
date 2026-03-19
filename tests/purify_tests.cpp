@@ -472,9 +472,17 @@ void test_puresign_message_signing(TestContext& ctx) {
         Result<Bytes> nonce_proof_bytes = proven->nonce_proof.serialize();
         expect_ok(ctx, nonce_proof_bytes, "NonceProof serializes");
         if (nonce_proof_bytes.has_value()) {
+            ctx.expect(!nonce_proof_bytes->empty() && (*nonce_proof_bytes)[0] == 2,
+                       "NonceProof uses the unique-derivation wire format version");
             Result<purify::puresign::NonceProof> parsed_nonce_proof =
                 purify::puresign::NonceProof::deserialize(*nonce_proof_bytes);
             expect_ok(ctx, parsed_nonce_proof, "NonceProof round-trips");
+
+            Bytes legacy_nonce_proof = *nonce_proof_bytes;
+            legacy_nonce_proof[0] = 1;
+            expect_error(ctx, purify::puresign::NonceProof::deserialize(legacy_nonce_proof),
+                         ErrorCode::BackendRejectedInput,
+                         "NonceProof rejects the old counter-bearing wire format");
         }
 
         Result<Bytes> proven_bytes = proven->serialize();

@@ -56,11 +56,10 @@ XOnly32 binding_digest(std::string_view tag, std::span<const unsigned char> inpu
     return out;
 }
 
-Bytes tagged_eval_input(std::string_view tag, std::uint8_t counter, std::span<const unsigned char> input) {
+Bytes tagged_eval_input(std::string_view tag, std::span<const unsigned char> input) {
     Bytes out;
-    out.reserve(tag.size() + 1 + input.size());
+    out.reserve(tag.size() + input.size());
     out.insert(out.end(), tag.begin(), tag.end());
-    out.push_back(counter);
     out.insert(out.end(), input.begin(), input.end());
     return out;
 }
@@ -122,7 +121,6 @@ struct DerivedNonceData {
     XOnly32 signer_pubkey{};
     XOnly32 binding_digest{};
     Bytes eval_input;
-    std::uint8_t counter = 0;
 };
 
 Result<DerivedNonceData> derive_nonce_data(const UInt512& secret, PreparedNonce::Scope scope,
@@ -145,22 +143,18 @@ Result<DerivedNonceData> derive_nonce_data(const UInt512& secret, PreparedNonce:
     out.signer_pubkey = signer->xonly_pubkey;
     out.binding_digest = binding_digest(binding_tag, input);
 
-    bool found = false;
-    for (std::uint16_t counter = 0; counter <= 0xFF; ++counter) {
-        Result<FieldElement> nonce_value = eval(secret, tagged_eval_input(nonce_tag, static_cast<std::uint8_t>(counter), input));
-        if (!nonce_value.has_value()) {
-            return unexpected_error(nonce_value.error(), "derive_nonce_data:eval");
-        }
-        out.scalar = nonce_value->to_bytes_be();
-        if (std::any_of(out.scalar.begin(), out.scalar.end(), [](unsigned char byte) { return byte != 0; })) {
-            out.counter = static_cast<std::uint8_t>(counter);
-            out.eval_input = tagged_eval_input(nonce_tag, out.counter, input);
-            found = true;
-            break;
-        }
+    out.eval_input = tagged_eval_input(nonce_tag, input);
+    Result<FieldElement> nonce_value = eval(secret, out.eval_input);
+    if (!nonce_value.has_value()) {
+        return unexpected_error(nonce_value.error(), "derive_nonce_data:eval");
     }
-    if (!found) {
-        return unexpected_error(ErrorCode::InternalMismatch, "derive_nonce_data:zero_nonce_exhausted");
+    out.scalar = nonce_value->to_bytes_be();
+    if (std::all_of(out.scalar.begin(), out.scalar.end(), [](unsigned char byte) { return byte == 0; })) {
+        /* This rejects the unique invalid Schnorr nonce. Since Purify outputs a field element
+         * modulo the secp256k1 group order, the failure probability is exactly 1/n, which is
+         * negligible for n ~= 2^256.
+         */
+        return unexpected_error(ErrorCode::BackendRejectedInput, "derive_nonce_data:zero_nonce");
     }
 
     if (purify_bip340_nonce_from_scalar(out.scalar.data(), out.nonce.xonly.data()) == 0) {
@@ -188,7 +182,6 @@ Result<NonceProof> build_nonce_proof(const UInt512& secret, const DerivedNonceDa
     }
 
     NonceProof out{};
-    out.counter = nonce_data.counter;
     out.nonce = nonce_data.nonce;
     out.proof = std::move(*proof);
     Result<bool> match = nonce_proof_matches_nonce(out);
@@ -317,9 +310,8 @@ Result<Bytes> NonceProof::serialize() const {
     }
 
     Bytes out;
-    out.reserve(1 + 1 + 4 + 32 + proof_bytes->size());
-    out.push_back(static_cast<unsigned char>(1));
-    out.push_back(counter);
+    out.reserve(1 + 4 + 32 + proof_bytes->size());
+    out.push_back(static_cast<unsigned char>(2));
     append_u32_le(out, static_cast<std::uint32_t>(proof_bytes->size()));
     out.insert(out.end(), nonce.xonly.begin(), nonce.xonly.end());
     out.insert(out.end(), proof_bytes->begin(), proof_bytes->end());
@@ -327,23 +319,22 @@ Result<Bytes> NonceProof::serialize() const {
 }
 
 Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serialized) {
-    if (serialized.size() < 38) {
+    if (serialized.size() < 37) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:header");
     }
-    if (serialized[0] != 1) {
+    if (serialized[0] != 2) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "NonceProof::deserialize:version");
     }
-    std::optional<std::uint32_t> proof_size = read_u32_le(serialized, 2);
+    std::optional<std::uint32_t> proof_size = read_u32_le(serialized, 1);
     assert(proof_size.has_value() && "header length check should guarantee a u32 proof size");
-    if (38 + *proof_size != serialized.size()) {
+    if (37 + *proof_size != serialized.size()) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:proof_size");
     }
 
     NonceProof out{};
-    out.counter = serialized[1];
-    std::copy_n(serialized.begin() + 6, 32, out.nonce.xonly.begin());
+    std::copy_n(serialized.begin() + 5, 32, out.nonce.xonly.begin());
     Result<ExperimentalBulletproofProof> proof_value =
-        ExperimentalBulletproofProof::deserialize(serialized.subspan(38, *proof_size));
+        ExperimentalBulletproofProof::deserialize(serialized.subspan(37, *proof_size));
     if (!proof_value.has_value()) {
         return unexpected_error(proof_value.error(), "NonceProof::deserialize:proof");
     }
@@ -637,7 +628,7 @@ Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<c
     }
 
     Result<NativeBulletproofCircuit> circuit =
-        verifier_circuit(tagged_eval_input(kMessageNonceTag, nonce_proof.counter, message), public_key.purify_pubkey);
+        verifier_circuit(tagged_eval_input(kMessageNonceTag, message), public_key.purify_pubkey);
     if (!circuit.has_value()) {
         return unexpected_error(circuit.error(), "verify_message_nonce_proof:verifier_circuit");
     }
@@ -663,7 +654,7 @@ Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<con
     }
 
     Result<NativeBulletproofCircuit> circuit =
-        verifier_circuit(tagged_eval_input(kTopicNonceTag, nonce_proof.counter, topic), public_key.purify_pubkey);
+        verifier_circuit(tagged_eval_input(kTopicNonceTag, topic), public_key.purify_pubkey);
     if (!circuit.has_value()) {
         return unexpected_error(circuit.error(), "verify_topic_nonce_proof:verifier_circuit");
     }

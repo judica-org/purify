@@ -10,8 +10,11 @@
 #include "purify/puresign.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
+#include <limits>
 
+#include "purify_bppp.hpp"
 #include "purify/curve.hpp"
 
 namespace purify::puresign {
@@ -21,6 +24,8 @@ constexpr std::string_view kMessageNonceTag = "PureSign/Nonce/Message/";
 constexpr std::string_view kTopicNonceTag = "PureSign/Nonce/Topic/";
 constexpr std::string_view kMessageBindingTag = "PureSign/Binding/Message";
 constexpr std::string_view kTopicBindingTag = "PureSign/Binding/Topic";
+constexpr std::string_view kMessageProofTag = "PureSign/Proof/Message/V1";
+constexpr std::string_view kTopicProofTag = "PureSign/Proof/Topic/V1";
 
 const UInt256& secp256k1_order() {
     static const UInt256 value =
@@ -58,6 +63,174 @@ Bytes tagged_eval_input(std::string_view tag, std::uint8_t counter, std::span<co
     out.push_back(counter);
     out.insert(out.end(), input.begin(), input.end());
     return out;
+}
+
+void append_u32_le(Bytes& out, std::uint32_t value) {
+    for (int i = 0; i < 4; ++i) {
+        out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
+    }
+}
+
+std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes, std::size_t offset) {
+    std::uint32_t value = 0;
+    if (offset + 4 > bytes.size()) {
+        return std::nullopt;
+    }
+    for (int i = 0; i < 4; ++i) {
+        value |= static_cast<std::uint32_t>(bytes[offset + i]) << (8 * i);
+    }
+    return value;
+}
+
+std::string_view proof_tag_for_scope(PreparedNonce::Scope scope) {
+    return scope == PreparedNonce::Scope::Message ? kMessageProofTag : kTopicProofTag;
+}
+
+Bytes proof_statement_binding(PreparedNonce::Scope scope) {
+    return bytes_from_ascii(proof_tag_for_scope(scope));
+}
+
+Scalar32 derive_proof_nonce_seed(const UInt512& secret, PreparedNonce::Scope scope, std::span<const unsigned char> eval_input) {
+    std::array<unsigned char, 64> secret_bytes = secret.to_bytes_be();
+    Bytes key(secret_bytes.begin(), secret_bytes.end());
+    Bytes data = bytes_from_ascii(proof_tag_for_scope(scope));
+    data.insert(data.end(), eval_input.begin(), eval_input.end());
+    Bytes digest = hmac_sha256(key, data);
+    Scalar32 out{};
+    assert(digest.size() == out.size() && "hmac_sha256() should return 32 bytes");
+    std::copy(digest.begin(), digest.end(), out.begin());
+    return out;
+}
+
+Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof) {
+    XOnly32 xonly{};
+    int parity = 0;
+    if (!nonce_proof.proof.commitment.has_value()) {
+        return unexpected_error(ErrorCode::MissingValue, "nonce_proof_matches_nonce:missing_commitment");
+    }
+    if (purify_bip340_xonly_from_point(nonce_proof.proof.commitment->data(), xonly.data(), &parity) == 0) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "nonce_proof_matches_nonce:invalid_commitment");
+    }
+    (void)parity;
+    return xonly == nonce_proof.nonce.xonly;
+}
+
+struct DerivedNonceData {
+    PreparedNonce::Scope scope;
+    Scalar32 scalar{};
+    Nonce nonce{};
+    XOnly32 signer_pubkey{};
+    XOnly32 binding_digest{};
+    Bytes eval_input;
+    std::uint8_t counter = 0;
+};
+
+Result<DerivedNonceData> derive_nonce_data(const UInt512& secret, PreparedNonce::Scope scope,
+                                           std::span<const unsigned char> input) {
+    Status field_status = validate_puresign_field_alignment();
+    if (!field_status.has_value()) {
+        return unexpected_error(field_status.error(), "derive_nonce_data:validate_puresign_field_alignment");
+    }
+
+    Result<Bip340Key> signer = derive_bip340_key(secret);
+    if (!signer.has_value()) {
+        return unexpected_error(signer.error(), "derive_nonce_data:derive_bip340_key");
+    }
+
+    const std::string_view nonce_tag = scope == PreparedNonce::Scope::Message ? kMessageNonceTag : kTopicNonceTag;
+    const std::string_view binding_tag = scope == PreparedNonce::Scope::Message ? kMessageBindingTag : kTopicBindingTag;
+
+    DerivedNonceData out{};
+    out.scope = scope;
+    out.signer_pubkey = signer->xonly_pubkey;
+    out.binding_digest = binding_digest(binding_tag, input);
+
+    bool found = false;
+    for (std::uint16_t counter = 0; counter <= 0xFF; ++counter) {
+        Result<FieldElement> nonce_value = eval(secret, tagged_eval_input(nonce_tag, static_cast<std::uint8_t>(counter), input));
+        if (!nonce_value.has_value()) {
+            return unexpected_error(nonce_value.error(), "derive_nonce_data:eval");
+        }
+        out.scalar = nonce_value->to_bytes_be();
+        if (std::any_of(out.scalar.begin(), out.scalar.end(), [](unsigned char byte) { return byte != 0; })) {
+            out.counter = static_cast<std::uint8_t>(counter);
+            out.eval_input = tagged_eval_input(nonce_tag, out.counter, input);
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        return unexpected_error(ErrorCode::InternalMismatch, "derive_nonce_data:zero_nonce_exhausted");
+    }
+
+    if (purify_bip340_nonce_from_scalar(out.scalar.data(), out.nonce.xonly.data()) == 0) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "derive_nonce_data:bip340_nonce_from_scalar");
+    }
+    return out;
+}
+
+Result<NonceProof> build_nonce_proof(const UInt512& secret, const DerivedNonceData& nonce_data) {
+    Result<BulletproofWitnessData> witness = prove_assignment_data(nonce_data.eval_input, secret);
+    if (!witness.has_value()) {
+        return unexpected_error(witness.error(), "build_nonce_proof:prove_assignment_data");
+    }
+    Result<NativeBulletproofCircuit> circuit = verifier_circuit(nonce_data.eval_input, witness->public_key);
+    if (!circuit.has_value()) {
+        return unexpected_error(circuit.error(), "build_nonce_proof:verifier_circuit");
+    }
+
+    Scalar32 proof_nonce = derive_proof_nonce_seed(secret, nonce_data.scope, nonce_data.eval_input);
+    Bytes statement_binding = proof_statement_binding(nonce_data.scope);
+    Result<ExperimentalBulletproofProof> proof =
+        prove_experimental_circuit(*circuit, witness->assignment, proof_nonce, bppp::base_generator(), statement_binding);
+    if (!proof.has_value()) {
+        return unexpected_error(proof.error(), "build_nonce_proof:prove_experimental_circuit");
+    }
+
+    NonceProof out{};
+    out.counter = nonce_data.counter;
+    out.nonce = nonce_data.nonce;
+    out.proof = std::move(*proof);
+    Result<bool> match = nonce_proof_matches_nonce(out);
+    if (!match.has_value()) {
+        return unexpected_error(match.error(), "build_nonce_proof:nonce_proof_matches_nonce");
+    }
+    if (!*match) {
+        return unexpected_error(ErrorCode::InternalMismatch, "build_nonce_proof:nonce_mismatch");
+    }
+    return out;
+}
+
+Result<DerivedNonceData> prepare_nonce_data_impl(const UInt512& secret, PreparedNonce::Scope scope,
+                                                 std::span<const unsigned char> input) {
+    if (scope == PreparedNonce::Scope::Topic && input.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput, "prepare_nonce_data_impl:empty_topic");
+    }
+
+    Result<DerivedNonceData> nonce_data = derive_nonce_data(secret, scope, input);
+    if (!nonce_data.has_value()) {
+        return unexpected_error(nonce_data.error(), "prepare_nonce_data_impl:derive_nonce_data");
+    }
+    return nonce_data;
+}
+
+Result<ProvenSignature> sign_with_prepared_proof_impl(const UInt512& secret, std::span<const unsigned char> message,
+                                                      PreparedNonce&& prepared, PreparedNonce::Scope expected_scope,
+                                                      const char* context) {
+    if (!prepared.public_proof().has_value()) {
+        return unexpected_error(ErrorCode::MissingValue, context);
+    }
+    NonceProof nonce_proof = *prepared.public_proof();
+    Result<Signature> signature = expected_scope == PreparedNonce::Scope::Message
+        ? sign_message_with_prepared(secret, message, std::move(prepared))
+        : sign_with_prepared_topic(secret, message, std::move(prepared));
+    if (!signature.has_value()) {
+        return unexpected_error(signature.error(), context);
+    }
+    if (signature->nonce().xonly != nonce_proof.nonce.xonly) {
+        return unexpected_error(ErrorCode::InternalMismatch, context);
+    }
+    return ProvenSignature{*signature, std::move(nonce_proof)};
 }
 
 }  // namespace
@@ -134,13 +307,106 @@ Result<Signature> Signature::deserialize(std::span<const unsigned char> serializ
     return out;
 }
 
+Result<Bytes> NonceProof::serialize() const {
+    Result<Bytes> proof_bytes = proof.serialize();
+    if (!proof_bytes.has_value()) {
+        return unexpected_error(proof_bytes.error(), "NonceProof::serialize:proof");
+    }
+    if (proof_bytes->size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return unexpected_error(ErrorCode::UnexpectedSize, "NonceProof::serialize:proof_size");
+    }
+
+    Bytes out;
+    out.reserve(1 + 1 + 4 + 32 + proof_bytes->size());
+    out.push_back(static_cast<unsigned char>(1));
+    out.push_back(counter);
+    append_u32_le(out, static_cast<std::uint32_t>(proof_bytes->size()));
+    out.insert(out.end(), nonce.xonly.begin(), nonce.xonly.end());
+    out.insert(out.end(), proof_bytes->begin(), proof_bytes->end());
+    return out;
+}
+
+Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serialized) {
+    if (serialized.size() < 38) {
+        return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:header");
+    }
+    if (serialized[0] != 1) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "NonceProof::deserialize:version");
+    }
+    std::optional<std::uint32_t> proof_size = read_u32_le(serialized, 2);
+    assert(proof_size.has_value() && "header length check should guarantee a u32 proof size");
+    if (38 + *proof_size != serialized.size()) {
+        return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:proof_size");
+    }
+
+    NonceProof out{};
+    out.counter = serialized[1];
+    std::copy_n(serialized.begin() + 6, 32, out.nonce.xonly.begin());
+    Result<ExperimentalBulletproofProof> proof_value =
+        ExperimentalBulletproofProof::deserialize(serialized.subspan(38, *proof_size));
+    if (!proof_value.has_value()) {
+        return unexpected_error(proof_value.error(), "NonceProof::deserialize:proof");
+    }
+    out.proof = std::move(*proof_value);
+    Result<bool> match = nonce_proof_matches_nonce(out);
+    if (!match.has_value()) {
+        return unexpected_error(match.error(), "NonceProof::deserialize:nonce_proof_matches_nonce");
+    }
+    if (!*match) {
+        return unexpected_error(ErrorCode::BindingMismatch, "NonceProof::deserialize:nonce_mismatch");
+    }
+    return out;
+}
+
+Result<Bytes> ProvenSignature::serialize() const {
+    Result<Bytes> nonce_proof_bytes = nonce_proof.serialize();
+    if (!nonce_proof_bytes.has_value()) {
+        return unexpected_error(nonce_proof_bytes.error(), "ProvenSignature::serialize:nonce_proof");
+    }
+    if (nonce_proof_bytes->size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return unexpected_error(ErrorCode::UnexpectedSize, "ProvenSignature::serialize:nonce_proof_size");
+    }
+
+    Bytes out;
+    out.reserve(1 + 4 + nonce_proof_bytes->size() + 64);
+    out.push_back(static_cast<unsigned char>(1));
+    append_u32_le(out, static_cast<std::uint32_t>(nonce_proof_bytes->size()));
+    out.insert(out.end(), nonce_proof_bytes->begin(), nonce_proof_bytes->end());
+    out.insert(out.end(), signature.bytes.begin(), signature.bytes.end());
+    return out;
+}
+
+Result<ProvenSignature> ProvenSignature::deserialize(std::span<const unsigned char> serialized) {
+    if (serialized.size() < 69) {
+        return unexpected_error(ErrorCode::InvalidFixedSize, "ProvenSignature::deserialize:header");
+    }
+    if (serialized[0] != 1) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "ProvenSignature::deserialize:version");
+    }
+    std::optional<std::uint32_t> nonce_proof_size = read_u32_le(serialized, 1);
+    assert(nonce_proof_size.has_value() && "header length check should guarantee a u32 nonce proof size");
+    if (5 + *nonce_proof_size + 64 != serialized.size()) {
+        return unexpected_error(ErrorCode::InvalidFixedSize, "ProvenSignature::deserialize:size");
+    }
+
+    Result<NonceProof> nonce_proof_value = NonceProof::deserialize(serialized.subspan(5, *nonce_proof_size));
+    if (!nonce_proof_value.has_value()) {
+        return unexpected_error(nonce_proof_value.error(), "ProvenSignature::deserialize:nonce_proof");
+    }
+    Result<Signature> signature_value = Signature::deserialize(serialized.subspan(5 + *nonce_proof_size, 64));
+    if (!signature_value.has_value()) {
+        return unexpected_error(signature_value.error(), "ProvenSignature::deserialize:signature");
+    }
+    return ProvenSignature{*signature_value, *nonce_proof_value};
+}
+
 PreparedNonce::PreparedNonce(Scope scope, const Scalar32& scalar, const Nonce& nonce,
                              const XOnly32& signer_pubkey, const XOnly32& binding_digest)
     : scope_(scope), scalar_(scalar), nonce_(nonce), signer_pubkey_(signer_pubkey), binding_digest_(binding_digest) {}
 
 PreparedNonce::PreparedNonce(PreparedNonce&& other) noexcept
     : scope_(other.scope_), scalar_(other.scalar_), nonce_(other.nonce_),
-      signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_) {
+      proof_(std::move(other.proof_)), signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_) {
     other.clear();
 }
 
@@ -150,6 +416,7 @@ PreparedNonce& PreparedNonce::operator=(PreparedNonce&& other) noexcept {
         scope_ = other.scope_;
         scalar_ = other.scalar_;
         nonce_ = other.nonce_;
+        proof_ = std::move(other.proof_);
         signer_pubkey_ = other.signer_pubkey_;
         binding_digest_ = other.binding_digest_;
         other.clear();
@@ -163,6 +430,7 @@ PreparedNonce::~PreparedNonce() {
 
 void PreparedNonce::clear() noexcept {
     std::fill(scalar_.begin(), scalar_.end(), 0);
+    proof_.reset();
 }
 
 Result<PublicKey> derive_public_key(const UInt512& secret) {
@@ -178,79 +446,51 @@ Result<PublicKey> derive_public_key(const UInt512& secret) {
 }
 
 Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<const unsigned char> message) {
-    Status field_status = validate_puresign_field_alignment();
-    if (!field_status.has_value()) {
-        return unexpected_error(field_status.error(), "prepare_message_nonce:validate_puresign_field_alignment");
+    Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message);
+    if (!nonce_data.has_value()) {
+        return unexpected_error(nonce_data.error(), "prepare_message_nonce:prepare_nonce_data_impl");
     }
+    return PreparedNonce(PreparedNonce::Scope::Message, nonce_data->scalar, nonce_data->nonce,
+                         nonce_data->signer_pubkey, nonce_data->binding_digest);
+}
 
-    Result<Bip340Key> signer = derive_bip340_key(secret);
-    if (!signer.has_value()) {
-        return unexpected_error(signer.error(), "prepare_message_nonce:derive_bip340_key");
+Result<PreparedNonce> prepare_message_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> message) {
+    Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message);
+    if (!nonce_data.has_value()) {
+        return unexpected_error(nonce_data.error(), "prepare_message_nonce_with_proof:prepare_nonce_data_impl");
     }
-
-    Scalar32 scalar{};
-    bool found = false;
-    for (std::uint16_t counter = 0; counter <= 0xFF; ++counter) {
-        Result<FieldElement> nonce_value = eval(secret, tagged_eval_input(kMessageNonceTag, static_cast<std::uint8_t>(counter), message));
-        if (!nonce_value.has_value()) {
-            return unexpected_error(nonce_value.error(), "prepare_message_nonce:eval");
-        }
-        scalar = nonce_value->to_bytes_be();
-        if (std::any_of(scalar.begin(), scalar.end(), [](unsigned char byte) { return byte != 0; })) {
-            found = true;
-            break;
-        }
+    PreparedNonce prepared(PreparedNonce::Scope::Message, nonce_data->scalar, nonce_data->nonce,
+                           nonce_data->signer_pubkey, nonce_data->binding_digest);
+    Result<NonceProof> proof = build_nonce_proof(secret, *nonce_data);
+    if (!proof.has_value()) {
+        return unexpected_error(proof.error(), "prepare_message_nonce_with_proof:build_nonce_proof");
     }
-    if (!found) {
-        return unexpected_error(ErrorCode::InternalMismatch, "prepare_message_nonce:zero_nonce_exhausted");
-    }
-
-    Nonce nonce{};
-    if (purify_bip340_nonce_from_scalar(scalar.data(), nonce.xonly.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "prepare_message_nonce:bip340_nonce_from_scalar");
-    }
-    return PreparedNonce(PreparedNonce::Scope::Message, scalar, nonce, signer->xonly_pubkey,
-                         binding_digest(kMessageBindingTag, message));
+    prepared.proof_ = std::move(*proof);
+    return prepared;
 }
 
 Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const unsigned char> topic) {
-    if (topic.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput, "prepare_topic_nonce:empty_topic");
+    Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic);
+    if (!nonce_data.has_value()) {
+        return unexpected_error(nonce_data.error(), "prepare_topic_nonce:prepare_nonce_data_impl");
     }
+    return PreparedNonce(PreparedNonce::Scope::Topic, nonce_data->scalar, nonce_data->nonce,
+                         nonce_data->signer_pubkey, nonce_data->binding_digest);
+}
 
-    Status field_status = validate_puresign_field_alignment();
-    if (!field_status.has_value()) {
-        return unexpected_error(field_status.error(), "prepare_topic_nonce:validate_puresign_field_alignment");
+Result<PreparedNonce> prepare_topic_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> topic) {
+    Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic);
+    if (!nonce_data.has_value()) {
+        return unexpected_error(nonce_data.error(), "prepare_topic_nonce_with_proof:prepare_nonce_data_impl");
     }
-
-    Result<Bip340Key> signer = derive_bip340_key(secret);
-    if (!signer.has_value()) {
-        return unexpected_error(signer.error(), "prepare_topic_nonce:derive_bip340_key");
+    PreparedNonce prepared(PreparedNonce::Scope::Topic, nonce_data->scalar, nonce_data->nonce,
+                           nonce_data->signer_pubkey, nonce_data->binding_digest);
+    Result<NonceProof> proof = build_nonce_proof(secret, *nonce_data);
+    if (!proof.has_value()) {
+        return unexpected_error(proof.error(), "prepare_topic_nonce_with_proof:build_nonce_proof");
     }
-
-    Scalar32 scalar{};
-    bool found = false;
-    for (std::uint16_t counter = 0; counter <= 0xFF; ++counter) {
-        Result<FieldElement> nonce_value = eval(secret, tagged_eval_input(kTopicNonceTag, static_cast<std::uint8_t>(counter), topic));
-        if (!nonce_value.has_value()) {
-            return unexpected_error(nonce_value.error(), "prepare_topic_nonce:eval");
-        }
-        scalar = nonce_value->to_bytes_be();
-        if (std::any_of(scalar.begin(), scalar.end(), [](unsigned char byte) { return byte != 0; })) {
-            found = true;
-            break;
-        }
-    }
-    if (!found) {
-        return unexpected_error(ErrorCode::InternalMismatch, "prepare_topic_nonce:zero_nonce_exhausted");
-    }
-
-    Nonce nonce{};
-    if (purify_bip340_nonce_from_scalar(scalar.data(), nonce.xonly.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "prepare_topic_nonce:bip340_nonce_from_scalar");
-    }
-    return PreparedNonce(PreparedNonce::Scope::Topic, scalar, nonce, signer->xonly_pubkey,
-                         binding_digest(kTopicBindingTag, topic));
+    prepared.proof_ = std::move(*proof);
+    return prepared;
 }
 
 Result<Signature> sign_message(const UInt512& secret, std::span<const unsigned char> message) {
@@ -291,6 +531,17 @@ Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<co
     return out;
 }
 
+Result<ProvenSignature> sign_message_with_prepared_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                                         PreparedNonce&& prepared) {
+    Result<ProvenSignature> signature =
+        sign_with_prepared_proof_impl(secret, message, std::move(prepared), PreparedNonce::Scope::Message,
+                                      "sign_message_with_prepared_proof");
+    if (!signature.has_value()) {
+        return unexpected_error(signature.error(), "sign_message_with_prepared_proof:sign_with_prepared_proof_impl");
+    }
+    return signature;
+}
+
 Result<Signature> sign_with_topic(const UInt512& secret, std::span<const unsigned char> message,
                                   std::span<const unsigned char> topic) {
     Result<PreparedNonce> prepared = prepare_topic_nonce(secret, topic);
@@ -327,6 +578,34 @@ Result<Signature> sign_with_prepared_topic(const UInt512& secret, std::span<cons
     return out;
 }
 
+Result<ProvenSignature> sign_with_prepared_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                                       PreparedNonce&& prepared) {
+    Result<ProvenSignature> signature =
+        sign_with_prepared_proof_impl(secret, message, std::move(prepared), PreparedNonce::Scope::Topic,
+                                      "sign_with_prepared_topic_proof");
+    if (!signature.has_value()) {
+        return unexpected_error(signature.error(), "sign_with_prepared_topic_proof:sign_with_prepared_proof_impl");
+    }
+    return signature;
+}
+
+Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span<const unsigned char> message) {
+    Result<PreparedNonce> prepared = prepare_message_nonce_with_proof(secret, message);
+    if (!prepared.has_value()) {
+        return unexpected_error(prepared.error(), "sign_message_with_proof:prepare_message_nonce_with_proof");
+    }
+    return sign_message_with_prepared_proof(secret, message, std::move(*prepared));
+}
+
+Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                              std::span<const unsigned char> topic) {
+    Result<PreparedNonce> prepared = prepare_topic_nonce_with_proof(secret, topic);
+    if (!prepared.has_value()) {
+        return unexpected_error(prepared.error(), "sign_with_topic_proof:prepare_topic_nonce_with_proof");
+    }
+    return sign_with_prepared_topic_proof(secret, message, std::move(*prepared));
+}
+
 Result<bool> verify_signature(const PublicKey& public_key, std::span<const unsigned char> message,
                               const Signature& signature) {
     Status pubkey_status = validate_public_key(public_key.purify_pubkey);
@@ -341,6 +620,86 @@ Result<bool> verify_signature(const PublicKey& public_key, std::span<const unsig
     }
     return purify_bip340_verify(signature.bytes.data(), nullable_data(message), message.size(),
                                 public_key.bip340_pubkey.data()) != 0;
+}
+
+Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> message,
+                                        const NonceProof& nonce_proof) {
+    Status pubkey_status = validate_public_key(public_key.purify_pubkey);
+    if (!pubkey_status.has_value()) {
+        return unexpected_error(pubkey_status.error(), "verify_message_nonce_proof:validate_public_key");
+    }
+    Result<bool> match = nonce_proof_matches_nonce(nonce_proof);
+    if (!match.has_value()) {
+        return unexpected_error(match.error(), "verify_message_nonce_proof:nonce_proof_matches_nonce");
+    }
+    if (!*match) {
+        return false;
+    }
+
+    Result<NativeBulletproofCircuit> circuit =
+        verifier_circuit(tagged_eval_input(kMessageNonceTag, nonce_proof.counter, message), public_key.purify_pubkey);
+    if (!circuit.has_value()) {
+        return unexpected_error(circuit.error(), "verify_message_nonce_proof:verifier_circuit");
+    }
+    Bytes statement_binding = proof_statement_binding(PreparedNonce::Scope::Message);
+    return verify_experimental_circuit(*circuit, nonce_proof.proof, bppp::base_generator(), statement_binding);
+}
+
+Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> topic,
+                                      const NonceProof& nonce_proof) {
+    if (topic.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput, "verify_topic_nonce_proof:empty_topic");
+    }
+    Status pubkey_status = validate_public_key(public_key.purify_pubkey);
+    if (!pubkey_status.has_value()) {
+        return unexpected_error(pubkey_status.error(), "verify_topic_nonce_proof:validate_public_key");
+    }
+    Result<bool> match = nonce_proof_matches_nonce(nonce_proof);
+    if (!match.has_value()) {
+        return unexpected_error(match.error(), "verify_topic_nonce_proof:nonce_proof_matches_nonce");
+    }
+    if (!*match) {
+        return false;
+    }
+
+    Result<NativeBulletproofCircuit> circuit =
+        verifier_circuit(tagged_eval_input(kTopicNonceTag, nonce_proof.counter, topic), public_key.purify_pubkey);
+    if (!circuit.has_value()) {
+        return unexpected_error(circuit.error(), "verify_topic_nonce_proof:verifier_circuit");
+    }
+    Bytes statement_binding = proof_statement_binding(PreparedNonce::Scope::Topic);
+    return verify_experimental_circuit(*circuit, nonce_proof.proof, bppp::base_generator(), statement_binding);
+}
+
+Result<bool> verify_message_signature_with_proof(const PublicKey& public_key, std::span<const unsigned char> message,
+                                                 const ProvenSignature& signature) {
+    Result<bool> sig_ok = verify_signature(public_key, message, signature.signature);
+    if (!sig_ok.has_value()) {
+        return unexpected_error(sig_ok.error(), "verify_message_signature_with_proof:verify_signature");
+    }
+    if (!*sig_ok) {
+        return false;
+    }
+    if (signature.signature.nonce().xonly != signature.nonce_proof.nonce.xonly) {
+        return false;
+    }
+    return verify_message_nonce_proof(public_key, message, signature.nonce_proof);
+}
+
+Result<bool> verify_topic_signature_with_proof(const PublicKey& public_key, std::span<const unsigned char> message,
+                                               std::span<const unsigned char> topic,
+                                               const ProvenSignature& signature) {
+    Result<bool> sig_ok = verify_signature(public_key, message, signature.signature);
+    if (!sig_ok.has_value()) {
+        return unexpected_error(sig_ok.error(), "verify_topic_signature_with_proof:verify_signature");
+    }
+    if (!*sig_ok) {
+        return false;
+    }
+    if (signature.signature.nonce().xonly != signature.nonce_proof.nonce.xonly) {
+        return false;
+    }
+    return verify_topic_nonce_proof(public_key, topic, signature.nonce_proof);
 }
 
 }  // namespace purify::puresign

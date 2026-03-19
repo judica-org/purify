@@ -80,6 +80,15 @@ int purify_bip340_key_from_seckey(unsigned char seckey32[32], unsigned char xonl
  */
 int purify_bip340_nonce_from_scalar(unsigned char scalar32[32], unsigned char xonly_nonce32[32]);
 
+/**
+ * @brief Converts a compressed secp256k1 point into its x-only public key encoding.
+ *
+ * Returns zero when the point encoding is invalid. When `parity_out` is not null it receives the
+ * original point parity as returned by `secp256k1_xonly_pubkey_from_pubkey` (`0` for even Y,
+ * `1` for odd Y).
+ */
+int purify_bip340_xonly_from_point(const unsigned char point33[33], unsigned char xonly32[32], int* parity_out);
+
 /** @brief Returns nonzero when the x-only public key encoding parses successfully. */
 int purify_bip340_validate_xonly_pubkey(const unsigned char xonly_pubkey32[32]);
 

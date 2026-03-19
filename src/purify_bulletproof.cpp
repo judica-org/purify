@@ -200,32 +200,42 @@ struct FlattenedRowFamily {
     Bytes scalars32;
 };
 
-FlattenedRowFamily flatten_row_family(const std::vector<purify::NativeBulletproofCircuitRow>& rows) {
+FlattenedRowFamily flatten_row_family(const std::vector<purify::NativeBulletproofCircuitRow>& rows,
+                                      std::size_t constraint_offset) {
     FlattenedRowFamily flat;
     std::vector<std::size_t> offsets;
+    std::vector<std::size_t> counts;
     offsets.reserve(rows.size());
+    counts.reserve(rows.size());
     flat.views.resize(rows.size());
 
     std::size_t total_entries = 0;
     for (const auto& row : rows) {
-        total_entries += row.entries.size();
+        total_entries += std::count_if(row.entries.begin(), row.entries.end(),
+                                       [&](const auto& entry) { return entry.idx >= constraint_offset; });
     }
     flat.indices.reserve(total_entries);
     flat.scalars32.reserve(total_entries * 32);
 
     for (const auto& row : rows) {
+        std::size_t kept = 0;
         offsets.push_back(flat.indices.size());
         for (const auto& entry : row.entries) {
-            flat.indices.push_back(entry.idx);
+            if (entry.idx < constraint_offset) {
+                continue;
+            }
+            ++kept;
+            flat.indices.push_back(entry.idx - constraint_offset);
             auto bytes = entry.scalar.to_bytes_be();
             flat.scalars32.insert(flat.scalars32.end(), bytes.begin(), bytes.end());
         }
+        counts.push_back(kept);
     }
 
     const std::size_t* indices_base = flat.indices.empty() ? nullptr : flat.indices.data();
     const unsigned char* scalars_base = flat.scalars32.empty() ? nullptr : flat.scalars32.data();
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        const std::size_t count = rows[i].entries.size();
+        const std::size_t count = counts[i];
         const std::size_t start = offsets[i];
         flat.views[i].size = count;
         flat.views[i].indices = count == 0 ? nullptr : indices_base + start;
@@ -245,15 +255,18 @@ struct FlattenedCircuitView {
 
 FlattenedCircuitView flatten_circuit_view(const purify::NativeBulletproofCircuit& circuit) {
     FlattenedCircuitView flat;
-    flat.wl = flatten_row_family(circuit.wl);
-    flat.wr = flatten_row_family(circuit.wr);
-    flat.wo = flatten_row_family(circuit.wo);
-    flat.wv = flatten_row_family(circuit.wv);
-    flat.constants32 = flatten_scalars32(circuit.c);
+    const std::size_t implicit_bit_constraints = 2 * circuit.n_bits;
+    assert(circuit.c.size() >= implicit_bit_constraints && "native circuit must contain all implicit bit constraints");
+    flat.wl = flatten_row_family(circuit.wl, implicit_bit_constraints);
+    flat.wr = flatten_row_family(circuit.wr, implicit_bit_constraints);
+    flat.wo = flatten_row_family(circuit.wo, implicit_bit_constraints);
+    flat.wv = flatten_row_family(circuit.wv, implicit_bit_constraints);
+    std::vector<FieldElement> explicit_constants(circuit.c.begin() + static_cast<std::ptrdiff_t>(implicit_bit_constraints), circuit.c.end());
+    flat.constants32 = flatten_scalars32(explicit_constants);
     flat.view.n_gates = circuit.n_gates;
     flat.view.n_commits = circuit.n_commitments;
     flat.view.n_bits = circuit.n_bits;
-    flat.view.n_constraints = circuit.c.size();
+    flat.view.n_constraints = explicit_constants.size();
     flat.view.wl = flat.wl.views.data();
     flat.view.wr = flat.wr.views.data();
     flat.view.wo = flat.wo.views.data();
@@ -517,7 +530,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
     FlattenedAssignmentView flat_assignment = flatten_assignment_view(assignment);
     Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
-    Bytes proof_bytes(purify_bulletproof_required_proof_size(circuit.n_gates), 0);
+    Bytes proof_bytes(std::max<std::size_t>(purify_bulletproof_required_proof_size(circuit.n_gates), 4096), 0);
     std::size_t proof_len = proof_bytes.size();
     BulletproofPointBytes commitment{};
     const unsigned char* blind_ptr = blind.has_value() ? blind->data() : nullptr;

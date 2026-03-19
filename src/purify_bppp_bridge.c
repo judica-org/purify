@@ -202,6 +202,49 @@ int purify_bip340_nonce_from_scalar(unsigned char scalar32[32], unsigned char xo
     return ok;
 }
 
+int purify_bip340_xonly_from_point(const unsigned char point33[33], unsigned char xonly32[32], int* parity_out) {
+    secp256k1_context* ctx = purify_create_context();
+    secp256k1_pubkey pubkey;
+    secp256k1_xonly_pubkey xonly;
+    int parity = 0;
+    int ok = 0;
+
+    memset(&pubkey, 0, sizeof(pubkey));
+    memset(&xonly, 0, sizeof(xonly));
+    if (xonly32 != NULL) {
+        memset(xonly32, 0, 32);
+    }
+    if (parity_out != NULL) {
+        *parity_out = 0;
+    }
+
+    if (ctx == NULL || point33 == NULL || xonly32 == NULL) {
+        if (ctx != NULL) {
+            secp256k1_context_destroy(ctx);
+        }
+        return 0;
+    }
+
+    ok = secp256k1_ec_pubkey_parse(ctx, &pubkey, point33, 33);
+    if (ok) {
+        ok = secp256k1_xonly_pubkey_from_pubkey(ctx, &xonly, &parity, &pubkey);
+    }
+    if (ok) {
+        ok = secp256k1_xonly_pubkey_serialize(ctx, xonly32, &xonly);
+    }
+    if (ok && parity_out != NULL) {
+        *parity_out = parity;
+    }
+    if (!ok) {
+        memset(xonly32, 0, 32);
+    }
+
+    memset(&pubkey, 0, sizeof(pubkey));
+    memset(&xonly, 0, sizeof(xonly));
+    secp256k1_context_destroy(ctx);
+    return ok;
+}
+
 int purify_bip340_validate_xonly_pubkey(const unsigned char xonly_pubkey32[32]) {
     secp256k1_context* ctx = purify_create_context();
     secp256k1_xonly_pubkey xonly;
@@ -712,7 +755,7 @@ int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circ
     if (ctx == NULL) {
         goto done;
     }
-    scratch = secp256k1_scratch_space_create(ctx, 1000000);
+    scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
     if (scratch == NULL) {
         goto done;
     }
@@ -814,7 +857,7 @@ int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* cir
     if (ctx == NULL) {
         goto done;
     }
-    scratch = secp256k1_scratch_space_create(ctx, 1000000);
+    scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
     if (scratch == NULL) {
         goto done;
     }

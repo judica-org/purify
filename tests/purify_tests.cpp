@@ -36,7 +36,12 @@ struct TestContext {
 
 template <typename T>
 void expect_ok(TestContext& ctx, const Result<T>& result, std::string_view message) {
-    ctx.expect(result.has_value(), message);
+    if (!result.has_value()) {
+        std::cerr << "FAIL: " << message << " (" << result.error().name() << ")\n";
+        ++ctx.failures;
+        return;
+    }
+    ctx.expect(true, message);
 }
 
 void expect_ok(TestContext& ctx, const Status& status, std::string_view message) {
@@ -321,6 +326,68 @@ void test_bppp_move_overload(TestContext& ctx) {
     expect_error(ctx, proof, ErrorCode::EmptyInput, "rvalue prove_norm_arg overload preserves empty-input validation");
 }
 
+void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
+    NativeBulletproofCircuit circuit(1, 1, 0);
+    std::size_t constraint = circuit.add_constraint(FieldElement::zero());
+    circuit.add_output_term(0, constraint, FieldElement::one());
+    circuit.add_commitment_term(0, constraint, FieldElement::from_int(-1));
+
+    BulletproofAssignmentData assignment;
+    assignment.left = {FieldElement::from_int(3)};
+    assignment.right = {FieldElement::from_int(4)};
+    assignment.output = {FieldElement::from_int(12)};
+    assignment.commitments = {FieldElement::from_int(12)};
+
+    std::array<unsigned char, 32> nonce{};
+    for (std::size_t i = 0; i < nonce.size(); ++i) {
+        nonce[i] = static_cast<unsigned char>(i + 1);
+    }
+    Bytes binding = purify::bytes_from_ascii("toy-circuit-binding");
+
+    Result<purify::ExperimentalBulletproofProof> proof =
+        purify::prove_experimental_circuit(circuit, assignment, nonce, purify::bppp::base_generator(), binding);
+    expect_ok(ctx, proof, "prove_experimental_circuit succeeds on a one-gate circuit");
+    if (!proof.has_value()) {
+        return;
+    }
+
+    ctx.expect(proof->commitment.has_value(), "experimental circuit proof includes the exact public commitment");
+
+    Result<bool> verified =
+        purify::verify_experimental_circuit(circuit, *proof, purify::bppp::base_generator(), binding);
+    expect_ok(ctx, verified, "verify_experimental_circuit succeeds on the generated proof");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "experimental circuit proof verifies");
+    }
+
+    Result<Bytes> encoded = proof->serialize();
+    expect_ok(ctx, encoded, "ExperimentalBulletproofProof serializes");
+    if (!encoded.has_value()) {
+        return;
+    }
+    Result<purify::ExperimentalBulletproofProof> decoded =
+        purify::ExperimentalBulletproofProof::deserialize(*encoded);
+    expect_ok(ctx, decoded, "ExperimentalBulletproofProof round-trips");
+    if (!decoded.has_value()) {
+        return;
+    }
+
+    Result<bool> reparsed =
+        purify::verify_experimental_circuit(circuit, *decoded, purify::bppp::base_generator(), binding);
+    expect_ok(ctx, reparsed, "verify_experimental_circuit accepts the reparsed proof");
+    if (reparsed.has_value()) {
+        ctx.expect(*reparsed, "reparsed experimental circuit proof verifies");
+    }
+
+    Result<bool> wrong_binding =
+        purify::verify_experimental_circuit(circuit, *proof, purify::bppp::base_generator(),
+                                            purify::bytes_from_ascii("toy-circuit-binding-wrong"));
+    expect_ok(ctx, wrong_binding, "verify_experimental_circuit runs with a wrong binding");
+    if (wrong_binding.has_value()) {
+        ctx.expect(!*wrong_binding, "experimental circuit proof is bound to the supplied statement bytes");
+    }
+}
+
 void test_puresign_message_signing(TestContext& ctx) {
     Result<UInt512> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for PureSign message signing");
@@ -332,12 +399,31 @@ void test_puresign_message_signing(TestContext& ctx) {
 
     Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(*secret);
     expect_ok(ctx, public_key, "derive_public_key succeeds");
+    Result<purify::puresign::PreparedNonce> prepared_with_proof =
+        purify::puresign::prepare_message_nonce_with_proof(*secret, message);
+    expect_ok(ctx, prepared_with_proof, "prepare_message_nonce_with_proof succeeds");
     Result<purify::puresign::PreparedNonce> prepared_a = purify::puresign::prepare_message_nonce(*secret, message);
     expect_ok(ctx, prepared_a, "prepare_message_nonce succeeds");
     Result<purify::puresign::PreparedNonce> prepared_b = purify::puresign::prepare_message_nonce(*secret, message);
     expect_ok(ctx, prepared_b, "prepare_message_nonce is deterministic");
-    if (!public_key.has_value() || !prepared_a.has_value() || !prepared_b.has_value()) {
+    if (!public_key.has_value() || !prepared_with_proof.has_value() || !prepared_a.has_value() || !prepared_b.has_value()) {
         return;
+    }
+
+    ctx.expect(prepared_with_proof->public_proof().has_value(), "prepare_message_nonce_with_proof exposes a public nonce proof");
+    if (prepared_with_proof->public_proof().has_value()) {
+        Result<bool> nonce_proof_ok =
+            purify::puresign::verify_message_nonce_proof(*public_key, message, *prepared_with_proof->public_proof());
+        expect_ok(ctx, nonce_proof_ok, "verify_message_nonce_proof succeeds on the generated proof");
+        if (nonce_proof_ok.has_value()) {
+            ctx.expect(*nonce_proof_ok, "generated message-bound nonce proof verifies");
+        }
+        Result<bool> wrong_nonce_proof =
+            purify::puresign::verify_message_nonce_proof(*public_key, Bytes{0x89}, *prepared_with_proof->public_proof());
+        expect_ok(ctx, wrong_nonce_proof, "verify_message_nonce_proof runs on a wrong message");
+        if (wrong_nonce_proof.has_value()) {
+            ctx.expect(!*wrong_nonce_proof, "message-bound nonce proof rejects a different message");
+        }
     }
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
@@ -352,6 +438,42 @@ void test_puresign_message_signing(TestContext& ctx) {
     expect_ok(ctx, cached, "sign_message_with_prepared succeeds");
     if (!direct.has_value() || !cached.has_value()) {
         return;
+    }
+
+    Result<purify::puresign::ProvenSignature> proven =
+        purify::puresign::sign_message_with_prepared_proof(*secret, message, std::move(*prepared_with_proof));
+    expect_ok(ctx, proven, "sign_message_with_prepared_proof succeeds");
+    if (proven.has_value()) {
+        Result<bool> proven_ok =
+            purify::puresign::verify_message_signature_with_proof(*public_key, message, *proven);
+        expect_ok(ctx, proven_ok, "verify_message_signature_with_proof succeeds");
+        if (proven_ok.has_value()) {
+            ctx.expect(*proven_ok, "message signature with proof verifies");
+        }
+
+        Result<Bytes> nonce_proof_bytes = proven->nonce_proof.serialize();
+        expect_ok(ctx, nonce_proof_bytes, "NonceProof serializes");
+        if (nonce_proof_bytes.has_value()) {
+            Result<purify::puresign::NonceProof> parsed_nonce_proof =
+                purify::puresign::NonceProof::deserialize(*nonce_proof_bytes);
+            expect_ok(ctx, parsed_nonce_proof, "NonceProof round-trips");
+        }
+
+        Result<Bytes> proven_bytes = proven->serialize();
+        expect_ok(ctx, proven_bytes, "ProvenSignature serializes");
+        if (proven_bytes.has_value()) {
+            Result<purify::puresign::ProvenSignature> parsed_proven =
+                purify::puresign::ProvenSignature::deserialize(*proven_bytes);
+            expect_ok(ctx, parsed_proven, "ProvenSignature round-trips");
+            if (parsed_proven.has_value()) {
+                Result<bool> parsed_ok =
+                    purify::puresign::verify_message_signature_with_proof(*public_key, message, *parsed_proven);
+                expect_ok(ctx, parsed_ok, "parsed message signature with proof verifies");
+                if (parsed_ok.has_value()) {
+                    ctx.expect(*parsed_ok, "parsed message signature with proof is accepted");
+                }
+            }
+        }
     }
 
     ctx.expect(direct->bytes == cached->bytes, "cached message-bound signing matches direct signing");
@@ -403,12 +525,27 @@ void test_puresign_topic_signing(TestContext& ctx) {
     Bytes message = sample_message();
     Bytes topic = purify::bytes_from_ascii("session-1");
 
+    Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(*secret);
+    expect_ok(ctx, public_key, "derive_public_key succeeds for topic signing");
+    Result<purify::puresign::PreparedNonce> prepared_with_proof =
+        purify::puresign::prepare_topic_nonce_with_proof(*secret, topic);
+    expect_ok(ctx, prepared_with_proof, "prepare_topic_nonce_with_proof succeeds");
     Result<purify::puresign::PreparedNonce> prepared_a = purify::puresign::prepare_topic_nonce(*secret, topic);
     expect_ok(ctx, prepared_a, "prepare_topic_nonce succeeds");
     Result<purify::puresign::PreparedNonce> prepared_b = purify::puresign::prepare_topic_nonce(*secret, topic);
     expect_ok(ctx, prepared_b, "prepare_topic_nonce is deterministic");
-    if (!prepared_a.has_value() || !prepared_b.has_value()) {
+    if (!public_key.has_value() || !prepared_with_proof.has_value() || !prepared_a.has_value() || !prepared_b.has_value()) {
         return;
+    }
+
+    ctx.expect(prepared_with_proof->public_proof().has_value(), "prepare_topic_nonce_with_proof exposes a public nonce proof");
+    if (prepared_with_proof->public_proof().has_value()) {
+        Result<bool> nonce_proof_ok =
+            purify::puresign::verify_topic_nonce_proof(*public_key, topic, *prepared_with_proof->public_proof());
+        expect_ok(ctx, nonce_proof_ok, "verify_topic_nonce_proof succeeds on the generated proof");
+        if (nonce_proof_ok.has_value()) {
+            ctx.expect(*nonce_proof_ok, "generated topic-bound nonce proof verifies");
+        }
     }
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
@@ -423,6 +560,18 @@ void test_puresign_topic_signing(TestContext& ctx) {
     expect_ok(ctx, cached, "sign_with_prepared_topic succeeds");
     if (!direct.has_value() || !cached.has_value()) {
         return;
+    }
+
+    Result<purify::puresign::ProvenSignature> proven =
+        purify::puresign::sign_with_prepared_topic_proof(*secret, message, std::move(*prepared_with_proof));
+    expect_ok(ctx, proven, "sign_with_prepared_topic_proof succeeds");
+    if (proven.has_value()) {
+        Result<bool> proven_ok =
+            purify::puresign::verify_topic_signature_with_proof(*public_key, message, topic, *proven);
+        expect_ok(ctx, proven_ok, "verify_topic_signature_with_proof succeeds");
+        if (proven_ok.has_value()) {
+            ctx.expect(*proven_ok, "topic-bound signature with proof verifies");
+        }
     }
 
     ctx.expect(direct->bytes == cached->bytes, "cached topic-bound signing matches direct signing");
@@ -475,6 +624,7 @@ int main() {
     test_equal_lowering(ctx);
     test_expr_builder(ctx);
     test_bppp_move_overload(ctx);
+    test_experimental_bulletproof_roundtrip(ctx);
     test_puresign_message_signing(ctx);
     test_puresign_topic_signing(ctx);
     test_puresign_binding_checks(ctx);

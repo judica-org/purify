@@ -6,16 +6,16 @@
  * @file puresign.hpp
  * @brief Purify-derived BIP340 signing helpers with prepared nonces and wire-format artifacts.
  *
- * This layer exposes deterministic nonces and signatures derived from a packed Purify secret and
- * intended to be ready for transport or direct secp256k1 use. It does not yet emit a third-party-
- * verifiable Purify statement proof because the current backend only exposes witness generation
- * and a standalone norm argument, not a full statement-proof API.
+ * This layer exposes deterministic nonces, signatures, and experimental `proof(R)` artifacts
+ * derived from a packed Purify secret and intended to be ready for transport or direct
+ * secp256k1 use.
  */
 
 #pragma once
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include "purify/api.hpp"
@@ -29,9 +29,9 @@ using Signature64 = std::array<unsigned char, 64>;
 /**
  * @brief Public key bundle pairing a Purify packed public key with its derived BIP340 x-only key.
  *
- * This bundle is convenient for applications that need both identities. Until a full statement
- * proof is exposed, third parties can verify signatures against `bip340_pubkey` but cannot
- * independently prove that the bundled Purify and BIP340 keys came from the same secret.
+ * This bundle is convenient for applications that need both identities. Third parties can verify
+ * signatures against `bip340_pubkey`, but this convenience type does not by itself prove that the
+ * bundled Purify and BIP340 keys came from the same secret.
  */
 struct PublicKey {
     static constexpr std::size_t kSerializedSize = 96;
@@ -65,6 +65,25 @@ struct Signature {
     [[nodiscard]] static Result<Signature> deserialize(std::span<const unsigned char> serialized);
 };
 
+/** @brief Public nonce together with its experimental Purify statement proof. */
+struct NonceProof {
+    std::uint8_t counter = 0;
+    Nonce nonce;
+    ExperimentalBulletproofProof proof;
+
+    [[nodiscard]] Result<Bytes> serialize() const;
+    [[nodiscard]] static Result<NonceProof> deserialize(std::span<const unsigned char> serialized);
+};
+
+/** @brief Standard signature bundled with the public nonce proof it relied on. */
+struct ProvenSignature {
+    Signature signature;
+    NonceProof nonce_proof;
+
+    [[nodiscard]] Result<Bytes> serialize() const;
+    [[nodiscard]] static Result<ProvenSignature> deserialize(std::span<const unsigned char> serialized);
+};
+
 /**
  * @brief Move-only prepared nonce bound to either a message or a topic.
  *
@@ -73,6 +92,11 @@ struct Signature {
  */
 class PreparedNonce {
 public:
+    enum class Scope : std::uint8_t {
+        Message,
+        Topic,
+    };
+
     PreparedNonce(const PreparedNonce&) = delete;
     PreparedNonce& operator=(const PreparedNonce&) = delete;
 
@@ -82,6 +106,10 @@ public:
 
     [[nodiscard]] const Nonce& public_nonce() const noexcept {
         return nonce_;
+    }
+
+    [[nodiscard]] const std::optional<NonceProof>& public_proof() const noexcept {
+        return proof_;
     }
 
     /**
@@ -95,11 +123,6 @@ public:
     }
 
 private:
-    enum class Scope : std::uint8_t {
-        Message,
-        Topic,
-    };
-
     PreparedNonce(Scope scope, const Scalar32& scalar, const Nonce& nonce,
                   const XOnly32& signer_pubkey, const XOnly32& binding_digest);
 
@@ -108,15 +131,22 @@ private:
     Scope scope_{Scope::Message};
     Scalar32 scalar_{};
     Nonce nonce_{};
+    std::optional<NonceProof> proof_;
     XOnly32 signer_pubkey_{};
     XOnly32 binding_digest_{};
 
     friend Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<const unsigned char> message);
     friend Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const unsigned char> topic);
+    friend Result<PreparedNonce> prepare_message_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> message);
+    friend Result<PreparedNonce> prepare_topic_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> topic);
     friend Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<const unsigned char> message,
                                                         PreparedNonce&& prepared);
     friend Result<Signature> sign_with_prepared_topic(const UInt512& secret, std::span<const unsigned char> message,
                                                       PreparedNonce&& prepared);
+    friend Result<ProvenSignature> sign_message_with_prepared_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                                                    PreparedNonce&& prepared);
+    friend Result<ProvenSignature> sign_with_prepared_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                                                  PreparedNonce&& prepared);
 };
 
 /** @brief Derives the public PureSign key bundle from a packed Purify secret. */
@@ -124,6 +154,8 @@ Result<PublicKey> derive_public_key(const UInt512& secret);
 
 /** @brief Derives a deterministic nonce bound to an exact message. */
 Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<const unsigned char> message);
+/** @brief Derives a deterministic message-bound nonce and proves its public point `R`. */
+Result<PreparedNonce> prepare_message_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> message);
 /**
  * @brief Derives a deterministic nonce bound to a caller-chosen topic.
  *
@@ -131,12 +163,17 @@ Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<con
  * than one message will reuse the signing nonce and leak the signing key.
  */
 Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const unsigned char> topic);
+/** @brief Derives a deterministic topic-bound nonce and proves its public point `R`. */
+Result<PreparedNonce> prepare_topic_nonce_with_proof(const UInt512& secret, std::span<const unsigned char> topic);
 
 /** @brief Signs a message using a Purify-derived nonce bound to that same message. */
 Result<Signature> sign_message(const UInt512& secret, std::span<const unsigned char> message);
 /** @brief Signs a message using a previously prepared message-bound nonce. */
 Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<const unsigned char> message,
                                              PreparedNonce&& prepared);
+/** @brief Signs a message and returns the signature bundled with the prepared public nonce proof. */
+Result<ProvenSignature> sign_message_with_prepared_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                                         PreparedNonce&& prepared);
 /**
  * @brief Signs a message using a Purify-derived nonce bound only to the supplied topic.
  *
@@ -152,9 +189,31 @@ Result<Signature> sign_with_topic(const UInt512& secret, std::span<const unsigne
  */
 Result<Signature> sign_with_prepared_topic(const UInt512& secret, std::span<const unsigned char> message,
                                            PreparedNonce&& prepared);
+/** @brief Signs with a prepared topic-bound nonce and returns the bundled public nonce proof. */
+Result<ProvenSignature> sign_with_prepared_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                                       PreparedNonce&& prepared);
+
+/** @brief Prepares, signs, and returns the bundled message-bound nonce proof and signature. */
+Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span<const unsigned char> message);
+/** @brief Prepares, signs, and returns the bundled topic-bound nonce proof and signature. */
+Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                              std::span<const unsigned char> topic);
 
 /** @brief Verifies a standard BIP340 signature against the derived x-only public key. */
 Result<bool> verify_signature(const PublicKey& public_key, std::span<const unsigned char> message,
                               const Signature& signature);
+/** @brief Verifies a message-bound public nonce proof against the Purify public key. */
+Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> message,
+                                        const NonceProof& nonce_proof);
+/** @brief Verifies a topic-bound public nonce proof against the Purify public key. */
+Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> topic,
+                                      const NonceProof& nonce_proof);
+/** @brief Verifies a message signature together with the claimed public nonce proof. */
+Result<bool> verify_message_signature_with_proof(const PublicKey& public_key, std::span<const unsigned char> message,
+                                                 const ProvenSignature& signature);
+/** @brief Verifies a topic-bound signature together with the claimed public nonce proof. */
+Result<bool> verify_topic_signature_with_proof(const PublicKey& public_key, std::span<const unsigned char> message,
+                                               std::span<const unsigned char> topic,
+                                               const ProvenSignature& signature);
 
 }  // namespace purify::puresign

@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,6 +21,10 @@
 #include "purify/expr.hpp"
 
 namespace purify {
+
+using BulletproofScalarBytes = std::array<unsigned char, 32>;
+using BulletproofPointBytes = std::array<unsigned char, 33>;
+using BulletproofGeneratorBytes = std::array<unsigned char, 33>;
 
 /** @brief Columnar witness assignment compatible with the native Bulletproof circuit layout. */
 struct BulletproofAssignmentData {
@@ -94,6 +99,46 @@ private:
     static void add_row_term(std::vector<NativeBulletproofCircuitRow>& rows, std::size_t expected_size,
                              std::size_t row_idx, std::size_t constraint_idx, const FieldElement& scalar);
 };
+
+/**
+ * @brief Experimental single-proof wrapper over the imported legacy Bulletproof circuit backend.
+ *
+ * This artifact is wire-ready: when the circuit exposes one committed scalar it carries the exact
+ * compressed public point alongside the proof bytes. The proof transcript is always bound to a
+ * canonical digest of the native circuit and optional statement-binding bytes supplied to the
+ * prove/verify helpers below.
+ */
+struct ExperimentalBulletproofProof {
+    static constexpr unsigned char kSerializationVersion = 1;
+
+    std::optional<BulletproofPointBytes> commitment;
+    Bytes proof;
+
+    Result<Bytes> serialize() const;
+    static Result<ExperimentalBulletproofProof> deserialize(std::span<const unsigned char> bytes);
+};
+
+/**
+ * @brief Proves a native circuit with the experimental imported Bulletproof circuit backend.
+ *
+ * When `circuit.n_commitments == 1`, providing `blind = std::nullopt` yields an exact public point
+ * commitment `assignment.commitments[0] * value_generator`, which is the form needed for `R = rG`
+ * style statements.
+ */
+Result<ExperimentalBulletproofProof> prove_experimental_circuit(
+    const NativeBulletproofCircuit& circuit,
+    const BulletproofAssignmentData& assignment,
+    const BulletproofScalarBytes& nonce,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding = {},
+    std::optional<BulletproofScalarBytes> blind = std::nullopt);
+
+/** @brief Verifies a proof produced by `prove_experimental_circuit` against the same native circuit and statement binding. */
+Result<bool> verify_experimental_circuit(
+    const NativeBulletproofCircuit& circuit,
+    const ExperimentalBulletproofProof& proof,
+    const BulletproofGeneratorBytes& value_generator,
+    std::span<const unsigned char> statement_binding = {});
 
 /**
  * @brief Lowering helper that converts a symbolic transcript into native Bulletproof witness and circuit forms.

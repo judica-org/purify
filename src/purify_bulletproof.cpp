@@ -420,6 +420,48 @@ FlattenedAssignmentView flatten_assignment_view(const purify::BulletproofAssignm
     return flat;
 }
 
+Result<FieldElement> evaluate_expr_with_assignment(const Expr& expr,
+                                                   const purify::BulletproofAssignmentData& assignment) {
+    FieldElement out = expr.constant();
+    for (const auto& term : expr.linear()) {
+        std::size_t index = term.first.index;
+        switch (term.first.kind) {
+        case SymbolKind::Left:
+            if (index >= assignment.left.size()) {
+                return purify::unexpected_error(purify::ErrorCode::MissingValue,
+                                                "evaluate_expr_with_assignment:left_index");
+            }
+            out = out + (assignment.left[index] * term.second);
+            break;
+        case SymbolKind::Right:
+            if (index >= assignment.right.size()) {
+                return purify::unexpected_error(purify::ErrorCode::MissingValue,
+                                                "evaluate_expr_with_assignment:right_index");
+            }
+            out = out + (assignment.right[index] * term.second);
+            break;
+        case SymbolKind::Output:
+            if (index >= assignment.output.size()) {
+                return purify::unexpected_error(purify::ErrorCode::MissingValue,
+                                                "evaluate_expr_with_assignment:output_index");
+            }
+            out = out + (assignment.output[index] * term.second);
+            break;
+        case SymbolKind::Commitment:
+            if (index >= assignment.commitments.size()) {
+                return purify::unexpected_error(purify::ErrorCode::MissingValue,
+                                                "evaluate_expr_with_assignment:commitment_index");
+            }
+            out = out + (assignment.commitments[index] * term.second);
+            break;
+        case SymbolKind::Witness:
+            return purify::unexpected_error(purify::ErrorCode::MissingValue,
+                                            "evaluate_expr_with_assignment:witness_symbol");
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
 namespace purify {
@@ -814,7 +856,7 @@ Result<NativeBulletproofCircuit> NativeBulletproofCircuit::PackedWithSlack::unpa
     return out;
 }
 
-Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack_with_slack(const PackedSlack& slack) const {
+Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack_with_slack(const PackedSlackPlan& slack) const {
     if (!has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, "NativeBulletproofCircuit::pack_with_slack:shape");
     }
@@ -905,7 +947,7 @@ Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack
 }
 
 Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack_with_slack() const {
-    return pack_with_slack(PackedSlack{});
+    return pack_with_slack(PackedSlackPlan{});
 }
 
 Result<Bytes> ExperimentalBulletproofProof::serialize() const {
@@ -1323,6 +1365,59 @@ NativeBulletproofCircuit BulletproofTranscript::native_circuit() const {
         append_constraint_to_circuit(circuit, constraint.first, constraint.second);
     }
     return circuit;
+}
+
+Result<bool> NativeBulletproofCircuitTemplate::partial_evaluate(const BulletproofAssignmentData& assignment) const {
+    if (!base_packed_.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "NativeBulletproofCircuitTemplate::partial_evaluate:shape");
+    }
+    if (assignment.left.size() != base_packed_.n_gates()
+        || assignment.right.size() != base_packed_.n_gates()
+        || assignment.output.size() != base_packed_.n_gates()
+        || assignment.commitments.size() != base_packed_.n_commitments()) {
+        return unexpected_error(ErrorCode::SizeMismatch, "NativeBulletproofCircuitTemplate::partial_evaluate:assignment_shape");
+    }
+    return base_packed_.evaluate(assignment);
+}
+
+Result<bool> NativeBulletproofCircuitTemplate::final_evaluate(const BulletproofAssignmentData& assignment,
+                                                              const UInt512& pubkey) const {
+    if (!base_packed_.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "NativeBulletproofCircuitTemplate::final_evaluate:shape");
+    }
+    if (assignment.left.size() != base_packed_.n_gates()
+        || assignment.right.size() != base_packed_.n_gates()
+        || assignment.output.size() != base_packed_.n_gates()
+        || assignment.commitments.size() != base_packed_.n_commitments()) {
+        return unexpected_error(ErrorCode::SizeMismatch, "NativeBulletproofCircuitTemplate::final_evaluate:assignment_shape");
+    }
+    Result<std::pair<UInt256, UInt256>> unpacked = unpack_public(pubkey);
+    if (!unpacked.has_value()) {
+        return unexpected_error(unpacked.error(), "NativeBulletproofCircuitTemplate::final_evaluate:unpack_public");
+    }
+    Result<FieldElement> expected_p1 = FieldElement::try_from_uint256(unpacked->first);
+    if (!expected_p1.has_value()) {
+        return unexpected_error(expected_p1.error(), "NativeBulletproofCircuitTemplate::final_evaluate:expected_p1");
+    }
+    Result<FieldElement> expected_p2 = FieldElement::try_from_uint256(unpacked->second);
+    if (!expected_p2.has_value()) {
+        return unexpected_error(expected_p2.error(), "NativeBulletproofCircuitTemplate::final_evaluate:expected_p2");
+    }
+    Result<FieldElement> actual_p1 = evaluate_expr_with_assignment(p1x_, assignment);
+    if (!actual_p1.has_value()) {
+        return unexpected_error(actual_p1.error(), "NativeBulletproofCircuitTemplate::final_evaluate:actual_p1");
+    }
+    Result<FieldElement> actual_p2 = evaluate_expr_with_assignment(p2x_, assignment);
+    if (!actual_p2.has_value()) {
+        return unexpected_error(actual_p2.error(), "NativeBulletproofCircuitTemplate::final_evaluate:actual_p2");
+    }
+    Result<FieldElement> actual_out = evaluate_expr_with_assignment(out_, assignment);
+    if (!actual_out.has_value()) {
+        return unexpected_error(actual_out.error(), "NativeBulletproofCircuitTemplate::final_evaluate:actual_out");
+    }
+    return *actual_p1 == *expected_p1
+        && *actual_p2 == *expected_p2
+        && *actual_out == assignment.commitments[0];
 }
 
 Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuitTemplate::instantiate_packed(const UInt512& pubkey) const {

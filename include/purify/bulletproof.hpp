@@ -73,7 +73,7 @@ struct NativeBulletproofCircuitRow {
  * built directly in C++ without parser round-trips.
  */
 struct NativeBulletproofCircuit {
-    struct PackedSlack {
+    struct PackedSlackPlan {
         std::size_t constraint_slack = 0;
         std::vector<std::size_t> wl;
         std::vector<std::size_t> wr;
@@ -229,7 +229,7 @@ struct NativeBulletproofCircuit {
     /** @brief Packs the circuit into one aligned slab with no additional row or constraint slack. */
     Result<PackedWithSlack> pack_with_slack() const;
     /** @brief Packs the circuit into one aligned slab with caller-specified slack for later mutation. */
-    Result<PackedWithSlack> pack_with_slack(const PackedSlack& slack) const;
+    Result<PackedWithSlack> pack_with_slack(const PackedSlackPlan& slack) const;
 
 private:
     /** @brief Shared bounds-checked helper for appending a sparse term to one matrix family. */
@@ -264,6 +264,12 @@ struct ExperimentalBulletproofProof {
  */
 class NativeBulletproofCircuitTemplate {
 public:
+    /** @brief Evaluates only the public-key-agnostic base circuit cached inside the template. */
+    Result<bool> partial_evaluate(const BulletproofAssignmentData& assignment) const;
+
+    /** @brief Evaluates only the late-bound public-key/output constraints against one assignment. */
+    Result<bool> final_evaluate(const BulletproofAssignmentData& assignment, const UInt512& pubkey) const;
+
     Result<NativeBulletproofCircuit::PackedWithSlack> instantiate_packed(const UInt512& pubkey) const;
     Result<NativeBulletproofCircuit> instantiate(const UInt512& pubkey) const;
 

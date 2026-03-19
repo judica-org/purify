@@ -419,7 +419,7 @@ void test_packed_circuit_with_slack(TestContext& ctx) {
     assignment.output = {FieldElement::from_int(12)};
     assignment.commitments = {FieldElement::from_int(12)};
 
-    NativeBulletproofCircuit::PackedSlack slack;
+    NativeBulletproofCircuit::PackedSlackPlan slack;
     slack.constraint_slack = 1;
     slack.wo = {1};
     slack.wv = {1};
@@ -447,6 +447,39 @@ void test_packed_circuit_with_slack(TestContext& ctx) {
     }
     ctx.expect(unpacked->c.size() == circuit.c.size(), "unpacked reset circuit restores the original constraint count");
     ctx.expect(unpacked->evaluate(assignment), "unpacked reset circuit still accepts the original witness");
+}
+
+void test_circuit_template_partial_final_eval(TestContext& ctx) {
+    Result<UInt512> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for template partial/final evaluation");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+    Result<purify::puresign::MessageProofCache> cache = purify::puresign::build_message_proof_cache(message);
+    expect_ok(ctx, cache, "build_message_proof_cache succeeds for template partial/final evaluation");
+    if (!cache.has_value()) {
+        return;
+    }
+
+    Result<purify::BulletproofWitnessData> witness = purify::prove_assignment_data(cache->eval_input, *secret);
+    expect_ok(ctx, witness, "prove_assignment_data succeeds for template partial/final evaluation");
+    if (!witness.has_value()) {
+        return;
+    }
+
+    Result<bool> partial_ok = cache->circuit_template.partial_evaluate(witness->assignment);
+    expect_ok(ctx, partial_ok, "circuit template partial_evaluate succeeds");
+    if (partial_ok.has_value()) {
+        ctx.expect(*partial_ok, "circuit template partial_evaluate accepts the generated witness");
+    }
+
+    Result<bool> final_ok = cache->circuit_template.final_evaluate(witness->assignment, witness->public_key);
+    expect_ok(ctx, final_ok, "circuit template final_evaluate succeeds");
+    if (final_ok.has_value()) {
+        ctx.expect(*final_ok, "circuit template final_evaluate accepts the bound public key");
+    }
 }
 
 void test_puresign_message_signing(TestContext& ctx) {
@@ -747,6 +780,7 @@ int main() {
     test_bppp_move_overload(ctx);
     test_experimental_bulletproof_roundtrip(ctx);
     test_packed_circuit_with_slack(ctx);
+    test_circuit_template_partial_final_eval(ctx);
     test_puresign_message_signing(ctx);
     test_puresign_topic_signing(ctx);
     test_puresign_binding_checks(ctx);

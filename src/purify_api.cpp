@@ -52,7 +52,7 @@ Bytes tagged_message(std::string_view prefix, const Bytes& message) {
     return out;
 }
 
-void add_expr_slack(NativeBulletproofCircuit::PackedSlack& slack, const Expr& expr) {
+void add_expr_slack(NativeBulletproofCircuit::PackedSlackPlan& slack, const Expr& expr) {
     for (const auto& term : expr.linear()) {
         switch (term.first.kind) {
         case SymbolKind::Left:
@@ -82,9 +82,9 @@ void add_expr_slack(NativeBulletproofCircuit::PackedSlack& slack, const Expr& ex
     }
 }
 
-NativeBulletproofCircuit::PackedSlack build_template_slack(std::size_t n_gates, std::size_t n_commitments,
-                                                           const Expr& p1x, const Expr& p2x, const Expr& out) {
-    NativeBulletproofCircuit::PackedSlack slack;
+NativeBulletproofCircuit::PackedSlackPlan build_template_slack(std::size_t n_gates, std::size_t n_commitments,
+                                                               const Expr& p1x, const Expr& p2x, const Expr& out) {
+    NativeBulletproofCircuit::PackedSlackPlan slack;
     slack.constraint_slack = 3;
     slack.wl.assign(n_gates, 0);
     slack.wr.assign(n_gates, 0);

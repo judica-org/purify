@@ -363,6 +363,21 @@ int main(int argc, char** argv) {
         ankerl::nanobench::doNotOptimizeAway(built->constraint_count());
     });
 
+    auto partial_eval_bench = make_bench(*config);
+    partial_eval_bench.run("partial-evaluate verifier circuit template", [&] {
+        purify::Result<bool> ok = bench_case->circuit_template.partial_evaluate(bench_case->witness.assignment);
+        assert(ok.has_value() && *ok && "benchmark circuit template partial evaluation should succeed");
+        ankerl::nanobench::doNotOptimizeAway(*ok);
+    });
+
+    auto final_eval_bench = make_bench(*config);
+    final_eval_bench.run("final-evaluate verifier circuit template", [&] {
+        purify::Result<bool> ok =
+            bench_case->circuit_template.final_evaluate(bench_case->witness.assignment, bench_case->witness.public_key);
+        assert(ok.has_value() && *ok && "benchmark circuit template final evaluation should succeed");
+        ankerl::nanobench::doNotOptimizeAway(*ok);
+    });
+
     auto experimental_prove_bench = make_bench(*config);
     experimental_prove_bench.run("prove experimental circuit", [&] {
         purify::Result<ExperimentalBulletproofProof> proof =

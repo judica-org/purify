@@ -8,6 +8,7 @@
 #include <optional>
 #include <string_view>
 
+#include "../src/purify_bulletproof_internal.hpp"
 #include "purify.hpp"
 #include "purify_bppp.hpp"
 
@@ -252,6 +253,132 @@ void test_random_experimental_proof_properties(TestContext& ctx) {
                "tampering an experimental proof is rejected");
 }
 
+void test_template_split_eval_differential(TestContext& ctx) {
+    SplitMix64 rng(0x6b8b4567327b23c6ULL);
+
+    for (std::size_t i = 0; i < 8; ++i) {
+        Result<GeneratedKey> key = random_key(rng);
+        expect_ok(ctx, key, "random_key succeeds for split-eval differential coverage");
+        if (!key.has_value()) {
+            continue;
+        }
+
+        Bytes message = random_bytes(rng, 0, 48);
+        Result<purify::BulletproofWitnessData> witness = purify::prove_assignment_data(message, key->secret);
+        expect_ok(ctx, witness, "prove_assignment_data succeeds for split-eval differential coverage");
+        Result<purify::NativeBulletproofCircuitTemplate> circuit_template = purify::verifier_circuit_template(message);
+        expect_ok(ctx, circuit_template, "verifier_circuit_template succeeds for split-eval differential coverage");
+        if (!witness.has_value() || !circuit_template.has_value()) {
+            continue;
+        }
+
+        Result<purify::NativeBulletproofCircuit::PackedWithSlack> full =
+            circuit_template->instantiate_packed(key->public_key);
+        expect_ok(ctx, full, "instantiate_packed succeeds for split-eval differential coverage");
+        if (!full.has_value()) {
+            continue;
+        }
+
+        auto compare_split_vs_full = [&](const purify::BulletproofAssignmentData& assignment,
+                                         const UInt512& pubkey,
+                                         std::string_view label) {
+            Result<bool> partial = circuit_template->partial_evaluate(assignment);
+            Result<bool> final = circuit_template->final_evaluate(assignment, pubkey);
+            expect_ok(ctx, partial, label);
+            expect_ok(ctx, final, label);
+            if (!partial.has_value() || !final.has_value()) {
+                return;
+            }
+
+            Result<purify::NativeBulletproofCircuit::PackedWithSlack> instantiated =
+                circuit_template->instantiate_packed(pubkey);
+            expect_ok(ctx, instantiated, label);
+            if (!instantiated.has_value()) {
+                return;
+            }
+
+            bool split_ok = *partial && *final;
+            bool full_ok = instantiated->evaluate(assignment);
+            ctx.expect(split_ok == full_ok, label);
+        };
+
+        compare_split_vs_full(witness->assignment, key->public_key,
+                              "split-eval matches full packed evaluation on honest witness data");
+
+        purify::BulletproofAssignmentData bad_base = witness->assignment;
+        bad_base.output[0] = bad_base.output[0] + purify::FieldElement::one();
+        compare_split_vs_full(bad_base, key->public_key,
+                              "split-eval matches full packed evaluation when a multiplication gate is broken");
+
+        purify::BulletproofAssignmentData bad_final = witness->assignment;
+        bad_final.commitments[0] = bad_final.commitments[0] + purify::FieldElement::one();
+        compare_split_vs_full(bad_final, key->public_key,
+                              "split-eval matches full packed evaluation when only the final commitment binding is broken");
+
+        Result<GeneratedKey> other = random_key(rng);
+        expect_ok(ctx, other, "second random_key succeeds for wrong-pubkey split-eval differential coverage");
+        if (other.has_value() && other->public_key != key->public_key) {
+            compare_split_vs_full(witness->assignment, other->public_key,
+                                  "split-eval matches full packed evaluation for a wrong public key");
+        }
+    }
+}
+
+void test_assume_valid_proof_matches_validated_proof(TestContext& ctx) {
+    SplitMix64 rng(0x1234fedcba987654ULL);
+
+    for (std::size_t i = 0; i < 2; ++i) {
+        Result<GeneratedKey> key = random_key(rng);
+        expect_ok(ctx, key, "random_key succeeds for assume-valid proof differential coverage");
+        if (!key.has_value()) {
+            continue;
+        }
+
+        Bytes message = random_bytes(rng, 0, 48);
+        Result<purify::BulletproofWitnessData> witness = purify::prove_assignment_data(message, key->secret);
+        expect_ok(ctx, witness, "prove_assignment_data succeeds for assume-valid proof differential coverage");
+        Result<purify::NativeBulletproofCircuitTemplate> circuit_template = purify::verifier_circuit_template(message);
+        expect_ok(ctx, circuit_template, "verifier_circuit_template succeeds for assume-valid proof differential coverage");
+        if (!witness.has_value() || !circuit_template.has_value()) {
+            continue;
+        }
+
+        Result<bool> partial = circuit_template->partial_evaluate(witness->assignment);
+        Result<bool> final = circuit_template->final_evaluate(witness->assignment, witness->public_key);
+        expect_ok(ctx, partial, "partial_evaluate succeeds before assume-valid proof differential");
+        expect_ok(ctx, final, "final_evaluate succeeds before assume-valid proof differential");
+        if (!partial.has_value() || !final.has_value() || !*partial || !*final) {
+            continue;
+        }
+
+        Result<purify::NativeBulletproofCircuit::PackedWithSlack> circuit =
+            circuit_template->instantiate_packed(witness->public_key);
+        expect_ok(ctx, circuit, "instantiate_packed succeeds for assume-valid proof differential coverage");
+        if (!circuit.has_value()) {
+            continue;
+        }
+
+        std::array<unsigned char, 32> nonce = random_array<32>(rng);
+        Bytes binding = random_bytes(rng, 0, 32);
+        Result<ExperimentalBulletproofProof> validated =
+            purify::prove_experimental_circuit(*circuit, witness->assignment, nonce,
+                                               purify::bppp::base_generator(), binding);
+        expect_ok(ctx, validated, "validated packed proof succeeds in differential coverage");
+        Result<ExperimentalBulletproofProof> skipped =
+            purify::prove_experimental_circuit_assume_valid(*circuit, witness->assignment, nonce,
+                                                            purify::bppp::base_generator(), binding);
+        expect_ok(ctx, skipped, "assume-valid packed proof succeeds in differential coverage");
+        if (!validated.has_value() || !skipped.has_value()) {
+            continue;
+        }
+
+        ctx.expect(validated->commitment == skipped->commitment,
+                   "assume-valid and validated proving produce the same commitment");
+        ctx.expect(validated->proof == skipped->proof,
+                   "assume-valid and validated proving produce identical proof bytes");
+    }
+}
+
 void test_random_puresign_proven_signature_properties(TestContext& ctx) {
     SplitMix64 rng(0xfeedfacedeadbeefULL);
 
@@ -304,6 +431,8 @@ int main() {
 
     test_seeded_key_and_circuit_properties(ctx);
     test_random_experimental_proof_properties(ctx);
+    test_template_split_eval_differential(ctx);
+    test_assume_valid_proof_matches_validated_proof(ctx);
     test_random_puresign_proven_signature_properties(ctx);
 
     if (ctx.failures != 0) {

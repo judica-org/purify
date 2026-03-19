@@ -1,0 +1,58 @@
+# GitHub Actions workflow for building and deploying Doxygen docs to GitHub Pages
+# This workflow builds the docs on push to main and deploys to the `gh-pages` branch
+
+name: docs-pages
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+
+      - name: Configure CMake (docs only)
+        run: cmake -S . -B build-docs -DPURIFY_BUILD_DOCS=ON -DPURIFY_BUILD_BENCH=OFF -DPURIFY_BUILD_FUZZ=OFF -DPURIFY_BUILD_TESTS=OFF -DPURIFY_BUILD_REFERENCE_TESTS=OFF
+
+      - name: Build docs
+        run: cmake --build build-docs --target docs
+
+      - name: Upload built docs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-html
+          path: build-docs/docs/html
+
+  deploy-pages:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Download built docs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-html
+          path: docs-html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-html
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

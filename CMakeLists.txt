@@ -78,6 +78,13 @@ if(MSVC)
         /wd4267
         /wd4310
     )
+
+    # Visual Studio generators do not reliably honor target-wide
+    # `$<COMPILE_LANGUAGE:C>` options for mixed C/C++ targets, so attach the
+    # C11 atomics flag directly to the source that includes `<stdatomic.h>`.
+    set_property(SOURCE src/legacy_bulletproof/scratch_frames.c APPEND PROPERTY COMPILE_OPTIONS
+        /experimental:c11atomics
+    )
 endif()
 
 function(purify_configure_library_target target)
@@ -103,11 +110,6 @@ function(purify_configure_library_target target)
         target_compile_definitions(${target} PUBLIC PURIFY_USE_LEGACY_FIELD_HASHES=1)
     else()
         target_compile_definitions(${target} PUBLIC PURIFY_USE_LEGACY_FIELD_HASHES=0)
-    endif()
-
-    if(MSVC)
-        # MSVC gates C11 <stdatomic.h> behind an extra compiler flag.
-        target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
     endif()
 
     purify_enable_warnings(${target})

@@ -214,6 +214,56 @@ void purify_scalar_cmov(purify_scalar* dst, const purify_scalar* src, int flag) 
     secp256k1_scalar_cmov(purify_scalar_cast(dst), purify_scalar_cast_const(src), flag);
 }
 
+void purify_sha256(unsigned char output32[32], const unsigned char *data,
+                   size_t data_len) {
+  static const unsigned char zero = 0;
+  secp256k1_sha256 sha256;
+
+  if (data == NULL && data_len == 0) {
+    data = &zero;
+  }
+
+  secp256k1_sha256_initialize(&sha256);
+  if (data_len != 0) {
+    secp256k1_sha256_write(&sha256, data, data_len);
+  }
+  secp256k1_sha256_finalize(&sha256, output32);
+  secp256k1_sha256_clear(&sha256);
+}
+
+int purify_sha256_many(unsigned char output32[32],
+                       const unsigned char *const *items,
+                       const size_t *item_lens,
+                       size_t items_count) {
+  secp256k1_sha256 sha256;
+  if (output32 == NULL) {
+    return 0;
+  }
+  if (items_count != 0 && (items == NULL || item_lens == NULL)) {
+    memset(output32, 0, 32);
+    return 0;
+  }
+  secp256k1_sha256_initialize(&sha256);
+  for (size_t i = 0; i < items_count; ++i) {
+    const unsigned char *item = items[i];
+    size_t item_len = item_lens[i];
+    if (item == NULL) {
+      if (item_len != 0) {
+        secp256k1_sha256_clear(&sha256);
+        memset(output32, 0, 32);
+        return 0;
+      }
+      continue;
+    }
+    if (item_len != 0) {
+      secp256k1_sha256_write(&sha256, item, item_len);
+    }
+  }
+  secp256k1_sha256_finalize(&sha256, output32);
+  secp256k1_sha256_clear(&sha256);
+  return 1;
+}
+
 void purify_hmac_sha256(unsigned char output32[32],
                         const unsigned char* key, size_t key_len,
                         const unsigned char* data, size_t data_len) {

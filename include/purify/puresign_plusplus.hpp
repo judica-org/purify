@@ -77,13 +77,17 @@ private:
     NonceProof proof_;
 
     friend Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret,
-                                                                           std::span<const unsigned char> message);
+                                                                           std::span<const unsigned char> message,
+                                                                           bppp::ExperimentalCircuitCache* circuit_cache);
     friend Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret,
-                                                                           const MessageProofCache& cache);
+                                                                           const MessageProofCache& cache,
+                                                                           bppp::ExperimentalCircuitCache* circuit_cache);
     friend Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret,
-                                                                         std::span<const unsigned char> topic);
+                                                                         std::span<const unsigned char> topic,
+                                                                         bppp::ExperimentalCircuitCache* circuit_cache);
     friend Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret,
-                                                                         const TopicProofCache& cache);
+                                                                         const TopicProofCache& cache,
+                                                                         bppp::ExperimentalCircuitCache* circuit_cache);
     friend Result<ProvenSignature> sign_message_with_prepared_proof(const UInt512& secret,
                                                                     std::span<const unsigned char> message,
                                                                     PreparedNonceWithProof&& prepared);
@@ -99,15 +103,19 @@ Result<TopicProofCache> build_topic_proof_cache(std::span<const unsigned char> t
 
 Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<const unsigned char> message);
 Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret,
-                                                                std::span<const unsigned char> message);
+                                                                std::span<const unsigned char> message,
+                                                                bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret,
-                                                                const MessageProofCache& cache);
+                                                                const MessageProofCache& cache,
+                                                                bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 
 Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const unsigned char> topic);
 Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret,
-                                                              std::span<const unsigned char> topic);
+                                                              std::span<const unsigned char> topic,
+                                                              bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret,
-                                                              const TopicProofCache& cache);
+                                                              const TopicProofCache& cache,
+                                                              bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 
 Result<Signature> sign_message(const UInt512& secret, std::span<const unsigned char> message);
 Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<const unsigned char> message,
@@ -124,34 +132,46 @@ Result<ProvenSignature> sign_with_prepared_topic_proof(const UInt512& secret,
                                                        std::span<const unsigned char> message,
                                                        PreparedNonceWithProof&& prepared);
 
-Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span<const unsigned char> message);
-Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, const MessageProofCache& cache);
+Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span<const unsigned char> message,
+                                                bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
+Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, const MessageProofCache& cache,
+                                                bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
-                                              std::span<const unsigned char> topic);
+                                              std::span<const unsigned char> topic,
+                                              bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
-                                              const TopicProofCache& cache);
+                                              const TopicProofCache& cache,
+                                              bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 
 Result<bool> verify_signature(const PublicKey& public_key, std::span<const unsigned char> message,
                               const Signature& signature);
 Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> message,
-                                        const NonceProof& nonce_proof);
+                                        const NonceProof& nonce_proof,
+                                        bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<bool> verify_message_nonce_proof(const MessageProofCache& cache, const PublicKey& public_key,
-                                        const NonceProof& nonce_proof);
+                                        const NonceProof& nonce_proof,
+                                        bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> topic,
-                                      const NonceProof& nonce_proof);
+                                      const NonceProof& nonce_proof,
+                                      bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<bool> verify_topic_nonce_proof(const TopicProofCache& cache, const PublicKey& public_key,
-                                      const NonceProof& nonce_proof);
+                                      const NonceProof& nonce_proof,
+                                      bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<bool> verify_message_signature_with_proof(const PublicKey& public_key,
                                                  std::span<const unsigned char> message,
-                                                 const ProvenSignature& signature);
+                                                 const ProvenSignature& signature,
+                                                 bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<bool> verify_message_signature_with_proof(const MessageProofCache& cache, const PublicKey& public_key,
-                                                 const ProvenSignature& signature);
+                                                 const ProvenSignature& signature,
+                                                 bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<bool> verify_topic_signature_with_proof(const PublicKey& public_key,
                                                std::span<const unsigned char> message,
                                                std::span<const unsigned char> topic,
-                                               const ProvenSignature& signature);
+                                               const ProvenSignature& signature,
+                                               bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 Result<bool> verify_topic_signature_with_proof(const TopicProofCache& cache, const PublicKey& public_key,
                                                std::span<const unsigned char> message,
-                                               const ProvenSignature& signature);
+                                               const ProvenSignature& signature,
+                                               bppp::ExperimentalCircuitCache* circuit_cache = nullptr);
 
 }  // namespace purify::puresign_plusplus

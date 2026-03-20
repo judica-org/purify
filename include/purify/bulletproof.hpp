@@ -255,6 +255,26 @@ struct ExperimentalBulletproofProof {
     static Result<ExperimentalBulletproofProof> deserialize(std::span<const unsigned char> bytes);
 };
 
+/** @brief Caller-owned cache for reusable legacy Bulletproof backend resources keyed by gate count. */
+class ExperimentalBulletproofBackendCache {
+public:
+    ExperimentalBulletproofBackendCache();
+    ExperimentalBulletproofBackendCache(const ExperimentalBulletproofBackendCache&) = delete;
+    ExperimentalBulletproofBackendCache& operator=(const ExperimentalBulletproofBackendCache&) = delete;
+    ExperimentalBulletproofBackendCache(ExperimentalBulletproofBackendCache&& other) noexcept;
+    ExperimentalBulletproofBackendCache& operator=(ExperimentalBulletproofBackendCache&& other) noexcept;
+    ~ExperimentalBulletproofBackendCache();
+
+    void clear();
+    [[nodiscard]] std::size_t size() const noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+
+    friend struct ExperimentalBulletproofBackendCacheAccess;
+};
+
 /**
  * @brief Public-key-agnostic native verifier-circuit template.
  *
@@ -295,26 +315,30 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding = {},
-    std::optional<BulletproofScalarBytes> blind = std::nullopt);
+    std::optional<BulletproofScalarBytes> blind = std::nullopt,
+    ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const NativeBulletproofCircuit::PackedWithSlack& circuit,
     const BulletproofAssignmentData& assignment,
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding = {},
-    std::optional<BulletproofScalarBytes> blind = std::nullopt);
+    std::optional<BulletproofScalarBytes> blind = std::nullopt,
+    ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 
 /** @brief Verifies a proof produced by `prove_experimental_circuit` against the same one-commitment native circuit. */
 Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit::PackedWithSlack& circuit,
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 
 /** @brief Builds a reusable public-key-agnostic verifier-circuit template for a message. */
 Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message);

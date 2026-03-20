@@ -22,10 +22,69 @@
 #include <type_traits>
 #include <unordered_map>
 
+namespace purify {
+
+struct BulletproofBackendResourceDeleter {
+    void operator()(purify_bulletproof_backend_resources* resources) const noexcept {
+        purify_bulletproof_backend_resources_destroy(resources);
+    }
+};
+
+using BulletproofBackendResourcePtr =
+    std::unique_ptr<purify_bulletproof_backend_resources, BulletproofBackendResourceDeleter>;
+
+struct ExperimentalBulletproofBackendCache::Impl {
+    std::unordered_map<std::size_t, BulletproofBackendResourcePtr> resources;
+};
+
+struct ExperimentalBulletproofBackendCacheAccess {
+    static purify_bulletproof_backend_resources* find(ExperimentalBulletproofBackendCache* cache, std::size_t n_gates) {
+        if (cache == nullptr || cache->impl_ == nullptr) {
+            return nullptr;
+        }
+        auto it = cache->impl_->resources.find(n_gates);
+        if (it == cache->impl_->resources.end()) {
+            return nullptr;
+        }
+        return it->second.get();
+    }
+
+    static void insert(ExperimentalBulletproofBackendCache* cache, std::size_t n_gates,
+                       BulletproofBackendResourcePtr resources) {
+        if (cache == nullptr || cache->impl_ == nullptr) {
+            return;
+        }
+        cache->impl_->resources.emplace(n_gates, std::move(resources));
+    }
+};
+
+ExperimentalBulletproofBackendCache::ExperimentalBulletproofBackendCache() : impl_(std::make_unique<Impl>()) {}
+
+ExperimentalBulletproofBackendCache::ExperimentalBulletproofBackendCache(
+    ExperimentalBulletproofBackendCache&& other) noexcept = default;
+
+ExperimentalBulletproofBackendCache& ExperimentalBulletproofBackendCache::operator=(
+    ExperimentalBulletproofBackendCache&& other) noexcept = default;
+
+ExperimentalBulletproofBackendCache::~ExperimentalBulletproofBackendCache() = default;
+
+void ExperimentalBulletproofBackendCache::clear() {
+    if (impl_ != nullptr) {
+        impl_->resources.clear();
+    }
+}
+
+std::size_t ExperimentalBulletproofBackendCache::size() const noexcept {
+    return impl_ != nullptr ? impl_->resources.size() : 0;
+}
+
+}  // namespace purify
+
 namespace {
 
 using purify::Expr;
 using purify::ErrorCode;
+using purify::ExperimentalBulletproofBackendCache;
 using purify::ExperimentalBulletproofProof;
 using purify::FieldElement;
 using purify::Result;
@@ -38,15 +97,6 @@ using purify::BulletproofGeneratorBytes;
 using purify::BulletproofPointBytes;
 using purify::BulletproofScalarBytes;
 using PackedCircuit = purify::NativeBulletproofCircuit::PackedWithSlack;
-
-struct BulletproofBackendResourceDeleter {
-    void operator()(purify_bulletproof_backend_resources* resources) const noexcept {
-        purify_bulletproof_backend_resources_destroy(resources);
-    }
-};
-
-using BulletproofBackendResourcePtr =
-    std::unique_ptr<purify_bulletproof_backend_resources, BulletproofBackendResourceDeleter>;
 
 static_assert(std::is_trivially_copyable_v<purify::NativeBulletproofCircuitTerm>,
               "Packed circuit storage requires trivially copyable terms");
@@ -454,18 +504,38 @@ std::size_t circuit_n_commitments(const PackedCircuit& circuit) {
     return circuit.n_commitments();
 }
 
-purify_bulletproof_backend_resources* cached_bulletproof_backend_resources(std::size_t n_gates) {
-    thread_local std::unordered_map<std::size_t, BulletproofBackendResourcePtr> cache;
+struct ResolvedBulletproofBackendResources {
+    purify_bulletproof_backend_resources* resources = nullptr;
+    purify::BulletproofBackendResourcePtr owned_resources;
+};
 
-    auto it = cache.find(n_gates);
-    if (it == cache.end()) {
-        purify_bulletproof_backend_resources* created = purify_bulletproof_backend_resources_create(n_gates);
-        if (created == nullptr) {
-            return nullptr;
+ResolvedBulletproofBackendResources resolve_bulletproof_backend_resources(
+    std::size_t n_gates,
+    purify::ExperimentalBulletproofBackendCache* cache) {
+    ResolvedBulletproofBackendResources out;
+
+    if (cache != nullptr) {
+        out.resources = purify::ExperimentalBulletproofBackendCacheAccess::find(cache, n_gates);
+        if (out.resources != nullptr) {
+            return out;
         }
-        it = cache.emplace(n_gates, BulletproofBackendResourcePtr(created)).first;
     }
-    return it->second.get();
+
+    purify_bulletproof_backend_resources* created = purify_bulletproof_backend_resources_create(n_gates);
+    if (created == nullptr) {
+        return out;
+    }
+
+    if (cache != nullptr) {
+        purify::ExperimentalBulletproofBackendCacheAccess::insert(cache, n_gates,
+                                                                  purify::BulletproofBackendResourcePtr(created));
+        out.resources = purify::ExperimentalBulletproofBackendCacheAccess::find(cache, n_gates);
+        return out;
+    }
+
+    out.owned_resources.reset(created);
+    out.resources = out.owned_resources.get();
+    return out;
 }
 
 template <typename CircuitLike>
@@ -476,6 +546,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_impl(
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding,
     std::optional<BulletproofScalarBytes> blind,
+    ExperimentalBulletproofBackendCache* backend_cache,
     bool require_assignment_validation,
     const char* shape_context,
     const char* gates_context,
@@ -511,7 +582,9 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_impl(
     std::size_t proof_len = proof_bytes.size();
     BulletproofPointBytes commitment{};
     const unsigned char* blind_ptr = blind.has_value() ? blind->data() : nullptr;
-    purify_bulletproof_backend_resources* resources = cached_bulletproof_backend_resources(circuit_n_gates(circuit));
+    ResolvedBulletproofBackendResources resolved =
+        resolve_bulletproof_backend_resources(circuit_n_gates(circuit), backend_cache);
+    purify_bulletproof_backend_resources* resources = resolved.resources;
 
     if (proof_len == 0 || resources == nullptr) {
         return unexpected_error(ErrorCode::UnexpectedSize, proof_size_context);
@@ -1109,8 +1182,10 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding,
-    std::optional<BulletproofScalarBytes> blind) {
-    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding, blind, true,
+    std::optional<BulletproofScalarBytes> blind,
+    ExperimentalBulletproofBackendCache* backend_cache) {
+    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding,
+                                           blind, backend_cache, true,
                                            "prove_experimental_circuit:circuit_shape",
                                            "prove_experimental_circuit:n_gates_power_of_two",
                                            "prove_experimental_circuit:n_commitments",
@@ -1126,8 +1201,10 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding,
-    std::optional<BulletproofScalarBytes> blind) {
-    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding, blind, true,
+    std::optional<BulletproofScalarBytes> blind,
+    ExperimentalBulletproofBackendCache* backend_cache) {
+    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding,
+                                           blind, backend_cache, true,
                                            "prove_experimental_circuit:packed_circuit_shape",
                                            "prove_experimental_circuit:packed_n_gates_power_of_two",
                                            "prove_experimental_circuit:packed_n_commitments",
@@ -1143,8 +1220,10 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_assume_valid(
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
     std::span<const unsigned char> statement_binding,
-    std::optional<BulletproofScalarBytes> blind) {
-    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding, blind, false,
+    std::optional<BulletproofScalarBytes> blind,
+    ExperimentalBulletproofBackendCache* backend_cache) {
+    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding,
+                                           blind, backend_cache, false,
                                            "prove_experimental_circuit_assume_valid:packed_circuit_shape",
                                            "prove_experimental_circuit_assume_valid:packed_n_gates_power_of_two",
                                            "prove_experimental_circuit_assume_valid:packed_n_commitments",
@@ -1158,7 +1237,8 @@ Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
-    std::span<const unsigned char> statement_binding) {
+    std::span<const unsigned char> statement_binding,
+    ExperimentalBulletproofBackendCache* backend_cache) {
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:circuit_shape");
     }
@@ -1174,7 +1254,8 @@ Result<bool> verify_experimental_circuit(
 
     FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
     Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
-    purify_bulletproof_backend_resources* resources = cached_bulletproof_backend_resources(circuit.n_gates);
+    ResolvedBulletproofBackendResources resolved = resolve_bulletproof_backend_resources(circuit.n_gates, backend_cache);
+    purify_bulletproof_backend_resources* resources = resolved.resources;
     if (resources == nullptr) {
         return unexpected_error(ErrorCode::UnexpectedSize, "verify_experimental_circuit:backend_resources");
     }
@@ -1189,7 +1270,8 @@ Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit::PackedWithSlack& circuit,
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
-    std::span<const unsigned char> statement_binding) {
+    std::span<const unsigned char> statement_binding,
+    ExperimentalBulletproofBackendCache* backend_cache) {
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:packed_circuit_shape");
     }
@@ -1205,7 +1287,9 @@ Result<bool> verify_experimental_circuit(
 
     FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
     Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
-    purify_bulletproof_backend_resources* resources = cached_bulletproof_backend_resources(circuit.n_gates());
+    ResolvedBulletproofBackendResources resolved =
+        resolve_bulletproof_backend_resources(circuit.n_gates(), backend_cache);
+    purify_bulletproof_backend_resources* resources = resolved.resources;
     if (resources == nullptr) {
         return unexpected_error(ErrorCode::UnexpectedSize, "verify_experimental_circuit:packed_backend_resources");
     }

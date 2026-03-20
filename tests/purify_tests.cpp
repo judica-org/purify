@@ -2,11 +2,16 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+#include <array>
+#include <span>
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "purify.hpp"
 #include "purify_bppp.hpp"
+#include "purify_secp_bridge.h"
 #include "test_harness.hpp"
 
 namespace {
@@ -20,6 +25,7 @@ using purify::Bytes;
 using purify::ErrorCode;
 using purify::Expr;
 using purify::FieldElement;
+using purify::GeneratedKey;
 using purify::NativeBulletproofCircuit;
 using purify::Result;
 using purify::Status;
@@ -118,6 +124,40 @@ FieldElement evaluate_toy_bppp_relation(const ToyBpppReduction& reduction) {
         total = total + (reduction.l_vec[i] * reduction.c_vec[i]);
     }
     return total;
+}
+
+void test_sha256_many_bridge(TestContext& ctx) {
+    const std::array<unsigned char, 2> part1{{'a', 'b'}};
+    const std::array<unsigned char, 0> part2{};
+    const std::array<unsigned char, 2> part3{{'c', 'd'}};
+    const unsigned char* items[] = {part1.data(), part2.data(), part3.data()};
+    const size_t item_lens[] = {part1.size(), part2.size(), part3.size()};
+
+    std::array<unsigned char, 32> direct{};
+    std::array<unsigned char, 32> many{};
+    const Bytes concatenated{'a', 'b', 'c', 'd'};
+
+    purify_sha256(direct.data(), concatenated.data(), concatenated.size());
+    int ok = purify_sha256_many(many.data(), items, item_lens, std::size(items));
+    ctx.expect(ok != 0, "purify_sha256_many accepts valid segmented input");
+    if (ok != 0) {
+        ctx.expect(many == direct, "purify_sha256_many matches purify_sha256 on concatenated data");
+    }
+
+    std::array<unsigned char, 32> empty_direct{};
+    std::array<unsigned char, 32> empty_many{};
+    purify_sha256(empty_direct.data(), nullptr, 0);
+    ok = purify_sha256_many(empty_many.data(), nullptr, nullptr, 0);
+    ctx.expect(ok != 0, "purify_sha256_many accepts an empty segment set");
+    if (ok != 0) {
+        ctx.expect(empty_many == empty_direct, "purify_sha256_many empty input matches purify_sha256 empty input");
+    }
+
+    const unsigned char* invalid_items[] = {nullptr};
+    const size_t invalid_item_lens[] = {1};
+    std::array<unsigned char, 32> invalid{};
+    ok = purify_sha256_many(invalid.data(), invalid_items, invalid_item_lens, std::size(invalid_items));
+    ctx.expect(ok == 0, "purify_sha256_many rejects null non-empty segments");
 }
 
 void test_known_sample(TestContext& ctx) {
@@ -1161,6 +1201,7 @@ void test_puresign_plusplus_topic_signing(TestContext& ctx) {
 }  // namespace
 
 void run_purify_tests(TestContext& ctx) {
+    test_sha256_many_bridge(ctx);
     test_known_sample(ctx);
     test_secret_hardening_path(ctx);
     test_library_key_generation(ctx);

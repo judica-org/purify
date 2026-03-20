@@ -184,7 +184,8 @@ struct DerivedNonceData {
 };
 
 Result<NonceProof> build_nonce_proof_from_template(const UInt512& secret, const DerivedNonceData& nonce_data,
-                                                   const NativeBulletproofCircuitTemplate& circuit_template) {
+                                                   const NativeBulletproofCircuitTemplate& circuit_template,
+                                                   ExperimentalBulletproofBackendCache* backend_cache = nullptr) {
     Result<BulletproofWitnessData> witness = prove_assignment_data(nonce_data.eval_input, secret);
     if (!witness.has_value()) {
         return unexpected_error(witness.error(), "build_nonce_proof_from_template:prove_assignment_data");
@@ -216,7 +217,8 @@ Result<NonceProof> build_nonce_proof_from_template(const UInt512& secret, const 
     Bytes statement_binding = proof_statement_binding(nonce_data.scope);
     Result<ExperimentalBulletproofProof> proof =
         prove_experimental_circuit_assume_valid(*circuit, witness->assignment, proof_nonce,
-                                                bppp::base_generator(), statement_binding);
+                                                bppp::base_generator(), statement_binding, std::nullopt,
+                                                backend_cache);
     if (!proof.has_value()) {
         return unexpected_error(proof.error(), "build_nonce_proof_from_template:prove_experimental_circuit");
     }
@@ -297,7 +299,8 @@ Result<DerivedNonceData> prepare_nonce_data_impl(const UInt512& secret, Prepared
 
 Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key, const NativeBulletproofCircuit& circuit,
                                              const NonceProof& nonce_proof, PreparedNonce::Scope scope,
-                                             const char* context) {
+                                             const char* context,
+                                             ExperimentalBulletproofBackendCache* backend_cache = nullptr) {
     Status key_status = validate_public_key_bundle(public_key);
     if (!key_status.has_value()) {
         return unexpected_error(key_status.error(), context);
@@ -314,13 +317,15 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key, const 
         return false;
     }
     Bytes statement_binding = proof_statement_binding(scope);
-    return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(), statement_binding);
+    return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(), statement_binding,
+                                       backend_cache);
 }
 
 Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
                                              const NativeBulletproofCircuit::PackedWithSlack& circuit,
                                              const NonceProof& nonce_proof, PreparedNonce::Scope scope,
-                                             const char* context) {
+                                             const char* context,
+                                             ExperimentalBulletproofBackendCache* backend_cache = nullptr) {
     Status key_status = validate_public_key_bundle(public_key);
     if (!key_status.has_value()) {
         return unexpected_error(key_status.error(), context);
@@ -337,7 +342,8 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
         return false;
     }
     Bytes statement_binding = proof_statement_binding(scope);
-    return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(), statement_binding);
+    return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(), statement_binding,
+                                       backend_cache);
 }
 
 }  // namespace
@@ -611,7 +617,8 @@ Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& s
     }
     PreparedNonce prepared(PreparedNonce::Scope::Message, nonce_data->scalar, nonce_data->nonce,
                            nonce_data->signer_pubkey, nonce_data->binding_digest);
-    Result<NonceProof> proof = build_nonce_proof_from_template(secret, *nonce_data, cache.circuit_template);
+    Result<NonceProof> proof = build_nonce_proof_from_template(secret, *nonce_data, cache.circuit_template,
+                                                               &cache.backend_cache);
     if (!proof.has_value()) {
         return unexpected_error(proof.error(), "prepare_message_nonce_with_proof:build_nonce_proof_from_template");
     }
@@ -652,7 +659,8 @@ Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& sec
     }
     PreparedNonce prepared(PreparedNonce::Scope::Topic, nonce_data->scalar, nonce_data->nonce,
                            nonce_data->signer_pubkey, nonce_data->binding_digest);
-    Result<NonceProof> proof = build_nonce_proof_from_template(secret, *nonce_data, cache.circuit_template);
+    Result<NonceProof> proof = build_nonce_proof_from_template(secret, *nonce_data, cache.circuit_template,
+                                                               &cache.backend_cache);
     if (!proof.has_value()) {
         return unexpected_error(proof.error(), "prepare_topic_nonce_with_proof:build_nonce_proof_from_template");
     }
@@ -832,7 +840,8 @@ Result<bool> verify_message_nonce_proof(const MessageProofCache& cache, const Pu
         return unexpected_error(circuit.error(), "verify_message_nonce_proof:instantiate_packed");
     }
     return verify_nonce_proof_with_circuit(public_key, *circuit, nonce_proof, PreparedNonce::Scope::Message,
-                                           "verify_message_nonce_proof:verify_nonce_proof_with_circuit");
+                                           "verify_message_nonce_proof:verify_nonce_proof_with_circuit",
+                                           &cache.backend_cache);
 }
 
 Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> topic,
@@ -861,7 +870,8 @@ Result<bool> verify_topic_nonce_proof(const TopicProofCache& cache, const Public
         return unexpected_error(circuit.error(), "verify_topic_nonce_proof:instantiate_packed");
     }
     return verify_nonce_proof_with_circuit(public_key, *circuit, nonce_proof, PreparedNonce::Scope::Topic,
-                                           "verify_topic_nonce_proof:verify_nonce_proof_with_circuit");
+                                           "verify_topic_nonce_proof:verify_nonce_proof_with_circuit",
+                                           &cache.backend_cache);
 }
 
 Result<bool> verify_message_signature_with_proof(const PublicKey& public_key, std::span<const unsigned char> message,

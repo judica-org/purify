@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <span>
 #include <utility>
 #include <vector>
@@ -94,6 +95,26 @@ struct NormArgProof {
     Bytes proof;
 };
 
+/** @brief Caller-owned cache for reusable experimental circuit reduction and BPPP backend data. */
+class ExperimentalCircuitCache {
+public:
+    ExperimentalCircuitCache();
+    ExperimentalCircuitCache(const ExperimentalCircuitCache&) = delete;
+    ExperimentalCircuitCache& operator=(const ExperimentalCircuitCache&) = delete;
+    ExperimentalCircuitCache(ExperimentalCircuitCache&& other) noexcept;
+    ExperimentalCircuitCache& operator=(ExperimentalCircuitCache&& other) noexcept;
+    ~ExperimentalCircuitCache();
+
+    void clear();
+    [[nodiscard]] std::size_t size() const noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+
+    friend struct ExperimentalCircuitCacheAccess;
+};
+
 /**
  * @brief Produces a standalone BPPP norm argument.
  * @param inputs Prover inputs and optional generators.
@@ -136,7 +157,8 @@ struct ExperimentalCircuitZkNormArgProof {
 Result<PointBytes> commit_experimental_circuit_witness(
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitCache* cache = nullptr);
 
 /**
  * @brief Produces an anchored transparent circuit proof using the experimental circuit-to-BPPP reduction.
@@ -148,7 +170,8 @@ Result<PointBytes> commit_experimental_circuit_witness(
 Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitCache* cache = nullptr);
 
 /**
  * @brief Produces an anchored transparent circuit proof against a caller-supplied reduced witness commitment.
@@ -162,7 +185,8 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg_to_c
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
     const PointBytes& witness_commitment,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitCache* cache = nullptr);
 
 /**
  * @brief Verifies an experimental transparent circuit proof produced by `prove_experimental_circuit_norm_arg`.
@@ -174,7 +198,8 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg_to_c
 Result<bool> verify_experimental_circuit_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitNormArgProof& proof,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitCache* cache = nullptr);
 
 /**
  * @brief Produces an experimental masked circuit proof over the reduced BPPP relation.
@@ -194,7 +219,8 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
     const ScalarBytes& nonce,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitCache* cache = nullptr);
 
 /**
  * @brief Verifies an experimental masked circuit proof produced by `prove_experimental_circuit_zk_norm_arg`.
@@ -206,7 +232,8 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
 Result<bool> verify_experimental_circuit_zk_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitZkNormArgProof& proof,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitCache* cache = nullptr);
 
 /**
  * @brief Produces an experimental masked circuit proof bound to explicit public commitment points.
@@ -220,7 +247,8 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
     const BulletproofAssignmentData& assignment,
     const ScalarBytes& nonce,
     std::span<const PointBytes> public_commitments,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitCache* cache = nullptr);
 
 /**
  * @brief Verifies an experimental masked circuit proof against explicit public commitment points.
@@ -232,7 +260,8 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitZkNormArgProof& proof,
     std::span<const PointBytes> public_commitments,
-    std::span<const unsigned char> statement_binding = {});
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitCache* cache = nullptr);
 
 /** @brief Purify witness bundle together with a Pedersen commitment to the output. */
 struct CommittedPurifyWitness {

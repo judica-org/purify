@@ -101,6 +101,7 @@ struct MessageProofCache {
     Bytes message;
     Bytes eval_input;
     NativeBulletproofCircuitTemplate circuit_template;
+    mutable ExperimentalBulletproofBackendCache backend_cache;
 };
 
 /**
@@ -114,6 +115,7 @@ struct TopicProofCache {
     Bytes topic;
     Bytes eval_input;
     NativeBulletproofCircuitTemplate circuit_template;
+    mutable ExperimentalBulletproofBackendCache backend_cache;
 };
 
 class PreparedNonceWithProof;

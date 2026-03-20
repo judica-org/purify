@@ -53,6 +53,29 @@ void purify_scalar_mul(purify_scalar* out, const purify_scalar* lhs, const purif
 void purify_scalar_cmov(purify_scalar* dst, const purify_scalar* src, int flag);
 
 /**
+ * @brief Computes SHA-256 over a byte string.
+ * @param output32 Output digest buffer.
+ * @param data Pointer to message bytes, or NULL when data_len is zero.
+ * @param data_len Message length in bytes.
+ */
+void purify_sha256(unsigned char output32[32], const unsigned char *data,
+                   size_t data_len);
+
+/**
+ * @brief Computes SHA-256 over a set of byte strings.
+ * @param output32 Output digest buffer.
+ * @param items Array of item pointers. Each item may be NULL only when the
+ * corresponding length is zero.
+ * @param item_lens Array of item lengths in bytes.
+ * @param items_count Number of items in both arrays.
+ * @return Nonzero on success, zero on invalid input.
+ */
+int purify_sha256_many(unsigned char output32[32],
+                       const unsigned char *const *items,
+                       const size_t *item_lens,
+                       size_t items_count);
+
+/**
  * @brief Computes HMAC-SHA256 over a byte string.
  * @param output32 Output MAC buffer.
  * @param key Pointer to key bytes, or NULL when key_len is zero.

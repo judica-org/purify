@@ -38,26 +38,17 @@ constexpr std::string_view kMessageBindingTag = "PureSign/Binding/Message";
 constexpr std::string_view kTopicBindingTag = "PureSign/Binding/Topic";
 constexpr std::string_view kMessageProofTag = "PureSign/Proof/Message/V1";
 constexpr std::string_view kTopicProofTag = "PureSign/Proof/Topic/V1";
+const TaggedHash kMessageBindingTaggedHash(kMessageBindingTag);
+const TaggedHash kTopicBindingTaggedHash(kTopicBindingTag);
+const TaggedHash kMessageProofTaggedHash(kMessageProofTag);
+const TaggedHash kTopicProofTaggedHash(kTopicProofTag);
 
-const TaggedHash& tagged_hash(std::string_view tag) {
-    static const TaggedHash kMessageBindingTaggedHash(kMessageBindingTag);
-    static const TaggedHash kTopicBindingTaggedHash(kTopicBindingTag);
-    static const TaggedHash kMessageProofTaggedHash(kMessageProofTag);
-    static const TaggedHash kTopicProofTaggedHash(kTopicProofTag);
-    if (tag == kMessageBindingTag) {
-        return kMessageBindingTaggedHash;
-    }
-    if (tag == kTopicBindingTag) {
-        return kTopicBindingTaggedHash;
-    }
-    if (tag == kMessageProofTag) {
-        return kMessageProofTaggedHash;
-    }
-    if (tag == kTopicProofTag) {
-        return kTopicProofTaggedHash;
-    }
-    assert(false && "tagged_hash() received an unknown PureSign tag");
-    return kMessageBindingTaggedHash;
+const TaggedHash& binding_tagged_hash(PreparedNonce::Scope scope) {
+    return scope == PreparedNonce::Scope::Message ? kMessageBindingTaggedHash : kTopicBindingTaggedHash;
+}
+
+const TaggedHash& proof_tagged_hash(PreparedNonce::Scope scope) {
+    return scope == PreparedNonce::Scope::Message ? kMessageProofTaggedHash : kTopicProofTaggedHash;
 }
 
 const UInt256& secp256k1_order() {
@@ -88,9 +79,9 @@ const unsigned char* nullable_data(std::span<const unsigned char> input) {
     return input.empty() ? nullptr : input.data();
 }
 
-XOnly32 binding_digest(std::string_view tag, std::span<const unsigned char> input) {
+XOnly32 binding_digest(const TaggedHash& tag, std::span<const unsigned char> input) {
     XOnly32 out{};
-    out = tagged_hash(tag).digest(input);
+    out = tag.digest(input);
     return out;
 }
 
@@ -109,7 +100,7 @@ Scalar32 derive_proof_nonce_seed(const UInt512& secret, PreparedNonce::Scope sco
         std::span<const unsigned char>(secret_bytes.data(), secret_bytes.size()),
         eval_input,
     };
-    out = tagged_hash(proof_tag_for_scope(scope)).digest_many(digest_segments);
+    out = proof_tagged_hash(scope).digest_many(digest_segments);
     return out;
 }
 
@@ -207,12 +198,12 @@ Result<DerivedNonceData> derive_nonce_data(const UInt512& secret, PreparedNonce:
     }
 
     const std::string_view nonce_tag = scope == PreparedNonce::Scope::Message ? kMessageNonceTag : kTopicNonceTag;
-    const std::string_view binding_tag = scope == PreparedNonce::Scope::Message ? kMessageBindingTag : kTopicBindingTag;
+    const TaggedHash& binding_hash = binding_tagged_hash(scope);
 
     DerivedNonceData out{};
     out.scope = scope;
     out.signer_pubkey = signer->xonly_pubkey;
-    out.binding_digest = binding_digest(binding_tag, input);
+    out.binding_digest = binding_digest(binding_hash, input);
 
     out.eval_input = detail::tagged_eval_input(nonce_tag, input);
     Result<FieldElement> nonce_value = eval(secret, out.eval_input);
@@ -513,7 +504,7 @@ Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
     if (signer_pubkey_ != signer.xonly_pubkey) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_message:signer_pubkey");
     }
-    if (binding_digest_ != binding_digest(kMessageBindingTag, message)) {
+    if (binding_digest_ != binding_digest(kMessageBindingTaggedHash, message)) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_message:message_binding");
     }
 

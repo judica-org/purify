@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -19,6 +20,8 @@
 
 #include "purify/curve.hpp"
 #include "purify/expr.hpp"
+
+struct purify_bulletproof_backend_resources;
 
 namespace purify {
 
@@ -92,6 +95,11 @@ struct NativeBulletproofCircuit {
     class PackedWithSlack {
     public:
         PackedWithSlack() = default;
+
+        /** @brief Packs a native circuit into one aligned slab with caller-supplied row and constraint slack. */
+        [[nodiscard]] static Result<PackedWithSlack> from_circuit(
+            const NativeBulletproofCircuit& circuit,
+            const PackedSlackPlan& slack);
 
         [[nodiscard]] std::size_t n_gates() const noexcept {
             return n_gates_;
@@ -186,8 +194,6 @@ struct NativeBulletproofCircuit {
         std::size_t constant_bytes_offset_ = 0;
         std::vector<std::max_align_t> storage_;
 
-        friend struct NativeBulletproofCircuit;
-        friend class NativeBulletproofCircuitTemplate;
     };
 
     std::size_t n_gates = 0;
@@ -267,12 +273,12 @@ public:
 
     void clear();
     [[nodiscard]] std::size_t size() const noexcept;
+    /** @brief Returns cached backend resources for this gate count, creating them on first use. */
+    [[nodiscard]] purify_bulletproof_backend_resources* get_or_create(std::size_t n_gates);
 
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
-
-    friend struct ExperimentalBulletproofBackendCacheAccess;
 };
 
 /**

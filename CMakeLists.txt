@@ -111,8 +111,8 @@ add_library(purify
     src/purify_expr.cpp
     src/legacy_bulletproof/scratch_frames.c
     src/purify_numeric.cpp
-    src/purify_puresign.cpp
-    src/purify_puresign_plusplus.cpp
+    src/puresign/legacy.cpp
+    src/puresign/bppp.cpp
     src/purify_bppp.cpp
     src/purify_bppp_bridge.c
 )
@@ -191,8 +191,8 @@ if(PURIFY_BUILD_BENCH)
         src/purify_expr.cpp
         src/legacy_bulletproof/scratch_frames.c
         src/purify_numeric.cpp
-        src/purify_puresign.cpp
-        src/purify_puresign_plusplus.cpp
+        src/puresign/legacy.cpp
+        src/puresign/bppp.cpp
         src/purify_bppp.cpp
         src/purify_bppp_bridge.c
     )
@@ -244,6 +244,7 @@ if(PURIFY_BUILD_TESTS)
     add_executable(purify_tests
         tests/purify_tests_main.cpp
         tests/purify_tests.cpp
+        tests/puresign_tests.cpp
         tests/legacy_bulletproof_tests.cpp
     )
 

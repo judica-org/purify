@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file puresign.hpp
+ * @file puresign/legacy.hpp
  * @brief Legacy Bulletproof-backed Purify-derived BIP340 signing helpers with prepared nonces.
  *
  * This layer exposes deterministic nonces, signatures, and experimental `proof(R)` artifacts

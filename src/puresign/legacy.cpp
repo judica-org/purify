@@ -3,19 +3,19 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_puresign.cpp
+ * @file puresign/legacy.cpp
  * @brief Purify-derived BIP340 signing helpers with prepared nonces and wire-format artifacts.
  */
 
-#include "purify/puresign.hpp"
+#include "purify/puresign/legacy.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <limits>
 
-#include "purify_bulletproof_internal.hpp"
-#include "purify_puresign_internal.hpp"
+#include "../purify_bulletproof_internal.hpp"
+#include "detail/common.hpp"
 #include "purify_bppp.hpp"
 #include "purify/curve.hpp"
 

@@ -66,53 +66,6 @@ struct ExperimentalCircuitCache::Impl {
       backend_resources;
 };
 
-struct ExperimentalCircuitCacheAccess {
-  static std::shared_ptr<const void>
-  find(ExperimentalCircuitCache *cache,
-       const CircuitNormArgPublicDataCacheKey &key) {
-    if (cache == nullptr || cache->impl_ == nullptr) {
-      return {};
-    }
-    auto it = cache->impl_->public_data.find(key);
-    if (it == cache->impl_->public_data.end()) {
-      return {};
-    }
-    return it->second;
-  }
-
-  static void insert(ExperimentalCircuitCache *cache,
-                     CircuitNormArgPublicDataCacheKey key,
-                     std::shared_ptr<const void> value) {
-    if (cache == nullptr || cache->impl_ == nullptr) {
-      return;
-    }
-    cache->impl_->public_data.emplace(std::move(key), std::move(value));
-  }
-
-  static purify_bppp_backend_resources *
-  find_backend_resources(ExperimentalCircuitCache *cache,
-                         const GeneratorBackendCacheKey &key) {
-    if (cache == nullptr || cache->impl_ == nullptr) {
-      return nullptr;
-    }
-    auto it = cache->impl_->backend_resources.find(key);
-    if (it == cache->impl_->backend_resources.end()) {
-      return nullptr;
-    }
-    return it->second.get();
-  }
-
-  static void insert_backend_resources(ExperimentalCircuitCache *cache,
-                                       GeneratorBackendCacheKey key,
-                                       OwnedBpppBackendResources resources) {
-    if (cache == nullptr || cache->impl_ == nullptr) {
-      return;
-    }
-    cache->impl_->backend_resources.emplace(std::move(key),
-                                            std::move(resources));
-  }
-};
-
 ExperimentalCircuitCache::ExperimentalCircuitCache()
     : impl_(std::make_unique<Impl>()) {}
 
@@ -135,6 +88,59 @@ std::size_t ExperimentalCircuitCache::size() const noexcept {
   return impl_ != nullptr
              ? impl_->public_data.size() + impl_->backend_resources.size()
              : 0;
+}
+
+std::shared_ptr<const void> ExperimentalCircuitCache::find_public_data(
+    const std::array<unsigned char, 32> &key) const {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  auto it = impl_->public_data.find(key);
+  if (it == impl_->public_data.end()) {
+    return {};
+  }
+  return it->second;
+}
+
+void ExperimentalCircuitCache::insert_public_data(
+    std::array<unsigned char, 32> key,
+    std::shared_ptr<const void> value) {
+  if (impl_ == nullptr) {
+    return;
+  }
+  impl_->public_data.emplace(std::move(key), std::move(value));
+}
+
+purify_bppp_backend_resources *
+ExperimentalCircuitCache::get_or_create_backend_resources(
+    std::span<const PointBytes> generators) {
+  if (impl_ == nullptr || generators.empty()) {
+    return nullptr;
+  }
+
+  auto serialized_view = std::as_bytes(generators);
+  const unsigned char *serialized =
+      serialized_view.empty()
+          ? nullptr
+          : reinterpret_cast<const unsigned char *>(serialized_view.data());
+
+  GeneratorBackendCacheKey key{};
+  purify_sha256(key.data(), serialized, serialized_view.size());
+
+  auto it = impl_->backend_resources.find(key);
+  if (it != impl_->backend_resources.end()) {
+    return it->second.get();
+  }
+
+  purify_bppp_backend_resources *created =
+      purify_bppp_backend_resources_create(serialized, generators.size());
+  if (created == nullptr) {
+    return nullptr;
+  }
+
+  auto inserted =
+      impl_->backend_resources.emplace(key, OwnedBpppBackendResources(created));
+  return inserted.first->second.get();
 }
 
 namespace {
@@ -199,18 +205,6 @@ const TaggedHash kCircuitZkMaskNTaggedHash(kCircuitZkMaskNTag);
 const TaggedHash kCircuitZkMaskLTaggedHash(kCircuitZkMaskLTag);
 const TaggedHash kCircuitZkChallengeTaggedHash(kCircuitZkChallengeTag);
 
-GeneratorBackendCacheKey
-generator_cache_key(std::span<const PointBytes> generators) {
-  auto serialized_view = std::as_bytes(generators);
-  const unsigned char *serialized =
-      serialized_view.empty()
-          ? nullptr
-          : reinterpret_cast<const unsigned char *>(serialized_view.data());
-  GeneratorBackendCacheKey digest{};
-  purify_sha256(digest.data(), serialized, serialized_view.size());
-  return digest;
-}
-
 struct ResolvedBpppGeneratorBackend {
   std::span<const unsigned char> serialized_bytes{};
   std::size_t generator_count = 0;
@@ -227,21 +221,8 @@ ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
   if (cache == nullptr || serialized_generators.empty()) {
     return out;
   }
-  GeneratorBackendCacheKey key = generator_cache_key(serialized_generators);
-  purify_bppp_backend_resources *cached =
-      ExperimentalCircuitCacheAccess::find_backend_resources(cache, key);
-  if (cached == nullptr) {
-    purify_bppp_backend_resources *created =
-        purify_bppp_backend_resources_create(out.serialized_bytes.data(),
-                                             serialized_generators.size());
-    if (created == nullptr) {
-      return out;
-    }
-    ExperimentalCircuitCacheAccess::insert_backend_resources(
-        cache, key, OwnedBpppBackendResources(created));
-    cached = created;
-  }
-  out.backend_resources = cached;
+  out.backend_resources =
+      cache->get_or_create_backend_resources(serialized_generators);
   return out;
 }
 
@@ -387,7 +368,8 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
       circuit_norm_arg_public_data_cache_key(binding_digest,
                                              externalize_commitments);
   if (std::shared_ptr<const void> cached =
-          ExperimentalCircuitCacheAccess::find(cache, cache_key)) {
+          cache != nullptr ? cache->find_public_data(cache_key)
+                           : std::shared_ptr<const void>{}) {
     return std::static_pointer_cast<const CircuitNormArgPublicData>(cached);
   }
 
@@ -514,7 +496,9 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   }
   out->generators = std::move(*generators);
   CircuitNormArgPublicDataPtr shared = out;
-  ExperimentalCircuitCacheAccess::insert(cache, cache_key, shared);
+  if (cache != nullptr) {
+    cache->insert_public_data(cache_key, shared);
+  }
   return shared;
 }
 

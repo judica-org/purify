@@ -18,6 +18,8 @@
 
 #include "purify/api.hpp"
 
+struct purify_bppp_backend_resources;
+
 namespace purify::bppp {
 
 /** @brief Big-endian 32-byte scalar encoding. */
@@ -107,12 +109,16 @@ public:
 
     void clear();
     [[nodiscard]] std::size_t size() const noexcept;
+    /** @brief Looks up opaque cached reduction data by digest key. */
+    [[nodiscard]] std::shared_ptr<const void> find_public_data(const std::array<unsigned char, 32>& key) const;
+    /** @brief Stores opaque cached reduction data by digest key. */
+    void insert_public_data(std::array<unsigned char, 32> key, std::shared_ptr<const void> value);
+    /** @brief Returns cached backend resources for this generator set, creating them on first use. */
+    [[nodiscard]] purify_bppp_backend_resources* get_or_create_backend_resources(std::span<const PointBytes> generators);
 
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
-
-    friend struct ExperimentalCircuitCacheAccess;
 };
 
 /**

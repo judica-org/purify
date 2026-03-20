@@ -37,27 +37,6 @@ struct ExperimentalBulletproofBackendCache::Impl {
     std::unordered_map<std::size_t, BulletproofBackendResourcePtr> resources;
 };
 
-struct ExperimentalBulletproofBackendCacheAccess {
-    static purify_bulletproof_backend_resources* find(ExperimentalBulletproofBackendCache* cache, std::size_t n_gates) {
-        if (cache == nullptr || cache->impl_ == nullptr) {
-            return nullptr;
-        }
-        auto it = cache->impl_->resources.find(n_gates);
-        if (it == cache->impl_->resources.end()) {
-            return nullptr;
-        }
-        return it->second.get();
-    }
-
-    static void insert(ExperimentalBulletproofBackendCache* cache, std::size_t n_gates,
-                       BulletproofBackendResourcePtr resources) {
-        if (cache == nullptr || cache->impl_ == nullptr) {
-            return;
-        }
-        cache->impl_->resources.emplace(n_gates, std::move(resources));
-    }
-};
-
 ExperimentalBulletproofBackendCache::ExperimentalBulletproofBackendCache() : impl_(std::make_unique<Impl>()) {}
 
 ExperimentalBulletproofBackendCache::ExperimentalBulletproofBackendCache(
@@ -76,6 +55,25 @@ void ExperimentalBulletproofBackendCache::clear() {
 
 std::size_t ExperimentalBulletproofBackendCache::size() const noexcept {
     return impl_ != nullptr ? impl_->resources.size() : 0;
+}
+
+purify_bulletproof_backend_resources* ExperimentalBulletproofBackendCache::get_or_create(std::size_t n_gates) {
+    if (impl_ == nullptr) {
+        return nullptr;
+    }
+
+    auto it = impl_->resources.find(n_gates);
+    if (it != impl_->resources.end()) {
+        return it->second.get();
+    }
+
+    purify_bulletproof_backend_resources* created = purify_bulletproof_backend_resources_create(n_gates);
+    if (created == nullptr) {
+        return nullptr;
+    }
+
+    auto inserted = impl_->resources.emplace(n_gates, BulletproofBackendResourcePtr(created));
+    return inserted.first->second.get();
 }
 
 }  // namespace purify
@@ -521,21 +519,15 @@ ResolvedBulletproofBackendResources resolve_bulletproof_backend_resources(
     ResolvedBulletproofBackendResources out;
 
     if (cache != nullptr) {
-        out.resources = purify::ExperimentalBulletproofBackendCacheAccess::find(cache, n_gates);
+        out.resources = cache->get_or_create(n_gates);
         if (out.resources != nullptr) {
             return out;
         }
+        return out;
     }
 
     purify_bulletproof_backend_resources* created = purify_bulletproof_backend_resources_create(n_gates);
     if (created == nullptr) {
-        return out;
-    }
-
-    if (cache != nullptr) {
-        purify::ExperimentalBulletproofBackendCacheAccess::insert(cache, n_gates,
-                                                                  purify::BulletproofBackendResourcePtr(created));
-        out.resources = purify::ExperimentalBulletproofBackendCacheAccess::find(cache, n_gates);
         return out;
     }
 
@@ -1050,9 +1042,11 @@ Result<NativeBulletproofCircuit> NativeBulletproofCircuit::PackedWithSlack::unpa
     return out;
 }
 
-Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack_with_slack(const PackedSlackPlan& slack) const {
-    if (!has_valid_shape()) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "NativeBulletproofCircuit::pack_with_slack:shape");
+Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::PackedWithSlack::from_circuit(
+    const NativeBulletproofCircuit& circuit,
+    const PackedSlackPlan& slack) {
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "NativeBulletproofCircuit::PackedWithSlack::from_circuit:shape");
     }
     auto validate_family_slack = [](const std::vector<std::size_t>& family_slack, std::size_t expected,
                                     const char* context) -> Status {
@@ -1061,32 +1055,36 @@ Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack
         }
         return {};
     };
-    Status wl_status = validate_family_slack(slack.wl, n_gates, "NativeBulletproofCircuit::pack_with_slack:wl");
+    Status wl_status = validate_family_slack(slack.wl, circuit.n_gates,
+                                             "NativeBulletproofCircuit::PackedWithSlack::from_circuit:wl");
     if (!wl_status.has_value()) {
-        return unexpected_error(wl_status.error(), "NativeBulletproofCircuit::pack_with_slack:wl");
+        return unexpected_error(wl_status.error(), "NativeBulletproofCircuit::PackedWithSlack::from_circuit:wl");
     }
-    Status wr_status = validate_family_slack(slack.wr, n_gates, "NativeBulletproofCircuit::pack_with_slack:wr");
+    Status wr_status = validate_family_slack(slack.wr, circuit.n_gates,
+                                             "NativeBulletproofCircuit::PackedWithSlack::from_circuit:wr");
     if (!wr_status.has_value()) {
-        return unexpected_error(wr_status.error(), "NativeBulletproofCircuit::pack_with_slack:wr");
+        return unexpected_error(wr_status.error(), "NativeBulletproofCircuit::PackedWithSlack::from_circuit:wr");
     }
-    Status wo_status = validate_family_slack(slack.wo, n_gates, "NativeBulletproofCircuit::pack_with_slack:wo");
+    Status wo_status = validate_family_slack(slack.wo, circuit.n_gates,
+                                             "NativeBulletproofCircuit::PackedWithSlack::from_circuit:wo");
     if (!wo_status.has_value()) {
-        return unexpected_error(wo_status.error(), "NativeBulletproofCircuit::pack_with_slack:wo");
+        return unexpected_error(wo_status.error(), "NativeBulletproofCircuit::PackedWithSlack::from_circuit:wo");
     }
-    Status wv_status = validate_family_slack(slack.wv, n_commitments, "NativeBulletproofCircuit::pack_with_slack:wv");
+    Status wv_status = validate_family_slack(slack.wv, circuit.n_commitments,
+                                             "NativeBulletproofCircuit::PackedWithSlack::from_circuit:wv");
     if (!wv_status.has_value()) {
-        return unexpected_error(wv_status.error(), "NativeBulletproofCircuit::pack_with_slack:wv");
+        return unexpected_error(wv_status.error(), "NativeBulletproofCircuit::PackedWithSlack::from_circuit:wv");
     }
 
     PackedWithSlack packed;
-    packed.n_gates_ = n_gates;
-    packed.n_commitments_ = n_commitments;
-    packed.n_bits_ = n_bits;
-    packed.constraint_size_ = c.size();
-    packed.constraint_base_size_ = c.size();
-    packed.constraint_capacity_ = c.size() + slack.constraint_slack;
+    packed.n_gates_ = circuit.n_gates;
+    packed.n_commitments_ = circuit.n_commitments;
+    packed.n_bits_ = circuit.n_bits;
+    packed.constraint_size_ = circuit.c.size();
+    packed.constraint_base_size_ = circuit.c.size();
+    packed.constraint_capacity_ = circuit.c.size() + slack.constraint_slack;
 
-    const std::size_t row_count = (3 * n_gates) + n_commitments;
+    const std::size_t row_count = (3 * circuit.n_gates) + circuit.n_commitments;
     std::size_t total_term_capacity = 0;
     auto sum_capacity = [&](const std::vector<NativeBulletproofCircuitRow>& rows,
                             const std::vector<std::size_t>& family_slack) {
@@ -1095,10 +1093,10 @@ Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack
             total_term_capacity += rows[i].entries.size() + extra;
         }
     };
-    sum_capacity(wl, slack.wl);
-    sum_capacity(wr, slack.wr);
-    sum_capacity(wo, slack.wo);
-    sum_capacity(wv, slack.wv);
+    sum_capacity(circuit.wl, slack.wl);
+    sum_capacity(circuit.wr, slack.wr);
+    sum_capacity(circuit.wo, slack.wo);
+    sum_capacity(circuit.wv, slack.wv);
 
     const std::size_t row_headers_bytes = row_count * sizeof(PackedWithSlack::PackedRowHeader);
     packed.term_bytes_offset_ = align_up(row_headers_bytes, alignof(NativeBulletproofCircuitTerm));
@@ -1114,7 +1112,7 @@ Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack
     NativeBulletproofCircuitTerm* terms = packed.term_data();
     FieldElement* constants = packed.constant_data();
 
-    std::copy(c.begin(), c.end(), constants);
+    std::copy(circuit.c.begin(), circuit.c.end(), constants);
 
     std::size_t row_cursor = 0;
     std::size_t term_cursor = 0;
@@ -1132,12 +1130,16 @@ Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack
             term_cursor += headers[row_cursor].capacity;
         }
     };
-    fill_family(wl, slack.wl);
-    fill_family(wr, slack.wr);
-    fill_family(wo, slack.wo);
-    fill_family(wv, slack.wv);
+    fill_family(circuit.wl, slack.wl);
+    fill_family(circuit.wr, slack.wr);
+    fill_family(circuit.wo, slack.wo);
+    fill_family(circuit.wv, slack.wv);
 
     return packed;
+}
+
+Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack_with_slack(const PackedSlackPlan& slack) const {
+    return PackedWithSlack::from_circuit(*this, slack);
 }
 
 Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::pack_with_slack() const {

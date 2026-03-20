@@ -10,7 +10,7 @@
 #include <span>
 #include <string_view>
 
-#include "purify/puresign.hpp"
+#include "purify/puresign/legacy.hpp"
 
 namespace purify::detail {
 

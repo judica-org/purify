@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file puresign_plusplus.hpp
+ * @file puresign/bppp.hpp
  * @brief Experimental BPPP-backed PureSign proof(R) helpers.
  */
 
@@ -12,7 +12,7 @@
 #include <span>
 #include <utility>
 
-#include "purify/puresign.hpp"
+#include "purify/puresign/legacy.hpp"
 #include "purify_bppp.hpp"
 
 namespace purify::puresign_plusplus {

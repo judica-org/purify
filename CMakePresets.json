@@ -1,0 +1,79 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "ci-base",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PURIFY_BUILD_BENCH": "OFF",
+        "PURIFY_BUILD_CLI": "ON",
+        "PURIFY_BUILD_DOCS": "OFF",
+        "PURIFY_BUILD_FUZZ": "OFF",
+        "PURIFY_BUILD_REFERENCE_TESTS": "ON",
+        "PURIFY_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "tagged",
+      "inherits": "ci-base",
+      "binaryDir": "${sourceDir}/build-tagged",
+      "cacheVariables": {
+        "PURIFY_USE_LEGACY_FIELD_HASHES": "OFF"
+      }
+    },
+    {
+      "name": "legacy",
+      "inherits": "ci-base",
+      "binaryDir": "${sourceDir}/build-legacy",
+      "cacheVariables": {
+        "PURIFY_USE_LEGACY_FIELD_HASHES": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "tagged",
+      "configurePreset": "tagged",
+      "configuration": "Release"
+    },
+    {
+      "name": "legacy",
+      "configurePreset": "legacy",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "tagged",
+      "configurePreset": "tagged",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "purify.tests|purify.property_tests|purify.reference_circuit"
+        }
+      }
+    },
+    {
+      "name": "legacy",
+      "configurePreset": "legacy",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "purify.tests|purify.reference_circuit"
+        }
+      }
+    }
+  ]
+}

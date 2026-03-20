@@ -284,6 +284,13 @@ private:
  */
 class NativeBulletproofCircuitTemplate {
 public:
+    /** @brief Builds a template from a lowered base circuit plus late-bound public expressions. */
+    [[nodiscard]] static NativeBulletproofCircuitTemplate from_parts(
+        NativeBulletproofCircuit::PackedWithSlack base_packed,
+        Expr p1x,
+        Expr p2x,
+        Expr out);
+
     /** @brief Evaluates only the public-key-agnostic base circuit cached inside the template. */
     Result<bool> partial_evaluate(const BulletproofAssignmentData& assignment) const;
 
@@ -298,8 +305,6 @@ private:
     Expr p1x_;
     Expr p2x_;
     Expr out_;
-
-    friend Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message);
 };
 
 /**

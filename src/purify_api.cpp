@@ -190,10 +190,16 @@ Result<Bip340Key> derive_bip340_key(const UInt512& secret) {
         return unexpected_error(status.error(), "derive_bip340_key:validate_secret_key");
     }
 
+    static const TaggedHash kBip340KeyGenTag("Purify/BIP340/KeyGen");
     std::array<unsigned char, 64> packed_secret = secret.to_bytes_be();
     Bytes ikm(packed_secret.begin(), packed_secret.end());
+#if PURIFY_USE_LEGACY_FIELD_HASHES
     std::optional<UInt256> scalar =
         hash_to_int<4>(ikm, secp256k1_order_minus_one(), bytes_from_ascii("Purify/BIP340/KeyGen"));
+#else
+    std::optional<UInt256> scalar = tagged_hash_to_int<4>(
+        std::span<const unsigned char>(ikm.data(), ikm.size()), secp256k1_order_minus_one(), kBip340KeyGenTag);
+#endif
     if (!scalar.has_value()) {
         return unexpected_error(ErrorCode::InternalMismatch, "derive_bip340_key:hash_to_int");
     }
@@ -291,18 +297,14 @@ Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& 
     bp.replace_expr_v_with_bp_var(p2x);
     bp.replace_expr_v_with_bp_var(out);
 
-    NativeBulletproofCircuitTemplate template_circuit;
     NativeBulletproofCircuit base_circuit = bp.native_circuit();
     Result<NativeBulletproofCircuit::PackedWithSlack> packed =
         base_circuit.pack_with_slack(build_template_slack(base_circuit.n_gates, base_circuit.n_commitments, p1x, p2x, out));
     if (!packed.has_value()) {
         return unexpected_error(packed.error(), "verifier_circuit_template:pack_with_slack");
     }
-    template_circuit.base_packed_ = std::move(*packed);
-    template_circuit.p1x_ = std::move(p1x);
-    template_circuit.p2x_ = std::move(p2x);
-    template_circuit.out_ = std::move(out);
-    return template_circuit;
+    return NativeBulletproofCircuitTemplate::from_parts(std::move(*packed), std::move(p1x), std::move(p2x),
+                                                        std::move(out));
 }
 
 Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const UInt512& secret) {

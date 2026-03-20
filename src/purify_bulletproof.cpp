@@ -268,6 +268,7 @@ void append_row_family_digest_generic(Bytes& out, std::size_t row_count, const R
 }
 
 Bytes circuit_binding_digest(const purify::NativeBulletproofCircuit& circuit, std::span<const unsigned char> statement_binding) {
+    static const purify::TaggedHash kCircuitBindingTag("Purify/ExperimentalBulletproof/CircuitV1");
     Bytes serialized;
     serialized.reserve(64 + circuit.c.size() * 32);
     append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_gates));
@@ -288,10 +289,13 @@ Bytes circuit_binding_digest(const purify::NativeBulletproofCircuit& circuit, st
     }
     append_u64_le(serialized, static_cast<std::uint64_t>(statement_binding.size()));
     serialized.insert(serialized.end(), statement_binding.begin(), statement_binding.end());
-    return purify::hmac_sha256(purify::bytes_from_ascii("Purify/ExperimentalBulletproof/CircuitV1"), serialized);
+    std::array<unsigned char, 32> digest =
+        kCircuitBindingTag.digest(std::span<const unsigned char>(serialized.data(), serialized.size()));
+    return Bytes(digest.begin(), digest.end());
 }
 
 Bytes circuit_binding_digest(const PackedCircuit& circuit, std::span<const unsigned char> statement_binding) {
+    static const purify::TaggedHash kCircuitBindingTag("Purify/ExperimentalBulletproof/CircuitV1");
     Bytes serialized;
     serialized.reserve(64 + circuit.constraint_count() * 32);
     append_u64_le(serialized, static_cast<std::uint64_t>(circuit.n_gates()));
@@ -312,7 +316,9 @@ Bytes circuit_binding_digest(const PackedCircuit& circuit, std::span<const unsig
     }
     append_u64_le(serialized, static_cast<std::uint64_t>(statement_binding.size()));
     serialized.insert(serialized.end(), statement_binding.begin(), statement_binding.end());
-    return purify::hmac_sha256(purify::bytes_from_ascii("Purify/ExperimentalBulletproof/CircuitV1"), serialized);
+    std::array<unsigned char, 32> digest =
+        kCircuitBindingTag.digest(std::span<const unsigned char>(serialized.data(), serialized.size()));
+    return Bytes(digest.begin(), digest.end());
 }
 
 template <typename CircuitLike>
@@ -1523,6 +1529,19 @@ NativeBulletproofCircuit BulletproofTranscript::native_circuit() const {
         append_constraint_to_circuit(circuit, constraint.first, constraint.second);
     }
     return circuit;
+}
+
+NativeBulletproofCircuitTemplate NativeBulletproofCircuitTemplate::from_parts(
+    NativeBulletproofCircuit::PackedWithSlack base_packed,
+    Expr p1x,
+    Expr p2x,
+    Expr out) {
+    NativeBulletproofCircuitTemplate template_circuit;
+    template_circuit.base_packed_ = std::move(base_packed);
+    template_circuit.p1x_ = std::move(p1x);
+    template_circuit.p2x_ = std::move(p2x);
+    template_circuit.out_ = std::move(out);
+    return template_circuit;
 }
 
 Result<bool> NativeBulletproofCircuitTemplate::partial_evaluate(const BulletproofAssignmentData& assignment) const {

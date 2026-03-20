@@ -117,7 +117,7 @@ bool proven_signature_rejected_after_tamper(const purify::puresign::PublicKey& p
     if (!parsed.has_value()) {
         return true;
     }
-    Result<bool> verified = purify::puresign::verify_message_signature_with_proof(public_key, message, *parsed);
+    Result<bool> verified = public_key.verify_message_signature_with_proof(message, *parsed);
     return !verified.has_value() || !*verified;
 }
 
@@ -135,8 +135,7 @@ bool proven_signature_plusplus_rejected_after_tamper(const purify::puresign_plus
     if (!parsed.has_value()) {
         return true;
     }
-    Result<bool> verified =
-        purify::puresign_plusplus::verify_message_signature_with_proof(public_key, message, *parsed);
+    Result<bool> verified = public_key.verify_message_signature_with_proof(message, *parsed);
     return !verified.has_value() || !*verified;
 }
 
@@ -170,8 +169,8 @@ void test_seeded_key_and_circuit_properties(TestContext& ctx) {
         Result<purify::Bip340Key> bip340 = purify::derive_bip340_key(first->secret);
         expect_ok(ctx, bip340, "derive_bip340_key succeeds on a generated secret");
 
-        Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(first->secret);
-        expect_ok(ctx, public_key, "puresign::derive_public_key succeeds on a generated secret");
+        Result<purify::puresign::PublicKey> public_key = purify::puresign::PublicKey::from_secret(first->secret);
+        expect_ok(ctx, public_key, "puresign::PublicKey::from_secret succeeds on a generated secret");
         if (bip340.has_value() && public_key.has_value()) {
             ctx.expect(public_key->bip340_pubkey == bip340->xonly_pubkey,
                        "PureSign public key bundle matches derive_bip340_key");
@@ -407,18 +406,19 @@ void test_random_puresign_proven_signature_properties(TestContext& ctx) {
         return;
     }
 
-    Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(key->secret);
-    expect_ok(ctx, public_key, "derive_public_key succeeds for randomized PureSign coverage");
-    if (!public_key.has_value()) {
+    Result<purify::puresign::KeyPair> key_pair = purify::puresign::KeyPair::from_secret(key->secret);
+    expect_ok(ctx, key_pair, "KeyPair::from_secret succeeds for randomized PureSign coverage");
+    if (!key_pair.has_value()) {
         return;
     }
+    const purify::puresign::PublicKey& public_key = key_pair->public_key();
 
     Bytes message = random_bytes(rng, 1, 40);
-    Result<purify::puresign::Signature> direct = purify::puresign::sign_message(key->secret, message);
-    expect_ok(ctx, direct, "sign_message succeeds for randomized PureSign coverage");
+    Result<purify::puresign::Signature> direct = key_pair->sign_message(message);
+    expect_ok(ctx, direct, "KeyPair::sign_message succeeds for randomized PureSign coverage");
 
-    Result<purify::puresign::ProvenSignature> proven = purify::puresign::sign_message_with_proof(key->secret, message);
-    expect_ok(ctx, proven, "sign_message_with_proof succeeds for randomized PureSign coverage");
+    Result<purify::puresign::ProvenSignature> proven = key_pair->sign_message_with_proof(message);
+    expect_ok(ctx, proven, "KeyPair::sign_message_with_proof succeeds for randomized PureSign coverage");
     if (!direct.has_value() || !proven.has_value()) {
         return;
     }
@@ -426,20 +426,20 @@ void test_random_puresign_proven_signature_properties(TestContext& ctx) {
     ctx.expect(direct->bytes == proven->signature.bytes,
                "sign_message_with_proof preserves the deterministic BIP340 signature bytes");
 
-    Result<bool> verified = purify::puresign::verify_message_signature_with_proof(*public_key, message, *proven);
-    expect_ok(ctx, verified, "verify_message_signature_with_proof succeeds for randomized PureSign coverage");
+    Result<bool> verified = public_key.verify_message_signature_with_proof(message, *proven);
+    expect_ok(ctx, verified, "PublicKey::verify_message_signature_with_proof succeeds for randomized PureSign coverage");
     if (verified.has_value()) {
         ctx.expect(*verified, "randomized PureSign message signature with proof verifies");
     }
 
-    Result<bool> wrong_message =
-        purify::puresign::verify_message_signature_with_proof(*public_key, random_bytes(rng, 1, 24), *proven);
-    expect_ok(ctx, wrong_message, "verify_message_signature_with_proof runs on a wrong message in property coverage");
+    Result<bool> wrong_message = public_key.verify_message_signature_with_proof(random_bytes(rng, 1, 24), *proven);
+    expect_ok(ctx, wrong_message,
+              "PublicKey::verify_message_signature_with_proof runs on a wrong message in property coverage");
     if (wrong_message.has_value()) {
         ctx.expect(!*wrong_message, "PureSign message proof rejects a mismatched message");
     }
 
-    ctx.expect(proven_signature_rejected_after_tamper(*public_key, message, *proven),
+    ctx.expect(proven_signature_rejected_after_tamper(public_key, message, *proven),
                "tampering a ProvenSignature is rejected");
 }
 
@@ -452,21 +452,20 @@ void test_random_puresign_plusplus_proven_signature_properties(TestContext& ctx)
         return;
     }
 
-    Result<purify::puresign_plusplus::PublicKey> public_key =
-        purify::puresign_plusplus::derive_public_key(key->secret);
-    expect_ok(ctx, public_key, "PureSign++ derive_public_key succeeds for randomized coverage");
-    if (!public_key.has_value()) {
+    Result<purify::puresign_plusplus::KeyPair> key_pair =
+        purify::puresign_plusplus::KeyPair::from_secret(key->secret);
+    expect_ok(ctx, key_pair, "PureSign++ KeyPair::from_secret succeeds for randomized coverage");
+    if (!key_pair.has_value()) {
         return;
     }
+    const purify::puresign_plusplus::PublicKey& public_key = key_pair->public_key();
 
     Bytes message = random_bytes(rng, 1, 40);
-    Result<purify::puresign_plusplus::Signature> direct =
-        purify::puresign_plusplus::sign_message(key->secret, message);
-    expect_ok(ctx, direct, "PureSign++ sign_message succeeds for randomized coverage");
+    Result<purify::puresign_plusplus::Signature> direct = key_pair->sign_message(message);
+    expect_ok(ctx, direct, "PureSign++ KeyPair::sign_message succeeds for randomized coverage");
 
-    Result<purify::puresign_plusplus::ProvenSignature> proven =
-        purify::puresign_plusplus::sign_message_with_proof(key->secret, message);
-    expect_ok(ctx, proven, "PureSign++ sign_message_with_proof succeeds for randomized coverage");
+    Result<purify::puresign_plusplus::ProvenSignature> proven = key_pair->sign_message_with_proof(message);
+    expect_ok(ctx, proven, "PureSign++ KeyPair::sign_message_with_proof succeeds for randomized coverage");
     if (!direct.has_value() || !proven.has_value()) {
         return;
     }
@@ -474,21 +473,19 @@ void test_random_puresign_plusplus_proven_signature_properties(TestContext& ctx)
     ctx.expect(direct->bytes == proven->signature.bytes,
                "PureSign++ sign_message_with_proof preserves deterministic BIP340 bytes");
 
-    Result<bool> verified =
-        purify::puresign_plusplus::verify_message_signature_with_proof(*public_key, message, *proven);
-    expect_ok(ctx, verified, "PureSign++ verify_message_signature_with_proof succeeds");
+    Result<bool> verified = public_key.verify_message_signature_with_proof(message, *proven);
+    expect_ok(ctx, verified, "PureSign++ PublicKey::verify_message_signature_with_proof succeeds");
     if (verified.has_value()) {
         ctx.expect(*verified, "randomized PureSign++ message signature with proof verifies");
     }
 
-    Result<bool> wrong_message =
-        purify::puresign_plusplus::verify_message_signature_with_proof(*public_key, random_bytes(rng, 1, 24), *proven);
-    expect_ok(ctx, wrong_message, "PureSign++ verify_message_signature_with_proof runs on a wrong message");
+    Result<bool> wrong_message = public_key.verify_message_signature_with_proof(random_bytes(rng, 1, 24), *proven);
+    expect_ok(ctx, wrong_message, "PureSign++ PublicKey::verify_message_signature_with_proof runs on a wrong message");
     if (wrong_message.has_value()) {
         ctx.expect(!*wrong_message, "PureSign++ message proof rejects a mismatched message");
     }
 
-    ctx.expect(proven_signature_plusplus_rejected_after_tamper(*public_key, message, *proven),
+    ctx.expect(proven_signature_plusplus_rejected_after_tamper(public_key, message, *proven),
                "tampering a PureSign++ ProvenSignature is rejected");
 }
 

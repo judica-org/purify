@@ -385,9 +385,15 @@ const EllipticCurve& curve2() {
 }
 
 Result<JacobianPoint> hash_to_curve(const Bytes& data, const EllipticCurve& curve) {
+    static const TaggedHash kHashToCurveTag("Purify/HashToCurve");
     for (int i = 0; i < 256; ++i) {
         Bytes info{static_cast<unsigned char>(i)};
+#if PURIFY_USE_LEGACY_FIELD_HASHES
         std::optional<UInt320> value = hash_to_int(data, two_p(), info);
+#else
+        std::optional<UInt320> value =
+            tagged_hash_to_int<5>(std::span<const unsigned char>(data.data(), data.size()), two_p(), kHashToCurveTag, info);
+#endif
         if (!value.has_value()) {
             continue;
         }

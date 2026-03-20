@@ -33,6 +33,10 @@
 #include "purify/error.hpp"
 #include "purify_secp_bridge.h"
 
+#ifndef PURIFY_USE_LEGACY_FIELD_HASHES
+#define PURIFY_USE_LEGACY_FIELD_HASHES 0
+#endif
+
 namespace purify {
 
 /** @brief Dynamically sized byte string used for messages, serialized witnesses, and proofs. */

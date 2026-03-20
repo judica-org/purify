@@ -223,17 +223,18 @@ bool run_iteration(const FuzzConfig& config, std::size_t iteration, std::uint64_
         return false;
     }
 
-    Result<purify::puresign::PublicKey> public_key = purify::puresign::derive_public_key(key->secret);
-    if (!require_result(public_key, "derive_public_key", iteration, case_seed)) {
+    Result<purify::puresign::KeyPair> key_pair = purify::puresign::KeyPair::from_secret(key->secret);
+    if (!require_result(key_pair, "KeyPair::from_secret", iteration, case_seed)) {
         return false;
     }
+    const purify::puresign::PublicKey& public_key = key_pair->public_key();
 
-    Result<purify::puresign::Signature> signature = purify::puresign::sign_message(key->secret, message);
-    if (!require_result(signature, "sign_message", iteration, case_seed)) {
+    Result<purify::puresign::Signature> signature = key_pair->sign_message(message);
+    if (!require_result(signature, "KeyPair::sign_message", iteration, case_seed)) {
         return false;
     }
-    if (!require_true(purify::puresign::verify_signature(*public_key, message, *signature),
-                      "verify_signature", iteration, case_seed)) {
+    if (!require_true(public_key.verify_signature(message, *signature),
+                      "PublicKey::verify_signature", iteration, case_seed)) {
         return false;
     }
 
@@ -242,17 +243,18 @@ bool run_iteration(const FuzzConfig& config, std::size_t iteration, std::uint64_
         return true;
     }
 
-    Result<purify::puresign::ProvenSignature> proven = purify::puresign::sign_message_with_proof(key->secret, message);
-    if (!require_result(proven, "sign_message_with_proof", iteration, case_seed)) {
+    Result<purify::puresign::ProvenSignature> proven = key_pair->sign_message_with_proof(message);
+    if (!require_result(proven, "KeyPair::sign_message_with_proof", iteration, case_seed)) {
         return false;
     }
-    if (!require_true(purify::puresign::verify_message_signature_with_proof(*public_key, message, *proven),
-                      "verify_message_signature_with_proof", iteration, case_seed)) {
+    if (!require_true(public_key.verify_message_signature_with_proof(message, *proven),
+                      "PublicKey::verify_message_signature_with_proof", iteration, case_seed)) {
         return false;
     }
-    Result<bool> wrong_message =
-        purify::puresign::verify_message_signature_with_proof(*public_key, random_bytes(rng, 1, 16), *proven);
-    if (!require_result(wrong_message, "verify_message_signature_with_proof_wrong_message", iteration, case_seed)) {
+    Result<bool> wrong_message = public_key.verify_message_signature_with_proof(random_bytes(rng, 1, 16), *proven);
+    if (!require_result(wrong_message,
+                        "PublicKey::verify_message_signature_with_proof_wrong_message",
+                        iteration, case_seed)) {
         return false;
     }
     if (*wrong_message) {
@@ -262,18 +264,19 @@ bool run_iteration(const FuzzConfig& config, std::size_t iteration, std::uint64_
         return false;
     }
 
-    Result<purify::puresign::ProvenSignature> topic_signature =
-        purify::puresign::sign_with_topic_proof(key->secret, message, topic);
-    if (!require_result(topic_signature, "sign_with_topic_proof", iteration, case_seed)) {
+    Result<purify::puresign::ProvenSignature> topic_signature = key_pair->sign_with_topic_proof(message, topic);
+    if (!require_result(topic_signature, "KeyPair::sign_with_topic_proof", iteration, case_seed)) {
         return false;
     }
-    if (!require_true(purify::puresign::verify_topic_signature_with_proof(*public_key, message, topic, *topic_signature),
-                      "verify_topic_signature_with_proof", iteration, case_seed)) {
+    if (!require_true(public_key.verify_topic_signature_with_proof(message, topic, *topic_signature),
+                      "PublicKey::verify_topic_signature_with_proof", iteration, case_seed)) {
         return false;
     }
     Result<bool> wrong_topic =
-        purify::puresign::verify_topic_signature_with_proof(*public_key, message, random_bytes(rng, 1, 16), *topic_signature);
-    if (!require_result(wrong_topic, "verify_topic_signature_with_proof_wrong_topic", iteration, case_seed)) {
+        public_key.verify_topic_signature_with_proof(message, random_bytes(rng, 1, 16), *topic_signature);
+    if (!require_result(wrong_topic,
+                        "PublicKey::verify_topic_signature_with_proof_wrong_topic",
+                        iteration, case_seed)) {
         return false;
     }
     if (*wrong_topic) {

@@ -111,6 +111,45 @@ std::uint64_t ceil_div(std::uint64_t lhs, std::uint64_t rhs);
 /** @brief Computes an HMAC-SHA256 digest using the secp bridge implementation. */
 Bytes hmac_sha256(const Bytes& key, const Bytes& data);
 
+/**
+ * @brief Reusable BIP340-style tagged SHA-256 helper.
+ *
+ * The digest is computed as `SHA256(SHA256(tag) || SHA256(tag) || data...)`.
+ */
+class TaggedHash {
+public:
+    explicit TaggedHash(std::string_view tag) {
+        purify_sha256(tag_hash_.data(), reinterpret_cast<const unsigned char*>(tag.data()), tag.size());
+    }
+
+    [[nodiscard]] std::array<unsigned char, 32> digest(std::span<const unsigned char> data) const {
+        return digest_many<1>({data});
+    }
+
+    template <std::size_t Segments>
+    [[nodiscard]] std::array<unsigned char, 32>
+    digest_many(const std::array<std::span<const unsigned char>, Segments>& segments) const {
+        std::array<unsigned char, 32> out{};
+        std::array<const unsigned char*, Segments + 2> items{};
+        std::array<size_t, Segments + 2> item_lens{};
+        items[0] = tag_hash_.data();
+        item_lens[0] = tag_hash_.size();
+        items[1] = tag_hash_.data();
+        item_lens[1] = tag_hash_.size();
+        for (std::size_t i = 0; i < Segments; ++i) {
+            items[i + 2] = segments[i].empty() ? nullptr : segments[i].data();
+            item_lens[i + 2] = segments[i].size();
+        }
+        int ok = purify_sha256_many(out.data(), items.data(), item_lens.data(), items.size());
+        assert(ok != 0 && "TaggedHash::digest_many() must accept well-formed segments");
+        (void)ok;
+        return out;
+    }
+
+private:
+    std::array<unsigned char, 32> tag_hash_{};
+};
+
 /** @brief Expands input key material using HKDF-SHA256. */
 Bytes hkdf(std::size_t length, const Bytes& ikm, const Bytes& salt = {}, const Bytes& info = {});
 
@@ -121,6 +160,43 @@ std::optional<BigUInt<Words>> hash_to_int(const Bytes& data, const BigUInt<Words
     for (int i = 0; i < 256; ++i) {
         Bytes salt{static_cast<unsigned char>(i)};
         Bytes derived = hkdf((bits + 7) / 8, data, salt, info);
+        BigUInt<Words> value = BigUInt<Words>::from_bytes_be(derived.data(), derived.size());
+        value.mask_bits(bits);
+        if (value.compare(range) < 0) {
+            return value;
+        }
+    }
+    return std::nullopt;
+}
+
+/** @brief Rejection-samples a uniformly distributed integer below `range` using repeated tagged hashes. */
+template <std::size_t Words>
+std::optional<BigUInt<Words>> tagged_hash_to_int(std::span<const unsigned char> data, const BigUInt<Words>& range,
+                                                 const TaggedHash& tag, std::span<const unsigned char> info = {}) {
+    std::size_t bits = range.bit_length();
+    std::size_t bytes_needed = (bits + 7) / 8;
+    for (std::uint64_t attempt = 0; attempt < 256; ++attempt) {
+        Bytes derived;
+        derived.reserve(bytes_needed);
+        std::array<unsigned char, 8> attempt_bytes{};
+        for (std::size_t i = 0; i < attempt_bytes.size(); ++i) {
+            attempt_bytes[attempt_bytes.size() - 1 - i] = static_cast<unsigned char>((attempt >> (8 * i)) & 0xffU);
+        }
+        for (std::uint64_t block = 0; derived.size() < bytes_needed; ++block) {
+            std::array<unsigned char, 8> block_bytes{};
+            for (std::size_t i = 0; i < block_bytes.size(); ++i) {
+                block_bytes[block_bytes.size() - 1 - i] = static_cast<unsigned char>((block >> (8 * i)) & 0xffU);
+            }
+            std::array digest_segments{
+                data,
+                info,
+                std::span<const unsigned char>(attempt_bytes.data(), attempt_bytes.size()),
+                std::span<const unsigned char>(block_bytes.data(), block_bytes.size()),
+            };
+            std::array<unsigned char, 32> digest = tag.digest_many(digest_segments);
+            std::size_t copy_len = std::min<std::size_t>(digest.size(), bytes_needed - derived.size());
+            derived.insert(derived.end(), digest.begin(), digest.begin() + static_cast<std::ptrdiff_t>(copy_len));
+        }
         BigUInt<Words> value = BigUInt<Words>::from_bytes_be(derived.data(), derived.size());
         value.mask_bits(bits);
         if (value.compare(range) < 0) {

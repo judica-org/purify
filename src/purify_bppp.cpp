@@ -191,6 +191,14 @@ constexpr std::string_view kCircuitZkMaskLTag =
     "Purify/BPPP/CircuitNormArg/ZKMaskL";
 constexpr std::string_view kCircuitZkChallengeTag =
     "Purify/BPPP/CircuitNormArg/ZKChallenge";
+const TaggedHash kCircuitNormArgRhoTaggedHash(kCircuitNormArgRhoTag);
+const TaggedHash kCircuitNormArgMulTaggedHash(kCircuitNormArgMulTag);
+const TaggedHash kCircuitNormArgConstraintTaggedHash(kCircuitNormArgConstraintTag);
+const TaggedHash kCircuitZkBlindTaggedHash(kCircuitZkBlindTag);
+const TaggedHash kCircuitZkMaskNTaggedHash(kCircuitZkMaskNTag);
+const TaggedHash kCircuitZkMaskLTaggedHash(kCircuitZkMaskLTag);
+const TaggedHash kCircuitZkChallengeTaggedHash(kCircuitZkChallengeTag);
+
 GeneratorBackendCacheKey
 generator_cache_key(std::span<const PointBytes> generators) {
   auto serialized_view = std::as_bytes(generators);
@@ -272,20 +280,16 @@ void append_u64_le(Bytes &out, std::uint64_t value) {
 }
 
 Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
-                                           std::string_view tag,
+                                           const TaggedHash& tag,
                                            std::size_t index) {
   Bytes prefix(seed.begin(), seed.end());
   append_u64_le(prefix, static_cast<std::uint64_t>(index));
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
     Bytes input = prefix;
     append_u64_le(input, counter);
-    Bytes digest = hmac_sha256(bytes_from_ascii(tag), input);
-    if (digest.size() != 32) {
-      return unexpected_error(ErrorCode::UnexpectedSize,
-                              "derive_nonzero_scalar:digest_size");
-    }
     ScalarBytes candidate_bytes{};
-    std::copy(digest.begin(), digest.end(), candidate_bytes.begin());
+    candidate_bytes =
+        tag.digest(std::span<const unsigned char>(input.data(), input.size()));
     Result<FieldElement> candidate =
         FieldElement::try_from_bytes32(candidate_bytes);
     if (candidate.has_value() && !candidate->is_zero()) {
@@ -297,7 +301,7 @@ Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
 }
 
 Result<FieldElement> derive_scalar(std::span<const unsigned char> seed,
-                                   std::string_view tag, std::size_t index,
+                                   const TaggedHash& tag, std::size_t index,
                                    std::uint64_t attempt = 0) {
   Bytes prefix(seed.begin(), seed.end());
   append_u64_le(prefix, static_cast<std::uint64_t>(index));
@@ -305,13 +309,9 @@ Result<FieldElement> derive_scalar(std::span<const unsigned char> seed,
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
     Bytes input = prefix;
     append_u64_le(input, counter);
-    Bytes digest = hmac_sha256(bytes_from_ascii(tag), input);
-    if (digest.size() != 32) {
-      return unexpected_error(ErrorCode::UnexpectedSize,
-                              "derive_scalar:digest_size");
-    }
     ScalarBytes candidate_bytes{};
-    std::copy(digest.begin(), digest.end(), candidate_bytes.begin());
+    candidate_bytes =
+        tag.digest(std::span<const unsigned char>(input.data(), input.size()));
     Result<FieldElement> candidate =
         FieldElement::try_from_bytes32(candidate_bytes);
     if (candidate.has_value()) {
@@ -378,7 +378,7 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   Bytes binding_digest =
       experimental_circuit_binding_digest(circuit, statement_binding);
   Result<FieldElement> rho =
-      derive_nonzero_scalar(binding_digest, kCircuitNormArgRhoTag, 0);
+      derive_nonzero_scalar(binding_digest, kCircuitNormArgRhoTaggedHash, 0);
   if (!rho.has_value()) {
     return unexpected_error(rho.error(),
                             "build_circuit_norm_arg_public_data:rho");
@@ -409,7 +409,7 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   std::vector<FieldElement> mul_weights(circuit.n_gates, zero);
   for (std::size_t i = 0; i < circuit.n_gates; ++i) {
     Result<FieldElement> challenge =
-        derive_nonzero_scalar(binding_digest, kCircuitNormArgMulTag, i);
+        derive_nonzero_scalar(binding_digest, kCircuitNormArgMulTaggedHash, i);
     if (!challenge.has_value()) {
       return unexpected_error(challenge.error(),
                               "build_circuit_norm_arg_public_data:mul_weight");
@@ -420,7 +420,7 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   std::vector<FieldElement> row_weights(circuit.c.size(), zero);
   for (std::size_t i = 0; i < circuit.c.size(); ++i) {
     Result<FieldElement> challenge =
-        derive_nonzero_scalar(binding_digest, kCircuitNormArgConstraintTag, i);
+        derive_nonzero_scalar(binding_digest, kCircuitNormArgConstraintTaggedHash, i);
     if (!challenge.has_value()) {
       return unexpected_error(
           challenge.error(),
@@ -877,7 +877,7 @@ derive_zk_challenge(std::span<const unsigned char> binding_digest,
   seed.insert(seed.end(), s_commitment.begin(), s_commitment.end());
   ScalarBytes t2_bytes = scalar_bytes(t2);
   seed.insert(seed.end(), t2_bytes.begin(), t2_bytes.end());
-  return derive_nonzero_scalar(seed, kCircuitZkChallengeTag, 0);
+  return derive_nonzero_scalar(seed, kCircuitZkChallengeTaggedHash, 0);
 }
 
 } // namespace
@@ -1307,7 +1307,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
     CircuitNormArgReduction hidden = *base_reduction;
     for (std::size_t i = used_l; i < hidden.l_vec.size(); ++i) {
       Result<FieldElement> blind =
-          derive_scalar(seed, kCircuitZkBlindTag, i - used_l, attempt);
+          derive_scalar(seed, kCircuitZkBlindTaggedHash, i - used_l, attempt);
       if (!blind.has_value()) {
         return unexpected_error(
             blind.error(), "prove_experimental_circuit_zk_norm_arg_impl:blind");
@@ -1318,7 +1318,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
     std::vector<FieldElement> mask_n(hidden.n_vec.size(), FieldElement::zero());
     for (std::size_t i = 0; i < mask_n.size(); ++i) {
       Result<FieldElement> value =
-          derive_scalar(seed, kCircuitZkMaskNTag, i, attempt);
+          derive_scalar(seed, kCircuitZkMaskNTaggedHash, i, attempt);
       if (!value.has_value()) {
         return unexpected_error(
             value.error(),
@@ -1330,7 +1330,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
     std::vector<FieldElement> mask_l(hidden.l_vec.size(), FieldElement::zero());
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
       Result<FieldElement> value =
-          derive_scalar(seed, kCircuitZkMaskLTag, i, attempt);
+          derive_scalar(seed, kCircuitZkMaskLTaggedHash, i, attempt);
       if (!value.has_value()) {
         return unexpected_error(
             value.error(),

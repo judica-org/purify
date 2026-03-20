@@ -15,81 +15,100 @@ namespace purify {
 
 namespace detail {
 
-struct UInt128 {
-    std::uint64_t lo = 0;
-    std::uint64_t hi = 0;
+class UInt128 {
+public:
+    [[nodiscard]] static UInt128 from_words(std::uint64_t hi, std::uint64_t lo) {
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+        return UInt128((static_cast<unsigned __int128>(hi) << 64) | lo);
+#else
+        return UInt128(hi, lo);
+#endif
+    }
+
+    [[nodiscard]] static UInt128 mul_u64(std::uint64_t lhs, std::uint64_t rhs) {
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+        return UInt128(static_cast<unsigned __int128>(lhs) * rhs);
+#else
+        constexpr std::uint64_t kMask32 = 0xffffffffULL;
+
+        std::uint64_t lhs_lo = lhs & kMask32;
+        std::uint64_t lhs_hi = lhs >> 32;
+        std::uint64_t rhs_lo = rhs & kMask32;
+        std::uint64_t rhs_hi = rhs >> 32;
+
+        std::uint64_t lo_lo = lhs_lo * rhs_lo;
+        std::uint64_t hi_lo = lhs_hi * rhs_lo;
+        std::uint64_t lo_hi = lhs_lo * rhs_hi;
+        std::uint64_t hi_hi = lhs_hi * rhs_hi;
+
+        std::uint64_t cross = (lo_lo >> 32) + (hi_lo & kMask32) + (lo_hi & kMask32);
+        return UInt128(hi_hi + (hi_lo >> 32) + (lo_hi >> 32) + (cross >> 32),
+                       (lo_lo & kMask32) | (cross << 32));
+#endif
+    }
+
+    [[nodiscard]] UInt128 add_u64(std::uint64_t addend) const {
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+        return UInt128(value_ + addend);
+#else
+        UInt128 out = *this;
+        out.lo_ += addend;
+        out.hi_ += (out.lo_ < addend) ? 1U : 0U;
+        return out;
+#endif
+    }
+
+    [[nodiscard]] std::pair<UInt128, std::uint32_t> divmod_u32(std::uint32_t divisor) const {
+        assert(divisor != 0 && "UInt128::divmod_u32 requires a non-zero divisor");
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+        unsigned __int128 quotient = value_ / divisor;
+        return std::make_pair(UInt128(quotient), static_cast<std::uint32_t>(value_ % divisor));
+#else
+        constexpr std::uint64_t kMask32 = 0xffffffffULL;
+
+        std::uint64_t rem = 0;
+        auto step = [&](std::uint32_t word) {
+            std::uint64_t cur = (rem << 32) | word;
+            std::uint32_t qword = static_cast<std::uint32_t>(cur / divisor);
+            rem = cur % divisor;
+            return qword;
+        };
+
+        UInt128 quotient(
+            (static_cast<std::uint64_t>(step(static_cast<std::uint32_t>(hi_ >> 32))) << 32)
+                | step(static_cast<std::uint32_t>(hi_ & kMask32)),
+            (static_cast<std::uint64_t>(step(static_cast<std::uint32_t>(lo_ >> 32))) << 32)
+                | step(static_cast<std::uint32_t>(lo_ & kMask32)));
+        return std::make_pair(quotient, static_cast<std::uint32_t>(rem));
+#endif
+    }
+
+    [[nodiscard]] std::uint64_t low64() const {
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+        return static_cast<std::uint64_t>(value_);
+#else
+        return lo_;
+#endif
+    }
+
+    [[nodiscard]] std::uint64_t high64() const {
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+        return static_cast<std::uint64_t>(value_ >> 64);
+#else
+        return hi_;
+#endif
+    }
+
+private:
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+    explicit UInt128(unsigned __int128 value) : value_(value) {}
+    unsigned __int128 value_ = 0;
+#else
+    UInt128(std::uint64_t hi, std::uint64_t lo) : lo_(lo), hi_(hi) {}
+    std::uint64_t lo_ = 0;
+    std::uint64_t hi_ = 0;
+#endif
 };
-
-[[nodiscard]] inline UInt128 u128_from_words(std::uint64_t hi, std::uint64_t lo) {
-    return UInt128{lo, hi};
-}
-
-[[nodiscard]] inline UInt128 u128_add_u64(const UInt128& value, std::uint64_t addend) {
-#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
-    unsigned __int128 accum = (static_cast<unsigned __int128>(value.hi) << 64) | value.lo;
-    accum += addend;
-    return UInt128{static_cast<std::uint64_t>(accum), static_cast<std::uint64_t>(accum >> 64)};
-#else
-    UInt128 out = value;
-    out.lo += addend;
-    out.hi += (out.lo < addend) ? 1U : 0U;
-    return out;
-#endif
-}
-
-[[nodiscard]] inline UInt128 u128_mul_u64(std::uint64_t lhs, std::uint64_t rhs) {
-#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
-    unsigned __int128 product = static_cast<unsigned __int128>(lhs) * rhs;
-    return UInt128{static_cast<std::uint64_t>(product), static_cast<std::uint64_t>(product >> 64)};
-#else
-    constexpr std::uint64_t kMask32 = 0xffffffffULL;
-
-    std::uint64_t lhs_lo = lhs & kMask32;
-    std::uint64_t lhs_hi = lhs >> 32;
-    std::uint64_t rhs_lo = rhs & kMask32;
-    std::uint64_t rhs_hi = rhs >> 32;
-
-    std::uint64_t lo_lo = lhs_lo * rhs_lo;
-    std::uint64_t hi_lo = lhs_hi * rhs_lo;
-    std::uint64_t lo_hi = lhs_lo * rhs_hi;
-    std::uint64_t hi_hi = lhs_hi * rhs_hi;
-
-    std::uint64_t cross = (lo_lo >> 32) + (hi_lo & kMask32) + (lo_hi & kMask32);
-
-    UInt128 out;
-    out.lo = (lo_lo & kMask32) | (cross << 32);
-    out.hi = hi_hi + (hi_lo >> 32) + (lo_hi >> 32) + (cross >> 32);
-    return out;
-#endif
-}
-
-[[nodiscard]] inline std::pair<UInt128, std::uint32_t> u128_divmod_u32(const UInt128& value, std::uint32_t divisor) {
-    assert(divisor != 0 && "u128_divmod_u32 requires a non-zero divisor");
-#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
-    unsigned __int128 cur = (static_cast<unsigned __int128>(value.hi) << 64) | value.lo;
-    unsigned __int128 quotient = cur / divisor;
-    return std::make_pair(
-        UInt128{static_cast<std::uint64_t>(quotient), static_cast<std::uint64_t>(quotient >> 64)},
-        static_cast<std::uint32_t>(cur % divisor));
-#else
-    constexpr std::uint64_t kMask32 = 0xffffffffULL;
-
-    std::uint64_t rem = 0;
-    auto step = [&](std::uint32_t word) {
-        std::uint64_t cur = (rem << 32) | word;
-        std::uint32_t qword = static_cast<std::uint32_t>(cur / divisor);
-        rem = cur % divisor;
-        return qword;
-    };
-
-    UInt128 quotient;
-    quotient.hi = (static_cast<std::uint64_t>(step(static_cast<std::uint32_t>(value.hi >> 32))) << 32)
-        | step(static_cast<std::uint32_t>(value.hi & kMask32));
-    quotient.lo = (static_cast<std::uint64_t>(step(static_cast<std::uint32_t>(value.lo >> 32))) << 32)
-        | step(static_cast<std::uint32_t>(value.lo & kMask32));
-    return std::make_pair(quotient, static_cast<std::uint32_t>(rem));
-#endif
-}
 
 [[nodiscard]] inline std::size_t bit_length_u64(std::uint64_t value) {
     return value == 0 ? 0U : 64U - static_cast<std::size_t>(std::countl_zero(value));
@@ -244,10 +263,10 @@ struct BigUInt {
         BigUInt out = *this;
         std::uint64_t carry = 0;
         for (std::size_t i = 0; i < Words; ++i) {
-            detail::UInt128 accum = detail::u128_mul_u64(out.limbs[i], value);
-            accum = detail::u128_add_u64(accum, carry);
-            out.limbs[i] = accum.lo;
-            carry = accum.hi;
+            detail::UInt128 accum = detail::UInt128::mul_u64(out.limbs[i], value);
+            accum = accum.add_u64(carry);
+            out.limbs[i] = accum.low64();
+            carry = accum.high64();
         }
         if (carry != 0) {
             return false;
@@ -430,9 +449,9 @@ struct BigUInt {
     std::uint32_t divmod_small(std::uint32_t divisor) {
         std::uint64_t rem = 0;
         for (std::size_t i = Words; i-- > 0;) {
-            auto [quotient, next_rem] = detail::u128_divmod_u32(detail::u128_from_words(rem, limbs[i]), divisor);
-            assert(quotient.hi == 0 && "BigUInt::divmod_small() quotient must fit in 64 bits");
-            limbs[i] = quotient.lo;
+            auto [quotient, next_rem] = detail::UInt128::from_words(rem, limbs[i]).divmod_u32(divisor);
+            assert(quotient.high64() == 0 && "BigUInt::divmod_small() quotient must fit in 64 bits");
+            limbs[i] = quotient.low64();
             rem = next_rem;
         }
         return static_cast<std::uint32_t>(rem);
@@ -572,11 +591,11 @@ BigUInt<LeftWords + RightWords> multiply(const BigUInt<LeftWords>& lhs, const Bi
     for (std::size_t i = 0; i < LeftWords; ++i) {
         std::uint64_t carry = 0;
         for (std::size_t j = 0; j < RightWords; ++j) {
-            detail::UInt128 accum = detail::u128_mul_u64(lhs.limbs[i], rhs.limbs[j]);
-            accum = detail::u128_add_u64(accum, out.limbs[i + j]);
-            accum = detail::u128_add_u64(accum, carry);
-            out.limbs[i + j] = accum.lo;
-            carry = accum.hi;
+            detail::UInt128 accum = detail::UInt128::mul_u64(lhs.limbs[i], rhs.limbs[j]);
+            accum = accum.add_u64(out.limbs[i + j]);
+            accum = accum.add_u64(carry);
+            out.limbs[i + j] = accum.low64();
+            carry = accum.high64();
         }
         out.limbs[i + RightWords] += carry;
     }

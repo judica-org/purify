@@ -78,7 +78,8 @@ Status validate_proof_cache_circuit(const CircuitLike& circuit, const char* cont
     return {};
 }
 
-inline Status validate_message_proof_cache(const puresign::MessageProofCache& cache,
+template <typename CacheLike>
+inline Status validate_message_proof_cache(const CacheLike& cache,
                                            std::string_view nonce_tag) {
     if (cache.eval_input != tagged_eval_input(nonce_tag, cache.message)) {
         return unexpected_error(ErrorCode::BindingMismatch, "validate_message_proof_cache:eval_input");
@@ -86,7 +87,8 @@ inline Status validate_message_proof_cache(const puresign::MessageProofCache& ca
     return {};
 }
 
-inline Status validate_topic_proof_cache(const puresign::TopicProofCache& cache,
+template <typename CacheLike>
+inline Status validate_topic_proof_cache(const CacheLike& cache,
                                          std::string_view nonce_tag) {
     if (cache.topic.empty()) {
         return unexpected_error(ErrorCode::EmptyInput, "validate_topic_proof_cache:empty_topic");

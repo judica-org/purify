@@ -65,6 +65,7 @@ struct PurifyBenchCase {
     purify::bppp::ExperimentalCircuitZkNormArgProof experimental_bppp_proof;
     purify::bppp::ExperimentalCircuitCache experimental_bppp_cache;
     purify::puresign::MessageProofCache message_proof_cache;
+    purify::puresign_plusplus::MessageProofCache message_proof_cache_plusplus;
     purify::bppp::ExperimentalCircuitCache puresign_plusplus_cache;
     std::optional<purify::puresign::KeyPair> key_pair;
     purify::puresign::PublicKey public_key;
@@ -229,6 +230,14 @@ std::optional<PurifyBenchCase> make_case() {
         return std::nullopt;
     }
     out.message_proof_cache = std::move(*message_proof_cache);
+
+    purify::Result<purify::puresign_plusplus::MessageProofCache> message_proof_cache_plusplus =
+        purify::puresign_plusplus::MessageProofCache::build(out.message);
+    if (!message_proof_cache_plusplus.has_value()) {
+        std::cerr << message_proof_cache_plusplus.error().message() << "\n";
+        return std::nullopt;
+    }
+    out.message_proof_cache_plusplus = std::move(*message_proof_cache_plusplus);
 
     purify::Result<purify::puresign::KeyPair> key_pair = purify::puresign::KeyPair::from_secret(out.secret);
     if (!key_pair.has_value()) {
@@ -531,7 +540,7 @@ int main(int argc, char** argv) {
         "puresign_plusplus.nonce.prepare_with_proof_cached_template", [&] {
             purify::Result<purify::puresign_plusplus::PreparedNonceWithProof> prepared =
                 bench_case->key_pair_plusplus->prepare_message_nonce_with_proof(
-                    bench_case->message_proof_cache, &bench_case->puresign_plusplus_cache);
+                    bench_case->message_proof_cache_plusplus, &bench_case->puresign_plusplus_cache);
             assert(prepared.has_value() && "benchmark cached PureSign++ nonce proof preparation should succeed");
             ankerl::nanobench::doNotOptimizeAway(prepared->proof().proof.proof.data());
         });
@@ -569,7 +578,7 @@ int main(int argc, char** argv) {
         "puresign_plusplus.nonce.verify_proof_cached_template", [&] {
             purify::Result<bool> ok =
                 bench_case->public_key_plusplus.verify_message_nonce_proof(
-                    bench_case->message_proof_cache, bench_case->proven_signature_plusplus.nonce_proof,
+                    bench_case->message_proof_cache_plusplus, bench_case->proven_signature_plusplus.nonce_proof,
                     &bench_case->puresign_plusplus_cache);
             assert(ok.has_value() && *ok && "benchmark cached PureSign++ nonce proof verification should succeed");
             ankerl::nanobench::doNotOptimizeAway(*ok);
@@ -612,7 +621,7 @@ int main(int argc, char** argv) {
     sign_with_cached_proof_plusplus_bench.run("puresign_plusplus.signature.sign_with_proof_cached_template", [&] {
         purify::Result<purify::puresign_plusplus::ProvenSignature> signature =
             bench_case->key_pair_plusplus->sign_message_with_proof(
-                bench_case->message_proof_cache, &bench_case->puresign_plusplus_cache);
+                bench_case->message_proof_cache_plusplus, &bench_case->puresign_plusplus_cache);
         assert(signature.has_value() && "benchmark cached PureSign++ proof signing should succeed");
         ankerl::nanobench::doNotOptimizeAway(signature->signature.bytes.data());
     });
@@ -657,7 +666,7 @@ int main(int argc, char** argv) {
         "puresign_plusplus.signature.verify_with_proof_cached_template", [&] {
             purify::Result<bool> ok =
                 bench_case->public_key_plusplus.verify_message_signature_with_proof(
-                    bench_case->message_proof_cache, bench_case->proven_signature_plusplus,
+                    bench_case->message_proof_cache_plusplus, bench_case->proven_signature_plusplus,
                     &bench_case->puresign_plusplus_cache);
             assert(ok.has_value() && *ok && "benchmark cached PureSign++ proof verification should succeed");
             ankerl::nanobench::doNotOptimizeAway(*ok);

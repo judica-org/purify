@@ -9,28 +9,30 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <span>
 #include <utility>
 
-#include "purify/puresign/legacy.hpp"
+#include "purify/api.hpp"
 #include "purify_bppp.hpp"
 
 namespace purify::puresign_plusplus {
 
-using Scalar32 = purify::puresign::Scalar32;
-using XOnly32 = purify::puresign::XOnly32;
-using Signature64 = purify::puresign::Signature64;
-using Nonce = purify::puresign::Nonce;
-using Signature = purify::puresign::Signature;
-using MessageProofCache = purify::puresign::MessageProofCache;
-using TopicProofCache = purify::puresign::TopicProofCache;
-using PreparedNonce = purify::puresign::PreparedNonce;
+using Scalar32 = std::array<unsigned char, 32>;
+using XOnly32 = std::array<unsigned char, 32>;
+using Signature64 = std::array<unsigned char, 64>;
+
+struct MessageProofCache;
+struct TopicProofCache;
+struct Signature;
+class PreparedNonce;
 
 struct NonceProof;
 struct ProvenSignature;
 
 struct PublicKey {
-    static constexpr std::size_t kSerializedSize = purify::puresign::PublicKey::kSerializedSize;
+    static constexpr std::size_t kSerializedSize = 96;
 
     UInt512 purify_pubkey;
     XOnly32 bip340_pubkey{};
@@ -165,6 +167,76 @@ struct PublicKey {
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 };
 
+/** @brief Public BIP340 nonce point in x-only form. */
+struct Nonce {
+    static constexpr std::size_t kSerializedSize = 32;
+
+    XOnly32 xonly{};
+
+    /** @brief Serializes this x-only nonce into its fixed-size wire format. */
+    [[nodiscard]] Bytes serialize() const;
+    /** @brief Parses a serialized x-only nonce. */
+    [[nodiscard]] static Result<Nonce> deserialize(std::span<const unsigned char> serialized);
+};
+
+/** @brief Standard 64-byte BIP340 signature. */
+struct Signature {
+    static constexpr std::size_t kSerializedSize = 64;
+
+    Signature64 bytes{};
+
+    /** @brief Returns the x-only public nonce encoded in the first 32 signature bytes. */
+    [[nodiscard]] Nonce nonce() const;
+    /** @brief Returns the 32-byte Schnorr `s` scalar encoded in the last 32 signature bytes. */
+    [[nodiscard]] Scalar32 s() const;
+    /** @brief Serializes this signature into its fixed-size wire format. */
+    [[nodiscard]] Bytes serialize() const;
+    /** @brief Parses a serialized BIP340 signature. */
+    [[nodiscard]] static Result<Signature> deserialize(std::span<const unsigned char> serialized);
+};
+
+/**
+ * @brief Cacheable message-bound nonce-proof template for the BPPP-backed PureSign++ proof(R) flow.
+ *
+ * This bundles the exact message together with the public-key-agnostic circuit template needed for
+ * message-bound proof creation and verification. The mutable BPPP circuit cache can be reused
+ * across multiple signers for the same message.
+ */
+struct MessageProofCache {
+    Bytes message;
+    Bytes eval_input;
+    NativeBulletproofCircuitTemplate circuit_template;
+    mutable bppp::ExperimentalCircuitCache backend_cache;
+
+    /**
+     * @brief Builds a reusable verifier template for one exact message.
+     * @param message The message that all later prepared nonces or proofs must bind to.
+     * @return The reusable cache for that message.
+     */
+    [[nodiscard]] static Result<MessageProofCache> build(std::span<const unsigned char> message);
+};
+
+/**
+ * @brief Cacheable topic-bound nonce-proof template for the BPPP-backed PureSign++ proof(R) flow.
+ *
+ * This bundles the exact topic together with the public-key-agnostic circuit template needed for
+ * topic-bound proof creation and verification. The mutable BPPP circuit cache can be reused
+ * across multiple signers for the same topic.
+ */
+struct TopicProofCache {
+    Bytes topic;
+    Bytes eval_input;
+    NativeBulletproofCircuitTemplate circuit_template;
+    mutable bppp::ExperimentalCircuitCache backend_cache;
+
+    /**
+     * @brief Builds a reusable verifier template for one exact topic.
+     * @param topic The topic that all later prepared nonces or proofs must bind to.
+     * @return The reusable cache for that topic.
+     */
+    [[nodiscard]] static Result<TopicProofCache> build(std::span<const unsigned char> topic);
+};
+
 struct NonceProof {
     static constexpr unsigned char kSerializationVersion = 1;
 
@@ -184,6 +256,87 @@ struct ProvenSignature {
 
     [[nodiscard]] Result<Bytes> serialize() const;
     [[nodiscard]] static Result<ProvenSignature> deserialize(std::span<const unsigned char> serialized);
+};
+
+/**
+ * @brief Move-only prepared nonce bound to either a message or a topic.
+ *
+ * The public nonce is safe to send over the wire. The secret scalar is intentionally not
+ * serializable and is wiped on destruction and after moves.
+ */
+class PreparedNonce {
+public:
+    enum class Scope : std::uint8_t {
+        Message,
+        Topic,
+    };
+
+    PreparedNonce(const PreparedNonce&) = delete;
+    PreparedNonce& operator=(const PreparedNonce&) = delete;
+
+    PreparedNonce(PreparedNonce&& other) noexcept;
+    PreparedNonce& operator=(PreparedNonce&& other) noexcept;
+    ~PreparedNonce();
+
+    /**
+     * @brief Returns the public nonce corresponding to this prepared secret nonce scalar.
+     * @return The x-only public nonce that is safe to share with a verifier.
+     */
+    [[nodiscard]] const Nonce& public_nonce() const noexcept {
+        return nonce_;
+    }
+
+    /**
+     * @brief Explicitly exports the secret nonce scalar.
+     *
+     * This is intentionally a copy-returning accessor so callers have to opt in to handling the
+     * secret value.
+     */
+    [[nodiscard]] Scalar32 scalar() const {
+        return scalar_;
+    }
+
+    /**
+     * @brief Builds a prepared nonce from already-derived nonce components.
+     * @param scope Whether the nonce is message-bound or topic-bound.
+     * @param scalar The secret nonce scalar to store.
+     * @param nonce The public x-only nonce corresponding to `scalar`.
+     * @param signer_pubkey The signer's BIP340 x-only public key.
+     * @param binding_digest The binding digest that this nonce must later match.
+     * @return The constructed move-only prepared nonce.
+     */
+    [[nodiscard]] static PreparedNonce from_parts(Scope scope, const Scalar32& scalar, const Nonce& nonce,
+                                                  const XOnly32& signer_pubkey, const XOnly32& binding_digest);
+
+    /**
+     * @brief Consumes this message-bound nonce and signs the matching message.
+     * @param signer The BIP340 signer derived from the same secret as this prepared nonce.
+     * @param message The message that must match the nonce binding.
+     * @return The resulting BIP340 signature.
+     */
+    [[nodiscard]] Result<Signature> sign_message(const Bip340Key& signer,
+                                                 std::span<const unsigned char> message) &&;
+
+    /**
+     * @brief Consumes this topic-bound nonce and signs a message under that topic binding.
+     * @param signer The BIP340 signer derived from the same secret as this prepared nonce.
+     * @param message The message to sign.
+     * @return The resulting BIP340 signature.
+     */
+    [[nodiscard]] Result<Signature> sign_topic_message(const Bip340Key& signer,
+                                                       std::span<const unsigned char> message) &&;
+
+private:
+    PreparedNonce(Scope scope, const Scalar32& scalar, const Nonce& nonce,
+                  const XOnly32& signer_pubkey, const XOnly32& binding_digest);
+
+    void clear() noexcept;
+
+    Scope scope_{Scope::Message};
+    Scalar32 scalar_{};
+    Nonce nonce_{};
+    XOnly32 signer_pubkey_{};
+    XOnly32 binding_digest_{};
 };
 
 class PreparedNonceWithProof {

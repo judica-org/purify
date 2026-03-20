@@ -1,5 +1,7 @@
 # purify-cpp
 
+> Warning: This project is a work in progress and is pending thorough review. Expect changes, incomplete areas, and rough edges.
+
 This repository contains a C++ port of the `purify.py` reference implementation, plus native circuit construction and BPP-backed benchmarking on top of `secp256k1-zkp`.
 
 Upstream reference material is available under [`reference/`](reference/) as optional git submodules.

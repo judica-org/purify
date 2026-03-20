@@ -272,8 +272,15 @@ std::optional<PurifyBenchCase> make_case() {
     out.key_pair_plusplus = std::move(*key_pair_plusplus);
     out.public_key_plusplus = out.key_pair_plusplus->public_key();
 
-    purify::Result<purify::puresign_plusplus::ProvenSignature> proven_signature_plusplus =
+    purify::Result<purify::puresign_plusplus::ProvenSignature> warmed_signature_plusplus =
         out.key_pair_plusplus->sign_message_with_proof(out.message, &out.puresign_plusplus_cache);
+    if (!warmed_signature_plusplus.has_value()) {
+        std::cerr << warmed_signature_plusplus.error().message() << "\n";
+        return std::nullopt;
+    }
+
+    purify::Result<purify::puresign_plusplus::ProvenSignature> proven_signature_plusplus =
+        out.key_pair_plusplus->sign_message_with_proof(out.message_proof_cache_plusplus);
     if (!proven_signature_plusplus.has_value()) {
         std::cerr << proven_signature_plusplus.error().message() << "\n";
         return std::nullopt;
@@ -540,9 +547,10 @@ int main(int argc, char** argv) {
     auto prepare_nonce_with_cached_proof_plusplus_bench = make_bench(*config, "nonce");
     prepare_nonce_with_cached_proof_plusplus_bench.run(
         "puresign_plusplus.nonce.prepare_with_proof_cached_template", [&] {
+            // Cached-template PureSign++ paths should use the cache-owned backend cache.
             purify::Result<purify::puresign_plusplus::PreparedNonceWithProof> prepared =
                 bench_case->key_pair_plusplus->prepare_message_nonce_with_proof(
-                    bench_case->message_proof_cache_plusplus, &bench_case->puresign_plusplus_cache);
+                    bench_case->message_proof_cache_plusplus);
             assert(prepared.has_value() && "benchmark cached PureSign++ nonce proof preparation should succeed");
             ankerl::nanobench::doNotOptimizeAway(prepared->proof().proof.proof.data());
         });
@@ -580,8 +588,7 @@ int main(int argc, char** argv) {
         "puresign_plusplus.nonce.verify_proof_cached_template", [&] {
             purify::Result<bool> ok =
                 bench_case->public_key_plusplus.verify_message_nonce_proof(
-                    bench_case->message_proof_cache_plusplus, bench_case->proven_signature_plusplus.nonce_proof,
-                    &bench_case->puresign_plusplus_cache);
+                    bench_case->message_proof_cache_plusplus, bench_case->proven_signature_plusplus.nonce_proof);
             assert(ok.has_value() && *ok && "benchmark cached PureSign++ nonce proof verification should succeed");
             ankerl::nanobench::doNotOptimizeAway(*ok);
         });
@@ -622,8 +629,7 @@ int main(int argc, char** argv) {
     auto sign_with_cached_proof_plusplus_bench = make_bench(*config, "signature");
     sign_with_cached_proof_plusplus_bench.run("puresign_plusplus.signature.sign_with_proof_cached_template", [&] {
         purify::Result<purify::puresign_plusplus::ProvenSignature> signature =
-            bench_case->key_pair_plusplus->sign_message_with_proof(
-                bench_case->message_proof_cache_plusplus, &bench_case->puresign_plusplus_cache);
+            bench_case->key_pair_plusplus->sign_message_with_proof(bench_case->message_proof_cache_plusplus);
         assert(signature.has_value() && "benchmark cached PureSign++ proof signing should succeed");
         ankerl::nanobench::doNotOptimizeAway(signature->signature.bytes.data());
     });
@@ -668,8 +674,7 @@ int main(int argc, char** argv) {
         "puresign_plusplus.signature.verify_with_proof_cached_template", [&] {
             purify::Result<bool> ok =
                 bench_case->public_key_plusplus.verify_message_signature_with_proof(
-                    bench_case->message_proof_cache_plusplus, bench_case->proven_signature_plusplus,
-                    &bench_case->puresign_plusplus_cache);
+                    bench_case->message_proof_cache_plusplus, bench_case->proven_signature_plusplus);
             assert(ok.has_value() && *ok && "benchmark cached PureSign++ proof verification should succeed");
             ankerl::nanobench::doNotOptimizeAway(*ok);
         });

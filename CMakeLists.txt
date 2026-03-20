@@ -66,6 +66,20 @@ if(NOT MSVC)
     )
 endif()
 
+if(MSVC)
+    # `purify_bppp_bridge.c` directly compiles vendored secp256k1-zkp sources,
+    # which trigger a large number of benign narrowing/constant-expression
+    # diagnostics under MSVC. Keep warnings enabled for our own code and
+    # suppress the known third-party warnings only for this translation unit.
+    set_property(SOURCE src/purify_bppp_bridge.c APPEND PROPERTY COMPILE_OPTIONS
+        /wd4127
+        /wd4146
+        /wd4244
+        /wd4267
+        /wd4310
+    )
+endif()
+
 function(purify_configure_library_target target)
     target_compile_features(${target} PUBLIC cxx_std_23)
 

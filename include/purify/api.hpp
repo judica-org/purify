@@ -211,7 +211,7 @@ inline Result<GeneratedKey> generate_key(std::span<const unsigned char> seed) {
 template <typename FillRandom>
 requires(NoexceptByteFill<FillRandom> || NoexceptCheckedByteFill<FillRandom>)
 Result<GeneratedKey> generate_key(FillRandom&& fill_random) {
-    PURIFY_ASSIGN_OR_RETURN(auto secret, random_below(key_space_size(), std::forward<FillRandom>(fill_random)),
+    PURIFY_ASSIGN_OR_RETURN(const auto& secret, random_below(key_space_size(), std::forward<FillRandom>(fill_random)),
                             "generate_key:random_below_custom");
     PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(secret), "generate_key:from_packed_secret");
     return derive_key(std::move(owned_secret));

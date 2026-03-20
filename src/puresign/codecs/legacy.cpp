@@ -104,7 +104,7 @@ Result<Signature> Signature::deserialize(std::span<const unsigned char> serializ
 }
 
 Result<Bytes> NonceProof::serialize() const {
-    PURIFY_ASSIGN_OR_RETURN(auto proof_bytes, proof.serialize(), "NonceProof::serialize:proof");
+    PURIFY_ASSIGN_OR_RETURN(const auto& proof_bytes, proof.serialize(), "NonceProof::serialize:proof");
     if (proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return unexpected_error(ErrorCode::UnexpectedSize, "NonceProof::serialize:proof_size");
     }
@@ -146,7 +146,7 @@ Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serial
 }
 
 Result<Bytes> ProvenSignature::serialize() const {
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_proof_bytes, nonce_proof.serialize(), "ProvenSignature::serialize:nonce_proof");
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_proof_bytes, nonce_proof.serialize(), "ProvenSignature::serialize:nonce_proof");
     if (nonce_proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return unexpected_error(ErrorCode::UnexpectedSize, "ProvenSignature::serialize:nonce_proof_size");
     }

@@ -60,10 +60,10 @@ Bytes tagged_message(std::string_view prefix, const Bytes& message) {
 }
 
 Result<UInt512> derive_public_key_from_secret(const UInt512& secret) {
-    PURIFY_ASSIGN_OR_RETURN(auto unpacked, unpack_secret(secret), "derive_public_key_from_secret:unpack_secret");
-    PURIFY_ASSIGN_OR_RETURN(auto p1, curve1().mul_secret_affine(generator1(), unpacked.first),
+    PURIFY_ASSIGN_OR_RETURN(const auto& unpacked, unpack_secret(secret), "derive_public_key_from_secret:unpack_secret");
+    PURIFY_ASSIGN_OR_RETURN(const auto& p1, curve1().mul_secret_affine(generator1(), unpacked.first),
                             "derive_public_key_from_secret:mul_secret_affine_p1");
-    PURIFY_ASSIGN_OR_RETURN(auto p2, curve2().mul_secret_affine(generator2(), unpacked.second),
+    PURIFY_ASSIGN_OR_RETURN(const auto& p2, curve2().mul_secret_affine(generator2(), unpacked.second),
                             "derive_public_key_from_secret:mul_secret_affine_p2");
     return pack_public(p1.x.to_uint256(), p2.x.to_uint256());
 }
@@ -168,7 +168,7 @@ Result<UInt512> random_below(const UInt512& range) {
 }
 
 Result<GeneratedKey> generate_key() {
-    PURIFY_ASSIGN_OR_RETURN(auto secret, random_below(key_space_size()), "generate_key:random_below");
+    PURIFY_ASSIGN_OR_RETURN(const auto& secret, random_below(key_space_size()), "generate_key:random_below");
     PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(secret), "generate_key:from_packed_secret");
     return derive_key(std::move(owned_secret));
 }
@@ -189,7 +189,7 @@ Result<GeneratedKey> derive_key(const SecretKey& secret) {
 }
 
 Result<GeneratedKey> derive_key(SecretKey&& secret) {
-    PURIFY_ASSIGN_OR_RETURN(auto public_key, derive_public_key_from_secret(secret.packed()),
+    PURIFY_ASSIGN_OR_RETURN(const auto& public_key, derive_public_key_from_secret(secret.packed()),
                             "derive_key:derive_public_key_from_secret");
     return GeneratedKey{std::move(secret), public_key};
 }
@@ -221,23 +221,23 @@ Result<Bip340Key> derive_bip340_key(const SecretKey& secret) {
 }
 
 Result<FieldElement> eval(const SecretKey& secret, const Bytes& message) {
-    PURIFY_ASSIGN_OR_RETURN(auto unpacked, unpack_secret(secret.packed()), "eval:unpack_secret");
-    PURIFY_ASSIGN_OR_RETURN(auto m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
+    PURIFY_ASSIGN_OR_RETURN(const auto& unpacked, unpack_secret(secret.packed()), "eval:unpack_secret");
+    PURIFY_ASSIGN_OR_RETURN(const auto& m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
                             "eval:hash_to_curve_m1");
-    PURIFY_ASSIGN_OR_RETURN(auto m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
+    PURIFY_ASSIGN_OR_RETURN(const auto& m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
                             "eval:hash_to_curve_m2");
-    PURIFY_ASSIGN_OR_RETURN(auto q1, curve1().mul_secret_affine(m1, unpacked.first), "eval:mul_secret_affine_q1");
-    PURIFY_ASSIGN_OR_RETURN(auto q2, curve2().mul_secret_affine(m2, unpacked.second), "eval:mul_secret_affine_q2");
+    PURIFY_ASSIGN_OR_RETURN(const auto& q1, curve1().mul_secret_affine(m1, unpacked.first), "eval:mul_secret_affine_q1");
+    PURIFY_ASSIGN_OR_RETURN(const auto& q2, curve2().mul_secret_affine(m2, unpacked.second), "eval:mul_secret_affine_q2");
     return combine(q1.x, q2.x);
 }
 
 Result<std::string> verifier(const Bytes& message, const UInt512& pubkey) {
-    PURIFY_ASSIGN_OR_RETURN(auto m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
+    PURIFY_ASSIGN_OR_RETURN(const auto& m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
                             "verifier:hash_to_curve_m1");
-    PURIFY_ASSIGN_OR_RETURN(auto m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
+    PURIFY_ASSIGN_OR_RETURN(const auto& m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
                             "verifier:hash_to_curve_m2");
     Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(auto result, circuit_main(transcript, m1, m2), "verifier:circuit_main");
+    PURIFY_ASSIGN_OR_RETURN(const auto& result, circuit_main(transcript, m1, m2), "verifier:circuit_main");
     BulletproofTranscript bp;
     PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, result.n_bits), "verifier:from_transcript");
     PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(pubkey, result.p1x, result.p2x, result.out),
@@ -246,18 +246,18 @@ Result<std::string> verifier(const Bytes& message, const UInt512& pubkey) {
 }
 
 Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UInt512& pubkey) {
-    PURIFY_ASSIGN_OR_RETURN(auto template_circuit, verifier_circuit_template(message),
+    PURIFY_ASSIGN_OR_RETURN(const auto& template_circuit, verifier_circuit_template(message),
                             "verifier_circuit:verifier_circuit_template");
     return template_circuit.instantiate(pubkey);
 }
 
 Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message) {
-    PURIFY_ASSIGN_OR_RETURN(auto m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
+    PURIFY_ASSIGN_OR_RETURN(const auto& m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
                             "verifier_circuit_template:hash_to_curve_m1");
-    PURIFY_ASSIGN_OR_RETURN(auto m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
+    PURIFY_ASSIGN_OR_RETURN(const auto& m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
                             "verifier_circuit_template:hash_to_curve_m2");
     Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(auto result, circuit_main(transcript, m1, m2),
+    PURIFY_ASSIGN_OR_RETURN(const auto& result, circuit_main(transcript, m1, m2),
                             "verifier_circuit_template:circuit_main");
     BulletproofTranscript bp;
     PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, result.n_bits), "verifier_circuit_template:from_transcript");
@@ -278,23 +278,23 @@ Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& 
 }
 
 Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const SecretKey& secret) {
-    PURIFY_ASSIGN_OR_RETURN(auto unpacked, unpack_secret(secret.packed()), "prove_assignment_data:unpack_secret");
-    PURIFY_ASSIGN_OR_RETURN(auto m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
+    PURIFY_ASSIGN_OR_RETURN(const auto& unpacked, unpack_secret(secret.packed()), "prove_assignment_data:unpack_secret");
+    PURIFY_ASSIGN_OR_RETURN(const auto& m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
                             "prove_assignment_data:hash_to_curve_m1");
-    PURIFY_ASSIGN_OR_RETURN(auto m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
+    PURIFY_ASSIGN_OR_RETURN(const auto& m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
                             "prove_assignment_data:hash_to_curve_m2");
-    PURIFY_ASSIGN_OR_RETURN(auto p1, curve1().mul_secret_affine(generator1(), unpacked.first),
+    PURIFY_ASSIGN_OR_RETURN(const auto& p1, curve1().mul_secret_affine(generator1(), unpacked.first),
                             "prove_assignment_data:mul_secret_affine_p1");
-    PURIFY_ASSIGN_OR_RETURN(auto p2, curve2().mul_secret_affine(generator2(), unpacked.second),
+    PURIFY_ASSIGN_OR_RETURN(const auto& p2, curve2().mul_secret_affine(generator2(), unpacked.second),
                             "prove_assignment_data:mul_secret_affine_p2");
-    PURIFY_ASSIGN_OR_RETURN(auto q1, curve1().mul_secret_affine(m1, unpacked.first),
+    PURIFY_ASSIGN_OR_RETURN(const auto& q1, curve1().mul_secret_affine(m1, unpacked.first),
                             "prove_assignment_data:mul_secret_affine_q1");
-    PURIFY_ASSIGN_OR_RETURN(auto q2, curve2().mul_secret_affine(m2, unpacked.second),
+    PURIFY_ASSIGN_OR_RETURN(const auto& q2, curve2().mul_secret_affine(m2, unpacked.second),
                             "prove_assignment_data:mul_secret_affine_q2");
     FieldElement native_out = combine(q1.x, q2.x);
 
     Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(auto result, circuit_main(transcript, m1, m2, unpacked.first, unpacked.second),
+    PURIFY_ASSIGN_OR_RETURN(const auto& result, circuit_main(transcript, m1, m2, unpacked.first, unpacked.second),
                             "prove_assignment_data:circuit_main");
     if (transcript.evaluate(result.p1x) != std::optional<FieldElement>(p1.x)) {
         return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:p1x_mismatch");
@@ -324,19 +324,19 @@ Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const
 }
 
 Result<bool> evaluate_verifier_circuit(const Bytes& message, const BulletproofWitnessData& witness) {
-    PURIFY_ASSIGN_OR_RETURN(auto circuit, verifier_circuit(message, witness.public_key),
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, verifier_circuit(message, witness.public_key),
                             "evaluate_verifier_circuit:verifier_circuit");
     return circuit.evaluate(witness.assignment);
 }
 
 Result<bool> evaluate_verifier_circuit(const Bytes& message, const SecretKey& secret) {
-    PURIFY_ASSIGN_OR_RETURN(auto witness, prove_assignment_data(message, secret),
+    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(message, secret),
                             "evaluate_verifier_circuit:prove_assignment_data");
     return evaluate_verifier_circuit(message, witness);
 }
 
 Result<Bytes> prove_assignment(const Bytes& message, const SecretKey& secret) {
-    PURIFY_ASSIGN_OR_RETURN(auto witness, prove_assignment_data(message, secret), "prove_assignment:prove_assignment_data");
+    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(message, secret), "prove_assignment:prove_assignment_data");
     Result<Bytes> serialized = witness.assignment.serialize();
     assert(serialized.has_value() && "prove_assignment() should serialize a well-formed assignment");
     if (!serialized.has_value()) {

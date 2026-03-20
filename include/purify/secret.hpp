@@ -74,7 +74,7 @@ public:
      * @return Owned secret key on success, or a parsing/validation error.
      */
     [[nodiscard]] static Result<SecretKey> from_hex(std::string_view hex) {
-        PURIFY_ASSIGN_OR_RETURN(auto packed, UInt512::try_from_hex(hex), "SecretKey::from_hex:try_from_hex");
+        PURIFY_ASSIGN_OR_RETURN(const auto& packed, UInt512::try_from_hex(hex), "SecretKey::from_hex:try_from_hex");
         return from_packed(packed);
     }
 

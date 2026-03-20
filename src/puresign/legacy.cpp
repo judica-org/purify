@@ -131,7 +131,7 @@ struct DerivedNonceData {
 Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret, const DerivedNonceData& nonce_data,
                                                    const NativeBulletproofCircuitTemplate& circuit_template,
                                                    ExperimentalBulletproofBackendCache* backend_cache = nullptr) {
-    PURIFY_ASSIGN_OR_RETURN(auto witness, prove_assignment_data(nonce_data.eval_input, secret),
+    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(nonce_data.eval_input, secret),
                             "build_nonce_proof_from_template:prove_assignment_data");
     PURIFY_ASSIGN_OR_RETURN(auto partial_ok, circuit_template.partial_evaluate(witness.assignment),
                             "build_nonce_proof_from_template:partial_evaluate");
@@ -143,7 +143,7 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret, cons
     if (!final_ok) {
         return unexpected_error(ErrorCode::BindingMismatch, "build_nonce_proof_from_template:final_evaluate_false");
     }
-    PURIFY_ASSIGN_OR_RETURN(auto circuit, circuit_template.instantiate_packed(witness.public_key),
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, circuit_template.instantiate_packed(witness.public_key),
                             "build_nonce_proof_from_template:instantiate_packed");
     PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit, "build_nonce_proof_from_template:circuit_shape"),
                            "build_nonce_proof_from_template:validate_proof_cache_circuit");
@@ -171,7 +171,7 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret, cons
 Result<DerivedNonceData> derive_nonce_data(const SecretKey& secret, PreparedNonce::Scope scope,
                                            std::span<const unsigned char> input) {
     PURIFY_RETURN_IF_ERROR(validate_puresign_field_alignment(), "derive_nonce_data:validate_puresign_field_alignment");
-    PURIFY_ASSIGN_OR_RETURN(auto signer, derive_bip340_key(secret), "derive_nonce_data:derive_bip340_key");
+    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret), "derive_nonce_data:derive_bip340_key");
 
     const std::string_view nonce_tag = scope == PreparedNonce::Scope::Message ? kMessageNonceTag : kTopicNonceTag;
     const TaggedHash& binding_hash = binding_tagged_hash(scope);
@@ -182,7 +182,7 @@ Result<DerivedNonceData> derive_nonce_data(const SecretKey& secret, PreparedNonc
     out.binding_digest = binding_digest(binding_hash, input);
 
     out.eval_input = detail::tagged_eval_input(nonce_tag, input);
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_value, eval(secret, out.eval_input), "derive_nonce_data:eval");
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_value, eval(secret, out.eval_input), "derive_nonce_data:eval");
     out.scalar = nonce_value.to_bytes_be();
     if (std::all_of(out.scalar.begin(), out.scalar.end(), [](unsigned char byte) { return byte == 0; })) {
         /* This rejects the unique invalid Schnorr nonce. Since Purify outputs a field element
@@ -199,7 +199,7 @@ Result<DerivedNonceData> derive_nonce_data(const SecretKey& secret, PreparedNonc
 }
 
 Result<NonceProof> build_nonce_proof(const SecretKey& secret, const DerivedNonceData& nonce_data) {
-    PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(nonce_data.eval_input),
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit_template, verifier_circuit_template(nonce_data.eval_input),
                             "build_nonce_proof:verifier_circuit_template");
     return build_nonce_proof_from_template(secret, nonce_data, circuit_template);
 }
@@ -362,8 +362,8 @@ Result<ProvenSignature> PreparedNonceWithProof::sign_topic_message(const SecretK
 namespace api_impl {
 
 Result<PublicKey> derive_public_key(const SecretKey& secret) {
-    PURIFY_ASSIGN_OR_RETURN(auto purify_key, derive_key(secret), "derive_public_key:derive_key");
-    PURIFY_ASSIGN_OR_RETURN(auto bip340_key, derive_bip340_key(secret), "derive_public_key:derive_bip340_key");
+    PURIFY_ASSIGN_OR_RETURN(const auto& purify_key, derive_key(secret), "derive_public_key:derive_key");
+    PURIFY_ASSIGN_OR_RETURN(const auto& bip340_key, derive_bip340_key(secret), "derive_public_key:derive_bip340_key");
     return PublicKey{purify_key.public_key, bip340_key.xonly_pubkey};
 }
 
@@ -393,14 +393,14 @@ Result<TopicProofCache> build_topic_proof_cache(std::span<const unsigned char> t
 }
 
 Result<PreparedNonce> prepare_message_nonce(const SecretKey& secret, std::span<const unsigned char> message) {
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message),
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message),
                             "prepare_message_nonce:prepare_nonce_data_impl");
     return PreparedNonce::from_parts(PreparedNonce::Scope::Message, nonce_data.scalar, nonce_data.nonce,
                                      nonce_data.signer_pubkey, nonce_data.binding_digest);
 }
 
 Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey& secret, std::span<const unsigned char> message) {
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message),
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message),
                             "prepare_message_nonce_with_proof:prepare_nonce_data_impl");
     PreparedNonce prepared = PreparedNonce::from_parts(PreparedNonce::Scope::Message, nonce_data.scalar,
                                                        nonce_data.nonce, nonce_data.signer_pubkey,
@@ -413,7 +413,7 @@ Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey&
 Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey& secret, const MessageProofCache& cache) {
     PURIFY_RETURN_IF_ERROR(validate_message_proof_cache(cache),
                            "prepare_message_nonce_with_proof:validate_message_proof_cache");
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, cache.message),
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, cache.message),
                             "prepare_message_nonce_with_proof:prepare_nonce_data_impl");
     PreparedNonce prepared = PreparedNonce::from_parts(PreparedNonce::Scope::Message, nonce_data.scalar,
                                                        nonce_data.nonce, nonce_data.signer_pubkey,
@@ -426,14 +426,14 @@ Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey&
 }
 
 Result<PreparedNonce> prepare_topic_nonce(const SecretKey& secret, std::span<const unsigned char> topic) {
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic),
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic),
                             "prepare_topic_nonce:prepare_nonce_data_impl");
     return PreparedNonce::from_parts(PreparedNonce::Scope::Topic, nonce_data.scalar, nonce_data.nonce,
                                      nonce_data.signer_pubkey, nonce_data.binding_digest);
 }
 
 Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& secret, std::span<const unsigned char> topic) {
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic),
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic),
                             "prepare_topic_nonce_with_proof:prepare_nonce_data_impl");
     PreparedNonce prepared = PreparedNonce::from_parts(PreparedNonce::Scope::Topic, nonce_data.scalar,
                                                        nonce_data.nonce, nonce_data.signer_pubkey,
@@ -446,7 +446,7 @@ Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& s
 Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& secret, const TopicProofCache& cache) {
     PURIFY_RETURN_IF_ERROR(validate_topic_proof_cache(cache),
                            "prepare_topic_nonce_with_proof:validate_topic_proof_cache");
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, cache.topic),
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, cache.topic),
                             "prepare_topic_nonce_with_proof:prepare_nonce_data_impl");
     PreparedNonce prepared = PreparedNonce::from_parts(PreparedNonce::Scope::Topic, nonce_data.scalar,
                                                        nonce_data.nonce, nonce_data.signer_pubkey,
@@ -465,7 +465,7 @@ Result<Signature> sign_message(const SecretKey& secret, std::span<const unsigned
 
 Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
                                              PreparedNonce&& prepared) {
-    PURIFY_ASSIGN_OR_RETURN(auto signer, derive_bip340_key(secret), "sign_message_with_prepared:derive_bip340_key");
+    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret), "sign_message_with_prepared:derive_bip340_key");
     return std::move(prepared).sign_message(signer, message);
 }
 
@@ -482,7 +482,7 @@ Result<Signature> sign_with_topic(const SecretKey& secret, std::span<const unsig
 
 Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
                                            PreparedNonce&& prepared) {
-    PURIFY_ASSIGN_OR_RETURN(auto signer, derive_bip340_key(secret), "sign_with_prepared_topic:derive_bip340_key");
+    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret), "sign_with_prepared_topic:derive_bip340_key");
     return std::move(prepared).sign_topic_message(signer, message);
 }
 
@@ -533,7 +533,7 @@ Result<bool> verify_signature(const PublicKey& public_key, std::span<const unsig
 Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> message,
                                         const NonceProof& nonce_proof,
                                         ExperimentalBulletproofBackendCache* circuit_cache) {
-    PURIFY_ASSIGN_OR_RETURN(auto circuit,
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit,
                             verifier_circuit(detail::tagged_eval_input(kMessageNonceTag, message), public_key.purify_pubkey),
                             "verify_message_nonce_proof:verifier_circuit");
     return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, PreparedNonce::Scope::Message,
@@ -545,7 +545,7 @@ Result<bool> verify_message_nonce_proof(const MessageProofCache& cache, const Pu
                                         const NonceProof& nonce_proof,
                                         ExperimentalBulletproofBackendCache* circuit_cache) {
     PURIFY_RETURN_IF_ERROR(validate_message_proof_cache(cache), "verify_message_nonce_proof:validate_message_proof_cache");
-    PURIFY_ASSIGN_OR_RETURN(auto circuit, cache.circuit_template.instantiate_packed(public_key.purify_pubkey),
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, cache.circuit_template.instantiate_packed(public_key.purify_pubkey),
                             "verify_message_nonce_proof:instantiate_packed");
     return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, PreparedNonce::Scope::Message,
                                            "verify_message_nonce_proof:verify_nonce_proof_with_circuit",
@@ -558,7 +558,7 @@ Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<con
     if (topic.empty()) {
         return unexpected_error(ErrorCode::EmptyInput, "verify_topic_nonce_proof:empty_topic");
     }
-    PURIFY_ASSIGN_OR_RETURN(auto circuit,
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit,
                             verifier_circuit(detail::tagged_eval_input(kTopicNonceTag, topic), public_key.purify_pubkey),
                             "verify_topic_nonce_proof:verifier_circuit");
     return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, PreparedNonce::Scope::Topic,
@@ -570,7 +570,7 @@ Result<bool> verify_topic_nonce_proof(const TopicProofCache& cache, const Public
                                       const NonceProof& nonce_proof,
                                       ExperimentalBulletproofBackendCache* circuit_cache) {
     PURIFY_RETURN_IF_ERROR(validate_topic_proof_cache(cache), "verify_topic_nonce_proof:validate_topic_proof_cache");
-    PURIFY_ASSIGN_OR_RETURN(auto circuit, cache.circuit_template.instantiate_packed(public_key.purify_pubkey),
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, cache.circuit_template.instantiate_packed(public_key.purify_pubkey),
                             "verify_topic_nonce_proof:instantiate_packed");
     return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, PreparedNonce::Scope::Topic,
                                            "verify_topic_nonce_proof:verify_nonce_proof_with_circuit",
@@ -742,7 +742,7 @@ Result<Signature> KeyPair::sign_message(std::span<const unsigned char> message) 
 
 Result<Signature> KeyPair::sign_message_with_prepared(std::span<const unsigned char> message,
                                                       PreparedNonce&& prepared) const {
-    PURIFY_ASSIGN_OR_RETURN(auto signer, derive_bip340_key(secret_), "KeyPair::sign_message_with_prepared:derive_bip340_key");
+    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret_), "KeyPair::sign_message_with_prepared:derive_bip340_key");
     return std::move(prepared).sign_message(signer, message);
 }
 
@@ -759,7 +759,7 @@ Result<Signature> KeyPair::sign_with_topic(std::span<const unsigned char> messag
 
 Result<Signature> KeyPair::sign_with_prepared_topic(std::span<const unsigned char> message,
                                                     PreparedNonce&& prepared) const {
-    PURIFY_ASSIGN_OR_RETURN(auto signer, derive_bip340_key(secret_), "KeyPair::sign_with_prepared_topic:derive_bip340_key");
+    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret_), "KeyPair::sign_with_prepared_topic:derive_bip340_key");
     return std::move(prepared).sign_topic_message(signer, message);
 }
 

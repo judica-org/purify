@@ -10,9 +10,7 @@
 #include "purify/puresign/legacy.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cstring>
-#include <limits>
 
 #include "../purify_bulletproof_internal.hpp"
 #include "detail/common.hpp"
@@ -282,7 +280,7 @@ PreparedNonce::~PreparedNonce() {
 }
 
 void PreparedNonce::clear() noexcept {
-    std::fill(scalar_.begin(), scalar_.end(), 0);
+    std::fill(scalar_.begin(), scalar_.end(), static_cast<unsigned char>(0));
 }
 
 Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,

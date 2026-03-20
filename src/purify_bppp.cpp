@@ -358,12 +358,10 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
 
   Bytes binding_digest =
       experimental_circuit_binding_digest(circuit, statement_binding);
-  Result<FieldElement> rho =
-      derive_nonzero_scalar(binding_digest, kCircuitNormArgRhoTaggedHash, 0);
-  if (!rho.has_value()) {
-    return unexpected_error(rho.error(),
-                            "build_circuit_norm_arg_public_data:rho");
-  }
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &rho,
+      derive_nonzero_scalar(binding_digest, kCircuitNormArgRhoTaggedHash, 0),
+      "build_circuit_norm_arg_public_data:rho");
   CircuitNormArgPublicDataCacheKey cache_key =
       circuit_norm_arg_public_data_cache_key(binding_digest,
                                              externalize_commitments);
@@ -390,25 +388,21 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
 
   std::vector<FieldElement> mul_weights(circuit.n_gates, zero);
   for (std::size_t i = 0; i < circuit.n_gates; ++i) {
-    Result<FieldElement> challenge =
-        derive_nonzero_scalar(binding_digest, kCircuitNormArgMulTaggedHash, i);
-    if (!challenge.has_value()) {
-      return unexpected_error(challenge.error(),
-                              "build_circuit_norm_arg_public_data:mul_weight");
-    }
-    mul_weights[i] = *challenge;
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto &challenge,
+        derive_nonzero_scalar(binding_digest, kCircuitNormArgMulTaggedHash, i),
+        "build_circuit_norm_arg_public_data:mul_weight");
+    mul_weights[i] = challenge;
   }
 
   std::vector<FieldElement> row_weights(circuit.c.size(), zero);
   for (std::size_t i = 0; i < circuit.c.size(); ++i) {
-    Result<FieldElement> challenge =
-        derive_nonzero_scalar(binding_digest, kCircuitNormArgConstraintTaggedHash, i);
-    if (!challenge.has_value()) {
-      return unexpected_error(
-          challenge.error(),
-          "build_circuit_norm_arg_public_data:constraint_weight");
-    }
-    row_weights[i] = *challenge;
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto &challenge,
+        derive_nonzero_scalar(binding_digest, kCircuitNormArgConstraintTaggedHash,
+                              i),
+        "build_circuit_norm_arg_public_data:constraint_weight");
+    row_weights[i] = challenge;
   }
 
   std::vector<FieldElement> left_coeffs(circuit.n_gates, zero);
@@ -441,8 +435,8 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   accumulate_coeffs(circuit.wv, commitment_coeffs, true);
 
   auto out = std::make_shared<CircuitNormArgPublicData>();
-  out->rho = *rho;
-  out->rho_bytes = scalar_bytes(*rho);
+  out->rho = rho;
+  out->rho_bytes = scalar_bytes(rho);
   out->plus_terms.resize(circuit.n_gates);
   out->minus_terms.resize(circuit.n_gates);
   out->plus_shift.resize(circuit.n_gates, zero);
@@ -487,14 +481,10 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   out->target = constant.negate();
   out->c_vec_bytes = scalar_bytes(out->c_vec);
 
-  Result<std::vector<PointBytes>> generators =
-      create_generators(4 * circuit.n_gates + out->c_vec.size());
-  if (!generators.has_value()) {
-    return unexpected_error(
-        generators.error(),
-        "build_circuit_norm_arg_public_data:create_generators");
-  }
-  out->generators = std::move(*generators);
+  PURIFY_ASSIGN_OR_RETURN(
+      auto generators, create_generators(4 * circuit.n_gates + out->c_vec.size()),
+      "build_circuit_norm_arg_public_data:create_generators");
+  out->generators = std::move(generators);
   CircuitNormArgPublicDataPtr shared = out;
   if (cache != nullptr) {
     cache->insert_public_data(cache_key, shared);
@@ -517,17 +507,14 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
         "reduce_experimental_circuit_to_norm_arg:assignment_shape");
   }
 
-  Result<CircuitNormArgPublicDataPtr> public_data =
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &public_data,
       build_circuit_norm_arg_public_data(circuit, statement_binding,
-                                         externalize_commitments, cache);
-  if (!public_data.has_value()) {
-    return unexpected_error(
-        public_data.error(),
-        "reduce_experimental_circuit_to_norm_arg:public_data");
-  }
+                                         externalize_commitments, cache),
+      "reduce_experimental_circuit_to_norm_arg:public_data");
 
   CircuitNormArgReduction out;
-  out.public_data = *public_data;
+  out.public_data = public_data;
   out.n_vec.reserve(4 * circuit.n_gates);
   out.l_vec.assign(out.public_data->c_vec.size(), FieldElement::zero());
 
@@ -584,13 +571,10 @@ commit_norm_arg_witness_only(const NormArgInputs &inputs,
   const std::vector<PointBytes> *generators = &inputs.generators;
   std::vector<PointBytes> generated_generators;
   if (generators->empty()) {
-    Result<std::vector<PointBytes>> generated =
-        create_generators(inputs.n_vec.size() + inputs.l_vec.size());
-    if (!generated.has_value()) {
-      return unexpected_error(generated.error(),
-                              "commit_norm_arg_witness_only:create_generators");
-    }
-    generated_generators = std::move(*generated);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto generated, create_generators(inputs.n_vec.size() + inputs.l_vec.size()),
+        "commit_norm_arg_witness_only:create_generators");
+    generated_generators = std::move(generated);
     generators = &generated_generators;
   }
 
@@ -674,13 +658,10 @@ validate_public_commitments(std::span<const PointBytes> public_commitments,
                             "validate_public_commitments:size");
   }
   for (std::size_t i = 0; i < commitments.size(); ++i) {
-    Result<PointBytes> expected = point_from_scalar_base(commitments[i]);
-    if (!expected.has_value()) {
-      return unexpected_error(
-          expected.error(),
-          "validate_public_commitments:point_from_scalar_base");
-    }
-    if (*expected != public_commitments[i]) {
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto &expected, point_from_scalar_base(commitments[i]),
+        "validate_public_commitments:point_from_scalar_base");
+    if (expected != public_commitments[i]) {
       return unexpected_error(ErrorCode::BindingMismatch,
                               "validate_public_commitments:mismatch");
     }
@@ -701,15 +682,11 @@ Result<PointBytes> add_scaled_points(const PointBytes &base_commitment,
     if (scalars[i].is_zero()) {
       continue;
     }
-    Result<PointBytes> scaled = point_scale(points[i], scalars[i]);
-    if (!scaled.has_value()) {
-      return unexpected_error(scaled.error(), "add_scaled_points:scale");
-    }
-    Result<PointBytes> combined = point_add(out, *scaled);
-    if (!combined.has_value()) {
-      return unexpected_error(combined.error(), "add_scaled_points:add");
-    }
-    out = *combined;
+    PURIFY_ASSIGN_OR_RETURN(const auto &scaled, point_scale(points[i], scalars[i]),
+                            "add_scaled_points:scale");
+    PURIFY_ASSIGN_OR_RETURN(const auto &combined, point_add(out, scaled),
+                            "add_scaled_points:add");
+    out = combined;
   }
   return out;
 }
@@ -724,11 +701,9 @@ anchor_zk_a_commitment(const PointBytes &a_witness_commitment,
                             "anchor_zk_a_commitment:public_commitment_size");
   }
 
-  Result<PointBytes> anchored =
-      offset_commitment(a_witness_commitment, public_data.target);
-  if (!anchored.has_value()) {
-    return unexpected_error(anchored.error(), "anchor_zk_a_commitment:target");
-  }
+  PURIFY_ASSIGN_OR_RETURN(
+      auto anchored, offset_commitment(a_witness_commitment, public_data.target),
+      "anchor_zk_a_commitment:target");
   if (public_commitments.empty()) {
     return anchored;
   }
@@ -738,34 +713,27 @@ anchor_zk_a_commitment(const PointBytes &a_witness_commitment,
   for (const FieldElement &coeff : public_data.public_commitment_coeffs) {
     negated_coeffs.push_back(coeff.negate());
   }
-  return add_scaled_points(*anchored, public_commitments, negated_coeffs);
+  return add_scaled_points(anchored, public_commitments, negated_coeffs);
 }
 
 Result<PointBytes>
 commit_explicit_norm_arg(const NormArgInputs &inputs, const FieldElement &value,
                          ExperimentalCircuitCache *cache = nullptr) {
-  Result<PointBytes> witness_commitment =
-      commit_norm_arg_witness_only(inputs, cache);
-  if (!witness_commitment.has_value()) {
-    return unexpected_error(witness_commitment.error(),
-                            "commit_explicit_norm_arg:witness_commitment");
-  }
-  return offset_commitment(*witness_commitment, value);
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &witness_commitment, commit_norm_arg_witness_only(inputs, cache),
+      "commit_explicit_norm_arg:witness_commitment");
+  return offset_commitment(witness_commitment, value);
 }
 
 Result<PointBytes> combine_zk_commitments(const PointBytes &a_commitment,
                                           const PointBytes &s_commitment,
                                           const FieldElement &challenge,
                                           const FieldElement &t2) {
-  Result<PointBytes> scaled_s = point_scale(s_commitment, challenge);
-  if (!scaled_s.has_value()) {
-    return unexpected_error(scaled_s.error(), "combine_zk_commitments:scale_s");
-  }
-  Result<PointBytes> combined = point_add(a_commitment, *scaled_s);
-  if (!combined.has_value()) {
-    return unexpected_error(combined.error(), "combine_zk_commitments:add");
-  }
-  return offset_commitment(*combined, challenge * challenge * t2);
+  PURIFY_ASSIGN_OR_RETURN(const auto &scaled_s, point_scale(s_commitment, challenge),
+                          "combine_zk_commitments:scale_s");
+  PURIFY_ASSIGN_OR_RETURN(const auto &combined, point_add(a_commitment, scaled_s),
+                          "combine_zk_commitments:add");
+  return offset_commitment(combined, challenge * challenge * t2);
 }
 
 template <typename Inputs>
@@ -784,13 +752,10 @@ prove_norm_arg_impl(Inputs &&inputs,
   const std::vector<PointBytes> *generators = &inputs.generators;
   std::vector<PointBytes> generated_generators;
   if (generators->empty()) {
-    Result<std::vector<PointBytes>> generated =
-        create_generators(inputs.n_vec.size() + inputs.l_vec.size());
-    if (!generated.has_value()) {
-      return unexpected_error(generated.error(),
-                              "prove_norm_arg:create_generators");
-    }
-    generated_generators = std::move(*generated);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto generated, create_generators(inputs.n_vec.size() + inputs.l_vec.size()),
+        "prove_norm_arg:create_generators");
+    generated_generators = std::move(generated);
     generators = &generated_generators;
   }
   std::span<const unsigned char> n_vec = byte_span(inputs.n_vec);
@@ -916,13 +881,10 @@ commit_norm_arg_with_cache(const NormArgInputs &inputs,
   const std::vector<PointBytes> *generators = &inputs.generators;
   std::vector<PointBytes> generated_generators;
   if (generators->empty()) {
-    Result<std::vector<PointBytes>> generated =
-        create_generators(inputs.n_vec.size() + inputs.l_vec.size());
-    if (!generated.has_value()) {
-      return unexpected_error(generated.error(),
-                              "commit_norm_arg:create_generators");
-    }
-    generated_generators = std::move(*generated);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto generated, create_generators(inputs.n_vec.size() + inputs.l_vec.size()),
+        "commit_norm_arg:create_generators");
+    generated_generators = std::move(generated);
     generators = &generated_generators;
   }
 
@@ -987,13 +949,10 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
   const std::vector<PointBytes> *generators = &inputs.generators;
   std::vector<PointBytes> generated_generators;
   if (generators->empty()) {
-    Result<std::vector<PointBytes>> generated =
-        create_generators(inputs.n_vec.size() + inputs.l_vec.size());
-    if (!generated.has_value()) {
-      return unexpected_error(generated.error(),
-                              "prove_norm_arg_to_commitment:create_generators");
-    }
-    generated_generators = std::move(*generated);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto generated, create_generators(inputs.n_vec.size() + inputs.l_vec.size()),
+        "prove_norm_arg_to_commitment:create_generators");
+    generated_generators = std::move(generated);
     generators = &generated_generators;
   }
 
@@ -1081,14 +1040,12 @@ Result<PointBytes> commit_experimental_circuit_witness(
     const BulletproofAssignmentData &assignment,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitCache *cache) {
-  Result<CircuitNormArgReduction> reduction =
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &reduction,
       reduce_experimental_circuit_to_norm_arg(circuit, assignment,
-                                              statement_binding, false, cache);
-  if (!reduction.has_value()) {
-    return unexpected_error(reduction.error(),
-                            "commit_experimental_circuit_witness:reduce");
-  }
-  return commit_norm_arg_witness_only(build_norm_arg_inputs(*reduction), cache);
+                                              statement_binding, false, cache),
+      "commit_experimental_circuit_witness:reduce");
+  return commit_norm_arg_witness_only(build_norm_arg_inputs(reduction), cache);
 }
 
 Result<ExperimentalCircuitNormArgProof>
@@ -1122,46 +1079,34 @@ prove_experimental_circuit_norm_arg_to_commitment(
         "prove_experimental_circuit_norm_arg_to_commitment:assignment_invalid");
   }
 
-  Result<CircuitNormArgReduction> reduction =
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &reduction,
       reduce_experimental_circuit_to_norm_arg(circuit, assignment,
-                                              statement_binding, false, cache);
-  if (!reduction.has_value()) {
-    return unexpected_error(
-        reduction.error(),
-        "prove_experimental_circuit_norm_arg_to_commitment:reduce");
-  }
+                                              statement_binding, false, cache),
+      "prove_experimental_circuit_norm_arg_to_commitment:reduce");
 
-  NormArgInputs inputs = build_norm_arg_inputs(*reduction);
-  Result<PointBytes> computed_witness_commitment =
-      commit_norm_arg_witness_only(inputs, cache);
-  if (!computed_witness_commitment.has_value()) {
-    return unexpected_error(
-        computed_witness_commitment.error(),
-        "prove_experimental_circuit_norm_arg_to_commitment:commit_witness");
-  }
-  if (*computed_witness_commitment != witness_commitment) {
+  NormArgInputs inputs = build_norm_arg_inputs(reduction);
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &computed_witness_commitment,
+      commit_norm_arg_witness_only(inputs, cache),
+      "prove_experimental_circuit_norm_arg_to_commitment:commit_witness");
+  if (computed_witness_commitment != witness_commitment) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
                             "prove_experimental_circuit_norm_arg_to_commitment:"
                             "witness_commitment_mismatch");
   }
 
-  Result<PointBytes> anchored_commitment =
-      offset_commitment(witness_commitment, reduction->public_data->target);
-  if (!anchored_commitment.has_value()) {
-    return unexpected_error(
-        anchored_commitment.error(),
-        "prove_experimental_circuit_norm_arg_to_commitment:anchor");
-  }
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &anchored_commitment,
+      offset_commitment(witness_commitment, reduction.public_data->target),
+      "prove_experimental_circuit_norm_arg_to_commitment:anchor");
 
-  Result<NormArgProof> proof = prove_norm_arg_to_commitment_with_cache(
-      inputs, *anchored_commitment, cache);
-  if (!proof.has_value()) {
-    return unexpected_error(
-        proof.error(),
-        "prove_experimental_circuit_norm_arg_to_commitment:prove");
-  }
+  PURIFY_ASSIGN_OR_RETURN(
+      auto proof,
+      prove_norm_arg_to_commitment_with_cache(inputs, anchored_commitment, cache),
+      "prove_experimental_circuit_norm_arg_to_commitment:prove");
   return ExperimentalCircuitNormArgProof{witness_commitment,
-                                         std::move(proof->proof)};
+                                         std::move(proof.proof)};
 }
 
 Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
@@ -1169,15 +1114,13 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
     const BulletproofAssignmentData &assignment,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitCache *cache) {
-  Result<PointBytes> witness_commitment = commit_experimental_circuit_witness(
-      circuit, assignment, statement_binding, cache);
-  if (!witness_commitment.has_value()) {
-    return unexpected_error(
-        witness_commitment.error(),
-        "prove_experimental_circuit_norm_arg:commit_witness");
-  }
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &witness_commitment,
+      commit_experimental_circuit_witness(circuit, assignment, statement_binding,
+                                          cache),
+      "prove_experimental_circuit_norm_arg:commit_witness");
   return prove_experimental_circuit_norm_arg_to_commitment(
-      circuit, assignment, *witness_commitment, statement_binding, cache);
+      circuit, assignment, witness_commitment, statement_binding, cache);
 }
 
 Result<bool> verify_experimental_circuit_norm_arg(
@@ -1200,26 +1143,22 @@ Result<bool> verify_experimental_circuit_norm_arg(
                             "verify_experimental_circuit_norm_arg:proof_empty");
   }
 
-  Result<CircuitNormArgPublicDataPtr> public_data =
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &public_data,
       build_circuit_norm_arg_public_data(circuit, statement_binding, false,
-                                         cache);
-  if (!public_data.has_value()) {
-    return unexpected_error(public_data.error(),
-                            "verify_experimental_circuit_norm_arg:public_data");
-  }
-  Result<PointBytes> anchored_commitment =
-      offset_commitment(proof.witness_commitment, (*public_data)->target);
-  if (!anchored_commitment.has_value()) {
-    return unexpected_error(anchored_commitment.error(),
-                            "verify_experimental_circuit_norm_arg:anchor");
-  }
+                                         cache),
+      "verify_experimental_circuit_norm_arg:public_data");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &anchored_commitment,
+      offset_commitment(proof.witness_commitment, public_data->target),
+      "verify_experimental_circuit_norm_arg:anchor");
 
   NormArgProof bundle;
-  bundle.rho = (*public_data)->rho_bytes;
-  bundle.generators = (*public_data)->generators;
-  bundle.c_vec = (*public_data)->c_vec_bytes;
+  bundle.rho = public_data->rho_bytes;
+  bundle.generators = public_data->generators;
+  bundle.c_vec = public_data->c_vec_bytes;
   bundle.n_vec_len = 4 * circuit.n_gates;
-  bundle.commitment = *anchored_commitment;
+  bundle.commitment = anchored_commitment;
   bundle.proof = proof.proof;
   return verify_norm_arg_with_cache(bundle, cache);
 }
@@ -1260,24 +1199,18 @@ prove_experimental_circuit_zk_norm_arg_impl(
           ? bind_public_commitments(public_commitments, statement_binding)
           : Bytes(statement_binding.begin(), statement_binding.end());
   if (externalize_commitments) {
-    Status public_commitment_status =
-        validate_public_commitments(public_commitments, assignment.commitments);
-    if (!public_commitment_status.has_value()) {
-      return unexpected_error(public_commitment_status.error(),
-                              "prove_experimental_circuit_zk_norm_arg_impl:"
-                              "validate_public_commitments");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        validate_public_commitments(public_commitments, assignment.commitments),
+        "prove_experimental_circuit_zk_norm_arg_impl:"
+        "validate_public_commitments");
   }
 
-  Result<CircuitNormArgReduction> base_reduction =
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &base_reduction,
       reduce_experimental_circuit_to_norm_arg(circuit, assignment,
                                               bound_statement_binding,
-                                              externalize_commitments, cache);
-  if (!base_reduction.has_value()) {
-    return unexpected_error(
-        base_reduction.error(),
-        "prove_experimental_circuit_zk_norm_arg_impl:reduce");
-  }
+                                              externalize_commitments, cache),
+      "prove_experimental_circuit_zk_norm_arg_impl:reduce");
 
   Bytes binding_digest =
       experimental_circuit_binding_digest(circuit, bound_statement_binding);
@@ -1288,39 +1221,31 @@ prove_experimental_circuit_zk_norm_arg_impl(
   std::optional<Error> masked_failure;
 
   for (std::uint64_t attempt = 0; attempt < 32; ++attempt) {
-    CircuitNormArgReduction hidden = *base_reduction;
+    CircuitNormArgReduction hidden = base_reduction;
     for (std::size_t i = used_l; i < hidden.l_vec.size(); ++i) {
-      Result<FieldElement> blind =
-          derive_scalar(seed, kCircuitZkBlindTaggedHash, i - used_l, attempt);
-      if (!blind.has_value()) {
-        return unexpected_error(
-            blind.error(), "prove_experimental_circuit_zk_norm_arg_impl:blind");
-      }
-      hidden.l_vec[i] = *blind;
+      PURIFY_ASSIGN_OR_RETURN(
+          const auto &blind,
+          derive_scalar(seed, kCircuitZkBlindTaggedHash, i - used_l, attempt),
+          "prove_experimental_circuit_zk_norm_arg_impl:blind");
+      hidden.l_vec[i] = blind;
     }
 
     std::vector<FieldElement> mask_n(hidden.n_vec.size(), FieldElement::zero());
     for (std::size_t i = 0; i < mask_n.size(); ++i) {
-      Result<FieldElement> value =
-          derive_scalar(seed, kCircuitZkMaskNTaggedHash, i, attempt);
-      if (!value.has_value()) {
-        return unexpected_error(
-            value.error(),
-            "prove_experimental_circuit_zk_norm_arg_impl:mask_n");
-      }
-      mask_n[i] = *value;
+      PURIFY_ASSIGN_OR_RETURN(
+          const auto &value,
+          derive_scalar(seed, kCircuitZkMaskNTaggedHash, i, attempt),
+          "prove_experimental_circuit_zk_norm_arg_impl:mask_n");
+      mask_n[i] = value;
     }
 
     std::vector<FieldElement> mask_l(hidden.l_vec.size(), FieldElement::zero());
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
-      Result<FieldElement> value =
-          derive_scalar(seed, kCircuitZkMaskLTaggedHash, i, attempt);
-      if (!value.has_value()) {
-        return unexpected_error(
-            value.error(),
-            "prove_experimental_circuit_zk_norm_arg_impl:mask_l");
-      }
-      mask_l[i] = *value;
+      PURIFY_ASSIGN_OR_RETURN(
+          const auto &value,
+          derive_scalar(seed, kCircuitZkMaskLTaggedHash, i, attempt),
+          "prove_experimental_circuit_zk_norm_arg_impl:mask_l");
+      mask_l[i] = value;
     }
 
     const FieldElement t2 =
@@ -1378,25 +1303,22 @@ prove_experimental_circuit_zk_norm_arg_impl(
       }
       continue;
     }
-    Result<FieldElement> challenge =
-        derive_zk_challenge(binding_digest, *a_commitment, *s_commitment, t2);
-    if (!challenge.has_value()) {
-      return unexpected_error(
-          challenge.error(),
-          "prove_experimental_circuit_zk_norm_arg_impl:challenge");
-    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto &challenge,
+        derive_zk_challenge(binding_digest, *a_commitment, *s_commitment, t2),
+        "prove_experimental_circuit_zk_norm_arg_impl:challenge");
 
     CircuitNormArgReduction masked = hidden;
     for (std::size_t i = 0; i < masked.n_vec.size(); ++i) {
-      masked.n_vec[i] = masked.n_vec[i] + (*challenge * mask_n[i]);
+      masked.n_vec[i] = masked.n_vec[i] + (challenge * mask_n[i]);
     }
     for (std::size_t i = 0; i < masked.l_vec.size(); ++i) {
-      masked.l_vec[i] = masked.l_vec[i] + (*challenge * mask_l[i]);
+      masked.l_vec[i] = masked.l_vec[i] + (challenge * mask_l[i]);
     }
     NormArgInputs masked_inputs = build_norm_arg_inputs(masked);
 
     Result<PointBytes> combined_commitment =
-        combine_zk_commitments(*a_commitment, *s_commitment, *challenge, t2);
+        combine_zk_commitments(*a_commitment, *s_commitment, challenge, t2);
     if (!combined_commitment.has_value()) {
       if (!masked_failure.has_value()) {
         masked_failure = unexpected_error(combined_commitment.error(),
@@ -1477,49 +1399,35 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
       externalize_commitments
           ? bind_public_commitments(public_commitments, statement_binding)
           : Bytes(statement_binding.begin(), statement_binding.end());
-  Result<CircuitNormArgPublicDataPtr> public_data =
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &public_data,
       build_circuit_norm_arg_public_data(circuit, bound_statement_binding,
-                                         externalize_commitments, cache);
-  if (!public_data.has_value()) {
-    return unexpected_error(
-        public_data.error(),
-        "verify_experimental_circuit_zk_norm_arg_impl:public_data");
-  }
-  Result<FieldElement> t2 = FieldElement::try_from_bytes32(proof.t2);
-  if (!t2.has_value()) {
-    return unexpected_error(t2.error(),
-                            "verify_experimental_circuit_zk_norm_arg_impl:t2");
-  }
-  Result<PointBytes> a_commitment = anchor_zk_a_commitment(
-      proof.a_commitment, *(*public_data), public_commitments);
-  if (!a_commitment.has_value()) {
-    return unexpected_error(
-        a_commitment.error(),
-        "verify_experimental_circuit_zk_norm_arg_impl:a_commitment");
-  }
+                                         externalize_commitments, cache),
+      "verify_experimental_circuit_zk_norm_arg_impl:public_data");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &t2, FieldElement::try_from_bytes32(proof.t2),
+      "verify_experimental_circuit_zk_norm_arg_impl:t2");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &a_commitment,
+      anchor_zk_a_commitment(proof.a_commitment, *public_data, public_commitments),
+      "verify_experimental_circuit_zk_norm_arg_impl:a_commitment");
   Bytes binding_digest =
       experimental_circuit_binding_digest(circuit, bound_statement_binding);
-  Result<FieldElement> challenge = derive_zk_challenge(
-      binding_digest, *a_commitment, proof.s_commitment, *t2);
-  if (!challenge.has_value()) {
-    return unexpected_error(
-        challenge.error(),
-        "verify_experimental_circuit_zk_norm_arg_impl:challenge");
-  }
-  Result<PointBytes> commitment = combine_zk_commitments(
-      *a_commitment, proof.s_commitment, *challenge, *t2);
-  if (!commitment.has_value()) {
-    return unexpected_error(
-        commitment.error(),
-        "verify_experimental_circuit_zk_norm_arg_impl:commitment");
-  }
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &challenge,
+      derive_zk_challenge(binding_digest, a_commitment, proof.s_commitment, t2),
+      "verify_experimental_circuit_zk_norm_arg_impl:challenge");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &commitment,
+      combine_zk_commitments(a_commitment, proof.s_commitment, challenge, t2),
+      "verify_experimental_circuit_zk_norm_arg_impl:commitment");
 
   NormArgProof bundle;
-  bundle.rho = (*public_data)->rho_bytes;
-  bundle.generators = (*public_data)->generators;
-  bundle.c_vec = (*public_data)->c_vec_bytes;
+  bundle.rho = public_data->rho_bytes;
+  bundle.generators = public_data->generators;
+  bundle.c_vec = public_data->c_vec_bytes;
   bundle.n_vec_len = 4 * circuit.n_gates;
-  bundle.commitment = *commitment;
+  bundle.commitment = commitment;
   bundle.proof = proof.proof;
   return verify_norm_arg_with_cache(bundle, cache);
 }
@@ -1530,14 +1438,8 @@ prove_experimental_circuit_zk_norm_arg(
     const BulletproofAssignmentData &assignment, const ScalarBytes &nonce,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitCache *cache) {
-  Result<ExperimentalCircuitZkNormArgProof> proof =
-      prove_experimental_circuit_zk_norm_arg_impl(
-          circuit, assignment, nonce, {}, statement_binding, false, cache);
-  if (!proof.has_value()) {
-    return unexpected_error(proof.error(),
-                            "prove_experimental_circuit_zk_norm_arg");
-  }
-  return proof;
+  return prove_experimental_circuit_zk_norm_arg_impl(
+      circuit, assignment, nonce, {}, statement_binding, false, cache);
 }
 
 Result<bool> verify_experimental_circuit_zk_norm_arg(
@@ -1545,13 +1447,8 @@ Result<bool> verify_experimental_circuit_zk_norm_arg(
     const ExperimentalCircuitZkNormArgProof &proof,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitCache *cache) {
-  Result<bool> ok = verify_experimental_circuit_zk_norm_arg_impl(
+  return verify_experimental_circuit_zk_norm_arg_impl(
       circuit, proof, {}, statement_binding, false, cache);
-  if (!ok.has_value()) {
-    return unexpected_error(ok.error(),
-                            "verify_experimental_circuit_zk_norm_arg");
-  }
-  return ok;
 }
 
 Result<ExperimentalCircuitZkNormArgProof>
@@ -1561,16 +1458,9 @@ prove_experimental_circuit_zk_norm_arg_with_public_commitments(
     std::span<const PointBytes> public_commitments,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitCache *cache) {
-  Result<ExperimentalCircuitZkNormArgProof> proof =
-      prove_experimental_circuit_zk_norm_arg_impl(
-          circuit, assignment, nonce, public_commitments, statement_binding,
-          true, cache);
-  if (!proof.has_value()) {
-    return unexpected_error(
-        proof.error(),
-        "prove_experimental_circuit_zk_norm_arg_with_public_commitments");
-  }
-  return proof;
+  return prove_experimental_circuit_zk_norm_arg_impl(
+      circuit, assignment, nonce, public_commitments, statement_binding, true,
+      cache);
 }
 
 Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
@@ -1579,34 +1469,23 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
     std::span<const PointBytes> public_commitments,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitCache *cache) {
-  Result<bool> ok = verify_experimental_circuit_zk_norm_arg_impl(
+  return verify_experimental_circuit_zk_norm_arg_impl(
       circuit, proof, public_commitments, statement_binding, true, cache);
-  if (!ok.has_value()) {
-    return unexpected_error(
-        ok.error(),
-        "verify_experimental_circuit_zk_norm_arg_with_public_commitments");
-  }
-  return ok;
 }
 
 Result<CommittedPurifyWitness>
 commit_output_witness(const Bytes &message, const SecretKey &secret,
                       const ScalarBytes &blind, const GeneratorBytes &value_gen,
                       const GeneratorBytes &blind_gen) {
-  Result<BulletproofWitnessData> witness =
-      prove_assignment_data(message, secret);
-  if (!witness.has_value()) {
-    return unexpected_error(witness.error(),
-                            "commit_output_witness:prove_assignment_data");
-  }
-  Result<PointBytes> commitment = pedersen_commit_char(
-      blind, scalar_bytes(witness->output), value_gen, blind_gen);
-  if (!commitment.has_value()) {
-    return unexpected_error(commitment.error(),
-                            "commit_output_witness:pedersen_commit_char");
-  }
-  return CommittedPurifyWitness{witness->public_key, witness->output,
-                                std::move(witness->assignment), *commitment};
+  PURIFY_ASSIGN_OR_RETURN(auto witness, prove_assignment_data(message, secret),
+                          "commit_output_witness:prove_assignment_data");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &commitment,
+      pedersen_commit_char(blind, scalar_bytes(witness.output), value_gen,
+                           blind_gen),
+      "commit_output_witness:pedersen_commit_char");
+  return CommittedPurifyWitness{witness.public_key, witness.output,
+                                std::move(witness.assignment), commitment};
 }
 
 } // namespace purify::bppp

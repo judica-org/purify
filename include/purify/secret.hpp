@@ -64,10 +64,7 @@ public:
      * @return Owned secret key on success, or `ErrorCode::RangeViolation` if `packed` is invalid.
      */
     [[nodiscard]] static Result<SecretKey> from_packed(const UInt512& packed) {
-        Status status = validate_secret_key(packed);
-        if (!status.has_value()) {
-            return unexpected_error(status.error(), "SecretKey::from_packed:validate_secret_key");
-        }
+        PURIFY_RETURN_IF_ERROR(validate_secret_key(packed), "SecretKey::from_packed:validate_secret_key");
         return SecretKey(std::unique_ptr<UInt512, detail::SecureUInt512Deleter>(new UInt512(packed)));
     }
 
@@ -77,11 +74,8 @@ public:
      * @return Owned secret key on success, or a parsing/validation error.
      */
     [[nodiscard]] static Result<SecretKey> from_hex(std::string_view hex) {
-        Result<UInt512> packed = UInt512::try_from_hex(hex);
-        if (!packed.has_value()) {
-            return unexpected_error(packed.error(), "SecretKey::from_hex:try_from_hex");
-        }
-        return from_packed(*packed);
+        PURIFY_ASSIGN_OR_RETURN(auto packed, UInt512::try_from_hex(hex), "SecretKey::from_hex:try_from_hex");
+        return from_packed(packed);
     }
 
     /**

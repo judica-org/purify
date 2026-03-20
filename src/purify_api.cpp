@@ -60,19 +60,12 @@ Bytes tagged_message(std::string_view prefix, const Bytes& message) {
 }
 
 Result<UInt512> derive_public_key_from_secret(const UInt512& secret) {
-    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
-    if (!unpacked.has_value()) {
-        return unexpected_error(unpacked.error(), "derive_public_key_from_secret:unpack_secret");
-    }
-    Result<AffinePoint> p1 = curve1().mul_secret_affine(generator1(), unpacked->first);
-    if (!p1.has_value()) {
-        return unexpected_error(p1.error(), "derive_public_key_from_secret:mul_secret_affine_p1");
-    }
-    Result<AffinePoint> p2 = curve2().mul_secret_affine(generator2(), unpacked->second);
-    if (!p2.has_value()) {
-        return unexpected_error(p2.error(), "derive_public_key_from_secret:mul_secret_affine_p2");
-    }
-    return pack_public(p1->x.to_uint256(), p2->x.to_uint256());
+    PURIFY_ASSIGN_OR_RETURN(auto unpacked, unpack_secret(secret), "derive_public_key_from_secret:unpack_secret");
+    PURIFY_ASSIGN_OR_RETURN(auto p1, curve1().mul_secret_affine(generator1(), unpacked.first),
+                            "derive_public_key_from_secret:mul_secret_affine_p1");
+    PURIFY_ASSIGN_OR_RETURN(auto p2, curve2().mul_secret_affine(generator2(), unpacked.second),
+                            "derive_public_key_from_secret:mul_secret_affine_p2");
+    return pack_public(p1.x.to_uint256(), p2.x.to_uint256());
 }
 
 void add_expr_slack(NativeBulletproofCircuit::PackedSlackPlan& slack, const Expr& expr) {
@@ -175,15 +168,9 @@ Result<UInt512> random_below(const UInt512& range) {
 }
 
 Result<GeneratedKey> generate_key() {
-    Result<UInt512> secret = random_below(key_space_size());
-    if (!secret.has_value()) {
-        return unexpected_error(secret.error(), "generate_key:random_below");
-    }
-    Result<SecretKey> owned_secret = SecretKey::from_packed(*secret);
-    if (!owned_secret.has_value()) {
-        return unexpected_error(owned_secret.error(), "generate_key:from_packed_secret");
-    }
-    return derive_key(std::move(*owned_secret));
+    PURIFY_ASSIGN_OR_RETURN(auto secret, random_below(key_space_size()), "generate_key:random_below");
+    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(secret), "generate_key:from_packed_secret");
+    return derive_key(std::move(owned_secret));
 }
 
 Result<GeneratedKey> generate_key(KeySeed seed) {
@@ -192,27 +179,19 @@ Result<GeneratedKey> generate_key(KeySeed seed) {
     if (!secret.has_value()) {
         return unexpected_error(ErrorCode::InternalMismatch, "generate_key:hash_to_int_seed");
     }
-    Result<SecretKey> owned_secret = SecretKey::from_packed(*secret);
-    if (!owned_secret.has_value()) {
-        return unexpected_error(owned_secret.error(), "generate_key:from_packed_seed_secret");
-    }
-    return derive_key(std::move(*owned_secret));
+    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(*secret), "generate_key:from_packed_seed_secret");
+    return derive_key(std::move(owned_secret));
 }
 
 Result<GeneratedKey> derive_key(const SecretKey& secret) {
-    Result<SecretKey> owned_secret = secret.clone();
-    if (!owned_secret.has_value()) {
-        return unexpected_error(owned_secret.error(), "derive_key:clone");
-    }
-    return derive_key(std::move(*owned_secret));
+    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, secret.clone(), "derive_key:clone");
+    return derive_key(std::move(owned_secret));
 }
 
 Result<GeneratedKey> derive_key(SecretKey&& secret) {
-    Result<UInt512> public_key = derive_public_key_from_secret(secret.packed());
-    if (!public_key.has_value()) {
-        return unexpected_error(public_key.error(), "derive_key:derive_public_key_from_secret");
-    }
-    return GeneratedKey{std::move(secret), *public_key};
+    PURIFY_ASSIGN_OR_RETURN(auto public_key, derive_public_key_from_secret(secret.packed()),
+                            "derive_key:derive_public_key_from_secret");
+    return GeneratedKey{std::move(secret), public_key};
 }
 
 Result<Bip340Key> derive_bip340_key(const SecretKey& secret) {
@@ -242,155 +221,96 @@ Result<Bip340Key> derive_bip340_key(const SecretKey& secret) {
 }
 
 Result<FieldElement> eval(const SecretKey& secret, const Bytes& message) {
-    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret.packed());
-    if (!unpacked.has_value()) {
-        return unexpected_error(unpacked.error(), "eval:unpack_secret");
-    }
-    Result<JacobianPoint> m1 = hash_to_curve(tagged_message("Eval/1/", message), curve1());
-    if (!m1.has_value()) {
-        return unexpected_error(m1.error(), "eval:hash_to_curve_m1");
-    }
-    Result<JacobianPoint> m2 = hash_to_curve(tagged_message("Eval/2/", message), curve2());
-    if (!m2.has_value()) {
-        return unexpected_error(m2.error(), "eval:hash_to_curve_m2");
-    }
-    Result<AffinePoint> q1 = curve1().mul_secret_affine(*m1, unpacked->first);
-    if (!q1.has_value()) {
-        return unexpected_error(q1.error(), "eval:mul_secret_affine_q1");
-    }
-    Result<AffinePoint> q2 = curve2().mul_secret_affine(*m2, unpacked->second);
-    if (!q2.has_value()) {
-        return unexpected_error(q2.error(), "eval:mul_secret_affine_q2");
-    }
-    return combine(q1->x, q2->x);
+    PURIFY_ASSIGN_OR_RETURN(auto unpacked, unpack_secret(secret.packed()), "eval:unpack_secret");
+    PURIFY_ASSIGN_OR_RETURN(auto m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
+                            "eval:hash_to_curve_m1");
+    PURIFY_ASSIGN_OR_RETURN(auto m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
+                            "eval:hash_to_curve_m2");
+    PURIFY_ASSIGN_OR_RETURN(auto q1, curve1().mul_secret_affine(m1, unpacked.first), "eval:mul_secret_affine_q1");
+    PURIFY_ASSIGN_OR_RETURN(auto q2, curve2().mul_secret_affine(m2, unpacked.second), "eval:mul_secret_affine_q2");
+    return combine(q1.x, q2.x);
 }
 
 Result<std::string> verifier(const Bytes& message, const UInt512& pubkey) {
-    Result<JacobianPoint> m1 = hash_to_curve(tagged_message("Eval/1/", message), curve1());
-    if (!m1.has_value()) {
-        return unexpected_error(m1.error(), "verifier:hash_to_curve_m1");
-    }
-    Result<JacobianPoint> m2 = hash_to_curve(tagged_message("Eval/2/", message), curve2());
-    if (!m2.has_value()) {
-        return unexpected_error(m2.error(), "verifier:hash_to_curve_m2");
-    }
+    PURIFY_ASSIGN_OR_RETURN(auto m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
+                            "verifier:hash_to_curve_m1");
+    PURIFY_ASSIGN_OR_RETURN(auto m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
+                            "verifier:hash_to_curve_m2");
     Transcript transcript;
-    Result<CircuitMainResult> result = circuit_main(transcript, *m1, *m2);
-    if (!result.has_value()) {
-        return unexpected_error(result.error(), "verifier:circuit_main");
-    }
+    PURIFY_ASSIGN_OR_RETURN(auto result, circuit_main(transcript, m1, m2), "verifier:circuit_main");
     BulletproofTranscript bp;
-    Status transcript_status = bp.from_transcript(transcript, result->n_bits);
-    if (!transcript_status.has_value()) {
-        return unexpected_error(transcript_status.error(), "verifier:from_transcript");
-    }
-    Status pubkey_status = bp.add_pubkey_and_out(pubkey, result->p1x, result->p2x, result->out);
-    if (!pubkey_status.has_value()) {
-        return unexpected_error(pubkey_status.error(), "verifier:add_pubkey_and_out");
-    }
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, result.n_bits), "verifier:from_transcript");
+    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(pubkey, result.p1x, result.p2x, result.out),
+                           "verifier:add_pubkey_and_out");
     return bp.to_string();
 }
 
 Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UInt512& pubkey) {
-    Result<NativeBulletproofCircuitTemplate> template_circuit = verifier_circuit_template(message);
-    if (!template_circuit.has_value()) {
-        return unexpected_error(template_circuit.error(), "verifier_circuit:verifier_circuit_template");
-    }
-    return template_circuit->instantiate(pubkey);
+    PURIFY_ASSIGN_OR_RETURN(auto template_circuit, verifier_circuit_template(message),
+                            "verifier_circuit:verifier_circuit_template");
+    return template_circuit.instantiate(pubkey);
 }
 
 Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message) {
-    Result<JacobianPoint> m1 = hash_to_curve(tagged_message("Eval/1/", message), curve1());
-    if (!m1.has_value()) {
-        return unexpected_error(m1.error(), "verifier_circuit_template:hash_to_curve_m1");
-    }
-    Result<JacobianPoint> m2 = hash_to_curve(tagged_message("Eval/2/", message), curve2());
-    if (!m2.has_value()) {
-        return unexpected_error(m2.error(), "verifier_circuit_template:hash_to_curve_m2");
-    }
+    PURIFY_ASSIGN_OR_RETURN(auto m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
+                            "verifier_circuit_template:hash_to_curve_m1");
+    PURIFY_ASSIGN_OR_RETURN(auto m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
+                            "verifier_circuit_template:hash_to_curve_m2");
     Transcript transcript;
-    Result<CircuitMainResult> result = circuit_main(transcript, *m1, *m2);
-    if (!result.has_value()) {
-        return unexpected_error(result.error(), "verifier_circuit_template:circuit_main");
-    }
+    PURIFY_ASSIGN_OR_RETURN(auto result, circuit_main(transcript, m1, m2),
+                            "verifier_circuit_template:circuit_main");
     BulletproofTranscript bp;
-    Status transcript_status = bp.from_transcript(transcript, result->n_bits);
-    if (!transcript_status.has_value()) {
-        return unexpected_error(transcript_status.error(), "verifier_circuit_template:from_transcript");
-    }
-    Expr p1x = result->p1x;
-    Expr p2x = result->p2x;
-    Expr out = result->out;
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, result.n_bits), "verifier_circuit_template:from_transcript");
+    Expr p1x = result.p1x;
+    Expr p2x = result.p2x;
+    Expr out = result.out;
     bp.replace_expr_v_with_bp_var(p1x);
     bp.replace_expr_v_with_bp_var(p2x);
     bp.replace_expr_v_with_bp_var(out);
 
     NativeBulletproofCircuit base_circuit = bp.native_circuit();
-    Result<NativeBulletproofCircuit::PackedWithSlack> packed =
-        base_circuit.pack_with_slack(build_template_slack(base_circuit.n_gates, base_circuit.n_commitments, p1x, p2x, out));
-    if (!packed.has_value()) {
-        return unexpected_error(packed.error(), "verifier_circuit_template:pack_with_slack");
-    }
-    return NativeBulletproofCircuitTemplate::from_parts(std::move(*packed), std::move(p1x), std::move(p2x),
+    PURIFY_ASSIGN_OR_RETURN(
+        auto packed,
+        base_circuit.pack_with_slack(build_template_slack(base_circuit.n_gates, base_circuit.n_commitments, p1x, p2x, out)),
+        "verifier_circuit_template:pack_with_slack");
+    return NativeBulletproofCircuitTemplate::from_parts(std::move(packed), std::move(p1x), std::move(p2x),
                                                         std::move(out));
 }
 
 Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const SecretKey& secret) {
-    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret.packed());
-    if (!unpacked.has_value()) {
-        return unexpected_error(unpacked.error(), "prove_assignment_data:unpack_secret");
-    }
-    Result<JacobianPoint> m1 = hash_to_curve(tagged_message("Eval/1/", message), curve1());
-    if (!m1.has_value()) {
-        return unexpected_error(m1.error(), "prove_assignment_data:hash_to_curve_m1");
-    }
-    Result<JacobianPoint> m2 = hash_to_curve(tagged_message("Eval/2/", message), curve2());
-    if (!m2.has_value()) {
-        return unexpected_error(m2.error(), "prove_assignment_data:hash_to_curve_m2");
-    }
-    Result<AffinePoint> p1 = curve1().mul_secret_affine(generator1(), unpacked->first);
-    if (!p1.has_value()) {
-        return unexpected_error(p1.error(), "prove_assignment_data:mul_secret_affine_p1");
-    }
-    Result<AffinePoint> p2 = curve2().mul_secret_affine(generator2(), unpacked->second);
-    if (!p2.has_value()) {
-        return unexpected_error(p2.error(), "prove_assignment_data:mul_secret_affine_p2");
-    }
-    Result<AffinePoint> q1 = curve1().mul_secret_affine(*m1, unpacked->first);
-    if (!q1.has_value()) {
-        return unexpected_error(q1.error(), "prove_assignment_data:mul_secret_affine_q1");
-    }
-    Result<AffinePoint> q2 = curve2().mul_secret_affine(*m2, unpacked->second);
-    if (!q2.has_value()) {
-        return unexpected_error(q2.error(), "prove_assignment_data:mul_secret_affine_q2");
-    }
-    FieldElement native_out = combine(q1->x, q2->x);
+    PURIFY_ASSIGN_OR_RETURN(auto unpacked, unpack_secret(secret.packed()), "prove_assignment_data:unpack_secret");
+    PURIFY_ASSIGN_OR_RETURN(auto m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
+                            "prove_assignment_data:hash_to_curve_m1");
+    PURIFY_ASSIGN_OR_RETURN(auto m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
+                            "prove_assignment_data:hash_to_curve_m2");
+    PURIFY_ASSIGN_OR_RETURN(auto p1, curve1().mul_secret_affine(generator1(), unpacked.first),
+                            "prove_assignment_data:mul_secret_affine_p1");
+    PURIFY_ASSIGN_OR_RETURN(auto p2, curve2().mul_secret_affine(generator2(), unpacked.second),
+                            "prove_assignment_data:mul_secret_affine_p2");
+    PURIFY_ASSIGN_OR_RETURN(auto q1, curve1().mul_secret_affine(m1, unpacked.first),
+                            "prove_assignment_data:mul_secret_affine_q1");
+    PURIFY_ASSIGN_OR_RETURN(auto q2, curve2().mul_secret_affine(m2, unpacked.second),
+                            "prove_assignment_data:mul_secret_affine_q2");
+    FieldElement native_out = combine(q1.x, q2.x);
 
     Transcript transcript;
-    Result<CircuitMainResult> result = circuit_main(transcript, *m1, *m2, unpacked->first, unpacked->second);
-    if (!result.has_value()) {
-        return unexpected_error(result.error(), "prove_assignment_data:circuit_main");
-    }
-    if (transcript.evaluate(result->p1x) != std::optional<FieldElement>(p1->x)) {
+    PURIFY_ASSIGN_OR_RETURN(auto result, circuit_main(transcript, m1, m2, unpacked.first, unpacked.second),
+                            "prove_assignment_data:circuit_main");
+    if (transcript.evaluate(result.p1x) != std::optional<FieldElement>(p1.x)) {
         return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:p1x_mismatch");
     }
-    if (transcript.evaluate(result->p2x) != std::optional<FieldElement>(p2->x)) {
+    if (transcript.evaluate(result.p2x) != std::optional<FieldElement>(p2.x)) {
         return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:p2x_mismatch");
     }
-    if (transcript.evaluate(result->out) != std::optional<FieldElement>(native_out)) {
+    if (transcript.evaluate(result.out) != std::optional<FieldElement>(native_out)) {
         return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment_data:output_mismatch");
     }
 
-    UInt512 pubkey = pack_public(p1->x.to_uint256(), p2->x.to_uint256());
+    UInt512 pubkey = pack_public(p1.x.to_uint256(), p2.x.to_uint256());
     BulletproofTranscript bp;
-    Status transcript_status = bp.from_transcript(transcript, result->n_bits);
-    if (!transcript_status.has_value()) {
-        return unexpected_error(transcript_status.error(), "prove_assignment_data:from_transcript");
-    }
-    Status pubkey_status = bp.add_pubkey_and_out(pubkey, result->p1x, result->p2x, result->out);
-    if (!pubkey_status.has_value()) {
-        return unexpected_error(pubkey_status.error(), "prove_assignment_data:add_pubkey_and_out");
-    }
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, result.n_bits), "prove_assignment_data:from_transcript");
+    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(pubkey, result.p1x, result.p2x, result.out),
+                           "prove_assignment_data:add_pubkey_and_out");
     if (!bp.evaluate(transcript.varmap(), native_out)) {
         return unexpected_error(ErrorCode::TranscriptCheckFailed, "prove_assignment_data:transcript_check");
     }
@@ -404,27 +324,20 @@ Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const
 }
 
 Result<bool> evaluate_verifier_circuit(const Bytes& message, const BulletproofWitnessData& witness) {
-    Result<NativeBulletproofCircuit> circuit = verifier_circuit(message, witness.public_key);
-    if (!circuit.has_value()) {
-        return unexpected_error(circuit.error(), "evaluate_verifier_circuit:verifier_circuit");
-    }
-    return circuit->evaluate(witness.assignment);
+    PURIFY_ASSIGN_OR_RETURN(auto circuit, verifier_circuit(message, witness.public_key),
+                            "evaluate_verifier_circuit:verifier_circuit");
+    return circuit.evaluate(witness.assignment);
 }
 
 Result<bool> evaluate_verifier_circuit(const Bytes& message, const SecretKey& secret) {
-    Result<BulletproofWitnessData> witness = prove_assignment_data(message, secret);
-    if (!witness.has_value()) {
-        return unexpected_error(witness.error(), "evaluate_verifier_circuit:prove_assignment_data");
-    }
-    return evaluate_verifier_circuit(message, *witness);
+    PURIFY_ASSIGN_OR_RETURN(auto witness, prove_assignment_data(message, secret),
+                            "evaluate_verifier_circuit:prove_assignment_data");
+    return evaluate_verifier_circuit(message, witness);
 }
 
 Result<Bytes> prove_assignment(const Bytes& message, const SecretKey& secret) {
-    Result<BulletproofWitnessData> witness = prove_assignment_data(message, secret);
-    if (!witness.has_value()) {
-        return unexpected_error(witness.error(), "prove_assignment:prove_assignment_data");
-    }
-    Result<Bytes> serialized = witness->assignment.serialize();
+    PURIFY_ASSIGN_OR_RETURN(auto witness, prove_assignment_data(message, secret), "prove_assignment:prove_assignment_data");
+    Result<Bytes> serialized = witness.assignment.serialize();
     assert(serialized.has_value() && "prove_assignment() should serialize a well-formed assignment");
     if (!serialized.has_value()) {
         return unexpected_error(ErrorCode::InternalMismatch, "prove_assignment:serialize_assignment");

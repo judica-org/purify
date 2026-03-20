@@ -463,10 +463,7 @@ Status validate_public_key(const UInt512& packed) {
 }
 
 Result<std::pair<UInt256, UInt256>> unpack_secret(const UInt512& z) {
-    Status status = validate_secret_key(z);
-    if (!status.has_value()) {
-        return unexpected_error(status.error(), "unpack_secret:validate_secret_key");
-    }
+    PURIFY_RETURN_IF_ERROR(validate_secret_key(z), "unpack_secret:validate_secret_key");
     auto qr = divmod_same(z, widen<8>(half_n1()));
     UInt256 z1 = narrow<4>(qr.second);
     UInt256 z2 = narrow<4>(qr.first);
@@ -476,10 +473,7 @@ Result<std::pair<UInt256, UInt256>> unpack_secret(const UInt512& z) {
 }
 
 Result<std::pair<UInt256, UInt256>> unpack_public(const UInt512& packed) {
-    Status status = validate_public_key(packed);
-    if (!status.has_value()) {
-        return unexpected_error(status.error(), "unpack_public:validate_public_key");
-    }
+    PURIFY_RETURN_IF_ERROR(validate_public_key(packed), "unpack_public:validate_public_key");
     auto qr = divmod_same(packed, widen<8>(prime_p()));
     return std::make_pair(narrow<4>(qr.second), narrow<4>(qr.first));
 }

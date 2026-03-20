@@ -138,10 +138,7 @@ Result<UInt512> random_below(const UInt512& range, FillRandom&& fill_random) {
     std::array<unsigned char, 64> bytes{};
     std::span<unsigned char> out(bytes.data(), bytes_needed);
     while (true) {
-        Status status = std::forward<FillRandom>(fill_random)(out);
-        if (!status.has_value()) {
-            return unexpected_error(status.error(), "random_below:fill_random");
-        }
+        PURIFY_RETURN_IF_ERROR(std::forward<FillRandom>(fill_random)(out), "random_below:fill_random");
         UInt512 candidate = UInt512::from_bytes_be(bytes.data(), bytes_needed);
         candidate.mask_bits(bits);
         if (candidate.compare(range) < 0) {
@@ -202,11 +199,8 @@ Result<GeneratedKey> generate_key(KeySeed seed);
  * @return Generated keypair bundle.
  */
 inline Result<GeneratedKey> generate_key(std::span<const unsigned char> seed) {
-    Result<KeySeed> checked = KeySeed::try_from(seed);
-    if (!checked.has_value()) {
-        return unexpected_error(checked.error(), "generate_key:seed_too_short");
-    }
-    return generate_key(*checked);
+    PURIFY_ASSIGN_OR_RETURN(auto checked, KeySeed::try_from(seed), "generate_key:seed_too_short");
+    return generate_key(checked);
 }
 
 /**
@@ -217,15 +211,10 @@ inline Result<GeneratedKey> generate_key(std::span<const unsigned char> seed) {
 template <typename FillRandom>
 requires(NoexceptByteFill<FillRandom> || NoexceptCheckedByteFill<FillRandom>)
 Result<GeneratedKey> generate_key(FillRandom&& fill_random) {
-    Result<UInt512> secret = random_below(key_space_size(), std::forward<FillRandom>(fill_random));
-    if (!secret.has_value()) {
-        return unexpected_error(secret.error(), "generate_key:random_below_custom");
-    }
-    Result<SecretKey> owned_secret = SecretKey::from_packed(*secret);
-    if (!owned_secret.has_value()) {
-        return unexpected_error(owned_secret.error(), "generate_key:from_packed_secret");
-    }
-    return derive_key(std::move(*owned_secret));
+    PURIFY_ASSIGN_OR_RETURN(auto secret, random_below(key_space_size(), std::forward<FillRandom>(fill_random)),
+                            "generate_key:random_below_custom");
+    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(secret), "generate_key:from_packed_secret");
+    return derive_key(std::move(owned_secret));
 }
 
 /**

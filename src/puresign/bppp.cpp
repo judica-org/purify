@@ -258,50 +258,6 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
 
 }  // namespace
 
-Bytes Nonce::serialize() const {
-    return Bytes(xonly.begin(), xonly.end());
-}
-
-Result<Nonce> Nonce::deserialize(std::span<const unsigned char> serialized) {
-    if (serialized.size() != kSerializedSize) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "Nonce::deserialize:size");
-    }
-    Nonce out{};
-    std::copy(serialized.begin(), serialized.end(), out.xonly.begin());
-    if (purify_bip340_validate_xonly_pubkey(out.xonly.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "Nonce::deserialize:bip340_validate_xonly_pubkey");
-    }
-    return out;
-}
-
-Nonce Signature::nonce() const {
-    Nonce out{};
-    std::copy(bytes.begin(), bytes.begin() + 32, out.xonly.begin());
-    return out;
-}
-
-Scalar32 Signature::s() const {
-    Scalar32 out{};
-    std::copy(bytes.begin() + 32, bytes.end(), out.begin());
-    return out;
-}
-
-Bytes Signature::serialize() const {
-    return Bytes(bytes.begin(), bytes.end());
-}
-
-Result<Signature> Signature::deserialize(std::span<const unsigned char> serialized) {
-    if (serialized.size() != kSerializedSize) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "Signature::deserialize:size");
-    }
-    Signature out{};
-    std::copy(serialized.begin(), serialized.end(), out.bytes.begin());
-    if (purify_bip340_validate_signature(out.bytes.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "Signature::deserialize:bip340_validate_signature");
-    }
-    return out;
-}
-
 Result<MessageProofCache> MessageProofCache::build(std::span<const unsigned char> message) {
     Bytes eval_input = detail::tagged_eval_input(kMessageNonceTag, message);
     PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(eval_input),
@@ -411,98 +367,6 @@ Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
         return unexpected_error(ErrorCode::InternalMismatch, "PreparedNonce::sign_topic_message:self_verify");
     }
     return out;
-}
-
-Result<Bytes> NonceProof::serialize() const {
-    PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(*this),
-                            "NonceProof::serialize:nonce_proof_matches_nonce");
-    if (!match) {
-        return unexpected_error(ErrorCode::BindingMismatch, "NonceProof::serialize:nonce_mismatch");
-    }
-    if (proof.proof.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
-        return unexpected_error(ErrorCode::UnexpectedSize, "NonceProof::serialize:proof_size");
-    }
-
-    Bytes out;
-    out.reserve(1 + 4 + 32 + 33 + 33 + 33 + 32 + proof.proof.size());
-    out.push_back(kSerializationVersion);
-    detail::append_u32_le(out, static_cast<std::uint32_t>(proof.proof.size()));
-    out.insert(out.end(), nonce.xonly.begin(), nonce.xonly.end());
-    out.insert(out.end(), commitment_point.begin(), commitment_point.end());
-    out.insert(out.end(), proof.a_commitment.begin(), proof.a_commitment.end());
-    out.insert(out.end(), proof.s_commitment.begin(), proof.s_commitment.end());
-    out.insert(out.end(), proof.t2.begin(), proof.t2.end());
-    out.insert(out.end(), proof.proof.begin(), proof.proof.end());
-    return out;
-}
-
-Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serialized) {
-    constexpr std::size_t kHeaderSize = 1 + 4 + 32 + 33 + 33 + 33 + 32;
-    if (serialized.size() < kHeaderSize) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:header");
-    }
-    if (serialized[0] != kSerializationVersion) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "NonceProof::deserialize:version");
-    }
-    std::optional<std::uint32_t> proof_size = detail::read_u32_le(serialized, 1);
-    assert(proof_size.has_value() && "header length check should guarantee a u32 proof size");
-    if (kHeaderSize + *proof_size != serialized.size()) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:proof_size");
-    }
-
-    NonceProof out{};
-    std::copy_n(serialized.begin() + 5, 32, out.nonce.xonly.begin());
-    if (purify_bip340_validate_xonly_pubkey(out.nonce.xonly.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "NonceProof::deserialize:nonce");
-    }
-    std::copy_n(serialized.begin() + 37, 33, out.commitment_point.begin());
-    std::copy_n(serialized.begin() + 70, 33, out.proof.a_commitment.begin());
-    std::copy_n(serialized.begin() + 103, 33, out.proof.s_commitment.begin());
-    std::copy_n(serialized.begin() + 136, 32, out.proof.t2.begin());
-    out.proof.proof.assign(serialized.begin() + 168, serialized.end());
-
-    PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(out),
-                            "NonceProof::deserialize:nonce_proof_matches_nonce");
-    if (!match) {
-        return unexpected_error(ErrorCode::BindingMismatch, "NonceProof::deserialize:nonce_mismatch");
-    }
-    return out;
-}
-
-Result<Bytes> ProvenSignature::serialize() const {
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_proof_bytes, nonce_proof.serialize(), "ProvenSignature::serialize:nonce_proof");
-    if (nonce_proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
-        return unexpected_error(ErrorCode::UnexpectedSize, "ProvenSignature::serialize:nonce_proof_size");
-    }
-
-    Bytes out;
-    out.reserve(1 + 4 + nonce_proof_bytes.size() + 64);
-    out.push_back(kSerializationVersion);
-    detail::append_u32_le(out, static_cast<std::uint32_t>(nonce_proof_bytes.size()));
-    out.insert(out.end(), nonce_proof_bytes.begin(), nonce_proof_bytes.end());
-    out.insert(out.end(), signature.bytes.begin(), signature.bytes.end());
-    return out;
-}
-
-Result<ProvenSignature> ProvenSignature::deserialize(std::span<const unsigned char> serialized) {
-    if (serialized.size() < 69) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "ProvenSignature::deserialize:header");
-    }
-    if (serialized[0] != kSerializationVersion) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "ProvenSignature::deserialize:version");
-    }
-    std::optional<std::uint32_t> nonce_proof_size = detail::read_u32_le(serialized, 1);
-    assert(nonce_proof_size.has_value() && "header length check should guarantee a u32 nonce proof size");
-    if (5 + *nonce_proof_size + 64 != serialized.size()) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "ProvenSignature::deserialize:size");
-    }
-
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_proof_value, NonceProof::deserialize(serialized.subspan(5, *nonce_proof_size)),
-                            "ProvenSignature::deserialize:nonce_proof");
-    PURIFY_ASSIGN_OR_RETURN(auto signature_value,
-                            Signature::deserialize(serialized.subspan(5 + *nonce_proof_size, 64)),
-                            "ProvenSignature::deserialize:signature");
-    return ProvenSignature{signature_value, nonce_proof_value};
 }
 
 PreparedNonceWithProof PreparedNonceWithProof::from_parts(PreparedNonce prepared, NonceProof proof) {
@@ -813,32 +677,6 @@ Result<bool> verify_topic_signature_with_proof(const TopicProofCache& cache, con
 }
 
 }  // namespace api_impl
-
-Bytes PublicKey::serialize() const {
-    Bytes out;
-    out.reserve(kSerializedSize);
-    std::array<unsigned char, 64> packed = purify_pubkey.to_bytes_be();
-    out.insert(out.end(), packed.begin(), packed.end());
-    out.insert(out.end(), bip340_pubkey.begin(), bip340_pubkey.end());
-    return out;
-}
-
-Result<PublicKey> PublicKey::deserialize(std::span<const unsigned char> serialized) {
-    if (serialized.size() != kSerializedSize) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "PublicKey::deserialize:size");
-    }
-    UInt512 purify_pubkey = UInt512::from_bytes_be(serialized.data(), 64);
-    PURIFY_RETURN_IF_ERROR(validate_public_key(purify_pubkey), "PublicKey::deserialize:validate_public_key");
-
-    PublicKey out{};
-    out.purify_pubkey = purify_pubkey;
-    std::copy(serialized.begin() + 64, serialized.end(), out.bip340_pubkey.begin());
-    if (purify_bip340_validate_xonly_pubkey(out.bip340_pubkey.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput,
-                                "PublicKey::deserialize:bip340_validate_xonly_pubkey");
-    }
-    return out;
-}
 
 Result<PublicKey> PublicKey::from_secret(const SecretKey& secret) {
     return api_impl::derive_public_key(secret);

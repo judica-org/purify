@@ -91,6 +91,11 @@ function(purify_configure_library_target target)
         target_compile_definitions(${target} PUBLIC PURIFY_USE_LEGACY_FIELD_HASHES=0)
     endif()
 
+    if(MSVC)
+        # MSVC gates C11 <stdatomic.h> behind an extra compiler flag.
+        target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
+    endif()
+
     purify_enable_warnings(${target})
 endfunction()
 
@@ -112,7 +117,9 @@ add_library(purify
     src/legacy_bulletproof/scratch_frames.c
     src/purify_numeric.cpp
     src/puresign/legacy.cpp
+    src/puresign/codecs/legacy.cpp
     src/puresign/bppp.cpp
+    src/puresign/codecs/bppp.cpp
     src/purify_bppp.cpp
     src/purify_bppp_bridge.c
 )
@@ -192,7 +199,9 @@ if(PURIFY_BUILD_BENCH)
         src/legacy_bulletproof/scratch_frames.c
         src/purify_numeric.cpp
         src/puresign/legacy.cpp
+        src/puresign/codecs/legacy.cpp
         src/puresign/bppp.cpp
+        src/puresign/codecs/bppp.cpp
         src/purify_bppp.cpp
         src/purify_bppp_bridge.c
     )

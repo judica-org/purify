@@ -52,10 +52,10 @@ struct PublicKey {
 
     /**
      * @brief Derives both public identities from one packed Purify secret.
-     * @param secret The packed secret used to derive the Purify and BIP340 public keys.
+     * @param secret The owned secret used to derive the Purify and BIP340 public keys.
      * @return The derived public-key bundle.
      */
-    [[nodiscard]] static Result<PublicKey> from_secret(const UInt512& secret);
+    [[nodiscard]] static Result<PublicKey> from_secret(const SecretKey& secret);
 
     /**
      * @brief Verifies a plain BIP340 signature against this bundle's x-only public key.
@@ -382,20 +382,20 @@ public:
 
     /**
      * @brief Consumes this message-bound prepared proof bundle and signs the message.
-     * @param secret The packed secret corresponding to the prepared nonce.
+     * @param secret The owned secret corresponding to the prepared nonce.
      * @param message The message that must match the nonce binding.
      * @return The resulting signature bundled with its nonce proof.
      */
-    [[nodiscard]] Result<ProvenSignature> sign_message(const UInt512& secret,
+    [[nodiscard]] Result<ProvenSignature> sign_message(const SecretKey& secret,
                                                        std::span<const unsigned char> message) &&;
 
     /**
      * @brief Consumes this topic-bound prepared proof bundle and signs the message.
-     * @param secret The packed secret corresponding to the prepared nonce.
+     * @param secret The owned secret corresponding to the prepared nonce.
      * @param message The message to sign.
      * @return The resulting signature bundled with its nonce proof.
      */
-    [[nodiscard]] Result<ProvenSignature> sign_topic_message(const UInt512& secret,
+    [[nodiscard]] Result<ProvenSignature> sign_topic_message(const SecretKey& secret,
                                                              std::span<const unsigned char> message) &&;
 
 private:
@@ -416,10 +416,17 @@ public:
 
     /**
      * @brief Derives a PureSign++ signing key pair from one packed Purify secret.
-     * @param secret The packed secret to own inside the returned key pair.
-     * @return A move-only signer object bundling the secret, BIP340 signer, and public key.
+     * @param secret The secret to clone into the returned key pair.
+     * @return A move-only signer object bundling the secret and public key.
      */
-    [[nodiscard]] static Result<KeyPair> from_secret(const UInt512& secret);
+    [[nodiscard]] static Result<KeyPair> from_secret(const SecretKey& secret);
+
+    /**
+     * @brief Derives a PureSign++ signing key pair from one owned Purify secret.
+     * @param secret The secret to move into the returned key pair.
+     * @return A move-only signer object bundling the secret and public key.
+     */
+    [[nodiscard]] static Result<KeyPair> from_secret(SecretKey&& secret);
 
     /**
      * @brief Returns the public key bundle associated with this signer.
@@ -582,11 +589,10 @@ public:
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
 private:
-    KeyPair(const UInt512& secret, Bip340Key signer, PublicKey public_key)
-        : secret_(secret), signer_(std::move(signer)), public_key_(std::move(public_key)) {}
+    KeyPair(SecretKey secret, PublicKey public_key)
+        : secret_(std::move(secret)), public_key_(std::move(public_key)) {}
 
-    UInt512 secret_{};
-    Bip340Key signer_{};
+    SecretKey secret_;
     PublicKey public_key_{};
 };
 

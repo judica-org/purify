@@ -16,12 +16,13 @@
 #include <utility>
 
 #include "purify/bulletproof.hpp"
+#include "purify/secret.hpp"
 
 namespace purify {
 
-/** @brief Derived Purify keypair in packed integer form. */
+/** @brief Derived Purify keypair bundle with an owned packed secret and its matching public key. */
 struct GeneratedKey {
-    UInt512 secret;
+    SecretKey secret;
     UInt512 public_key;
 };
 
@@ -35,8 +36,37 @@ using KeySeed = SpanAtLeast<16, const unsigned char>;
  * returned pair is the canonical secp256k1/BIP340 encoding for this derivation.
  */
 struct Bip340Key {
-    std::array<unsigned char, 32> seckey;
-    std::array<unsigned char, 32> xonly_pubkey;
+    Bip340Key() = default;
+    Bip340Key(const Bip340Key&) = delete;
+    Bip340Key& operator=(const Bip340Key&) = delete;
+
+    Bip340Key(Bip340Key&& other) noexcept
+        : seckey(other.seckey), xonly_pubkey(other.xonly_pubkey) {
+        other.clear();
+    }
+
+    Bip340Key& operator=(Bip340Key&& other) noexcept {
+        if (this != &other) {
+            clear();
+            seckey = other.seckey;
+            xonly_pubkey = other.xonly_pubkey;
+            other.clear();
+        }
+        return *this;
+    }
+
+    ~Bip340Key() {
+        clear();
+    }
+
+    std::array<unsigned char, 32> seckey{};
+    std::array<unsigned char, 32> xonly_pubkey{};
+
+private:
+    void clear() noexcept {
+        detail::secure_clear_bytes(seckey.data(), seckey.size());
+        xonly_pubkey.fill(0);
+    }
 };
 
 /** @brief Complete witness bundle for evaluating and proving a Purify instance. */
@@ -46,15 +76,26 @@ struct BulletproofWitnessData {
     BulletproofAssignmentData assignment;
 };
 
-/** @brief Derives the packed public key corresponding to a packed secret. */
-Result<GeneratedKey> derive_key(const UInt512& secret);
+/**
+ * @brief Derives the packed public key corresponding to a packed secret.
+ * @param secret Owned secret to clone into the returned key bundle.
+ * @return Derived key bundle containing a fresh owned copy of `secret`.
+ */
+Result<GeneratedKey> derive_key(const SecretKey& secret);
 
 /**
- * @brief Derives a canonical BIP340 signing keypair from a packed Purify secret.
+ * @brief Derives the packed public key corresponding to a packed secret.
+ * @param secret Owned secret to move into the returned key bundle.
+ * @return Derived key bundle consuming `secret`.
+ */
+Result<GeneratedKey> derive_key(SecretKey&& secret);
+
+/**
+ * @brief Derives a canonical BIP340 signing keypair from an owned Purify secret.
  *
  * The derivation is deterministic and domain-separated from the Purify public key derivation.
  */
-Result<Bip340Key> derive_bip340_key(const UInt512& secret);
+Result<Bip340Key> derive_bip340_key(const SecretKey& secret);
 
 /** @brief Returns the size of the packed Purify secret-key space. */
 inline UInt512 key_space_size() {
@@ -180,16 +221,20 @@ Result<GeneratedKey> generate_key(FillRandom&& fill_random) {
     if (!secret.has_value()) {
         return unexpected_error(secret.error(), "generate_key:random_below_custom");
     }
-    return derive_key(*secret);
+    Result<SecretKey> owned_secret = SecretKey::from_packed(*secret);
+    if (!owned_secret.has_value()) {
+        return unexpected_error(owned_secret.error(), "generate_key:from_packed_secret");
+    }
+    return derive_key(std::move(*owned_secret));
 }
 
 /**
- * @brief Evaluates the Purify PRF for a packed secret and message.
- * @param secret Packed secret scalar pair.
+ * @brief Evaluates the Purify PRF for an owned secret key and message.
+ * @param secret Owned secret key.
  * @param message Message bytes to evaluate.
  * @return Purify output as a field element, or `ErrorCode::HashToCurveExhausted`.
  */
-Result<FieldElement> eval(const UInt512& secret, const Bytes& message);
+Result<FieldElement> eval(const SecretKey& secret, const Bytes& message);
 
 /**
  * @brief Builds the legacy serialized verifier description for a message and public key.
@@ -210,10 +255,10 @@ Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UI
 /**
  * @brief Computes the native Purify witness for a message and secret.
  * @param message Message bytes to evaluate.
- * @param secret Packed secret scalar pair.
+ * @param secret Owned secret key.
  * @return Witness bundle containing public key, output, and assignment columns, or `ErrorCode::HashToCurveExhausted`.
  */
-Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const UInt512& secret);
+Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const SecretKey& secret);
 
 /**
  * @brief Evaluates the generated verifier circuit against an explicit witness.
@@ -226,17 +271,17 @@ Result<bool> evaluate_verifier_circuit(const Bytes& message, const BulletproofWi
 /**
  * @brief Evaluates the generated verifier circuit using a witness derived from a secret.
  * @param message Message baked into the verifier circuit.
- * @param secret Packed secret scalar pair.
+ * @param secret Owned secret key.
  * @return True when the derived witness satisfies the circuit, or `ErrorCode::HashToCurveExhausted`.
  */
-Result<bool> evaluate_verifier_circuit(const Bytes& message, const UInt512& secret);
+Result<bool> evaluate_verifier_circuit(const Bytes& message, const SecretKey& secret);
 
 /**
  * @brief Serializes the witness assignment produced for a message and secret.
  * @param message Message bytes to evaluate.
- * @param secret Packed secret scalar pair.
+ * @param secret Owned secret key.
  * @return Serialized witness blob compatible with the legacy assignment format, or `ErrorCode::HashToCurveExhausted`.
  */
-Result<Bytes> prove_assignment(const Bytes& message, const UInt512& secret);
+Result<Bytes> prove_assignment(const Bytes& message, const SecretKey& secret);
 
 }  // namespace purify

@@ -13,6 +13,90 @@
 
 namespace purify {
 
+namespace detail {
+
+struct UInt128 {
+    std::uint64_t lo = 0;
+    std::uint64_t hi = 0;
+};
+
+[[nodiscard]] inline UInt128 u128_from_words(std::uint64_t hi, std::uint64_t lo) {
+    return UInt128{lo, hi};
+}
+
+[[nodiscard]] inline UInt128 u128_add_u64(const UInt128& value, std::uint64_t addend) {
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+    unsigned __int128 accum = (static_cast<unsigned __int128>(value.hi) << 64) | value.lo;
+    accum += addend;
+    return UInt128{static_cast<std::uint64_t>(accum), static_cast<std::uint64_t>(accum >> 64)};
+#else
+    UInt128 out = value;
+    out.lo += addend;
+    out.hi += (out.lo < addend) ? 1U : 0U;
+    return out;
+#endif
+}
+
+[[nodiscard]] inline UInt128 u128_mul_u64(std::uint64_t lhs, std::uint64_t rhs) {
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+    unsigned __int128 product = static_cast<unsigned __int128>(lhs) * rhs;
+    return UInt128{static_cast<std::uint64_t>(product), static_cast<std::uint64_t>(product >> 64)};
+#else
+    constexpr std::uint64_t kMask32 = 0xffffffffULL;
+
+    std::uint64_t lhs_lo = lhs & kMask32;
+    std::uint64_t lhs_hi = lhs >> 32;
+    std::uint64_t rhs_lo = rhs & kMask32;
+    std::uint64_t rhs_hi = rhs >> 32;
+
+    std::uint64_t lo_lo = lhs_lo * rhs_lo;
+    std::uint64_t hi_lo = lhs_hi * rhs_lo;
+    std::uint64_t lo_hi = lhs_lo * rhs_hi;
+    std::uint64_t hi_hi = lhs_hi * rhs_hi;
+
+    std::uint64_t cross = (lo_lo >> 32) + (hi_lo & kMask32) + (lo_hi & kMask32);
+
+    UInt128 out;
+    out.lo = (lo_lo & kMask32) | (cross << 32);
+    out.hi = hi_hi + (hi_lo >> 32) + (lo_hi >> 32) + (cross >> 32);
+    return out;
+#endif
+}
+
+[[nodiscard]] inline std::pair<UInt128, std::uint32_t> u128_divmod_u32(const UInt128& value, std::uint32_t divisor) {
+    assert(divisor != 0 && "u128_divmod_u32 requires a non-zero divisor");
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+    unsigned __int128 cur = (static_cast<unsigned __int128>(value.hi) << 64) | value.lo;
+    unsigned __int128 quotient = cur / divisor;
+    return std::make_pair(
+        UInt128{static_cast<std::uint64_t>(quotient), static_cast<std::uint64_t>(quotient >> 64)},
+        static_cast<std::uint32_t>(cur % divisor));
+#else
+    constexpr std::uint64_t kMask32 = 0xffffffffULL;
+
+    std::uint64_t rem = 0;
+    auto step = [&](std::uint32_t word) {
+        std::uint64_t cur = (rem << 32) | word;
+        std::uint32_t qword = static_cast<std::uint32_t>(cur / divisor);
+        rem = cur % divisor;
+        return qword;
+    };
+
+    UInt128 quotient;
+    quotient.hi = (static_cast<std::uint64_t>(step(static_cast<std::uint32_t>(value.hi >> 32))) << 32)
+        | step(static_cast<std::uint32_t>(value.hi & kMask32));
+    quotient.lo = (static_cast<std::uint64_t>(step(static_cast<std::uint32_t>(value.lo >> 32))) << 32)
+        | step(static_cast<std::uint32_t>(value.lo & kMask32));
+    return std::make_pair(quotient, static_cast<std::uint32_t>(rem));
+#endif
+}
+
+[[nodiscard]] inline std::size_t bit_length_u64(std::uint64_t value) {
+    return value == 0 ? 0U : 64U - static_cast<std::size_t>(std::countl_zero(value));
+}
+
+}  // namespace detail
+
 /**
  * @brief Little-endian fixed-width unsigned integer with simple arithmetic utilities.
  *
@@ -131,11 +215,11 @@ struct BigUInt {
     /** @brief Adds a small unsigned value in place when the result fits. */
     bool try_add_small(std::uint32_t value) {
         BigUInt out = *this;
-        unsigned __int128 carry = value;
+        std::uint64_t carry = value;
         for (std::size_t i = 0; i < Words && carry != 0; ++i) {
-            carry += out.limbs[i];
-            out.limbs[i] = static_cast<std::uint64_t>(carry);
-            carry >>= 64;
+            std::uint64_t sum = out.limbs[i] + carry;
+            carry = (sum < out.limbs[i]) ? 1U : 0U;
+            out.limbs[i] = sum;
         }
         if (carry != 0) {
             return false;
@@ -158,11 +242,12 @@ struct BigUInt {
     /** @brief Multiplies by a small unsigned value in place when the result fits. */
     bool try_mul_small(std::uint32_t value) {
         BigUInt out = *this;
-        unsigned __int128 carry = 0;
+        std::uint64_t carry = 0;
         for (std::size_t i = 0; i < Words; ++i) {
-            unsigned __int128 accum = static_cast<unsigned __int128>(out.limbs[i]) * value + carry;
-            out.limbs[i] = static_cast<std::uint64_t>(accum);
-            carry = accum >> 64;
+            detail::UInt128 accum = detail::u128_mul_u64(out.limbs[i], value);
+            accum = detail::u128_add_u64(accum, carry);
+            out.limbs[i] = accum.lo;
+            carry = accum.hi;
         }
         if (carry != 0) {
             return false;
@@ -185,11 +270,14 @@ struct BigUInt {
     /** @brief Adds another fixed-width integer when the result fits. */
     bool try_add_assign(const BigUInt& other) {
         BigUInt out = *this;
-        unsigned __int128 carry = 0;
+        std::uint64_t carry = 0;
         for (std::size_t i = 0; i < Words; ++i) {
-            unsigned __int128 accum = static_cast<unsigned __int128>(out.limbs[i]) + other.limbs[i] + carry;
-            out.limbs[i] = static_cast<std::uint64_t>(accum);
-            carry = accum >> 64;
+            std::uint64_t sum = out.limbs[i] + other.limbs[i];
+            std::uint64_t carry1 = (sum < out.limbs[i]) ? 1U : 0U;
+            std::uint64_t next = sum + carry;
+            std::uint64_t carry2 = (next < sum) ? 1U : 0U;
+            out.limbs[i] = next;
+            carry = carry1 | carry2;
         }
         if (carry != 0) {
             return false;
@@ -215,14 +303,11 @@ struct BigUInt {
         std::uint64_t borrow = 0;
         for (std::size_t i = 0; i < Words; ++i) {
             std::uint64_t rhs = other.limbs[i] + borrow;
-            std::uint64_t next_borrow = borrow ? (rhs <= other.limbs[i] ? 1U : 0U) : 0U;
-            if (out.limbs[i] < rhs) {
-                out.limbs[i] = static_cast<std::uint64_t>((static_cast<unsigned __int128>(1) << 64) + out.limbs[i] - rhs);
-                borrow = 1;
-            } else {
-                out.limbs[i] -= rhs;
-                borrow = next_borrow;
-            }
+            std::uint64_t rhs_overflow = (rhs < other.limbs[i]) ? 1U : 0U;
+            std::uint64_t next = out.limbs[i] - rhs;
+            std::uint64_t needs_borrow = (out.limbs[i] < rhs) ? 1U : 0U;
+            out.limbs[i] = next;
+            borrow = rhs_overflow | needs_borrow;
         }
         if (borrow != 0) {
             return false;
@@ -246,7 +331,7 @@ struct BigUInt {
     std::size_t bit_length() const {
         for (std::size_t i = Words; i-- > 0;) {
             if (limbs[i] != 0) {
-                return i * 64 + (64U - static_cast<std::size_t>(__builtin_clzll(limbs[i])));
+                return i * 64 + detail::bit_length_u64(limbs[i]);
             }
         }
         return 0;
@@ -343,11 +428,12 @@ struct BigUInt {
 
     /** @brief Divides by a small unsigned value in place and returns the remainder. */
     std::uint32_t divmod_small(std::uint32_t divisor) {
-        unsigned __int128 rem = 0;
+        std::uint64_t rem = 0;
         for (std::size_t i = Words; i-- > 0;) {
-            unsigned __int128 cur = (rem << 64) | limbs[i];
-            limbs[i] = static_cast<std::uint64_t>(cur / divisor);
-            rem = cur % divisor;
+            auto [quotient, next_rem] = detail::u128_divmod_u32(detail::u128_from_words(rem, limbs[i]), divisor);
+            assert(quotient.hi == 0 && "BigUInt::divmod_small() quotient must fit in 64 bits");
+            limbs[i] = quotient.lo;
+            rem = next_rem;
         }
         return static_cast<std::uint32_t>(rem);
     }
@@ -484,14 +570,15 @@ template <std::size_t LeftWords, std::size_t RightWords>
 BigUInt<LeftWords + RightWords> multiply(const BigUInt<LeftWords>& lhs, const BigUInt<RightWords>& rhs) {
     BigUInt<LeftWords + RightWords> out;
     for (std::size_t i = 0; i < LeftWords; ++i) {
-        unsigned __int128 carry = 0;
+        std::uint64_t carry = 0;
         for (std::size_t j = 0; j < RightWords; ++j) {
-            unsigned __int128 accum = static_cast<unsigned __int128>(lhs.limbs[i]) * rhs.limbs[j]
-                + out.limbs[i + j] + carry;
-            out.limbs[i + j] = static_cast<std::uint64_t>(accum);
-            carry = accum >> 64;
+            detail::UInt128 accum = detail::u128_mul_u64(lhs.limbs[i], rhs.limbs[j]);
+            accum = detail::u128_add_u64(accum, out.limbs[i + j]);
+            accum = detail::u128_add_u64(accum, carry);
+            out.limbs[i + j] = accum.lo;
+            carry = accum.hi;
         }
-        out.limbs[i + RightWords] += static_cast<std::uint64_t>(carry);
+        out.limbs[i + RightWords] += carry;
     }
     return out;
 }

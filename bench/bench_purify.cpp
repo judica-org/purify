@@ -33,7 +33,6 @@ using purify::FieldElement;
 using purify::NativeBulletproofCircuit;
 using purify::NativeBulletproofCircuitRow;
 using purify::NativeBulletproofCircuitTemplate;
-using purify::UInt512;
 
 constexpr std::string_view kSecretHex =
     "11427c7268288dddf0cd24af3d30524fd817a91e103e7e02eb28b78db81cb350"
@@ -56,7 +55,6 @@ struct BenchConfig {
 /** @brief Precomputed benchmark fixture shared across benchmark cases. */
 struct PurifyBenchCase {
     Bytes message;
-    UInt512 secret;
     BulletproofWitnessData witness;
     NativeBulletproofCircuitTemplate circuit_template;
     NativeBulletproofCircuit circuit;
@@ -176,8 +174,12 @@ std::optional<BenchConfig> parse_args(int argc, char** argv, int& exit_code) {
 std::optional<PurifyBenchCase> make_case() {
     PurifyBenchCase out;
     out.message = Bytes{0x01, 0x23, 0x45, 0x67};
-    out.secret = UInt512::from_hex(kSecretHex);
-    purify::Result<BulletproofWitnessData> witness = purify::prove_assignment_data(out.message, out.secret);
+    purify::Result<purify::SecretKey> secret = purify::SecretKey::from_hex(kSecretHex);
+    if (!secret.has_value()) {
+        std::cerr << secret.error().message() << "\n";
+        return std::nullopt;
+    }
+    purify::Result<BulletproofWitnessData> witness = purify::prove_assignment_data(out.message, *secret);
     if (!witness.has_value()) {
         std::cerr << witness.error().message() << "\n";
         return std::nullopt;
@@ -239,7 +241,7 @@ std::optional<PurifyBenchCase> make_case() {
     }
     out.message_proof_cache_plusplus = std::move(*message_proof_cache_plusplus);
 
-    purify::Result<purify::puresign::KeyPair> key_pair = purify::puresign::KeyPair::from_secret(out.secret);
+    purify::Result<purify::puresign::KeyPair> key_pair = purify::puresign::KeyPair::from_secret(*secret);
     if (!key_pair.has_value()) {
         std::cerr << key_pair.error().message() << "\n";
         return std::nullopt;
@@ -262,7 +264,7 @@ std::optional<PurifyBenchCase> make_case() {
     out.proven_signature = std::move(*proven_signature);
 
     purify::Result<purify::puresign_plusplus::KeyPair> key_pair_plusplus =
-        purify::puresign_plusplus::KeyPair::from_secret(out.secret);
+        purify::puresign_plusplus::KeyPair::from_secret(*secret);
     if (!key_pair_plusplus.has_value()) {
         std::cerr << key_pair_plusplus.error().message() << "\n";
         return std::nullopt;

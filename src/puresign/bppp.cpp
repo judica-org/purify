@@ -25,9 +25,9 @@ namespace purify::puresign_plusplus {
 
 namespace api_impl {
 
-Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<const unsigned char> message,
+Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
                                              PreparedNonce&& prepared);
-Result<Signature> sign_with_prepared_topic(const UInt512& secret, std::span<const unsigned char> message,
+Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
                                            PreparedNonce&& prepared);
 
 }  // namespace api_impl
@@ -86,14 +86,15 @@ Bytes proof_statement_binding(Scope scope) {
     return bytes_from_ascii(proof_tag_for_scope(scope));
 }
 
-Scalar32 derive_proof_nonce_seed(const UInt512& secret, Scope scope, std::span<const unsigned char> eval_input) {
-    std::array<unsigned char, 64> secret_bytes = secret.to_bytes_be();
+Scalar32 derive_proof_nonce_seed(const SecretKey& secret, Scope scope, std::span<const unsigned char> eval_input) {
+    std::array<unsigned char, 64> secret_bytes = secret.packed().to_bytes_be();
     Scalar32 out{};
     std::array digest_segments{
         std::span<const unsigned char>(secret_bytes.data(), secret_bytes.size()),
         eval_input,
     };
     out = proof_tagged_hash(scope).digest_many(digest_segments);
+    detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
     return out;
 }
 
@@ -126,7 +127,7 @@ struct DerivedNonceData {
     Bytes eval_input;
 };
 
-Result<DerivedNonceData> derive_nonce_data(const UInt512& secret,
+Result<DerivedNonceData> derive_nonce_data(const SecretKey& secret,
                                            Scope scope,
                                            std::span<const unsigned char> input) {
     Status field_status = validate_puresign_field_alignment();
@@ -163,7 +164,7 @@ Result<DerivedNonceData> derive_nonce_data(const UInt512& secret,
     return out;
 }
 
-Result<DerivedNonceData> prepare_nonce_data_impl(const UInt512& secret,
+Result<DerivedNonceData> prepare_nonce_data_impl(const SecretKey& secret,
                                                  Scope scope,
                                                  std::span<const unsigned char> input) {
     if (scope == Scope::Topic && input.empty()) {
@@ -193,7 +194,7 @@ Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof) {
     return xonly == nonce_proof.nonce.xonly;
 }
 
-Result<NonceProof> build_nonce_proof_from_template(const UInt512& secret,
+Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
                                                    Scope scope,
                                                    const Nonce& expected_nonce,
                                                    std::span<const unsigned char> eval_input,
@@ -259,7 +260,7 @@ Result<NonceProof> build_nonce_proof_from_template(const UInt512& secret,
     return out;
 }
 
-Result<NonceProof> build_nonce_proof(const UInt512& secret,
+Result<NonceProof> build_nonce_proof(const SecretKey& secret,
                                      Scope scope,
                                      std::span<const unsigned char> input,
                                      const Nonce& expected_nonce,
@@ -569,14 +570,10 @@ PreparedNonceWithProof PreparedNonceWithProof::from_parts(PreparedNonce prepared
     return PreparedNonceWithProof(std::move(prepared), std::move(proof));
 }
 
-Result<ProvenSignature> PreparedNonceWithProof::sign_message(const UInt512& secret,
+Result<ProvenSignature> PreparedNonceWithProof::sign_message(const SecretKey& secret,
                                                              std::span<const unsigned char> message) && {
-    Result<KeyPair> key_pair = KeyPair::from_secret(secret);
-    if (!key_pair.has_value()) {
-        return unexpected_error(key_pair.error(), "PreparedNonceWithProof::sign_message:from_secret");
-    }
     NonceProof nonce_proof = std::move(proof_);
-    Result<Signature> signature = key_pair->sign_message_with_prepared(message, std::move(prepared_));
+    Result<Signature> signature = api_impl::sign_message_with_prepared(secret, message, std::move(prepared_));
     if (!signature.has_value()) {
         return unexpected_error(signature.error(), "PreparedNonceWithProof::sign_message:sign_message_with_prepared");
     }
@@ -586,14 +583,10 @@ Result<ProvenSignature> PreparedNonceWithProof::sign_message(const UInt512& secr
     return ProvenSignature{*signature, std::move(nonce_proof)};
 }
 
-Result<ProvenSignature> PreparedNonceWithProof::sign_topic_message(const UInt512& secret,
+Result<ProvenSignature> PreparedNonceWithProof::sign_topic_message(const SecretKey& secret,
                                                                    std::span<const unsigned char> message) && {
-    Result<KeyPair> key_pair = KeyPair::from_secret(secret);
-    if (!key_pair.has_value()) {
-        return unexpected_error(key_pair.error(), "PreparedNonceWithProof::sign_topic_message:from_secret");
-    }
     NonceProof nonce_proof = std::move(proof_);
-    Result<Signature> signature = key_pair->sign_with_prepared_topic(message, std::move(prepared_));
+    Result<Signature> signature = api_impl::sign_with_prepared_topic(secret, message, std::move(prepared_));
     if (!signature.has_value()) {
         return unexpected_error(signature.error(),
                                 "PreparedNonceWithProof::sign_topic_message:sign_with_prepared_topic");
@@ -606,7 +599,7 @@ Result<ProvenSignature> PreparedNonceWithProof::sign_topic_message(const UInt512
 
 namespace api_impl {
 
-Result<PublicKey> derive_public_key(const UInt512& secret) {
+Result<PublicKey> derive_public_key(const SecretKey& secret) {
     Result<GeneratedKey> purify_key = derive_key(secret);
     if (!purify_key.has_value()) {
         return unexpected_error(purify_key.error(), "derive_public_key:derive_key");
@@ -626,7 +619,7 @@ Result<TopicProofCache> build_topic_proof_cache(std::span<const unsigned char> t
     return TopicProofCache::build(topic);
 }
 
-Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<const unsigned char> message) {
+Result<PreparedNonce> prepare_message_nonce(const SecretKey& secret, std::span<const unsigned char> message) {
     Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, Scope::Message, message);
     if (!nonce_data.has_value()) {
         return unexpected_error(nonce_data.error(), "prepare_message_nonce:prepare_nonce_data_impl");
@@ -635,7 +628,7 @@ Result<PreparedNonce> prepare_message_nonce(const UInt512& secret, std::span<con
                                      nonce_data->signer_pubkey, nonce_data->binding_digest);
 }
 
-Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret,
+Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey& secret,
                                                                 std::span<const unsigned char> message,
                                                                 bppp::ExperimentalCircuitCache* circuit_cache) {
     Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, Scope::Message, message);
@@ -653,7 +646,7 @@ Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& s
     return PreparedNonceWithProof::from_parts(std::move(prepared), std::move(*proof));
 }
 
-Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& secret,
+Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey& secret,
                                                                 const MessageProofCache& cache,
                                                                 bppp::ExperimentalCircuitCache* circuit_cache) {
     Status cache_status = validate_message_proof_cache(cache);
@@ -677,7 +670,7 @@ Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const UInt512& s
     return PreparedNonceWithProof::from_parts(std::move(prepared), std::move(*proof));
 }
 
-Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const unsigned char> topic) {
+Result<PreparedNonce> prepare_topic_nonce(const SecretKey& secret, std::span<const unsigned char> topic) {
     Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, Scope::Topic, topic);
     if (!nonce_data.has_value()) {
         return unexpected_error(nonce_data.error(), "prepare_topic_nonce:prepare_nonce_data_impl");
@@ -686,7 +679,7 @@ Result<PreparedNonce> prepare_topic_nonce(const UInt512& secret, std::span<const
                                      nonce_data->signer_pubkey, nonce_data->binding_digest);
 }
 
-Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret,
+Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& secret,
                                                               std::span<const unsigned char> topic,
                                                               bppp::ExperimentalCircuitCache* circuit_cache) {
     Result<DerivedNonceData> nonce_data = prepare_nonce_data_impl(secret, Scope::Topic, topic);
@@ -704,7 +697,7 @@ Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& sec
     return PreparedNonceWithProof::from_parts(std::move(prepared), std::move(*proof));
 }
 
-Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& secret,
+Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& secret,
                                                               const TopicProofCache& cache,
                                                               bppp::ExperimentalCircuitCache* circuit_cache) {
     Status cache_status = validate_topic_proof_cache(cache);
@@ -728,7 +721,7 @@ Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const UInt512& sec
     return PreparedNonceWithProof::from_parts(std::move(prepared), std::move(*proof));
 }
 
-Result<Signature> sign_message(const UInt512& secret, std::span<const unsigned char> message) {
+Result<Signature> sign_message(const SecretKey& secret, std::span<const unsigned char> message) {
     Result<PreparedNonce> prepared = prepare_message_nonce(secret, message);
     if (!prepared.has_value()) {
         return unexpected_error(prepared.error(), "sign_message:prepare_message_nonce");
@@ -736,7 +729,7 @@ Result<Signature> sign_message(const UInt512& secret, std::span<const unsigned c
     return sign_message_with_prepared(secret, message, std::move(*prepared));
 }
 
-Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<const unsigned char> message,
+Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
                                              PreparedNonce&& prepared) {
     Result<Bip340Key> signer = derive_bip340_key(secret);
     if (!signer.has_value()) {
@@ -745,13 +738,13 @@ Result<Signature> sign_message_with_prepared(const UInt512& secret, std::span<co
     return std::move(prepared).sign_message(*signer, message);
 }
 
-Result<ProvenSignature> sign_message_with_prepared_proof(const UInt512& secret,
+Result<ProvenSignature> sign_message_with_prepared_proof(const SecretKey& secret,
                                                          std::span<const unsigned char> message,
                                                          PreparedNonceWithProof&& prepared) {
     return std::move(prepared).sign_message(secret, message);
 }
 
-Result<Signature> sign_with_topic(const UInt512& secret, std::span<const unsigned char> message,
+Result<Signature> sign_with_topic(const SecretKey& secret, std::span<const unsigned char> message,
                                   std::span<const unsigned char> topic) {
     Result<PreparedNonce> prepared = prepare_topic_nonce(secret, topic);
     if (!prepared.has_value()) {
@@ -760,7 +753,7 @@ Result<Signature> sign_with_topic(const UInt512& secret, std::span<const unsigne
     return sign_with_prepared_topic(secret, message, std::move(*prepared));
 }
 
-Result<Signature> sign_with_prepared_topic(const UInt512& secret, std::span<const unsigned char> message,
+Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
                                            PreparedNonce&& prepared) {
     Result<Bip340Key> signer = derive_bip340_key(secret);
     if (!signer.has_value()) {
@@ -769,13 +762,13 @@ Result<Signature> sign_with_prepared_topic(const UInt512& secret, std::span<cons
     return std::move(prepared).sign_topic_message(*signer, message);
 }
 
-Result<ProvenSignature> sign_with_prepared_topic_proof(const UInt512& secret,
+Result<ProvenSignature> sign_with_prepared_topic_proof(const SecretKey& secret,
                                                        std::span<const unsigned char> message,
                                                        PreparedNonceWithProof&& prepared) {
     return std::move(prepared).sign_topic_message(secret, message);
 }
 
-Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span<const unsigned char> message,
+Result<ProvenSignature> sign_message_with_proof(const SecretKey& secret, std::span<const unsigned char> message,
                                                 bppp::ExperimentalCircuitCache* circuit_cache) {
     Result<PreparedNonceWithProof> prepared = prepare_message_nonce_with_proof(secret, message, circuit_cache);
     if (!prepared.has_value()) {
@@ -784,7 +777,7 @@ Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, std::span
     return sign_message_with_prepared_proof(secret, message, std::move(*prepared));
 }
 
-Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, const MessageProofCache& cache,
+Result<ProvenSignature> sign_message_with_proof(const SecretKey& secret, const MessageProofCache& cache,
                                                 bppp::ExperimentalCircuitCache* circuit_cache) {
     Result<PreparedNonceWithProof> prepared =
         prepare_message_nonce_with_proof(secret, cache, circuit_cache);
@@ -794,7 +787,7 @@ Result<ProvenSignature> sign_message_with_proof(const UInt512& secret, const Mes
     return sign_message_with_prepared_proof(secret, cache.message, std::move(*prepared));
 }
 
-Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
+Result<ProvenSignature> sign_with_topic_proof(const SecretKey& secret, std::span<const unsigned char> message,
                                               std::span<const unsigned char> topic,
                                               bppp::ExperimentalCircuitCache* circuit_cache) {
     Result<PreparedNonceWithProof> prepared = prepare_topic_nonce_with_proof(secret, topic, circuit_cache);
@@ -804,7 +797,7 @@ Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<c
     return sign_with_prepared_topic_proof(secret, message, std::move(*prepared));
 }
 
-Result<ProvenSignature> sign_with_topic_proof(const UInt512& secret, std::span<const unsigned char> message,
+Result<ProvenSignature> sign_with_topic_proof(const SecretKey& secret, std::span<const unsigned char> message,
                                               const TopicProofCache& cache,
                                               bppp::ExperimentalCircuitCache* circuit_cache) {
     Result<PreparedNonceWithProof> prepared =
@@ -991,7 +984,7 @@ Result<PublicKey> PublicKey::deserialize(std::span<const unsigned char> serializ
     return out;
 }
 
-Result<PublicKey> PublicKey::from_secret(const UInt512& secret) {
+Result<PublicKey> PublicKey::from_secret(const SecretKey& secret) {
     return api_impl::derive_public_key(secret);
 }
 
@@ -1047,16 +1040,20 @@ Result<bool> PublicKey::verify_topic_signature_with_proof(const TopicProofCache&
     return api_impl::verify_topic_signature_with_proof(cache, *this, message, signature, circuit_cache);
 }
 
-Result<KeyPair> KeyPair::from_secret(const UInt512& secret) {
-    Result<Bip340Key> signer = derive_bip340_key(secret);
-    if (!signer.has_value()) {
-        return unexpected_error(signer.error(), "KeyPair::from_secret:derive_bip340_key");
+Result<KeyPair> KeyPair::from_secret(const SecretKey& secret) {
+    Result<SecretKey> owned_secret = secret.clone();
+    if (!owned_secret.has_value()) {
+        return unexpected_error(owned_secret.error(), "KeyPair::from_secret:clone");
     }
+    return KeyPair::from_secret(std::move(*owned_secret));
+}
+
+Result<KeyPair> KeyPair::from_secret(SecretKey&& secret) {
     Result<PublicKey> public_key = PublicKey::from_secret(secret);
     if (!public_key.has_value()) {
         return unexpected_error(public_key.error(), "KeyPair::from_secret:from_secret");
     }
-    return KeyPair(secret, std::move(*signer), std::move(*public_key));
+    return KeyPair(std::move(secret), std::move(*public_key));
 }
 
 Result<PreparedNonce> KeyPair::prepare_message_nonce(std::span<const unsigned char> message) const {
@@ -1101,7 +1098,11 @@ Result<Signature> KeyPair::sign_message(std::span<const unsigned char> message) 
 
 Result<Signature> KeyPair::sign_message_with_prepared(std::span<const unsigned char> message,
                                                       PreparedNonce&& prepared) const {
-    return std::move(prepared).sign_message(signer_, message);
+    Result<Bip340Key> signer = derive_bip340_key(secret_);
+    if (!signer.has_value()) {
+        return unexpected_error(signer.error(), "KeyPair::sign_message_with_prepared:derive_bip340_key");
+    }
+    return std::move(prepared).sign_message(*signer, message);
 }
 
 Result<ProvenSignature> KeyPair::sign_message_with_prepared_proof(std::span<const unsigned char> message,
@@ -1120,7 +1121,11 @@ Result<Signature> KeyPair::sign_with_topic(std::span<const unsigned char> messag
 
 Result<Signature> KeyPair::sign_with_prepared_topic(std::span<const unsigned char> message,
                                                     PreparedNonce&& prepared) const {
-    return std::move(prepared).sign_topic_message(signer_, message);
+    Result<Bip340Key> signer = derive_bip340_key(secret_);
+    if (!signer.has_value()) {
+        return unexpected_error(signer.error(), "KeyPair::sign_with_prepared_topic:derive_bip340_key");
+    }
+    return std::move(prepared).sign_topic_message(*signer, message);
 }
 
 Result<ProvenSignature> KeyPair::sign_with_prepared_topic_proof(std::span<const unsigned char> message,

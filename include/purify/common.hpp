@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <bit>
 #include <cctype>
 #include <charconv>
 #include <cstdint>

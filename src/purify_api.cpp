@@ -16,6 +16,13 @@
 #include <fstream>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #include <bcrypt.h>
 #elif defined(__linux__)
 #include <sys/random.h>
@@ -50,6 +57,22 @@ Bytes tagged_message(std::string_view prefix, const Bytes& message) {
     out.insert(out.end(), prefix.begin(), prefix.end());
     out.insert(out.end(), message.begin(), message.end());
     return out;
+}
+
+Result<UInt512> derive_public_key_from_secret(const UInt512& secret) {
+    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
+    if (!unpacked.has_value()) {
+        return unexpected_error(unpacked.error(), "derive_public_key_from_secret:unpack_secret");
+    }
+    Result<AffinePoint> p1 = curve1().mul_secret_affine(generator1(), unpacked->first);
+    if (!p1.has_value()) {
+        return unexpected_error(p1.error(), "derive_public_key_from_secret:mul_secret_affine_p1");
+    }
+    Result<AffinePoint> p2 = curve2().mul_secret_affine(generator2(), unpacked->second);
+    if (!p2.has_value()) {
+        return unexpected_error(p2.error(), "derive_public_key_from_secret:mul_secret_affine_p2");
+    }
+    return pack_public(p1->x.to_uint256(), p2->x.to_uint256());
 }
 
 void add_expr_slack(NativeBulletproofCircuit::PackedSlackPlan& slack, const Expr& expr) {
@@ -156,7 +179,11 @@ Result<GeneratedKey> generate_key() {
     if (!secret.has_value()) {
         return unexpected_error(secret.error(), "generate_key:random_below");
     }
-    return derive_key(*secret);
+    Result<SecretKey> owned_secret = SecretKey::from_packed(*secret);
+    if (!owned_secret.has_value()) {
+        return unexpected_error(owned_secret.error(), "generate_key:from_packed_secret");
+    }
+    return derive_key(std::move(*owned_secret));
 }
 
 Result<GeneratedKey> generate_key(KeySeed seed) {
@@ -165,33 +192,32 @@ Result<GeneratedKey> generate_key(KeySeed seed) {
     if (!secret.has_value()) {
         return unexpected_error(ErrorCode::InternalMismatch, "generate_key:hash_to_int_seed");
     }
-    return derive_key(*secret);
+    Result<SecretKey> owned_secret = SecretKey::from_packed(*secret);
+    if (!owned_secret.has_value()) {
+        return unexpected_error(owned_secret.error(), "generate_key:from_packed_seed_secret");
+    }
+    return derive_key(std::move(*owned_secret));
 }
 
-Result<GeneratedKey> derive_key(const UInt512& secret) {
-    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
-    if (!unpacked.has_value()) {
-        return unexpected_error(unpacked.error(), "derive_key:unpack_secret");
+Result<GeneratedKey> derive_key(const SecretKey& secret) {
+    Result<SecretKey> owned_secret = secret.clone();
+    if (!owned_secret.has_value()) {
+        return unexpected_error(owned_secret.error(), "derive_key:clone");
     }
-    Result<AffinePoint> p1 = curve1().mul_secret_affine(generator1(), unpacked->first);
-    if (!p1.has_value()) {
-        return unexpected_error(p1.error(), "derive_key:mul_secret_affine_p1");
-    }
-    Result<AffinePoint> p2 = curve2().mul_secret_affine(generator2(), unpacked->second);
-    if (!p2.has_value()) {
-        return unexpected_error(p2.error(), "derive_key:mul_secret_affine_p2");
-    }
-    return GeneratedKey{secret, pack_public(p1->x.to_uint256(), p2->x.to_uint256())};
+    return derive_key(std::move(*owned_secret));
 }
 
-Result<Bip340Key> derive_bip340_key(const UInt512& secret) {
-    Status status = validate_secret_key(secret);
-    if (!status.has_value()) {
-        return unexpected_error(status.error(), "derive_bip340_key:validate_secret_key");
+Result<GeneratedKey> derive_key(SecretKey&& secret) {
+    Result<UInt512> public_key = derive_public_key_from_secret(secret.packed());
+    if (!public_key.has_value()) {
+        return unexpected_error(public_key.error(), "derive_key:derive_public_key_from_secret");
     }
+    return GeneratedKey{std::move(secret), *public_key};
+}
 
+Result<Bip340Key> derive_bip340_key(const SecretKey& secret) {
     static const TaggedHash kBip340KeyGenTag("Purify/BIP340/KeyGen");
-    std::array<unsigned char, 64> packed_secret = secret.to_bytes_be();
+    std::array<unsigned char, 64> packed_secret = secret.packed().to_bytes_be();
     Bytes ikm(packed_secret.begin(), packed_secret.end());
 #if PURIFY_USE_LEGACY_FIELD_HASHES
     std::optional<UInt256> scalar =
@@ -200,6 +226,8 @@ Result<Bip340Key> derive_bip340_key(const UInt512& secret) {
     std::optional<UInt256> scalar = tagged_hash_to_int<4>(
         std::span<const unsigned char>(ikm.data(), ikm.size()), secp256k1_order_minus_one(), kBip340KeyGenTag);
 #endif
+    detail::secure_clear_bytes(ikm.data(), ikm.size());
+    detail::secure_clear_bytes(packed_secret.data(), packed_secret.size());
     if (!scalar.has_value()) {
         return unexpected_error(ErrorCode::InternalMismatch, "derive_bip340_key:hash_to_int");
     }
@@ -213,8 +241,8 @@ Result<Bip340Key> derive_bip340_key(const UInt512& secret) {
     return out;
 }
 
-Result<FieldElement> eval(const UInt512& secret, const Bytes& message) {
-    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
+Result<FieldElement> eval(const SecretKey& secret, const Bytes& message) {
+    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret.packed());
     if (!unpacked.has_value()) {
         return unexpected_error(unpacked.error(), "eval:unpack_secret");
     }
@@ -307,8 +335,8 @@ Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& 
                                                         std::move(out));
 }
 
-Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const UInt512& secret) {
-    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
+Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const SecretKey& secret) {
+    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret.packed());
     if (!unpacked.has_value()) {
         return unexpected_error(unpacked.error(), "prove_assignment_data:unpack_secret");
     }
@@ -383,7 +411,7 @@ Result<bool> evaluate_verifier_circuit(const Bytes& message, const BulletproofWi
     return circuit->evaluate(witness.assignment);
 }
 
-Result<bool> evaluate_verifier_circuit(const Bytes& message, const UInt512& secret) {
+Result<bool> evaluate_verifier_circuit(const Bytes& message, const SecretKey& secret) {
     Result<BulletproofWitnessData> witness = prove_assignment_data(message, secret);
     if (!witness.has_value()) {
         return unexpected_error(witness.error(), "evaluate_verifier_circuit:prove_assignment_data");
@@ -391,7 +419,7 @@ Result<bool> evaluate_verifier_circuit(const Bytes& message, const UInt512& secr
     return evaluate_verifier_circuit(message, *witness);
 }
 
-Result<Bytes> prove_assignment(const Bytes& message, const UInt512& secret) {
+Result<Bytes> prove_assignment(const Bytes& message, const SecretKey& secret) {
     Result<BulletproofWitnessData> witness = prove_assignment_data(message, secret);
     if (!witness.has_value()) {
         return unexpected_error(witness.error(), "prove_assignment:prove_assignment_data");

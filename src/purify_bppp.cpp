@@ -1590,7 +1590,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
 }
 
 Result<CommittedPurifyWitness>
-commit_output_witness(const Bytes &message, const UInt512 &secret,
+commit_output_witness(const Bytes &message, const SecretKey &secret,
                       const ScalarBytes &blind, const GeneratorBytes &value_gen,
                       const GeneratorBytes &blind_gen) {
   Result<BulletproofWitnessData> witness =

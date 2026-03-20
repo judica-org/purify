@@ -19,10 +19,10 @@ using purify_test::sample_secret;
 using purify::Bytes;
 using purify::ErrorCode;
 using purify::Result;
-using purify::UInt512;
+using purify::SecretKey;
 
 void test_puresign_message_signing(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for PureSign message signing");
     if (!secret.has_value()) {
         return;
@@ -184,7 +184,7 @@ void test_puresign_message_signing(TestContext& ctx) {
 }
 
 void test_puresign_topic_signing(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for PureSign topic signing");
     if (!secret.has_value()) {
         return;
@@ -278,7 +278,7 @@ void test_puresign_topic_signing(TestContext& ctx) {
 }
 
 void test_puresign_binding_checks(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for PureSign binding checks");
     if (!secret.has_value()) {
         return;
@@ -312,7 +312,7 @@ void test_puresign_binding_checks(TestContext& ctx) {
 }
 
 void test_puresign_plusplus_message_signing(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for PureSign++ message signing");
     if (!secret.has_value()) {
         return;
@@ -407,7 +407,7 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
 }
 
 void test_puresign_plusplus_topic_signing(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for PureSign++ topic signing");
     if (!secret.has_value()) {
         return;

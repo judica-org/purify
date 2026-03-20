@@ -119,10 +119,10 @@ inline Status write_file(const std::string& path, const Bytes& bytes) {
 /**
  * @brief Writes a serialized witness assignment for a message and secret.
  * @param message Message bytes to evaluate.
- * @param secret Packed secret scalar pair.
+ * @param secret Owned secret key.
  * @param output_path Destination path for the witness blob.
  */
-inline Status prove(const Bytes& message, const UInt512& secret, const std::string& output_path = "prove.assn") {
+inline Status prove(const Bytes& message, const SecretKey& secret, const std::string& output_path = "prove.assn") {
     Result<Bytes> assignment = prove_assignment(message, secret);
     if (!assignment.has_value()) {
         return unexpected_error(assignment.error(), "prove:prove_assignment");
@@ -157,19 +157,20 @@ inline int run_cli(int argc, char** argv) {
     }
     std::string command = argv[1];
     if (command == "gen") {
-        std::optional<UInt512> secret_override;
+        std::optional<SecretKey> secret_override;
         if (argc >= 3) {
-            Result<UInt512> parsed = UInt512::try_from_hex(argv[2]);
+            Result<SecretKey> parsed = SecretKey::from_hex(argv[2]);
             if (!parsed.has_value()) {
                 return print_error(parsed.error());
             }
-            secret_override = *parsed;
+            secret_override = std::move(*parsed);
         }
-        Result<GeneratedKey> key = secret_override.has_value() ? derive_key(*secret_override) : generate_key();
+        Result<GeneratedKey> key =
+            secret_override.has_value() ? derive_key(*secret_override) : generate_key();
         if (!key.has_value()) {
             return print_error(key.error());
         }
-        std::cout << "z=" << key->secret.to_hex() << " # private key\n";
+        std::cout << "z=" << key->secret.packed().to_hex() << " # private key\n";
         std::cout << "x=" << key->public_key.to_hex() << " # public key\n";
         return 0;
     }
@@ -178,7 +179,7 @@ inline int run_cli(int argc, char** argv) {
             usage();
             return 1;
         }
-        Result<UInt512> secret = UInt512::try_from_hex(argv[2]);
+        Result<SecretKey> secret = SecretKey::from_hex(argv[2]);
         if (!secret.has_value()) {
             return print_error(secret.error());
         }
@@ -222,7 +223,7 @@ inline int run_cli(int argc, char** argv) {
         if (!message.has_value()) {
             return print_error(message.error());
         }
-        Result<UInt512> secret = UInt512::try_from_hex(argv[3]);
+        Result<SecretKey> secret = SecretKey::from_hex(argv[3]);
         if (!secret.has_value()) {
             return print_error(secret.error());
         }
@@ -241,7 +242,7 @@ inline int run_cli(int argc, char** argv) {
         if (!message.has_value()) {
             return print_error(message.error());
         }
-        Result<UInt512> secret = UInt512::try_from_hex(argv[3]);
+        Result<SecretKey> secret = SecretKey::from_hex(argv[3]);
         if (!secret.has_value()) {
             return print_error(secret.error());
         }
@@ -265,7 +266,7 @@ inline int run_cli(int argc, char** argv) {
             usage();
             return 1;
         }
-        Result<UInt512> secret = UInt512::try_from_hex(argv[2]);
+        Result<SecretKey> secret = SecretKey::from_hex(argv[2]);
         if (!secret.has_value()) {
             return print_error(secret.error());
         }

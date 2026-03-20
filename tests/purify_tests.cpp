@@ -33,6 +33,7 @@ using purify::NativeBulletproofCircuit;
 using purify::Result;
 using purify::Status;
 using purify::Transcript;
+using purify::UInt256;
 using purify::UInt512;
 
 std::string hex32(const std::array<unsigned char, 32>& bytes) {
@@ -162,8 +163,31 @@ void test_tagged_hash(TestContext& ctx) {
                "TaggedHash matches the secp256k1 tagged-sha256 test vector");
 }
 
+void test_biguint_arithmetic(TestContext& ctx) {
+    const UInt256 value = UInt256::from_hex("ffffffffffffffffffffffffffffffff");
+    ctx.expect(value.to_decimal() == "340282366920938463463374607431768211455",
+               "BigUInt decimal formatting handles 128-bit values without native __int128");
+
+    UInt256 borrow_edge = UInt256::from_hex("100000000000000000000000000000000");
+    borrow_edge.sub_assign(UInt256::one());
+    ctx.expect(borrow_edge.to_hex() == "ffffffffffffffffffffffffffffffff",
+               "BigUInt subtraction borrows cleanly across limb boundaries");
+
+    UInt256 saturated = UInt256::from_hex(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    ctx.expect(!saturated.try_add_small(1), "BigUInt detects overflow when adding to the maximum value");
+
+    const UInt512 squared = purify::multiply(value, value);
+    ctx.expect(squared.to_hex() == "fffffffffffffffffffffffffffffffe00000000000000000000000000000001",
+               "BigUInt wide multiplication preserves the full product");
+
+    const auto [quotient, remainder] = purify::divmod_same(squared, purify::widen<8>(value));
+    ctx.expect(quotient == purify::widen<8>(value) && remainder.is_zero(),
+               "BigUInt long division round-trips a wide square product");
+}
+
 void test_known_sample(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses");
     if (!secret.has_value()) {
         return;
@@ -208,13 +232,13 @@ void test_known_sample(TestContext& ctx) {
 }
 
 void test_secret_hardening_path(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for secret hardening checks");
     if (!secret.has_value()) {
         return;
     }
 
-    Result<std::pair<purify::UInt256, purify::UInt256>> unpacked = purify::unpack_secret(*secret);
+    Result<std::pair<purify::UInt256, purify::UInt256>> unpacked = purify::unpack_secret(secret->packed());
     expect_ok(ctx, unpacked, "sample secret unpacks for hardened multiplication checks");
     if (!unpacked.has_value()) {
         return;
@@ -301,12 +325,17 @@ void test_library_key_generation(TestContext& ctx) {
     };
     Result<purify::GeneratedKey> callable_key = purify::generate_key(fill_one);
     expect_ok(ctx, callable_key, "generate_key accepts a no-fail byte-fill callable");
-    Result<purify::GeneratedKey> expected_one = purify::derive_key(purify::UInt512::one());
-    expect_ok(ctx, expected_one, "derive_key succeeds for the packed secret one");
-    if (callable_key.has_value() && expected_one.has_value()) {
-        ctx.expect(callable_key->secret == expected_one->secret, "callable-based generate_key uses the supplied bytes");
-        ctx.expect(callable_key->public_key == expected_one->public_key,
-                   "callable-based generate_key derives the expected public key");
+    Result<purify::SecretKey> secret_one = purify::SecretKey::from_packed(purify::UInt512::one());
+    expect_ok(ctx, secret_one, "SecretKey::from_packed accepts the packed secret one");
+    if (secret_one.has_value()) {
+        Result<purify::GeneratedKey> expected_one = purify::derive_key(*secret_one);
+        expect_ok(ctx, expected_one, "derive_key succeeds for the packed secret one");
+        if (callable_key.has_value() && expected_one.has_value()) {
+            ctx.expect(callable_key->secret == expected_one->secret,
+                       "callable-based generate_key uses the supplied bytes");
+            ctx.expect(callable_key->public_key == expected_one->public_key,
+                       "callable-based generate_key derives the expected public key");
+        }
     }
 
     auto fill_two = [](std::span<unsigned char> bytes) noexcept -> Status {
@@ -322,7 +351,8 @@ void test_library_key_generation(TestContext& ctx) {
     Result<purify::GeneratedKey> os_key = purify::generate_key();
     expect_ok(ctx, os_key, "default generate_key succeeds");
     if (os_key.has_value()) {
-        ctx.expect(purify::is_valid_secret_key(os_key->secret), "default generate_key returns a canonical packed secret");
+        ctx.expect(purify::is_valid_secret_key(os_key->secret.packed()),
+                   "default generate_key returns a canonical packed secret");
         Result<purify::GeneratedKey> roundtrip = purify::derive_key(os_key->secret);
         expect_ok(ctx, roundtrip, "default generate_key output round-trips through derive_key");
         if (roundtrip.has_value()) {
@@ -333,7 +363,7 @@ void test_library_key_generation(TestContext& ctx) {
 }
 
 void test_bip340_key_derivation(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for BIP340 derivation");
     if (!secret.has_value()) {
         return;
@@ -375,18 +405,21 @@ void test_secret_key_validation(TestContext& ctx) {
     Bytes message = sample_message();
 
     UInt512 invalid = purify::key_space_size();
-    expect_error(ctx, purify::derive_key(invalid), ErrorCode::RangeViolation,
-                 "derive_key rejects the packed-secret upper bound");
-    expect_error(ctx, purify::eval(invalid, message), ErrorCode::RangeViolation,
-                 "eval rejects the packed-secret upper bound");
-    expect_error(ctx, purify::prove_assignment_data(message, invalid), ErrorCode::RangeViolation,
-                 "prove_assignment_data rejects the packed-secret upper bound");
-    expect_error(ctx, purify::derive_bip340_key(invalid), ErrorCode::RangeViolation,
-                 "derive_bip340_key rejects the packed-secret upper bound");
+    expect_error(ctx, purify::SecretKey::from_packed(invalid), ErrorCode::RangeViolation,
+                 "SecretKey::from_packed rejects the packed-secret upper bound");
 
     UInt512 last_valid = purify::key_space_size();
     last_valid.sub_assign(purify::widen<8>(purify::half_n1()));
-    expect_ok(ctx, purify::derive_key(last_valid), "derive_key accepts the last canonical packed secret");
+    Result<purify::SecretKey> canonical_secret = purify::SecretKey::from_packed(last_valid);
+    expect_ok(ctx, canonical_secret, "SecretKey::from_packed accepts the last canonical packed secret");
+    if (canonical_secret.has_value()) {
+        expect_ok(ctx, purify::derive_key(*canonical_secret), "derive_key accepts the last canonical packed secret");
+        expect_ok(ctx, purify::eval(*canonical_secret, message), "eval accepts the last canonical packed secret");
+        expect_ok(ctx, purify::prove_assignment_data(message, *canonical_secret),
+                  "prove_assignment_data accepts the last canonical packed secret");
+        expect_ok(ctx, purify::derive_bip340_key(*canonical_secret),
+                  "derive_bip340_key accepts the last canonical packed secret");
+    }
 }
 
 void test_public_key_validation(TestContext& ctx) {
@@ -572,7 +605,7 @@ void test_experimental_circuit_norm_arg_one_gate(TestContext& ctx) {
 }
 
 void test_experimental_circuit_norm_arg_sample_verifier(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for the experimental circuit norm argument");
     if (!secret.has_value()) {
         return;
@@ -660,7 +693,7 @@ void test_experimental_circuit_zk_norm_arg_one_gate(TestContext& ctx) {
 }
 
 void test_experimental_circuit_zk_norm_arg_sample_verifier(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for the experimental circuit ZK norm argument");
     if (!secret.has_value()) {
         return;
@@ -750,7 +783,7 @@ void test_packed_circuit_with_slack(TestContext& ctx) {
 }
 
 void test_circuit_template_partial_final_eval(TestContext& ctx) {
-    Result<UInt512> secret = sample_secret();
+    Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for template partial/final evaluation");
     if (!secret.has_value()) {
         return;
@@ -787,6 +820,7 @@ void test_circuit_template_partial_final_eval(TestContext& ctx) {
 void run_purify_tests(TestContext& ctx) {
     test_sha256_many_bridge(ctx);
     test_tagged_hash(ctx);
+    test_biguint_arithmetic(ctx);
     test_known_sample(ctx);
     test_secret_hardening_path(ctx);
     test_library_key_generation(ctx);

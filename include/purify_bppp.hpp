@@ -280,13 +280,13 @@ struct CommittedPurifyWitness {
 /**
  * @brief Evaluates Purify, derives its witness, and commits to the output.
  * @param message Message to evaluate.
- * @param secret Packed secret scalar pair.
+ * @param secret Owned Purify secret key.
  * @param blind Blinding factor for the output commitment.
  * @param value_gen Generator used for the value term.
  * @param blind_gen Generator used for the blind term.
  * @return Witness bundle extended with the serialized output commitment.
  */
-Result<CommittedPurifyWitness> commit_output_witness(const Bytes& message, const UInt512& secret,
+Result<CommittedPurifyWitness> commit_output_witness(const Bytes& message, const SecretKey& secret,
                                                      const ScalarBytes& blind,
                                                      const GeneratorBytes& value_gen = value_generator_h(),
                                                      const GeneratorBytes& blind_gen = base_generator());

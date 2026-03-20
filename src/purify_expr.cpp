@@ -21,6 +21,17 @@ int compare_field_elements(const purify::FieldElement& lhs, const purify::FieldE
     return lhs.to_uint256().compare(rhs.to_uint256());
 }
 
+int compare_symbols(const purify::Symbol& lhs, const purify::Symbol& rhs) {
+    const purify::SymbolLess less;
+    if (less(lhs, rhs)) {
+        return -1;
+    }
+    if (less(rhs, lhs)) {
+        return 1;
+    }
+    return 0;
+}
+
 }  // namespace
 
 namespace purify {
@@ -218,7 +229,7 @@ Expr ExprBuilder::build() {
         return out;
     }
     std::sort(terms_.begin(), terms_.end(), [](const Expr::Term& lhs, const Expr::Term& rhs) {
-        return lhs.first < rhs.first;
+        return SymbolLess{}(lhs.first, rhs.first);
     });
     auto& linear = out.linear();
     linear.reserve(terms_.size());
@@ -238,13 +249,14 @@ Expr ExprBuilder::build() {
 Expr operator+(const Expr& lhs, const Expr& rhs) {
     Expr out(lhs.constant_ + rhs.constant_);
     out.linear_.reserve(lhs.linear_.size() + rhs.linear_.size());
+    const SymbolLess less;
     std::size_t i = 0;
     std::size_t j = 0;
     while (i < lhs.linear_.size() || j < rhs.linear_.size()) {
-        if (j == rhs.linear_.size() || (i < lhs.linear_.size() && lhs.linear_[i].first < rhs.linear_[j].first)) {
+        if (j == rhs.linear_.size() || (i < lhs.linear_.size() && less(lhs.linear_[i].first, rhs.linear_[j].first))) {
             out.push_term(lhs.linear_[i]);
             ++i;
-        } else if (i == lhs.linear_.size() || rhs.linear_[j].first < lhs.linear_[i].first) {
+        } else if (i == lhs.linear_.size() || less(rhs.linear_[j].first, lhs.linear_[i].first)) {
             out.push_term(rhs.linear_[j]);
             ++j;
         } else {
@@ -308,22 +320,38 @@ bool operator==(const Expr& lhs, const Expr& rhs) {
     return lhs.constant_ == rhs.constant_ && lhs.linear_ == rhs.linear_;
 }
 
-bool operator<(const Expr& lhs, const Expr& rhs) {
-    int constant_cmp = compare_field_elements(lhs.constant_, rhs.constant_);
+bool ExprLess::operator()(const Expr& lhs, const Expr& rhs) const {
+    int constant_cmp = compare_field_elements(lhs.constant(), rhs.constant());
     if (constant_cmp != 0) {
         return constant_cmp < 0;
     }
-    std::size_t common = std::min(lhs.linear_.size(), rhs.linear_.size());
+    std::size_t common = std::min(lhs.linear().size(), rhs.linear().size());
     for (std::size_t i = 0; i < common; ++i) {
-        if (lhs.linear_[i].first != rhs.linear_[i].first) {
-            return lhs.linear_[i].first < rhs.linear_[i].first;
+        int symbol_cmp = compare_symbols(lhs.linear()[i].first, rhs.linear()[i].first);
+        if (symbol_cmp != 0) {
+            return symbol_cmp < 0;
         }
-        int coeff_cmp = compare_field_elements(lhs.linear_[i].second, rhs.linear_[i].second);
+        int coeff_cmp = compare_field_elements(lhs.linear()[i].second, rhs.linear()[i].second);
         if (coeff_cmp != 0) {
             return coeff_cmp < 0;
         }
     }
-    return lhs.linear_.size() < rhs.linear_.size();
+    return lhs.linear().size() < rhs.linear().size();
+}
+
+bool ExprPairLess::operator()(const std::pair<Expr, Expr>& lhs, const std::pair<Expr, Expr>& rhs) const {
+    const ExprLess less;
+    if (less(lhs.first, rhs.first)) {
+        return true;
+    }
+    if (less(rhs.first, lhs.first)) {
+        return false;
+    }
+    return less(lhs.second, rhs.second);
+}
+
+bool operator<(const Expr& lhs, const Expr& rhs) {
+    return ExprLess{}(lhs, rhs);
 }
 
 std::ostream& operator<<(std::ostream& out, const Expr& expr) {

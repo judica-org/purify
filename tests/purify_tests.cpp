@@ -478,6 +478,30 @@ void test_expr_builder(TestContext& ctx) {
                "ExprBuilder preserves affine evaluation semantics");
 }
 
+void test_expr_cache_ordering(TestContext& ctx) {
+    Transcript transcript;
+    Expr x = transcript.secret(std::nullopt);
+    Expr y = transcript.secret(std::nullopt);
+
+    Expr first = purify::ExprBuilder::reserved(2).add_scaled(y, 2).add(x).build();
+    Expr second = purify::ExprBuilder::reserved(2).add(x).add_scaled(y, 2).build();
+
+    ctx.expect(first == second, "ExprBuilder canonicalizes equivalent affine expressions");
+    ctx.expect(!(first < second) && !(second < first),
+               "Expr ordering treats equivalent affine expressions as the same key");
+
+    Expr out1 = transcript.mul(first, y);
+    Expr out2 = transcript.mul(second, y);
+    ctx.expect(out1 == out2, "Transcript mul cache reuses equivalent affine expression inputs");
+    ctx.expect(transcript.muls().size() == 1,
+               "Transcript mul cache stores one entry for equivalent affine expression keys");
+
+    transcript.boolean(first);
+    transcript.boolean(second);
+    ctx.expect(transcript.muls().size() == 2,
+               "Transcript boolean cache deduplicates equivalent affine expression keys");
+}
+
 void test_bppp_move_overload(TestContext& ctx) {
     purify::bppp::NormArgInputs inputs;
     Result<purify::bppp::NormArgProof> proof = purify::bppp::prove_norm_arg(std::move(inputs));
@@ -829,6 +853,7 @@ void run_purify_tests(TestContext& ctx) {
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);
     test_expr_builder(ctx);
+    test_expr_cache_ordering(ctx);
     test_bppp_move_overload(ctx);
     test_toy_bppp_circuit_reduction(ctx);
     test_experimental_circuit_norm_arg_one_gate(ctx);

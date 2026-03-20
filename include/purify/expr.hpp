@@ -9,12 +9,12 @@
 
 #pragma once
 
-#include <compare>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -43,8 +43,21 @@ struct Symbol {
     static Symbol commitment(std::uint32_t index);
 
     std::string to_string() const;
-    auto operator<=>(const Symbol&) const = default;
+    bool operator==(const Symbol&) const = default;
 };
+
+struct SymbolLess {
+    bool operator()(const Symbol& lhs, const Symbol& rhs) const noexcept {
+        using SymbolRank = std::underlying_type_t<SymbolKind>;
+        const SymbolRank lhs_kind = static_cast<SymbolRank>(lhs.kind);
+        const SymbolRank rhs_kind = static_cast<SymbolRank>(rhs.kind);
+        return lhs_kind < rhs_kind || (lhs_kind == rhs_kind && lhs.index < rhs.index);
+    }
+};
+
+inline bool operator<(const Symbol& lhs, const Symbol& rhs) noexcept {
+    return SymbolLess{}(lhs, rhs);
+}
 
 /** @brief Partial witness assignment vector indexed by transcript witness id. */
 using WitnessAssignments = std::vector<std::optional<FieldElement>>;
@@ -138,6 +151,14 @@ private:
 
     FieldElement constant_;
     std::vector<Term> linear_;
+};
+
+struct ExprLess {
+    bool operator()(const Expr& lhs, const Expr& rhs) const;
+};
+
+struct ExprPairLess {
+    bool operator()(const std::pair<Expr, Expr>& lhs, const std::pair<Expr, Expr>& rhs) const;
 };
 
 /**
@@ -234,9 +255,9 @@ public:
 private:
     WitnessAssignments varmap_;
     std::vector<MulConstraint> muls_;
-    std::map<std::pair<Expr, Expr>, Expr> mul_cache_;
-    std::map<std::pair<Expr, Expr>, Expr> div_cache_;
-    std::set<Expr> bool_cache_;
+    std::map<std::pair<Expr, Expr>, Expr, ExprPairLess> mul_cache_;
+    std::map<std::pair<Expr, Expr>, Expr, ExprPairLess> div_cache_;
+    std::set<Expr, ExprLess> bool_cache_;
     std::vector<Expr> eqs_;
 };
 

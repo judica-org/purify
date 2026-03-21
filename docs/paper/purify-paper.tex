@@ -44,7 +44,7 @@ this repository the same native Purify verifier circuit can then be proven in tw
 \begin{enumerate}[nosep]
   \item with the imported legacy Bulletproof circuit backend (``BP'')~\cite{bulletproofs}, and
   \item with a reduction to the \texttt{secp256k1-zkp} \texttt{bppp} norm-argument backend
-  (referred to here as the BP++ path; the code uses the names \texttt{bppp}/BPP)~\cite{bulletproofs-plus-plus,secp-zkp-main,secp-bppp}.
+  (referred to here as the BP++ path; the repository also uses the names \texttt{bppp}/BPP)~\cite{bulletproofs-plus-plus,secp-zkp-main,secp-bppp}.
 \end{enumerate}
 The important point is that both backends prove the same underlying Purify statement; they differ
 only in how the statement is encoded into a zero-knowledge proof.
@@ -130,7 +130,7 @@ The full PRF is then
 Purify is based on the average of the $x$-coordinate of the sum and the $x$-coordinate of the
 difference of two corresponding points on the base curve. The $v / D$ term appears because the
 second point starts on the $D$-twist $E_2$ and must be untwisted before applying the common
-addition law. This is why the combine map is a structured curve-derived identity rather than an
+addition law. The combine map is therefore a structured curve-derived identity rather than an
 arbitrary rational function. For the full derivation, see Appendix~\ref{app:combine-derivation}.
 
 The point-to-field projection is what makes the final expression a low-degree arithmetic relation
@@ -148,7 +148,7 @@ nonce. This is also the nonce shape consumed by higher-level protocols such as M
 To avoid overloading the earlier curve generators $G_1$ and $G_2$, write
 $G_{\mathrm{secp}}$ for the standard generator of secp256k1~\cite{bip340}.
 
-For a nonce-bound input $\widetilde{m}$, the code sets
+For a nonce-bound input $\widetilde{m}$, define
 \[
 r = \mathrm{Purify}((z_1,z_2), \widetilde{m}).
 \]
@@ -157,18 +157,18 @@ modulus:
 \[
 P = n_{\mathrm{secp256k1}}.
 \]
-That means the same byte string can be read directly as a secp256k1 scalar. So, except for the
+That means the same byte string can be read directly as a secp256k1 scalar. Except for the
 single invalid value $r = 0$, the Purify output can be used as a Schnorr nonce scalar without any
 extra reduction step. The zero case is rejected, which happens with negligible probability
 $1 / n_{\mathrm{secp256k1}}$.
 
-The code then canonicalizes that scalar to the even-$Y$ BIP340 representative and derives the
+That scalar is then canonicalized to the even-$Y$ BIP340 representative and used to derive the
 public x-only nonce
 \[
 R = [r]G_{\mathrm{secp}}.
 \]
-In the API this is exposed in x-only form, because that is the BIP340 nonce encoding. So the role
-of Purify in the signing layers is:
+In the API this is exposed in x-only form, because that is the BIP340 nonce encoding. In the
+signing layers, Purify therefore serves as:
 \[
 (z_1,z_2), \widetilde{m}
 \;\longmapsto\;
@@ -209,13 +209,13 @@ into a native sparse arithmetic circuit.
 
 \subsection{Step 1: Fix the Public Message Points}
 
-For a public message $m$, the code first computes
+For a public message $m$, the construction first fixes
 \[
 M_1 = H_1(m), \qquad M_2 = H_2(m)
 \]
 \emph{outside} the circuit. Both the template builder and the witness builder call
-\texttt{hash\_to\_curve} before any circuit logic is created. So the circuit never proves the
-hash-to-curve itself. It starts after the message has already been turned into the public curve
+\texttt{hash\_to\_curve} before any circuit logic is created. Hash-to-curve is therefore outside
+the proved statement. The proved relation begins after the message has already been turned into the public curve
 points $M_1$ and $M_2$.
 
 That is why the remaining statement is a fixed-base statement:
@@ -238,9 +238,9 @@ then the public key exposes only the x-coordinates
 \[
 P_{1,x} = X(P_1), \qquad P_{2,x} = X(P_2).
 \]
-So the full points $P_1,P_2$ are not themselves public objects in the API; only their x-only
+The full points $P_1,P_2$ are therefore not themselves public objects in the API; only their x-only
 encodings are. By contrast, the points $Q_1,Q_2$ and their x-coordinates $Q_{1,x},Q_{2,x}$ are
-internal witness-derived values. The circuit uses those hidden values to compute
+internal witness-derived values. The final relation uses those hidden values to compute
 \[
 o = \mathrm{combine}(Q_{1,x}, Q_{2,x}).
 \]
@@ -263,7 +263,7 @@ At the symbolic level, ``boolean'' means the transcript records the multiplicati
 \[
 b(b-1)=0.
 \]
-So the circuit does not merely hope those variables are bits; it proves they are bits.
+Bitness is therefore an explicit proved constraint, not an unchecked assumption.
 
 Here ``recoding'' means that \texttt{key\_to\_bits(...)} does not keep the scalar in ordinary
 binary form. Instead, it rewrites it into a signed-window encoding tailored to the later
@@ -291,8 +291,8 @@ The heart of the mapping is \texttt{circuit\_ec\_multiply\_x(...)}. It takes
 \end{itemize}
 and returns an expression for the final $x$-coordinate only.
 
-This is where the message-specific structure matters. Since the base point is public, the code can
-precompute point tables \emph{outside} the circuit:
+This is where the message-specific structure matters. Since the base point is public, the required
+point tables can be precomputed \emph{outside} the circuit:
 \begin{itemize}[nosep]
   \item successive doubles of the base point,
   \item odd multiples such as $B,3B,5B,7B$, and
@@ -317,7 +317,7 @@ one of
 \pm G_1, \qquad \pm 3G_1, \qquad \pm 5G_1, \qquad \pm 7G_1.
 \]
 This is where the boolean constraints matter. The lookup formulas are multilinear polynomials in
-$s_0,s_1,t$. Because the circuit separately proves
+$s_0,s_1,t$. Because separate constraints prove
 \[
 s_0(s_0-1)=0, \qquad s_1(s_1-1)=0, \qquad t(t-1)=0,
 \]
@@ -325,7 +325,7 @@ those variables are forced to be actual bits, so the lookup evaluates to one gen
 Without those bit constraints, the same polynomial formulas could evaluate to arbitrary affine
 combinations that do not correspond to any intended window choice.
 
-After selecting chunk points, the circuit adds them with the usual affine addition law. The helper
+After selecting chunk points, the construction applies the usual affine addition law. The helper
 \texttt{circuit\_ec\_add(...)} computes
 \[
 \lambda = \frac{y_2-y_1}{x_2-x_1}, \qquad
@@ -372,18 +372,18 @@ operations are:
 \end{itemize}
 
 Addition and subtraction are different: they are not separate transcript operations. They happen at
-the \texttt{Expr} level, where the code builds affine combinations such as $x+y$, $x-y$, or
+the \texttt{Expr} level, where one forms affine combinations such as $x+y$, $x-y$, or
 $3x-2y+7$ without immediately emitting a new constraint. Those affine expressions only become
 constraints when they are passed into one of the transcript operations above, such as
 \texttt{mul(...)}, \texttt{div(...)}, \texttt{boolean(...)}, or \texttt{equal(...)}.
 
-The subtle operation is division. The circuit does not contain a native inverse gate. Instead,
+Division is handled indirectly because the native constraint system has no inverse gate. Instead,
 \texttt{transcript.div(lhs, rhs)} introduces a quotient witness $q$ and proves only the equivalent
 product relation $q \cdot rhs = lhs$. When the prover knows concrete values, the witness generator
-fills in $q = lhs/rhs$, but the circuit itself still checks only multiplication and affine
+fills in $q = lhs/rhs$, but the resulting check still consists only of multiplication and affine
 equalities.
 
-So, underneath the convenience API, there are really only two primitive check types:
+Underneath the convenience API, the primitive checks reduce to two types:
 \begin{itemize}[nosep]
   \item multiplicative checks of the form $lhs \cdot rhs = out$, and
   \item affine checks of the form $lhs-rhs=0$.
@@ -406,7 +406,7 @@ For example, \texttt{boolean(x)} emits the multiplicative check $x(x-1)=0$, and
 \texttt{div(lhs,rhs)} emits the multiplicative check $q \cdot rhs = lhs$ after introducing the
 quotient witness $q$.
 
-So all of the following are represented by that small vocabulary of transcript operations:
+Within that vocabulary, all of the following are represented by transcript operations:
 \begin{itemize}[nosep]
   \item bit constraints $b(b-1)=0$,
   \item point-selection products such as $xy$ and $xyz$ in the lookup gadgets,
@@ -420,7 +420,7 @@ So all of the following are represented by that small vocabulary of transcript o
 
 In code, \texttt{circuit\_combine(...)} first forms $v = x_2 / D$, then constructs the numerator
 and denominator with \texttt{mul}, and finally enforces the quotient with one more
-\texttt{div}. So the final Purify formula is not special-cased at the backend layer; it is just
+\texttt{div}. The final Purify formula is therefore not special-cased at the backend layer; it is just
 another symbolic arithmetic gadget inside the same transcript.
 
 \subsection{Step 5: Lower the Transcript into Native Bulletproof Rows}
@@ -457,14 +457,15 @@ a_{L,i} a_{R,i} = a_{O,i}.
 Every recorded affine equality becomes one sparse linear row over those same gate wires and over
 the commitment wires.
 
-So one should not think ``some rows are multiplications.'' Multiplications become \emph{gates}.
+It is therefore misleading to think ``some rows are multiplications.'' Multiplications become
+\emph{gates}.
 Rows are used for the affine constraints that tie those gate values together. After lowering, the
 backend no longer sees elliptic-curve gadgets or transcript expressions. It only sees:
 \begin{itemize}[nosep]
   \item multiplication gates $(a_{L,i}, a_{R,i}, a_{O,i})$, and
   \item sparse linear rows tying those gate values together.
 \end{itemize}
-This is why an equality such as $lhs-rhs=0$ is classified as an affine check rather than as a
+An equality such as $lhs-rhs=0$ is therefore classified as an affine check rather than as a
 ``multiplication by $1$'' check: the native circuit format has a dedicated linear layer for such
 relations, and using that layer is both more direct and more efficient.
 
@@ -506,15 +507,15 @@ The commitment wires need one more piece of interpretation. They do \emph{not} c
 \texttt{secret(...)}. A \texttt{secret(...)} call allocates an internal witness that is eventually
 assigned onto ordinary gate wires and constrained there. By contrast, a commitment wire $V_k$ is a
 dedicated scalar slot of the Bulletproof statement itself: it may appear linearly in affine rows,
-and the backend separately exposes the corresponding public commitment point. In this Purify
+and the proof separately exposes the corresponding public commitment point. In this Purify
 circuit there is exactly one such slot, $V_0$, and it is introduced only by the late
 output-binding constraint
 \[
 o = V_0.
 \]
-So $v_0$ is not another secret-key coordinate and not another \texttt{secret(...)} witness. It is
+$v_0$ is therefore not another secret-key coordinate and not another \texttt{secret(...)} witness. It is
 the scalar opening of the committed Purify output. In the prover assignment this value lives in
-\texttt{assignment.commitments[0]}, and the backend turns it into the public commitment point that
+\texttt{assignment.commitments[0]}, and the proving wrapper maps it to the public commitment point that
 accompanies the proof.
 
 Concretely, each row starts from one affine equality produced by the lowering code, which first
@@ -554,7 +555,7 @@ then row $j$ stores
 \[
 \alpha_0 = 3,\qquad \beta_4 = -2,\qquad \gamma_7 = 1,\qquad \eta_0 = 5,\qquad c_j = -7,
 \]
-and the circuit checks
+and the resulting row checks
 \[
 3a_{L,0} - 2a_{R,4} + a_{O,7} + 5v_0 = -7.
 \]
@@ -598,7 +599,7 @@ P_{2,x} = \text{pubkey}_2, \qquad
 o = V_0.
 \]
 The first two equalities bind the circuit to the packed public key. The last equality binds the
-Purify output to commitment slot $V_0$. In other words, the code treats the claimed output as the
+Purify output to commitment slot $V_0$. In other words, the statement treats the claimed output as the
 single committed scalar of the Bulletproof-style statement, not as an ordinary public constant row.
 
 Finally, \texttt{prove\_assignment\_data(...)} runs the same symbolic construction with the concrete
@@ -614,13 +615,13 @@ as a \texttt{BulletproofAssignmentData} object.
 The legacy BP path proves the native circuit \emph{directly}. There is no further statement
 reduction after the circuit described above has been built.
 
-The important subtlety is the Purify output $o$. In the protocol, $o$ is supposed to remain secret:
+The key point is the Purify output $o$. In the protocol, $o$ is supposed to remain secret:
 for nonce proofs, the verifier should learn the public nonce point $R$, not the scalar $r=o$
-itself. That is why Step 6 does \emph{not} bind $o$ to a public field constant. Instead, it binds
+itself. Accordingly, Step 6 does \emph{not} bind $o$ to a public field constant. Instead, it binds
 \[
 o = V_0,
 \]
-where $V_0$ is the single committed-scalar slot of the Bulletproof statement. So the BP proof is a
+where $V_0$ is the single committed-scalar slot of the Bulletproof statement. The BP proof is therefore a
 proof of knowledge of a satisfying witness \emph{and} of an opening of that commitment slot, while
 exposing only the corresponding public commitment point.
 
@@ -681,7 +682,7 @@ For a valid witness, all circuit checks are equivalent to the single degree-6 id
 \[
 t(X) = \langle l(X), r(X) \rangle.
 \]
-The code computes the coefficients $t_1,\dots,t_6$ of that polynomial and sends commitments
+The prover computes the coefficients $t_1,\dots,t_6$ of that polynomial and sends commitments
 $T_1,T_3,T_4,T_5,T_6$; the $X^2$ coefficient is absorbed through the already-committed $A_O$ term,
 which is why there is no separate $T_2$. Fiat--Shamir then derives a challenge $x$, and the prover
 forms
@@ -699,7 +700,7 @@ point the verifier's public equations have already tied
   and
   \item $A_I,A_O,S$ into one vector-opening equation for the hidden vectors $l$ and $r$.
 \end{itemize}
-So the final hidden statement is exactly one inner product. The backend runs the standard
+At that point the remaining hidden statement is exactly one inner product. The backend runs the standard
 Bulletproof inner-product argument: it hashes the transcript and $t$ to derive the extra generator
 randomizer, recursively folds the vectors in half, emits pairs of points $(L_j,R_j)$, derives
 folding challenges $x_j$, and repeats until only tiny final scalars remain. Verification
@@ -731,7 +732,7 @@ That last step is the actual BP proving procedure in this repository. The wrappe
   the Bulletproof proof bytes.
 \end{enumerate}
 
-So the backend is proving one concrete statement:
+The resulting BP statement is:
 \begin{quote}
 there exist witness columns $(a_L,a_R,a_O)$ and a committed scalar $v_0$ such that every
 multiplication gate holds, every affine row holds, the public-key rows hold, and $o=v_0$.
@@ -745,7 +746,7 @@ the Bulletproof proof into the verification wrapper. In the nonce-proof wrapper,
 checks that the x-only projection of the public commitment point matches the advertised BIP340
 nonce.
 
-So the BP path is the most literal reading of the repository:
+The BP path is therefore the most literal reading of the repository:
 \begin{quote}
 prove that the supplied wire assignment satisfies the Purify circuit.
 \end{quote}
@@ -767,10 +768,10 @@ of the form
 \]
 and then asks the \texttt{bppp} backend to prove knowledge of the hidden vectors
 $n,\ell$ satisfying that single equation~\cite{bulletproofs-plus,bulletproofs-plus-plus,secp-zkp-main,secp-bppp}.
-So BP++ is not a different Purify statement. It is a public reduction of the same Purify circuit to
+BP++ is therefore not a different Purify statement. It is a public reduction of the same Purify circuit to
 a proof system that is designed around weighted norm arguments.
 
-This translation step is worthwhile for a practical reason. The repository already has one
+This translation step serves a practical purpose. The repository already has one
 message-specific Purify circuit template, one witness generator, and one direct BP proof of that
 statement. Reusing that same circuit as the source of truth means the BP and BP++ paths can be
 checked against exactly the same semantics and exactly the same witness assignment. A bespoke
@@ -797,7 +798,7 @@ $4 \cdot 2048 = 8192$ and lands exactly on the $909$-byte size tier. A bespoke p
 avoided that padding would likely move to about $4 \cdot 2030 = 8120$, which is enough to drop one
 tier to about $844$ bytes. But the \emph{next} proof-size drop would require pushing the dominant
 reduced dimension below $4096$, which would mean something much more aggressive than just removing
-bookkeeping. So the realistic upside is probably a modest additional byte reduction and some prover
+bookkeeping. The realistic upside is therefore probably a modest additional byte reduction and some prover
 speedup, not a second dramatic proof-size collapse.
 
 \subsection{Public Reduction to One Norm Relation}
@@ -909,7 +910,7 @@ s_i^+ = \frac{e_i^+}{2 d_i^+}, \qquad s_i^- = \frac{e_i^-}{2 d_i^-}.
 These shifts are stored as \texttt{plus\_shift[i]} and \texttt{minus\_shift[i]}.
 
 \medskip\noindent\textbf{Ordinary-square form.}
-The backend wants a weighted sum of \emph{ordinary} squares with fixed public weights
+The target norm relation uses a weighted sum of \emph{ordinary} squares with fixed public weights
 $\mu_k = (\rho^2)^{k+1}$. To fit that shape, the helper \texttt{two\_square\_terms(...)} splits
 each completed-square coefficient into two ordinary square coordinates. If one branch contributes
 \[
@@ -919,7 +920,7 @@ the helper chooses two field elements $t_1,t_2$ such that
 \[
 t_1^2 + t_2^2 = d.
 \]
-Concretely, writing $\xi^2 = -1$ in $\mathbb{F}_P$, the code sets
+Concretely, writing $\xi^2 = -1$ in $\mathbb{F}_P$, the reduction sets
 \[
 t_1 = \frac{d+1}{2}, \qquad t_2 = \xi \frac{d-1}{2},
 \]
@@ -937,7 +938,7 @@ exactly
 \[
 t_1^2 z^2 + t_2^2 z^2 = d z^2.
 \]
-So \texttt{two\_square\_terms(...)} is just a field-level decomposition of one coefficient-weighted
+\texttt{two\_square\_terms(...)} is therefore just a field-level decomposition of one coefficient-weighted
 square into two ordinary squares. That is why every original
 gate contributes \emph{four} entries to the reduced norm vector: two from the ``plus'' branch and
 two from the ``minus'' branch. Concretely,
@@ -958,7 +959,7 @@ for the zero-knowledge wrapper. The coefficient vector $c$ has the same shape: t
 entries weight the output-wire part, the next $C$ entries weight the commitment-wire part, and the
 padding tail is zero.
 
-So the public side supplies
+The public side then supplies
 \[
 c \in \mathbb{F}^{T}, \qquad T \in \mathbb{F},
 \]
@@ -999,7 +1000,7 @@ Importantly, this public reduction still does \emph{not} publish the Purify outp
 scalar. The output remains the commitment-wire value $v_0$, and in the reduction that scalar sits
 only as one hidden coordinate inside $\ell$. The public vectors $c$ and the public target $T$ are
 derived from the circuit shape and statement-binding bytes; they do not reveal the witness values.
-So the verifier never receives a separate field element for $o$, only one group commitment to the
+The verifier therefore never receives a separate field element for $o$, only one group commitment to the
 entire reduced witness together with a proof that the committed witness satisfies the norm relation.
 That said, this subsection is the minimal reduced-witness argument. The full witness-hiding wrapper
 used by the actual zero-knowledge API appears next.
@@ -1011,7 +1012,7 @@ $C_{\mathrm{wit}}$, and checks a norm-argument proof for
 \exists (n,\ell)\ \text{such that}\ 
 \sum_{k=0}^{4N-1} \mu_k n_k^2 + \langle \ell, c \rangle = T
 \]
-under that commitment. This is the cleanest way to see the BP++ design: it proves the same Purify
+under that commitment. This framing makes the BP++ design easiest to read: it proves the same Purify
 statement as BP, but only after first compressing the native circuit to the reduced witness
 coordinates $(n,\ell)$.
 
@@ -1069,7 +1070,7 @@ This is not just an abstract description: the implementation explicitly recomput
 commitment to $(n',\ell')$ and checks that it equals the combined point $C_x$ before calling the
 final inner prover. The verifier mirrors the same steps: recompute the public reduction, derive the
 same challenge $x$, reconstruct $C_x$, and verify the final norm argument against that combined
-commitment. So the outer protocol is Bulletproof-like, while the inner statement remains the BP++
+commitment. The outer protocol is Bulletproof-like, while the inner statement remains the BP++
 weighted norm relation.
 
 \subsection{Public Commitments and PureSign++}
@@ -1087,7 +1088,7 @@ supplies the corresponding public commitment points, and those points are hashed
 binding so that they cannot be swapped after the fact.
 
 The prover side also checks that the supplied public commitment points really match the commitment
-scalars in the witness assignment. When constructing the anchored $A$ commitment, the code subtracts
+scalars in the witness assignment. When constructing the anchored $A$ commitment, the implementation subtracts
 the weighted contribution of those already-public points, so the remaining hidden witness is only
 \[
 \ell = \bigl(a_{O,0}, \ldots, a_{O,N-1}, \text{padding}\bigr).
@@ -1174,7 +1175,8 @@ slope is squared, this is identical to writing
 \[
 \lambda_{\mathrm{add}}^2 = \frac{(y_1 - \tilde{y}_2)^2}{(u - \tilde{v})^2}.
 \]
-So the ``add'' in $x_{\mathrm{add}}$ refers to adding the points, not to adding the $y$-values.
+The ``add'' in $x_{\mathrm{add}}$ therefore refers to adding the points, not to adding the
+$y$-values.
 
 For the subtraction case, $P-Q = P+(-Q)$, so replacing $Q=(\tilde{v}, \tilde{y}_2)$ by
 $-Q=(\tilde{v}, -\tilde{y}_2)$ turns the slope numerator into $\pm(y_1 + \tilde{y}_2)$, whose square gives the

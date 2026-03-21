@@ -14,6 +14,8 @@
 \setlist[enumerate]{leftmargin=1.75em}
 \allowdisplaybreaks[2]
 \setlength{\emergencystretch}{2em}
+\newcommand{\bp}{\textbf{BulletProofs}}
+\newcommand{\bppp}{\textbf{BulletProofs++}}
 
 \ifdefined\pdfinfoomitdate
   \pdfinfoomitdate=1
@@ -42,9 +44,9 @@ pseudorandom function (PRF)~\cite{purify-ref}: it is designed so that the expens
 the arithmetic circuit while the in-circuit work stays close to low-degree field arithmetic. In
 this repository the same native Purify verifier circuit can then be proven in two different ways:
 \begin{enumerate}[nosep]
-  \item with the imported legacy Bulletproof circuit backend (``BP'')~\cite{bulletproofs}, and
-  \item with a reduction to the \texttt{secp256k1-zkp} \texttt{bppp} norm-argument backend
-  (referred to here as the BP++ path; the repository also uses the names \texttt{bppp}/BPP)~\cite{bulletproofs-plus-plus,secp-zkp-main,secp-bppp}.
+  \item with the imported legacy \bp\ circuit backend~\cite{bulletproofs}, and
+  \item with a reduction to the \texttt{secp256k1-zkp} \bppp\ norm-argument backend
+  (the \bppp\ path)~\cite{bulletproofs-plus-plus,secp-zkp-main,secp-bppp}.
 \end{enumerate}
 The important point is that both backends prove the same underlying Purify statement; they differ
 only in how the statement is encoded into a zero-knowledge proof.
@@ -423,7 +425,7 @@ and denominator with \texttt{mul}, and finally enforces the quotient with one mo
 \texttt{div}. The final Purify formula is therefore not special-cased at the backend layer; it is just
 another symbolic arithmetic gadget inside the same transcript.
 
-\subsection{Step 5: Lower the Transcript into Native Bulletproof Rows}
+\subsection{Step 5: Lower the Transcript into Native \bp\ Rows}
 
 After \texttt{circuit\_main(...)} finishes, the statement is therefore just a normalized list of
 emitted constraints in the \texttt{Transcript} language:
@@ -501,12 +503,12 @@ c_j.
 Here the symbols $a_{L,i}, a_{R,i}, a_{O,i}$ are the \emph{values} assigned to gate $i$'s left,
 right, and output wires. The coefficients $\alpha_i,\beta_i,\gamma_i,\eta_k$ are not new secret
 data; they are just the linear coefficients that appear when one lowered transcript equation is
-written in terms of the Bulletproof wire symbols $L_i,R_i,O_i,V_k$.
+written in terms of the \bp\ wire symbols $L_i,R_i,O_i,V_k$.
 
 The commitment wires need one more piece of interpretation. They do \emph{not} come from
 \texttt{secret(...)}. A \texttt{secret(...)} call allocates an internal witness that is eventually
 assigned onto ordinary gate wires and constrained there. By contrast, a commitment wire $V_k$ is a
-dedicated scalar slot of the Bulletproof statement itself: it may appear linearly in affine rows,
+dedicated scalar slot of the \bp\ statement itself: it may appear linearly in affine rows,
 and the proof separately exposes the corresponding public commitment point. In this Purify
 circuit there is exactly one such slot, $V_0$, and it is introduced only by the late
 output-binding constraint
@@ -537,7 +539,7 @@ After witness aliases have been replaced by wire symbols, that expression has th
 \]
 The row then stores those same coefficients in \texttt{wl}, \texttt{wr}, \texttt{wo}, and
 \texttt{wv},\footnote{The packed backend stores commitment-column entries with the opposite sign
-internally. This matches the imported Bulletproof statement convention and keeps the public
+internally. This matches the imported \bp\ statement convention and keeps the public
 commitment point in the natural form $C_k = [v_k]G$ rather than forcing the API to expose
 $-[v_k]G$ or to negate the opening scalar at the boundary. In this paper's single-commitment case,
 that means the public point can be published directly as $R=[r]G$. The displayed equation in the
@@ -570,14 +572,14 @@ Most rows come from one of two sources:
 
 Two lowering details are easy to miss but matter:
 \begin{enumerate}
-  \item If a transcript witness is just an alias for one Bulletproof wire value, the lowering code
+  \item If a transcript witness is just an alias for one \bp\ wire value, the lowering code
   maps it directly onto that wire instead of keeping an extra symbolic variable.
   \item If a transcript witness appears only in linear equations, the lowering code allocates an
   extra dummy gate whose left wire carries that witness and whose right and output wires are zero.
 \end{enumerate}
 After that, the number of multiplication gates in the native circuit is padded to the next power
 of two because both proving backends expect that shape. This gate-count padding is distinct from
-the later slack tail in the reduced vector $\ell$. For the current Purify parameters the unpadded
+the later zk slack variable slots in the reduced vector $\ell$. For the current Purify parameters the unpadded
 circuit is about 2030 multiplication gates, and the proof-facing shape is padded to 2048 gates.
 
 \subsection{Step 6: Bind the Public Key and the Claimed Output}
@@ -601,7 +603,7 @@ o = V_0.
 \]
 The first two equalities bind the circuit to the packed public key. The last equality binds the
 Purify output to commitment slot $V_0$. In other words, the statement treats the claimed output as the
-single committed scalar of the Bulletproof-style statement, not as an ordinary public constant row.
+single committed scalar of the \bp-style\ statement, not as an ordinary public constant row.
 
 Finally, \texttt{prove\_assignment\_data(...)} runs the same symbolic construction with the concrete
 secret key, checks that the symbolic outputs match native curve arithmetic, and materializes the
@@ -611,9 +613,9 @@ actual witness columns
 \]
 as a \texttt{BulletproofAssignmentData} object.
 
-\section{Zero-Knowledge Proofs with BP}
+\section{Zero-Knowledge Proofs with \bp}
 
-The legacy BP path proves the native circuit \emph{directly}. There is no further statement
+The legacy \bp\ path proves the native circuit \emph{directly}. There is no further statement
 reduction after the circuit described above has been built.
 
 The key point is the Purify output $o$. In the protocol, $o$ is supposed to remain secret:
@@ -622,20 +624,16 @@ itself. Accordingly, Step 6 does \emph{not} bind $o$ to a public field constant.
 \[
 o = V_0,
 \]
-where $V_0$ is the single committed-scalar slot of the Bulletproof statement. The BP proof is therefore a
+where $V_0$ is the single committed-scalar slot of the \bp\ statement. The \bp\ proof is therefore a
 proof of knowledge of a satisfying witness \emph{and} of an opening of that commitment slot, while
 exposing only the corresponding public commitment point.
 
-Concretely, \texttt{prove\_experimental\_circuit(...)} returns an
-\texttt{ExperimentalBulletproofProof} containing:
-\begin{itemize}[nosep]
-  \item the Bulletproof proof bytes, and
-  \item one public commitment point for $V_0$.
-\end{itemize}
-The scalar $o$ itself stays in \texttt{assignment.commitments[0]}; the verifier sees only that
-public point. The API also allows an extra blinding factor for this commitment. If a blind is
-provided, the backend uses a blinded commitment to $o$. If \texttt{blind = std::nullopt}, the
-wrapper exposes the exact point $[o]\texttt{value\_generator}$ instead.
+Operationally, \texttt{prove\_experimental\_circuit(...)} returns \bp\ proof bytes together
+with the public commitment point for $V_0$. The scalar $o$ itself stays in
+\texttt{assignment.commitments[0]}; the verifier sees only that public point. The API also allows
+an extra blinding factor for this commitment. If a blind is provided, the backend uses a blinded
+commitment to $o$. If \texttt{blind = std::nullopt}, the wrapper exposes the exact point
+$[o]\texttt{value\_generator}$ instead.
 
 That exact-unblinded mode is the one used by the legacy PureSign nonce proof. There the chosen
 \texttt{value\_generator} is the secp256k1 base generator, so the public commitment point is
@@ -647,7 +645,7 @@ R = [r]G_{\mathrm{secp}},
 which is exactly the public nonce point the higher-level Schnorr protocol needs. The scalar $r$
 remains hidden; only its curve-point image is public.
 
-Inside that wrapper, the imported backend then runs a standard Bulletproof-style polynomial proof
+Inside that wrapper, the imported backend then runs a standard \bp-style\ polynomial proof
 for the flattened circuit~\cite{bulletproofs}. The math has three layers.
 
 \medskip\noindent\textbf{Witness commitments.}
@@ -660,7 +658,7 @@ A_O &= \mathrm{Com}(a_O;\beta), \\
 S   &= \mathrm{Com}(l_3,r_3;\rho).
 \end{aligned}
 \]
-This is schematic notation: the first Boolean prefix uses the usual bit-specialized Bulletproof
+This is schematic notation: the first Boolean prefix uses the usual bit-specialized \bp{} 
 encoding, but conceptually $A_I$ commits to the left/right wire vectors, $A_O$ commits to the
 output-wire vector, and $S$ commits to the random masks. Fiat--Shamir then derives challenges
 $y,z$ from the transcript.
@@ -702,7 +700,7 @@ point the verifier's public equations have already tied
   \item $A_I,A_O,S$ into one vector-opening equation for the hidden vectors $l$ and $r$.
 \end{itemize}
 At that point the remaining hidden statement is exactly one inner product. The backend runs the standard
-Bulletproof inner-product argument: it hashes the transcript and $t$ to derive the extra generator
+\bp\ inner-product argument: it hashes the transcript and $t$ to derive the extra generator
 randomizer, recursively folds the vectors in half, emits pairs of points $(L_j,R_j)$, derives
 folding challenges $x_j$, and repeats until only tiny final scalars remain. Verification
 reconstructs the same folded generator coefficients from the $x_j$ values and checks one final
@@ -717,23 +715,12 @@ Concretely, the prover side does the following:
   \item call \texttt{prove\_experimental\_circuit(...)} on that circuit and assignment.
 \end{enumerate}
 
-That last step is the actual BP proving procedure in this repository. The wrapper:
-\begin{enumerate}
-  \item checks that the native circuit has the expected shape and that the supplied assignment
-  really satisfies all multiplication gates and affine rows,
-  \item flattens the sparse circuit matrices and the witness columns into the imported backend's
-  low-level view,
-  \item hashes the exact circuit plus any extra statement-binding bytes into one
-  circuit-binding digest,
-  \item passes the flattened circuit, flattened assignment, the proof nonce, the chosen
-  \texttt{value\_generator}, the optional commitment blind, and the binding digest into the imported
-  Bulletproof backend together with two output buffers, one for the commitment point and one for the
-  serialized proof, and
-  \item returns those two filled buffers as the public result: the commitment point for $V_0$ and
-  the Bulletproof proof bytes.
-\end{enumerate}
+That last step is the concrete \bp\ prover call in this repository: the wrapper validates
+the native circuit and witness assignment, binds the exact circuit and statement bytes into one
+digest, invokes the imported \bp\ backend, and returns the proof bytes together with the
+public commitment point for $V_0$.
 
-The resulting BP statement is:
+The resulting \bp\ statement is:
 \begin{quote}
 there exist witness columns $(a_L,a_R,a_O)$ and a committed scalar $v_0$ such that every
 multiplication gate holds, every affine row holds, the public-key rows hold, and $o=v_0$.
@@ -743,11 +730,11 @@ commitment point and the proof transcript.
 
 The verifier reruns the public half of the same setup: it reconstructs the same circuit shape,
 recomputes the same circuit-binding digest, and feeds the circuit, the public commitment point, and
-the Bulletproof proof into the verification wrapper. In the nonce-proof wrapper, the verifier also
+the \bp\ proof into the verification wrapper. In the nonce-proof wrapper, the verifier also
 checks that the x-only projection of the public commitment point matches the advertised BIP340
 nonce.
 
-The BP path is therefore the most literal reading of the repository:
+The \bp\ path is therefore the most literal reading of the repository:
 \begin{quote}
 prove that the supplied wire assignment satisfies the Purify circuit.
 \end{quote}
@@ -756,9 +743,9 @@ than as a revealed public field element. Its advantage is conceptual simplicity.
 that proof size and prover work scale with the full 2048-gate-style circuit rather than with a more
 compressed relation.
 
-\section{Zero-Knowledge Proofs with BP++ / BPP}
+\section{Zero-Knowledge Proofs with \bppp}
 
-The BP++ path starts from \emph{the same native circuit and the same witness assignment} as
+The \bppp\ path starts from \emph{the same native circuit and the same witness assignment} as
 Section~3. What changes is the public encoding handed to the backend. Instead of proving the full
 native gate-and-row system directly, the repository first reduces it to one weighted norm relation
 of the form
@@ -767,16 +754,17 @@ of the form
 \qquad
 \mu_k = (\rho^2)^{k+1},
 \]
-and then asks the \texttt{bppp} backend to prove knowledge of the hidden vectors
+and then asks the \bppp\ backend to prove knowledge of the hidden vectors
 $n,\ell$ satisfying that single equation~\cite{bulletproofs-plus,bulletproofs-plus-plus,secp-zkp-main,secp-bppp}.
-BP++ is therefore not a different Purify statement. It is a public reduction of the same Purify circuit to
+\bppp\ is therefore not a different Purify statement. It is a public reduction of the same Purify circuit to
 a proof system that is designed around weighted norm arguments.
 
 This translation step serves a practical purpose. The repository already has one
-message-specific Purify circuit template, one witness generator, and one direct BP proof of that
-statement. Reusing that same circuit as the source of truth means the BP and BP++ paths can be
+message-specific Purify circuit template, one witness generator, and one direct \bp\ proof of that
+statement. Reusing that same circuit as the source of truth means the \bp\ and
+\bppp\ paths can be
 checked against exactly the same semantics and exactly the same witness assignment. A bespoke
-``native BP++ circuit'' might also be possible in principle, but then the engineering burden would
+``native \bppp\ circuit'' might also be possible in principle, but then the engineering burden would
 move to proving that this second hand-written object is really equivalent to the original Purify
 statement. The reduction used here avoids that duplication: first fix one circuit, then change only
 the proof encoding. The repository does not implement or benchmark such a bespoke alternative, so it
@@ -791,14 +779,14 @@ the same secret scalar: one could compute each signed-window selector basis once
 it out to both the $G_1$ and $M_1$ tables, and likewise once for $z_2$ across the $G_2$ and $M_2$
 tables. That would remove some duplicated lookup products and some generic lowering overhead, but it
 would not change the basic Purify arithmetic. This matters for expectations about size. In the
-current benchmark surface the BP++ proof payload is about $909$ bytes versus about $1124$ bytes for
-legacy BP, a roughly $20\%$ reduction. The BPPP backend's proof size is logarithmic in the reduced
+current benchmark surface the \bppp\ proof payload is about $909$ bytes versus about $1124$ bytes for
+legacy \bp, a roughly $20\%$ reduction. The \bppp\ backend's proof size is logarithmic in the reduced
 dimensions, so small structural cleanups do not necessarily shrink the proof at all. The current
 reused path pads the native circuit to $2048$ gates, and that gate-count padding alone makes the
 dominant reduced dimension $4 \cdot 2048 = 8192$, landing exactly on the $909$-byte size tier.
 A bespoke path that merely avoided this native-circuit padding would likely move to about
 $4 \cdot 2030 = 8120$, which is enough to drop one tier to about $844$ bytes. This estimate is
-about the norm-vector dimension $4N$; it does not require removing the separate slack tail later
+about the norm-vector dimension $4N$; it does not require removing the separate zk slack variable slots later
 used in $\ell$ for the masked wrapper. But the \emph{next} proof-size drop would require pushing
 the dominant reduced dimension below $4096$, which would mean something much more aggressive than
 just removing bookkeeping. The realistic upside is therefore probably a modest additional byte
@@ -955,15 +943,15 @@ $a_{L,i}+a_{R,i}$ and $a_{L,i}-a_{R,i}$ values for each gate. The vector $\ell$ 
 remaining linear witness data. In the default mode its layout is
 \[
 \ell =
-\bigl(a_{O,0}, \ldots, a_{O,N-1}, v_0, \ldots, v_{C-1}, \text{padding}\bigr),
+\bigl(a_{O,0}, \ldots, a_{O,N-1}, v_0, \ldots, v_{C-1}, \text{zk slack variable slots}\bigr),
 \]
-where the final tail is reduction slack: coordinates introduced by rounding the $\ell$-vector
+where the final tail consists of zk slack variable slots: coordinates introduced by rounding the $\ell$-vector
 length up to a power of two after the used coordinates have been placed. This is distinct from the
-earlier gate-count padding of the native circuit. In the basic reduction these slack coordinates
-are zero; in the masked wrapper they are reused as blinding slots. The extra ``$+1$'' in the
+earlier gate-count padding of the native circuit. In the basic reduction these zk slack variable
+slots are zero; in the masked wrapper they are reused as blinding slots. The extra ``$+1$'' in the
 implementation ensures that this rounded $\ell$ length always leaves at least some slack beyond the
 used coordinates. The coefficient vector $c$ has the same shape: the first $N$ entries weight the
-output-wire part, the next $C$ entries weight the commitment-wire part, and the slack tail is zero.
+output-wire part, the next $C$ entries weight the commitment-wire part, and the zk slack variable slots are zero.
 
 The public side then supplies
 \[
@@ -973,11 +961,11 @@ and the entire native circuit is equivalent to one public relation
 \[
 \sum_{k=0}^{4N-1} \mu_k n_k^2 + \langle \ell, c \rangle = T,
 \]
-with $\mu_k = (\rho^2)^{k+1}$. This is the object the \texttt{bppp} backend is designed to prove.
+with $\mu_k = (\rho^2)^{k+1}$. This is the object the \bppp\ backend is designed to prove.
 
 \subsection{Transparent Reduced-Witness Proof}
 
-The simplest BPP entry points are:
+The simplest \bppp\ entry points are:
 \begin{itemize}[nosep]
   \item \texttt{commit\_experimental\_circuit\_witness},
   \item \texttt{prove\_experimental\_circuit\_norm\_arg}, and
@@ -999,7 +987,7 @@ The proof object returned by
 objects:
 \begin{itemize}[nosep]
   \item the reduced-witness commitment $C_{\mathrm{wit}}$, and
-  \item the inner \texttt{bppp} proof bytes.
+  \item the inner \bppp\ proof bytes.
 \end{itemize}
 
 Importantly, this public reduction still does \emph{not} publish the Purify output $o$ as a public
@@ -1018,15 +1006,15 @@ $C_{\mathrm{wit}}$, and checks a norm-argument proof for
 \exists (n,\ell)\ \text{such that}\ 
 \sum_{k=0}^{4N-1} \mu_k n_k^2 + \langle \ell, c \rangle = T
 \]
-under that commitment. This framing makes the BP++ design easiest to read: it proves the same Purify
-statement as BP, but only after first compressing the native circuit to the reduced witness
+under that commitment. This framing makes the \bppp\ design easiest to read: it proves the same Purify
+statement as \bp, but only after first compressing the native circuit to the reduced witness
 coordinates $(n,\ell)$.
 
 \subsection{The Masked Zero-Knowledge Wrapper Used Here}
 
-The repository's zero-knowledge BP++ path adds one more layer on top of that transparent reduced
-proof. Starting from the hidden vectors $(n,\ell)$, the prover first fills the reduction-slack tail
-of $\ell$ with fresh blind scalars and then derives random mask vectors
+The repository's zero-knowledge \bppp\ path adds one more layer on top of that transparent reduced
+proof. Starting from the hidden vectors $(n,\ell)$, the prover first fills the zk slack variable
+slots in $\ell$ with fresh blind scalars and then derives random mask vectors
 \[
 r_n \in \mathbb{F}^{4N}, \qquad r_\ell \in \mathbb{F}^{T}
 \]
@@ -1050,7 +1038,7 @@ Indeed,
 = T + x t_1 + x^2 t_2.
 \]
 
-The outer transcript then mirrors the standard Bulletproof masking pattern:
+The outer transcript then mirrors the standard \bp\ masking pattern:
 \begin{enumerate}
   \item commit to the hidden reduced witness,
   \[
@@ -1076,8 +1064,8 @@ This is not just an abstract description: the implementation explicitly recomput
 commitment to $(n',\ell')$ and checks that it equals the combined point $C_x$ before calling the
 final inner prover. The verifier mirrors the same steps: recompute the public reduction, derive the
 same challenge $x$, reconstruct $C_x$, and verify the final norm argument against that combined
-commitment. The outer protocol is Bulletproof-like, while the inner statement remains the BP++
-weighted norm relation.
+commitment. The outer protocol is \bp-like, while the inner statement remains the
+\bppp\ weighted norm relation.
 
 \subsection{Public Commitments and PureSign++}
 
@@ -1097,7 +1085,7 @@ The prover side also checks that the supplied public commitment points really ma
 scalars in the witness assignment. When constructing the anchored $A$ commitment, the implementation subtracts
 the weighted contribution of those already-public points, so the remaining hidden witness is only
 \[
-\ell = \bigl(a_{O,0}, \ldots, a_{O,N-1}, \text{padding}\bigr).
+\ell = \bigl(a_{O,0}, \ldots, a_{O,N-1}, \text{zk slack variable slots}\bigr).
 \]
 This is the hook used by the PureSign++ flow: some commitment objects remain explicit public
 protocol messages, while the hidden Purify witness is still proved through the same masked
@@ -1105,38 +1093,38 @@ norm-argument path.
 
 \section{Why Keep Both Proof Paths}
 
-The repository keeps both BP and BP++ because they serve different engineering purposes:
+The repository keeps both \bp\ and \bppp\ because they serve different engineering purposes:
 \begin{itemize}[nosep]
-  \item \textbf{BP is the direct baseline.} It proves the native circuit without any extra
+  \item \textbf{\bp\ is the direct baseline.} It proves the native circuit without any extra
   reduction layer and therefore acts as the simplest end-to-end reference for ``this Purify
   statement is satisfiable''.
-  \item \textbf{BP++ is the structured path.} It exploits the fact that the Purify circuit can be
+  \item \textbf{\bppp\ is the structured path.} It exploits the fact that the Purify circuit can be
   compressed into one weighted norm relation, which is a much better fit for the
-  \texttt{bppp} backend and for the repository's newer PureSign++ surfaces.
+  \bppp\ backend and for the repository's newer PureSign++ surfaces.
   \item \textbf{Both backends are benchmarked against the same statement.} The benchmark harness
-  reports both legacy-BP rows (for example
-  \texttt{experimental\_circuit.legacy\_bp.prove}) and BPP rows (for example
-  \texttt{experimental\_circuit.bppp\_zk\_norm\_arg.prove}), which makes the tradeoff explicit in
-  one place.
+  reports both legacy \bp\ rows (for example
+  \texttt{experimental\_circuit.legacy\_bp.prove}) and the corresponding \bppp\ rows, which makes
+  the tradeoff explicit in one place.
 \end{itemize}
 
 \section{Caveats}
 
 Two caveats are worth stating explicitly:
 \begin{enumerate}[nosep]
-  \item The BPP/BP++ interfaces in this repository are marked experimental. They are useful for
+  \item The \bppp\ interfaces in this repository are marked experimental. They are useful for
   research, benchmarking, and higher-level protocol work, but they should still be treated as an
   evolving proving path.
-  \item The outer masking layer is designed to recover the usual zero-knowledge hiding structure,
-  but the inner BPP backend is still a separate low-level implementation with its own operational
-  assumptions. The repository comments call this out directly.
+  \item The paper describes one mathematical statement and one masking wrapper, but the concrete
+  \bppp\ prover and verifier still depend on a separate experimental implementation of \bppp. The
+  remaining caveat is therefore about implementation maturity and integration risk, not about a
+  different public statement.
 \end{enumerate}
 
 \section{Summary}
 
-Purify is the statement. The native sparse circuit is the common intermediate form. BP proves that
-circuit directly. BP++ first folds the same circuit into a weighted norm argument and then proves
-that reduced relation, wrapped in a Bulletproof-style masking transcript. That split is the easiest
+Purify is the statement. The native sparse circuit is the common intermediate form. \bp\ proves that
+circuit directly. \bppp\ first folds the same circuit into a weighted norm argument and then proves
+that reduced relation, wrapped in a \bp-style\ masking transcript. That split is the easiest
 way to understand the design of \texttt{purify-cpp}: one circuit, two proving encodings.
 
 \appendix
@@ -1236,7 +1224,7 @@ Jonas Nick, Tim Ruffing, Yannick Seurin, and Pieter Wuille.
 
 \bibitem{bulletproofs}
 Benedikt B{\"u}nz, Jonathan Bootle, Dan Boneh, Andrew Poelstra, Pieter Wuille, and Gregory Maxwell.
-\newblock \emph{Bulletproofs: Short Proofs for Confidential Transactions and More}.
+\newblock \emph{\bp: Short Proofs for Confidential Transactions and More}.
 \newblock IEEE Symposium on Security and Privacy, 2018.
 \newblock Cryptology ePrint Archive, Paper 2017/1066.
 \newblock \url{https://eprint.iacr.org/2017/1066}
@@ -1249,7 +1237,7 @@ Heewon Chung, Kyoohyung Han, Chanyang Ju, Myungsun Kim, and Jae Hong Seo.
 
 \bibitem{bulletproofs-plus-plus}
 Liam Eagen, Sanket Kanjalkar, Tim Ruffing, and Jonas Nick.
-\newblock \emph{Bulletproofs++: Next Generation Confidential Transactions via Reciprocal Set Membership Arguments}.
+\newblock \emph{\bppp: Next Generation Confidential Transactions via Reciprocal Set Membership Arguments}.
 \newblock Cryptology ePrint Archive, Paper 2022/510.
 \newblock \url{https://eprint.iacr.org/2022/510}
 
@@ -1262,7 +1250,7 @@ Blockstream Research.
 \bibitem{secp-bppp}
 Jonas Nick et al.
 \newblock \emph{secp256k1-zkp}, \texttt{bulletproof-musig-dn-benches} branch.
-\newblock GitHub repository used as the upstream implementation reference for the experimental \texttt{bppp} backend in this project.
+\newblock GitHub repository used as the upstream implementation reference for the experimental \bppp\ backend in this project.
 \newblock \url{https://github.com/jonasnick/secp256k1-zkp}
 
 \end{thebibliography}

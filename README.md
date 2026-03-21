@@ -6,6 +6,17 @@ This repository contains a C++ port of the `purify.py` reference implementation,
 
 Upstream reference material is available under [`reference/`](reference/) as optional git submodules.
 
+## Paper
+
+A repo-local technical note describing Purify and the two proving paths implemented here is available at [`docs/paper/purify-paper.pdf`](docs/paper/purify-paper.pdf).
+The LaTeX source lives at [`docs/paper/purify-paper.tex`](docs/paper/purify-paper.tex), and you can rebuild the PDF locally with:
+
+```sh
+./docs/paper/build.sh
+```
+
+CI also compiles the PDF and uploads it as a workflow artifact.
+
 ## Repository layout
 
 - `include/`: public library headers intended for downstream consumers

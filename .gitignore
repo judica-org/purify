@@ -1,4 +1,13 @@
 /build/
+/docs/paper/build/
+
+# LaTeX artifacts
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
 
 # Local one-off binaries and libraries from ad hoc builds
 /a.out

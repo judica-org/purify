@@ -4,18 +4,26 @@
 
 This repository contains a C++ port of the `purify.py` reference implementation, plus native circuit construction and BPP-backed benchmarking on top of `secp256k1-zkp`.
 
+Canonical URLs:
+
+- Repository: <https://github.com/judica-org/purify>
+- Site: <https://judica.org/purify/>
+
 Upstream reference material is available under [`reference/`](reference/) as optional git submodules.
 
 ## Paper
 
 A repo-local technical note describing Purify and the two proving paths implemented here is available at [`docs/paper/purify-paper.pdf`](docs/paper/purify-paper.pdf).
+The published copy lives at <https://judica.org/purify/paper/> and the site landing page lives at <https://judica.org/purify/>.
+API documentation is published at <https://judica.org/purify/docs/>.
+
 The LaTeX source lives at [`docs/paper/purify-paper.tex`](docs/paper/purify-paper.tex), and you can rebuild the PDF locally with:
 
 ```sh
 ./docs/paper/build.sh
 ```
 
-CI also compiles the PDF and uploads it as a workflow artifact.
+CI also compiles the PDF and publishes it through the Pages site. The standalone `ci` workflow still uploads the PDF as a workflow artifact for inspection.
 
 ## Repository layout
 

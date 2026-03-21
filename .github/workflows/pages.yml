@@ -1,7 +1,7 @@
-# GitHub Actions workflow for building and deploying Doxygen docs to GitHub Pages
-# This workflow builds the docs on push to main and deploys to the `gh-pages` branch
+# GitHub Actions workflow for building and deploying the project site to GitHub Pages.
+# The published site includes a landing page, Doxygen docs, and the built paper PDF.
 
-name: docs-pages
+name: pages
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - master
 
 jobs:
-  build-docs:
+  build-site:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +17,15 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            doxygen \
+            graphviz \
+            latexmk \
+            texlive-latex-extra \
+            texlive-fonts-recommended \
+            texlive-latex-recommended
 
       - name: Configure CMake (docs only)
         run: cmake -S . -B build-docs -DPURIFY_BUILD_DOCS=ON -DPURIFY_BUILD_BENCH=OFF -DPURIFY_BUILD_FUZZ=OFF -DPURIFY_BUILD_TESTS=OFF -DPURIFY_BUILD_REFERENCE_TESTS=OFF
@@ -25,25 +33,31 @@ jobs:
       - name: Build docs
         run: cmake --build build-docs --target docs
 
-      - name: Upload built docs as artifact
+      - name: Build paper
+        run: ./docs/paper/build.sh
+
+      - name: Assemble Pages site
+        run: bash ./site/build-pages-site.sh build-pages build-docs/docs/html docs/paper/purify-paper.pdf docs/paper/purify-paper.tex
+
+      - name: Upload built site as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: docs-html
-          path: build-docs/docs/html
+          name: pages-site
+          path: build-pages
 
   deploy-pages:
-    needs: build-docs
+    needs: build-site
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pages: write
       id-token: write
     steps:
-      - name: Download built docs artifact
+      - name: Download built site artifact
         uses: actions/download-artifact@v4
         with:
-          name: docs-html
-          path: docs-html
+          name: pages-site
+          path: build-pages
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -51,7 +65,7 @@ jobs:
       - name: Upload to GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs-html
+          path: build-pages
 
       - name: Deploy to GitHub Pages
         id: deployment

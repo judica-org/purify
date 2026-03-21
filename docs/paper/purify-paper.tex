@@ -9,6 +9,11 @@
 \usepackage{booktabs}
 \usepackage{enumitem}
 \usepackage[hidelinks]{hyperref}
+\urlstyle{same}
+\setlist[itemize]{leftmargin=1.5em}
+\setlist[enumerate]{leftmargin=1.75em}
+\allowdisplaybreaks[2]
+\setlength{\emergencystretch}{2em}
 
 \ifdefined\pdfinfoomitdate
   \pdfinfoomitdate=1
@@ -51,10 +56,10 @@ Purify is a PRF over a prime field $\mathbb{F}_P$ chosen to have low multiplicat
 arithmetic circuits. The reference construction fixes curve coefficients $A, B \in \mathbb{F}_P$,
 a non-square $D \in \mathbb{F}_P$, and then works with two elliptic curves over the same field~\cite{purify-ref}:
 \[
-E_1: y^2 = x^3 + Ax + B,
-\]
-\[
-E_2: y^2 = x^3 + AD^2x + D^3B.
+\begin{aligned}
+E_1 &: y^2 = x^3 + Ax + B, \\
+E_2 &: y^2 = x^3 + AD^2x + D^3B.
+\end{aligned}
 \]
 The parameters $A$, $B$, and $D$ are special because they do two jobs at once.
 First, $A$ and $B$ define the base curve $E_1$. Second, choosing $D$ to be a
@@ -73,15 +78,13 @@ normalization by $D$. At the same time, the parameters are selected so that both
 curves still have the required cryptographic properties, such as prime order and
 hard Diffie-Hellman-style problems.
 
-It also fixes generators
+It also fixes generators and hash-to-curve maps
 \[
-G_i \in E_i(\mathbb{F}_P)
-\]
-and hash-to-curve maps
-\[
+G_i \in E_i(\mathbb{F}_P), \qquad
 H_i : \{0,1\}^* \to E_i(\mathbb{F}_P)
+\qquad (i \in \{1,2\}).
 \]
-for $i \in \{1,2\}$. We write
+We write
 \[
 X : E_i(\mathbb{F}_P) \setminus \{\mathcal{O}\} \to \mathbb{F}_P
 \]
@@ -97,13 +100,14 @@ which \texttt{purify-cpp} packs into one public-key value.
 
 For a message $m$, the Prover evaluates Purify as follows:
 \[
-M_1 = H_1(m), \qquad M_2 = H_2(m),
-\]
-\[
-[z_1]M_1 \in E_1(\mathbb{F}_P), \qquad [z_2]M_2 \in E_2(\mathbb{F}_P),
-\]
-\[
-u = X([z_1]M_1), \qquad v = X([z_2]M_2) \in \mathbb{F}_P,
+\begin{aligned}
+M_1 &= H_1(m) \in E_1(\mathbb{F}_P), &
+M_2 &= H_2(m) \in E_2(\mathbb{F}_P), \\
+[z_1]M_1 &\in E_1(\mathbb{F}_P), &
+[z_2]M_2 &\in E_2(\mathbb{F}_P), \\
+u &= X([z_1]M_1), &
+v &= X([z_2]M_2) \in \mathbb{F}_P.
+\end{aligned}
 \]
 \[
 \mathrm{combine} : \mathbb{F}_P \times \mathbb{F}_P \to \mathbb{F}_P,
@@ -216,21 +220,19 @@ points $M_1$ and $M_2$.
 
 That is why the remaining statement is a fixed-base statement:
 \[
-P_{1,x} = X([z_1]G_1), \qquad P_{2,x} = X([z_2]G_2),
-\]
-\[
-Q_{1,x} = X([z_1]M_1), \qquad Q_{2,x} = X([z_2]M_2),
-\]
-\[
-o = \mathrm{combine}(Q_{1,x}, Q_{2,x}).
+\begin{aligned}
+P_{1,x} &= X([z_1]G_1), & P_{2,x} &= X([z_2]G_2), \\
+Q_{1,x} &= X([z_1]M_1), & Q_{2,x} &= X([z_2]M_2), \\
+o &= \mathrm{combine}(Q_{1,x}, Q_{2,x}). &&
+\end{aligned}
 \]
 Here the points $G_1,G_2,M_1,M_2$ are all public constants for the statement. Only the scalars
 $z_1,z_2$ are secret. If we write
 \[
-P_1 = [z_1]G_1, \qquad P_2 = [z_2]G_2,
-\]
-\[
-Q_1 = [z_1]M_1, \qquad Q_2 = [z_2]M_2,
+\begin{aligned}
+P_1 &= [z_1]G_1, & P_2 &= [z_2]G_2, \\
+Q_1 &= [z_1]M_1, & Q_2 &= [z_2]M_2,
+\end{aligned}
 \]
 then the public key exposes only the x-coordinates
 \[
@@ -334,12 +336,10 @@ addition uses \texttt{circuit\_ec\_add\_x(...)} and skips the final $y$ computat
 
 The full Purify statement therefore becomes four copies of the same fixed-base gadget:
 \[
-P_{1,x} = \texttt{MulX}(G_1,z_1), \qquad
-P_{2,x} = \texttt{MulX}(G_2,z_2),
-\]
-\[
-Q_{1,x} = \texttt{MulX}(M_1,z_1), \qquad
-Q_{2,x} = \texttt{MulX}(M_2,z_2).
+\begin{aligned}
+P_{1,x} &= \texttt{MulX}(G_1,z_1), & P_{2,x} &= \texttt{MulX}(G_2,z_2), \\
+Q_{1,x} &= \texttt{MulX}(M_1,z_1), & Q_{2,x} &= \texttt{MulX}(M_2,z_2).
+\end{aligned}
 \]
 This is the main circuit insight in the repository: once the message is public, Purify reduces to
 two secret scalars being reused across four fixed-base multipliers.
@@ -440,20 +440,22 @@ each of those emitted constraints and translate the result into the native circu
 \[
 (\texttt{wl}, \texttt{wr}, \texttt{wo}, \texttt{wv}, \texttt{c}).
 \]
-The key point is that the native circuit has \emph{two} kinds of checks, not one:
-\begin{enumerate}
-  \item Every recorded multiplicative constraint becomes one numbered gate with wire symbols
-  $L_i,R_i,O_i$ and wire values
-  \[
-  (a_{L,i}, a_{R,i}, a_{O,i}),
-  \]
-  enforcing
-  \[
-  a_{L,i} a_{R,i} = a_{O,i}.
-  \]
-  \item Every recorded affine equality becomes one sparse linear row over those gate wires and over
-  the commitment wires.
-\end{enumerate}
+The key point is that the native circuit has \emph{two} layers, not one.
+
+\medskip\noindent\textbf{Gate layer.}
+Every recorded multiplicative constraint becomes one numbered gate with wire symbols
+$L_i,R_i,O_i$ and wire values
+\[
+(a_{L,i}, a_{R,i}, a_{O,i}),
+\]
+enforcing
+\[
+a_{L,i} a_{R,i} = a_{O,i}.
+\]
+
+\medskip\noindent\textbf{Row layer.}
+Every recorded affine equality becomes one sparse linear row over those same gate wires and over
+the commitment wires.
 
 So one should not think ``some rows are multiplications.'' Multiplications become \emph{gates}.
 Rows are used for the affine constraints that tie those gate values together. After lowering, the
@@ -466,7 +468,8 @@ This is why an equality such as $lhs-rhs=0$ is classified as an affine check rat
 ``multiplication by $1$'' check: the native circuit format has a dedicated linear layer for such
 relations, and using that layer is both more direct and more efficient.
 
-The second layer is where the row equation comes from. These ``second kind'' checks are just the
+\medskip\noindent\textbf{What the row equation means.}
+These ``second kind'' checks are just the
 affine equalities that remain after all multiplicative constraints have already been given their
 own gates. Concretely, a row appears whenever the backend needs to assert that some wire or public
 slot equals an affine expression. Typical examples are:
@@ -645,18 +648,22 @@ remains hidden; only its curve-point image is public.
 Inside that wrapper, the imported backend then runs a standard Bulletproof-style polynomial proof
 for the flattened circuit~\cite{bulletproofs}. The math has three layers.
 
+\medskip\noindent\textbf{Witness commitments.}
 First, it commits to the witness vectors. Schematically, it samples fresh blinders
 $\alpha,\beta,\rho$ and random masking vectors $l_3,r_3$, then sends
 \[
-A_I = \mathrm{Com}(a_L,a_R;\alpha),\qquad
-A_O = \mathrm{Com}(a_O;\beta),\qquad
-S   = \mathrm{Com}(l_3,r_3;\rho).
+\begin{aligned}
+A_I &= \mathrm{Com}(a_L,a_R;\alpha), \\
+A_O &= \mathrm{Com}(a_O;\beta), \\
+S   &= \mathrm{Com}(l_3,r_3;\rho).
+\end{aligned}
 \]
 This is schematic notation: the first Boolean prefix uses the usual bit-specialized Bulletproof
 encoding, but conceptually $A_I$ commits to the left/right wire vectors, $A_O$ commits to the
 output-wire vector, and $S$ commits to the random masks. Fiat--Shamir then derives challenges
 $y,z$ from the transcript.
 
+\medskip\noindent\textbf{Polynomial compression.}
 Second, it compresses the whole circuit into one polynomial identity. Using $y$ and $z$, the
 backend folds all sparse linear rows, all multiplication gates, and the commitment-wire weights
 into compressed vectors
@@ -665,9 +672,10 @@ l_1,\; l_3,\; r_0,\; r_1,\; r_3,\; w_V,
 \]
 with $l_2 := a_O$, and defines
 \[
-l(X) = l_1 X + l_2 X^2 + l_3 X^3,
-\qquad
-r(X) = r_0 + r_1 X + r_3 X^3.
+\begin{aligned}
+l(X) &= l_1 X + l_2 X^2 + l_3 X^3, \\
+r(X) &= r_0 + r_1 X + r_3 X^3.
+\end{aligned}
 \]
 For a valid witness, all circuit checks are equivalent to the single degree-6 identity
 \[
@@ -683,6 +691,7 @@ l = l(x),\qquad r = r(x),\qquad t = \langle l, r \rangle.
 The blinding scalars are folded in the same way, giving the serialized scalars $\tau_x$ and $\mu$
 that accompany the proof.
 
+\medskip\noindent\textbf{Inner-product argument.}
 Third, the backend proves the remaining inner-product claim $\langle l,r \rangle = t$. At this
 point the verifier's public equations have already tied
 \begin{itemize}[nosep]
@@ -803,6 +812,7 @@ derive:
   \item one weight $\sigma_j$ for each linear row.
 \end{itemize}
 
+\medskip\noindent\textbf{Row aggregation.}
 For row $j$, write the original affine check as
 \[
 \sum_i \alpha_i^{(j)} a_{L,i}
@@ -857,6 +867,7 @@ In the implementation, these collapsed coefficient vectors are
 \texttt{left\_coeffs}, \texttt{right\_coeffs}, \texttt{output\_coeffs}, and
 \texttt{commitment\_coeffs}. The weighted row constants become part of the eventual public target.
 
+\medskip\noindent\textbf{Gate reduction.}
 The gate weights then fold in the multiplicative constraints
 $a_{L,i} a_{R,i} = a_{O,i}$ by adding the weighted equations
 \[
@@ -897,6 +908,7 @@ s_i^+ = \frac{e_i^+}{2 d_i^+}, \qquad s_i^- = \frac{e_i^-}{2 d_i^-}.
 \]
 These shifts are stored as \texttt{plus\_shift[i]} and \texttt{minus\_shift[i]}.
 
+\medskip\noindent\textbf{Ordinary-square form.}
 The backend wants a weighted sum of \emph{ordinary} squares with fixed public weights
 $\mu_k = (\rho^2)^{k+1}$. To fit that shape, the helper \texttt{two\_square\_terms(...)} splits
 each completed-square coefficient into two ordinary square coordinates. If one branch contributes
@@ -1087,7 +1099,7 @@ norm-argument path.
 \section{Why Keep Both Proof Paths}
 
 The repository keeps both BP and BP++ because they serve different engineering purposes:
-\begin{itemize}
+\begin{itemize}[nosep]
   \item \textbf{BP is the direct baseline.} It proves the native circuit without any extra
   reduction layer and therefore acts as the simplest end-to-end reference for ``this Purify
   statement is satisfiable''.
@@ -1104,7 +1116,7 @@ The repository keeps both BP and BP++ because they serve different engineering p
 \section{Caveats}
 
 Two caveats are worth stating explicitly:
-\begin{enumerate}
+\begin{enumerate}[nosep]
   \item The BPP/BP++ interfaces in this repository are marked experimental. They are useful for
   research, benchmarking, and higher-level protocol work, but they should still be treated as an
   evolving proving path.
@@ -1191,7 +1203,7 @@ this simplifies to
 \]
 Purify uses exactly this average with $\tilde{v} = v / D$.
 
-\section*{Citations}
+\section*{References}
 
 \begin{thebibliography}{99}
 

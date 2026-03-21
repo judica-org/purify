@@ -167,6 +167,9 @@ void test_biguint_arithmetic(TestContext& ctx) {
     const UInt256 value = UInt256::from_hex("ffffffffffffffffffffffffffffffff");
     ctx.expect(value.to_decimal() == "340282366920938463463374607431768211455",
                "BigUInt decimal formatting handles 128-bit values without native __int128");
+    ctx.expect(purify::prime_p().to_decimal()
+                   == "115792089237316195423570985008687907852837564279074904382605163141518161494337",
+               "BigUInt decimal formatting handles full-width 256-bit values without native __int128");
 
     UInt256 borrow_edge = UInt256::from_hex("100000000000000000000000000000000");
     borrow_edge.sub_assign(UInt256::one());

@@ -74,11 +74,15 @@ public:
             return qword;
         };
 
-        UInt128 quotient(
-            (static_cast<std::uint64_t>(step(static_cast<std::uint32_t>(hi_ >> 32))) << 32)
-                | step(static_cast<std::uint32_t>(hi_ & kMask32)),
-            (static_cast<std::uint64_t>(step(static_cast<std::uint32_t>(lo_ >> 32))) << 32)
-                | step(static_cast<std::uint32_t>(lo_ & kMask32)));
+        // `step()` mutates `rem`, so sequence each word explicitly instead of
+        // relying on constructor-argument evaluation order, which differs across
+        // compilers and broke the MSVC fallback decimal conversion path.
+        const std::uint32_t q3 = step(static_cast<std::uint32_t>(hi_ >> 32));
+        const std::uint32_t q2 = step(static_cast<std::uint32_t>(hi_ & kMask32));
+        const std::uint32_t q1 = step(static_cast<std::uint32_t>(lo_ >> 32));
+        const std::uint32_t q0 = step(static_cast<std::uint32_t>(lo_ & kMask32));
+
+        UInt128 quotient((static_cast<std::uint64_t>(q3) << 32) | q2, (static_cast<std::uint64_t>(q1) << 32) | q0);
         return std::make_pair(quotient, static_cast<std::uint32_t>(rem));
 #endif
     }

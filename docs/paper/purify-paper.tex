@@ -123,7 +123,7 @@ v &= X([z_2]M_2) \in \mathbb{F}_P.
 The full PRF is then
 \[
 \begin{aligned}
-\mathrm{Purify}((z_1,z_2), m)
+o = \mathrm{Purify}((z_1,z_2), m)
 &= \mathrm{combine}(X([z_1]H_1(m)), X([z_2]H_2(m))) \\
 &= \mathrm{combine}(X([z_1]M_1), X([z_2]M_2)) \\
 &= \mathrm{combine}(u,v).
@@ -139,9 +139,12 @@ The point-to-field projection is what makes the final expression a low-degree ar
 over $\mathbb{F}_P$: the curve operations produce points, but the combine map consumes only their
 $x$-coordinates as field elements.
 
-The output is again an element of $\mathbb{F}_P$. The Verifier does not know
-$z_1$ or $z_2$; it only checks, through the proof system, that the public key
-and claimed output are consistent with these relations.
+The mathematical output is therefore a field element $o \in \mathbb{F}_P$. The proof systems used
+later do not always reveal that scalar directly. In the public-message setting studied in this
+repository, the message-derived points $M_1,M_2$ and the packed public key are public statement
+data, while $z_1,z_2$, the intermediate points $Q_1,Q_2$, and usually the scalar $o$ remain
+hidden. The verifier checks consistency with the Purify relation through a proof and may learn only
+a derived public nonce point rather than the raw field element $o$ itself.
 
 \subsection{From Purify Output to a Schnorr Nonce}
 
@@ -150,9 +153,9 @@ nonce. This is also the nonce shape consumed by higher-level protocols such as M
 To avoid overloading the earlier curve generators $G_1$ and $G_2$, write
 $G_{\mathrm{secp}}$ for the standard generator of secp256k1~\cite{bip340}.
 
-For a nonce-bound input $\widetilde{m}$, define
+For a nonce-bound input $\widetilde{m}$, first define the raw Purify output
 \[
-r = \mathrm{Purify}((z_1,z_2), \widetilde{m}).
+r_0 = \mathrm{Purify}((z_1,z_2), \widetilde{m}).
 \]
 The PureSign and PureSign++ layers require the Purify field modulus to equal the secp256k1 scalar
 modulus:
@@ -160,26 +163,45 @@ modulus:
 P = n_{\mathrm{secp256k1}}.
 \]
 That means the same byte string can be read directly as a secp256k1 scalar. Except for the
-single invalid value $r = 0$, the Purify output can be used as a Schnorr nonce scalar without any
+single invalid value $r_0 = 0$, the Purify output can be used as a Schnorr nonce scalar without any
 extra reduction step. The zero case is rejected, which happens with negligible probability
 $1 / n_{\mathrm{secp256k1}}$.
 
-That scalar is then canonicalized to the even-$Y$ BIP340 representative and used to derive the
-public x-only nonce
+BIP340 then replaces that raw scalar by the even-$Y$ representative of the same x-only nonce point.
+Write
+\[
+R_0 = [r_0]G_{\mathrm{secp}}.
+\]
+If $R_0$ already has even $Y$, set $r = r_0$. Otherwise set
+\[
+r = n_{\mathrm{secp256k1}} - r_0.
+\]
+In other words,
+\[
+r = \mathrm{BIP340Canon}(r_0),
+\]
+where $\mathrm{BIP340Canon}$ means ``keep the scalar if its nonce point already has even $Y$,
+otherwise negate it modulo $n_{\mathrm{secp256k1}}$.''
+Then
 \[
 R = [r]G_{\mathrm{secp}}.
 \]
-In the API this is exposed in x-only form, because that is the BIP340 nonce encoding. In the
+has even $Y$ and the same x-only encoding as $R_0$. This is exactly the normalization performed by
+\texttt{purify\_bip340\_nonce\_from\_scalar(...)}, which rewrites the nonce scalar in place to the
+even-$Y$ representative corresponding to the returned x-only nonce. In the API this is exposed in
+x-only form, because that is the BIP340 nonce encoding. In the
 signing layers, Purify therefore serves as:
 \[
 (z_1,z_2), \widetilde{m}
 \;\longmapsto\;
-r = \mathrm{Purify}((z_1,z_2), \widetilde{m})
+r_0 = \mathrm{Purify}((z_1,z_2), \widetilde{m})
+\;\longmapsto\;
+r = \mathrm{BIP340Canon}(r_0)
 \;\longmapsto\;
 R = [r]G_{\mathrm{secp}}.
 \]
-The later proof systems are then used to show that the published nonce really came from this
-Purify evaluation.
+The later proof systems are then used to show that the published x-only nonce matches the
+Purify-derived curve point after this BIP340 normalization step.
 
 \subsection{Why Purify Is Useful for Proof Systems}
 
@@ -327,6 +349,11 @@ those variables are forced to be actual bits, so the lookup evaluates to one gen
 Without those bit constraints, the same polynomial formulas could evaluate to arbitrary affine
 combinations that do not correspond to any intended window choice.
 
+The later affine-addition helpers are not invoked on arbitrary pairs of unknown points. In the
+reference construction they are only called on affine points that are guaranteed by construction not
+to be equal and not to be negatives of each other, so the denominator $x_2-x_1$ is non-zero on
+every valid lookup choice.
+
 After selecting chunk points, the construction applies the usual affine addition law. The helper
 \texttt{circuit\_ec\_add(...)} computes
 \[
@@ -383,7 +410,14 @@ Division is handled indirectly because the native constraint system has no inver
 \texttt{transcript.div(lhs, rhs)} introduces a quotient witness $q$ and proves only the equivalent
 product relation $q \cdot rhs = lhs$. When the prover knows concrete values, the witness generator
 fills in $q = lhs/rhs$, but the resulting check still consists only of multiplication and affine
-equalities.
+equalities. This also means the circuit is not using a generic ``complete'' division gadget: for a
+valid witness, every divisor fed into \texttt{div(...)} must already be non-zero. In this Purify
+circuit that covers both affine-addition slopes and the final combine denominator. The affine-add
+helpers are only reached on point pairs guaranteed by construction not to be equal or negatives of
+each other, and the final combine step likewise requires $u \neq v/D$ on the concrete witness. The
+transcript language does not prove those non-vanishing facts by itself; it relies on the circuit
+construction to ensure them, and the implementation checks them when concrete witness values are
+available.
 
 Underneath the convenience API, the primitive checks reduce to two types:
 \begin{itemize}[nosep]
@@ -619,8 +653,8 @@ The legacy \bp\ path proves the native circuit \emph{directly}. There is no furt
 reduction after the circuit described above has been built.
 
 The key point is the Purify output $o$. In the protocol, $o$ is supposed to remain secret:
-for nonce proofs, the verifier should learn the public nonce point $R$, not the scalar $r=o$
-itself. Accordingly, Step 6 does \emph{not} bind $o$ to a public field constant. Instead, it binds
+for nonce proofs, the verifier should learn the public nonce object derived from $o$, not the
+scalar itself. Accordingly, Step 6 does \emph{not} bind $o$ to a public field constant. Instead, it binds
 \[
 o = V_0,
 \]
@@ -639,11 +673,12 @@ That exact-unblinded mode is the one used by the legacy PureSign nonce proof. Th
 \texttt{value\_generator} is the secp256k1 base generator, so the public commitment point is
 literally
 \[
-R = [r]G_{\mathrm{secp}},
-\qquad r=o,
+[o]G_{\mathrm{secp}},
 \]
-which is exactly the public nonce point the higher-level Schnorr protocol needs. The scalar $r$
-remains hidden; only its curve-point image is public.
+where $o$ is the raw Purify output carried in the commitment slot. The higher-level nonce object
+then keeps only the BIP340 x-only encoding of the corresponding even-$Y$ representative. The scalar
+itself remains hidden; the verifier checks that the x-only projection of the public commitment point
+matches the advertised nonce.
 
 Inside that wrapper, the imported backend then runs a standard \bp-style\ polynomial proof
 for the flattened circuit~\cite{bulletproofs}. The math has three layers.
@@ -658,10 +693,10 @@ A_O &= \mathrm{Com}(a_O;\beta), \\
 S   &= \mathrm{Com}(l_3,r_3;\rho).
 \end{aligned}
 \]
-This is schematic notation: the first Boolean prefix uses the usual bit-specialized \bp{} 
-encoding, but conceptually $A_I$ commits to the left/right wire vectors, $A_O$ commits to the
-output-wire vector, and $S$ commits to the random masks. Fiat--Shamir then derives challenges
-$y,z$ from the transcript.
+This is schematic notation: the legacy backend uses a slightly specialized layout for the initial
+Boolean portion of the witness, but at the level relevant here the roles are simple. $A_I$ commits
+to the left/right wire vectors, $A_O$ commits to the output-wire vector, and $S$ commits to the
+random masks. Fiat--Shamir then derives challenges $y,z$ from the transcript.
 
 \medskip\noindent\textbf{Polynomial compression.}
 Second, it compresses the whole circuit into one polynomial identity. Using $y$ and $z$, the
@@ -773,24 +808,6 @@ circuit is already highly specialized to Purify, with public message hashes, fix
 x-only outputs, the likely upside should be thought of as an unmeasured constant-factor engineering
 improvement from backend-specific layout choices rather than an already-demonstrated order-of-
 magnitude gain.
-
-The most plausible bespoke win would be to share selector algebra across the two branches that use
-the same secret scalar: one could compute each signed-window selector basis once for $z_1$ and fan
-it out to both the $G_1$ and $M_1$ tables, and likewise once for $z_2$ across the $G_2$ and $M_2$
-tables. That would remove some duplicated lookup products and some generic lowering overhead, but it
-would not change the basic Purify arithmetic. This matters for expectations about size. In the
-current benchmark surface the \bppp\ proof payload is about $909$ bytes versus about $1124$ bytes for
-legacy \bp, a roughly $20\%$ reduction. The \bppp\ backend's proof size is logarithmic in the reduced
-dimensions, so small structural cleanups do not necessarily shrink the proof at all. The current
-reused path pads the native circuit to $2048$ gates, and that gate-count padding alone makes the
-dominant reduced dimension $4 \cdot 2048 = 8192$, landing exactly on the $909$-byte size tier.
-A bespoke path that merely avoided this native-circuit padding would likely move to about
-$4 \cdot 2030 = 8120$, which is enough to drop one tier to about $844$ bytes. This estimate is
-about the norm-vector dimension $4N$; it does not require removing the separate zk slack variable slots later
-used in $\ell$ for the masked wrapper. But the \emph{next} proof-size drop would require pushing
-the dominant reduced dimension below $4096$, which would mean something much more aggressive than
-just removing bookkeeping. The realistic upside is therefore probably a modest additional byte
-reduction and some prover speedup, not a second dramatic proof-size collapse.
 
 \subsection{Public Reduction to One Norm Relation}
 
@@ -1091,6 +1108,30 @@ This is the hook used by the PureSign++ flow: some commitment objects remain exp
 protocol messages, while the hidden Purify witness is still proved through the same masked
 norm-argument path.
 
+\subsection{Efficiency Note on a Bespoke \bppp\ Circuit}
+
+The most plausible bespoke win would be to share selector algebra across the two branches that use
+the same secret scalar: one could compute each signed-window selector basis once for $z_1$ and fan
+it out to both the $G_1$ and $M_1$ tables, and likewise once for $z_2$ across the $G_2$ and $M_2$
+tables. That would remove some duplicated lookup products and some generic lowering overhead, but it
+would not change the basic Purify arithmetic.
+
+This matters for expectations about size. In the current benchmark surface the \bppp\ proof payload
+is about $909$ bytes versus about $1124$ bytes for legacy \bp, a roughly $20\%$ reduction. The
+\bppp\ backend's proof size is logarithmic in the reduced dimensions, so small structural cleanups
+do not necessarily shrink the proof at all. The current reused path pads the native circuit to
+$2048$ gates, and that gate-count padding alone makes the dominant reduced dimension
+$4 \cdot 2048 = 8192$, landing exactly on the $909$-byte size tier. A bespoke path that merely
+avoided this native-circuit padding would likely move to about $4 \cdot 2030 = 8120$, which is
+enough to drop one tier to about $844$ bytes. This estimate is about the norm-vector dimension $4N$;
+it does not require removing the separate zk slack variable slots later used in $\ell$ for the
+masked wrapper.
+
+The \emph{next} proof-size drop would require pushing the dominant reduced dimension below $4096$,
+which would mean something much more aggressive than just removing bookkeeping. The realistic upside
+is therefore probably a modest additional byte reduction and some prover speedup, not a second
+dramatic proof-size collapse.
+
 \section{Why Keep Both Proof Paths}
 
 The repository keeps both \bp\ and \bppp\ because they serve different engineering purposes:
@@ -1224,7 +1265,7 @@ Jonas Nick, Tim Ruffing, Yannick Seurin, and Pieter Wuille.
 
 \bibitem{bulletproofs}
 Benedikt B{\"u}nz, Jonathan Bootle, Dan Boneh, Andrew Poelstra, Pieter Wuille, and Gregory Maxwell.
-\newblock \emph{\bp: Short Proofs for Confidential Transactions and More}.
+\newblock \emph{Bulletproofs: Short Proofs for Confidential Transactions and More}.
 \newblock IEEE Symposium on Security and Privacy, 2018.
 \newblock Cryptology ePrint Archive, Paper 2017/1066.
 \newblock \url{https://eprint.iacr.org/2017/1066}
@@ -1237,7 +1278,7 @@ Heewon Chung, Kyoohyung Han, Chanyang Ju, Myungsun Kim, and Jae Hong Seo.
 
 \bibitem{bulletproofs-plus-plus}
 Liam Eagen, Sanket Kanjalkar, Tim Ruffing, and Jonas Nick.
-\newblock \emph{\bppp: Next Generation Confidential Transactions via Reciprocal Set Membership Arguments}.
+\newblock \emph{Bulletproofs++: Next Generation Confidential Transactions via Reciprocal Set Membership Arguments}.
 \newblock Cryptology ePrint Archive, Paper 2022/510.
 \newblock \url{https://eprint.iacr.org/2022/510}
 

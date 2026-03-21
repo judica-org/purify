@@ -189,6 +189,285 @@ h2 {
   letter-spacing: 0.04em;
 }
 
+.signal-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.signal-copy,
+.signal-frame {
+  padding: 1.6rem;
+  border: 1px solid var(--line);
+  border-radius: 1.4rem;
+  background: rgba(255, 252, 246, 0.92);
+  box-shadow: var(--shadow);
+}
+
+.signal-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.signal-text {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 1.04rem;
+  line-height: 1.7;
+}
+
+.signal-text code {
+  padding: 0.12rem 0.36rem;
+  border-radius: 0.4rem;
+  background: rgba(24, 33, 31, 0.06);
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.95em;
+}
+
+.signal-frame {
+  position: relative;
+  overflow: hidden;
+  padding: 1.1rem;
+  background:
+    radial-gradient(circle at 50% 36%, rgba(154, 52, 18, 0.12), transparent 16rem),
+    linear-gradient(180deg, rgba(255, 252, 246, 0.96), rgba(248, 241, 228, 0.92));
+}
+
+.signal-diagram {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.signal-track {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 3.5;
+  stroke-dasharray: 5 16;
+  animation: signal-flow-ltr 12s linear infinite;
+}
+
+.signal-track-secret {
+  stroke: rgba(24, 33, 31, 0.62);
+}
+
+.signal-track-public {
+  stroke: rgba(24, 33, 31, 0.42);
+}
+
+.signal-track-message {
+  stroke: rgba(154, 52, 18, 0.72);
+}
+
+.signal-track-proof {
+  stroke: rgba(124, 45, 18, 0.84);
+}
+
+.signal-track-proof-builder {
+  stroke: rgba(124, 45, 18, 0.72);
+  stroke-width: 3;
+  stroke-dasharray: 6 14;
+  animation-duration: 10s;
+}
+
+.signal-track-purify-r {
+  stroke: rgba(24, 33, 31, 0.66);
+  stroke-width: 4.5;
+  stroke-dasharray: 8 18;
+  animation-duration: 10s;
+}
+
+.signal-track-verify-r {
+  stroke: rgba(24, 33, 31, 0.5);
+  stroke-width: 4.5;
+  stroke-dasharray: 8 18;
+  animation-duration: 10s;
+}
+
+.signal-track-r-point {
+  stroke: rgba(154, 52, 18, 0.82);
+  stroke-width: 4;
+  stroke-dasharray: 6 14;
+  animation-duration: 9s;
+}
+
+.signal-track-rtl {
+  animation-name: signal-flow-rtl;
+}
+
+.signal-divider {
+  stroke: rgba(24, 33, 31, 0.1);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 12;
+}
+
+.signal-node {
+  stroke: rgba(24, 33, 31, 0.12);
+  stroke-width: 1.5;
+}
+
+.signal-node-secret {
+  fill: #25312e;
+}
+
+.signal-node-message {
+  fill: #9a3412;
+}
+
+.signal-node-public {
+  fill: #ead9c5;
+}
+
+.signal-node-proof {
+  fill: #c87137;
+}
+
+.signal-scalar {
+  fill: rgba(255, 247, 236, 0.98);
+  stroke: rgba(24, 33, 31, 0.14);
+  stroke-width: 1.5;
+}
+
+.signal-scalar-ring {
+  fill: none;
+  stroke: rgba(24, 33, 31, 0.16);
+  stroke-width: 1.8;
+}
+
+.signal-core {
+  fill: rgba(255, 247, 236, 0.96);
+  stroke: rgba(24, 33, 31, 0.12);
+  stroke-width: 1.5;
+}
+
+.signal-core-public {
+  fill: rgba(244, 236, 223, 0.96);
+}
+
+.signal-core-ring,
+.signal-output-ring {
+  fill: none;
+  stroke-width: 1.8;
+}
+
+.signal-core-ring {
+  stroke: rgba(154, 52, 18, 0.22);
+  stroke-dasharray: 2 10;
+  animation: signal-spin 22s linear infinite;
+}
+
+.signal-core-ring-public {
+  stroke: rgba(24, 33, 31, 0.12);
+}
+
+.signal-point-group {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: signal-pulse 3.8s ease-in-out infinite;
+}
+
+.signal-point {
+  fill: var(--accent);
+}
+
+.signal-point-ring {
+  stroke: rgba(154, 52, 18, 0.36);
+}
+
+.signal-prover-box {
+  fill: rgba(244, 236, 223, 0.94);
+  stroke: rgba(24, 33, 31, 0.12);
+  stroke-width: 1.4;
+}
+
+.signal-half-title {
+  fill: var(--accent-dark);
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.signal-scalar-label {
+  fill: var(--ink);
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.96rem;
+  letter-spacing: 0.06em;
+}
+
+.signal-label,
+.signal-core-label,
+.signal-prover-label {
+  fill: var(--ink);
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.96rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.signal-caption,
+.signal-core-caption,
+.signal-output-caption,
+.signal-note {
+  color: var(--muted);
+  fill: var(--muted);
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+}
+
+.signal-point-label {
+  fill: #fff8ef;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.signal-label-tight {
+  font-size: 0.84rem;
+}
+
+.signal-caption-tight {
+  font-size: 0.68rem;
+}
+
+.signal-note {
+  margin: 0.35rem 0 0;
+}
+
+@keyframes signal-flow-ltr {
+  to {
+    stroke-dashoffset: 240;
+  }
+}
+
+@keyframes signal-flow-rtl {
+  to {
+    stroke-dashoffset: -240;
+  }
+}
+
+@keyframes signal-spin {
+  to {
+    stroke-dashoffset: -180;
+  }
+}
+
+@keyframes signal-pulse {
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.04);
+  }
+}
+
 @media (max-width: 860px) {
   .shell {
     width: min(100vw - 1.25rem, 100%);
@@ -203,7 +482,42 @@ h2 {
     grid-template-columns: 1fr;
   }
 
+  .signal-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-copy,
+  .signal-frame {
+    padding: 0.9rem;
+  }
+
   .card {
     min-height: auto;
+  }
+
+  .signal-label,
+  .signal-core-label,
+  .signal-scalar-label,
+  .signal-point-label,
+  .signal-prover-label {
+    font-size: 0.76rem;
+  }
+
+  .signal-caption,
+  .signal-core-caption,
+  .signal-output-caption {
+    font-size: 0.58rem;
+  }
+
+  .signal-half-title {
+    font-size: 0.64rem;
+  }
+
+  .signal-label-tight {
+    font-size: 0.7rem;
+  }
+
+  .signal-caption-tight {
+    font-size: 0.56rem;
   }
 }

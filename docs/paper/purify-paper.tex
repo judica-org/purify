@@ -575,9 +575,10 @@ Two lowering details are easy to miss but matter:
   \item If a transcript witness appears only in linear equations, the lowering code allocates an
   extra dummy gate whose left wire carries that witness and whose right and output wires are zero.
 \end{enumerate}
-After that, the gate count is padded to the next power of two because both proving backends expect
-that shape. For the current Purify parameters the unpadded circuit is about 2030 multiplication
-gates, and the proof-facing shape is padded to 2048 gates.
+After that, the number of multiplication gates in the native circuit is padded to the next power
+of two because both proving backends expect that shape. This gate-count padding is distinct from
+the later slack tail in the reduced vector $\ell$. For the current Purify parameters the unpadded
+circuit is about 2030 multiplication gates, and the proof-facing shape is padded to 2048 gates.
 
 \subsection{Step 6: Bind the Public Key and the Claimed Output}
 
@@ -793,13 +794,15 @@ would not change the basic Purify arithmetic. This matters for expectations abou
 current benchmark surface the BP++ proof payload is about $909$ bytes versus about $1124$ bytes for
 legacy BP, a roughly $20\%$ reduction. The BPPP backend's proof size is logarithmic in the reduced
 dimensions, so small structural cleanups do not necessarily shrink the proof at all. The current
-reused path pads the native circuit to $2048$ gates, which makes the dominant reduced dimension
-$4 \cdot 2048 = 8192$ and lands exactly on the $909$-byte size tier. A bespoke path that merely
-avoided that padding would likely move to about $4 \cdot 2030 = 8120$, which is enough to drop one
-tier to about $844$ bytes. But the \emph{next} proof-size drop would require pushing the dominant
-reduced dimension below $4096$, which would mean something much more aggressive than just removing
-bookkeeping. The realistic upside is therefore probably a modest additional byte reduction and some prover
-speedup, not a second dramatic proof-size collapse.
+reused path pads the native circuit to $2048$ gates, and that gate-count padding alone makes the
+dominant reduced dimension $4 \cdot 2048 = 8192$, landing exactly on the $909$-byte size tier.
+A bespoke path that merely avoided this native-circuit padding would likely move to about
+$4 \cdot 2030 = 8120$, which is enough to drop one tier to about $844$ bytes. This estimate is
+about the norm-vector dimension $4N$; it does not require removing the separate slack tail later
+used in $\ell$ for the masked wrapper. But the \emph{next} proof-size drop would require pushing
+the dominant reduced dimension below $4096$, which would mean something much more aggressive than
+just removing bookkeeping. The realistic upside is therefore probably a modest additional byte
+reduction and some prover speedup, not a second dramatic proof-size collapse.
 
 \subsection{Public Reduction to One Norm Relation}
 
@@ -954,10 +957,13 @@ remaining linear witness data. In the default mode its layout is
 \ell =
 \bigl(a_{O,0}, \ldots, a_{O,N-1}, v_0, \ldots, v_{C-1}, \text{padding}\bigr),
 \]
-where the padding coordinates are zero during the basic reduction and later become blinding slots
-for the zero-knowledge wrapper. The coefficient vector $c$ has the same shape: the first $N$
-entries weight the output-wire part, the next $C$ entries weight the commitment-wire part, and the
-padding tail is zero.
+where the final tail is reduction slack: coordinates introduced by rounding the $\ell$-vector
+length up to a power of two after the used coordinates have been placed. This is distinct from the
+earlier gate-count padding of the native circuit. In the basic reduction these slack coordinates
+are zero; in the masked wrapper they are reused as blinding slots. The extra ``$+1$'' in the
+implementation ensures that this rounded $\ell$ length always leaves at least some slack beyond the
+used coordinates. The coefficient vector $c$ has the same shape: the first $N$ entries weight the
+output-wire part, the next $C$ entries weight the commitment-wire part, and the slack tail is zero.
 
 The public side then supplies
 \[
@@ -1019,8 +1025,8 @@ coordinates $(n,\ell)$.
 \subsection{The Masked Zero-Knowledge Wrapper Used Here}
 
 The repository's zero-knowledge BP++ path adds one more layer on top of that transparent reduced
-proof. Starting from the hidden vectors $(n,\ell)$, the prover first fills the padding tail of
-$\ell$ with fresh blind scalars and then derives random mask vectors
+proof. Starting from the hidden vectors $(n,\ell)$, the prover first fills the reduction-slack tail
+of $\ell$ with fresh blind scalars and then derives random mask vectors
 \[
 r_n \in \mathbb{F}^{4N}, \qquad r_\ell \in \mathbb{F}^{T}
 \]

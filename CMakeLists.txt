@@ -355,6 +355,7 @@ if(PURIFY_BUILD_DOCS)
     find_package(Doxygen QUIET)
 
     if(DOXYGEN_FOUND)
+        set(PURIFY_DOXYGEN_AWESOME_CSS "" CACHE STRING "Optional path to doxygen-awesome.css for themed docs")
         file(GLOB_RECURSE PURIFY_DOCS_INPUT
             CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
@@ -371,6 +372,21 @@ if(PURIFY_BUILD_DOCS)
         set(PURIFY_DOXYGEN_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/docs")
         set(PURIFY_DOXYGEN_CONFIG "${CMAKE_CURRENT_BINARY_DIR}/Doxyfile")
         set(PURIFY_DOXYGEN_INDEX "${PURIFY_DOXYGEN_OUTPUT_DIR}/html/index.html")
+        set(PURIFY_DOXYGEN_CUSTOM_CSS "${CMAKE_CURRENT_SOURCE_DIR}/site/doxygen-awesome-custom.css")
+        set(PURIFY_DOXYGEN_HTML_COLORSTYLE "LIGHT")
+        set(PURIFY_DOXYGEN_HTML_COLORSTYLE_HUE "193")
+        set(PURIFY_DOXYGEN_HTML_COLORSTYLE_SAT "110")
+        set(PURIFY_DOXYGEN_HTML_COLORSTYLE_GAMMA "108")
+        set(PURIFY_DOXYGEN_STYLE_DEPENDS "${PURIFY_DOXYGEN_CUSTOM_CSS}")
+
+        if(PURIFY_DOXYGEN_AWESOME_CSS)
+            set(PURIFY_DOXYGEN_HTML_EXTRA_STYLESHEET
+                "${PURIFY_DOXYGEN_AWESOME_CSS} ${PURIFY_DOXYGEN_CUSTOM_CSS}"
+            )
+            list(APPEND PURIFY_DOXYGEN_STYLE_DEPENDS "${PURIFY_DOXYGEN_AWESOME_CSS}")
+        else()
+            set(PURIFY_DOXYGEN_HTML_EXTRA_STYLESHEET "${PURIFY_DOXYGEN_CUSTOM_CSS}")
+        endif()
 
         configure_file(
             "${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in"
@@ -386,6 +402,7 @@ if(PURIFY_BUILD_DOCS)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in"
                 "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
                 "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
+                ${PURIFY_DOXYGEN_STYLE_DEPENDS}
                 ${PURIFY_DOCS_INPUT}
             COMMENT "Generating API documentation with Doxygen"
             VERBATIM

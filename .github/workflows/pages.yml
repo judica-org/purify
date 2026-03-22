@@ -27,8 +27,22 @@ jobs:
             texlive-fonts-recommended \
             texlive-latex-recommended
 
+      - name: Fetch Doxygen Awesome CSS
+        run: |
+          mkdir -p build-docs
+          curl -fsSL \
+            https://raw.githubusercontent.com/jothepro/doxygen-awesome-css/v2.4.1/doxygen-awesome.css \
+            -o build-docs/doxygen-awesome.css
+
       - name: Configure CMake (docs only)
-        run: cmake -S . -B build-docs -DPURIFY_BUILD_DOCS=ON -DPURIFY_BUILD_BENCH=OFF -DPURIFY_BUILD_FUZZ=OFF -DPURIFY_BUILD_TESTS=OFF -DPURIFY_BUILD_REFERENCE_TESTS=OFF
+        run: >
+          cmake -S . -B build-docs
+          -DPURIFY_BUILD_DOCS=ON
+          -DPURIFY_BUILD_BENCH=OFF
+          -DPURIFY_BUILD_FUZZ=OFF
+          -DPURIFY_BUILD_TESTS=OFF
+          -DPURIFY_BUILD_REFERENCE_TESTS=OFF
+          -DPURIFY_DOXYGEN_AWESOME_CSS=$PWD/build-docs/doxygen-awesome.css
 
       - name: Build docs
         run: cmake --build build-docs --target docs

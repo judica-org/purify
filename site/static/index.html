@@ -32,19 +32,131 @@
             <line class="signal-divider" x1="600" y1="74" x2="600" y2="474" />
             <text class="signal-half-title" x="250" y="52" text-anchor="middle">private</text>
             <text class="signal-half-title" x="950" y="52" text-anchor="middle">public</text>
-            <path class="signal-track signal-track-secret signal-track-rtl" d="M 100 154 C 206 154, 264 176, 286 214" />
-            <path class="signal-track signal-track-secret signal-track-rtl" d="M 100 250 C 206 250, 260 250, 286 250" />
-            <path class="signal-track signal-track-message signal-track-rtl" d="M 100 346 C 206 346, 264 324, 286 286" />
-            <path class="signal-track signal-track-public signal-track-rtl" d="M 1100 132 C 1014 132, 972 170, 930 214" />
-            <path class="signal-track signal-track-public signal-track-rtl" d="M 1100 210 C 1014 210, 972 222, 930 238" />
-            <path class="signal-track signal-track-message signal-track-rtl" d="M 1100 288 C 1014 288, 972 278, 930 262" />
-            <path class="signal-track signal-track-proof signal-track-rtl" d="M 1100 366 C 1014 366, 972 330, 930 286" />
-            <path class="signal-track signal-track-purify-r signal-track-rtl" d="M 400 250 C 420 250, 442 250, 472 250" />
-            <path class="signal-track signal-track-verify-r signal-track-rtl" d="M 816 250 C 794 250, 770 250, 742 250" />
-            <path class="signal-track signal-track-proof-builder signal-track-rtl"
+            <path class="signal-track-soft signal-track-soft-center"
+              d="M 400 250 C 420 250, 442 250, 472 250" />
+            <path class="signal-track-soft signal-track-soft-proof"
               d="M 520 278 C 590 336, 652 388, 708 424" />
-            <path class="signal-track signal-track-proof-builder signal-track-rtl"
+            <path class="signal-track-soft signal-track-soft-proof"
               d="M 826 424 C 918 418, 1012 404, 1106 366" />
+            <path class="signal-track-soft signal-track-soft-verify"
+              d="M 816 250 C 794 250, 770 250, 742 250" />
+            <path id="signal-path-secret-z1" class="signal-track signal-track-secret"
+              d="M 100 154 C 206 154, 264 176, 286 214" />
+            <path id="signal-path-secret-z2" class="signal-track signal-track-secret"
+              d="M 100 250 C 206 250, 260 250, 286 250" />
+            <path id="signal-path-secret-m" class="signal-track signal-track-message"
+              d="M 100 346 C 206 346, 264 324, 286 286" />
+            <path id="signal-path-public-z1" class="signal-track signal-track-public signal-track-rtl"
+              d="M 1100 132 C 1014 132, 972 170, 930 214" />
+            <path id="signal-path-public-z2" class="signal-track signal-track-public signal-track-rtl"
+              d="M 1100 210 C 1014 210, 972 222, 930 238" />
+            <path id="signal-path-public-m" class="signal-track signal-track-message signal-track-rtl"
+              d="M 1100 288 C 1014 288, 972 278, 930 262" />
+            <path id="signal-path-public-zk" class="signal-track signal-track-proof signal-track-rtl"
+              d="M 1100 366 C 1014 366, 972 330, 930 286" />
+            <path id="signal-path-purify-r" class="signal-track signal-track-purify-r"
+              d="M 400 250 C 420 250, 442 250, 472 250" />
+            <path id="signal-path-verify-r" class="signal-track signal-track-verify-r signal-track-rtl"
+              d="M 816 250 C 794 250, 770 250, 742 250" />
+            <path id="signal-path-r-prover" class="signal-track signal-track-proof-builder"
+              d="M 520 278 C 590 336, 652 388, 708 424" />
+            <path id="signal-path-prover-zk" class="signal-track signal-track-proof-builder"
+              d="M 826 424 C 918 418, 1012 404, 1106 366" />
+            <circle class="signal-beacon signal-beacon-purify" cx="340" cy="250" r="88" />
+            <circle class="signal-beacon signal-beacon-scalar" cx="500" cy="250" r="46" />
+            <rect class="signal-beacon signal-beacon-prover" x="700" y="390" width="134" height="68" rx="24" />
+            <circle class="signal-beacon signal-beacon-verify" cx="876" cy="250" r="88" />
+            <circle class="signal-beacon signal-beacon-point" cx="700" cy="250" r="68" />
+            <g class="signal-pulse-layer" aria-hidden="true">
+              <circle class="signal-pulse-dot signal-pulse-dot-secret" cx="0" cy="0" r="4.5">
+                <animateMotion begin="0s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.1;0.13;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-secret-z1" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="0s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.11;0.15;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-secret" cx="0" cy="0" r="4.5">
+                <animateMotion begin="0.08s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.1;0.13;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-secret-z2" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="0.08s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.11;0.15;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-message" cx="0" cy="0" r="4.5">
+                <animateMotion begin="0.16s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.1;0.13;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-secret-m" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="0.16s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.11;0.15;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-secret" cx="0" cy="0" r="4.8">
+                <animateMotion begin="1.72s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.08;0.11;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-purify-r" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="1.72s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.085;0.11;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-proof" cx="0" cy="0" r="4.8">
+                <animateMotion begin="3.18s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.12;0.15;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-r-prover" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="3.18s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.125;0.15;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-proof" cx="0" cy="0" r="4.8">
+                <animateMotion begin="4.88s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.12;0.15;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-prover-zk" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="4.88s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.125;0.15;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-public" cx="0" cy="0" r="4.4">
+                <animateMotion begin="5.54s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.12;0.15;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-public-z1" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="5.54s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.125;0.15;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-public" cx="0" cy="0" r="4.4">
+                <animateMotion begin="5.66s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.12;0.15;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-public-z2" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="5.66s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.125;0.15;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-message" cx="0" cy="0" r="4.4">
+                <animateMotion begin="5.78s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.12;0.15;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-public-m" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="5.78s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.125;0.15;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-proof" cx="0" cy="0" r="4.4">
+                <animateMotion begin="6.54s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.12;0.15;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-public-zk" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="6.54s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.125;0.15;1" />
+              </circle>
+              <circle class="signal-pulse-dot signal-pulse-dot-public" cx="0" cy="0" r="4.8">
+                <animateMotion begin="8.18s" dur="12s" repeatCount="indefinite"
+                  keyTimes="0;0.1;0.13;1" keyPoints="0;1;1;1" calcMode="linear">
+                  <mpath href="#signal-path-verify-r" />
+                </animateMotion>
+                <animate attributeName="opacity" begin="8.18s" dur="12s" repeatCount="indefinite"
+                  values="0;1;1;0;0" keyTimes="0;0.015;0.105;0.135;1" />
+              </circle>
+            </g>
             <circle class="signal-node signal-node-secret" cx="82" cy="154" r="12" />
             <circle class="signal-node signal-node-secret" cx="82" cy="250" r="12" />
             <circle class="signal-node signal-node-message" cx="82" cy="346" r="12" />
@@ -66,27 +178,27 @@
             <text class="signal-caption" x="1076" y="304" text-anchor="end">message</text>
             <text class="signal-label" x="1076" y="360" text-anchor="end">ZK</text>
             <text class="signal-caption" x="1076" y="382" text-anchor="end">proof</text>
-            <g class="signal-core-group">
+            <g class="signal-core-group signal-stage signal-stage-purify">
               <circle class="signal-core-ring" cx="340" cy="250" r="78" />
               <circle class="signal-core" cx="340" cy="250" r="60" />
               <text class="signal-core-label" x="340" y="243" text-anchor="middle">Purify</text>
               <text class="signal-core-caption" x="340" y="270" text-anchor="middle">derive r</text>
             </g>
-            <g class="signal-scalar-group">
+            <g class="signal-scalar-group signal-stage signal-stage-scalar">
               <circle class="signal-scalar-ring" cx="500" cy="250" r="38" />
               <circle class="signal-scalar" cx="500" cy="250" r="28" />
               <text class="signal-scalar-label" x="500" y="256" text-anchor="middle">r</text>
             </g>
-            <g class="signal-point-group">
+            <g class="signal-point-group signal-stage signal-stage-point">
               <circle class="signal-point-ring" cx="700" cy="250" r="56" />
               <circle class="signal-point" cx="700" cy="250" r="40" />
               <text class="signal-point-label" x="700" y="257" text-anchor="middle">R</text>
             </g>
-            <g class="signal-prover-group">
+            <g class="signal-prover-group signal-stage signal-stage-prover">
               <rect class="signal-prover-box" x="708" y="398" width="118" height="52" rx="18" />
               <text class="signal-prover-label" x="767" y="430" text-anchor="middle">Prover</text>
             </g>
-            <g class="signal-core-group signal-core-group-public">
+            <g class="signal-core-group signal-core-group-public signal-stage signal-stage-verify">
               <circle class="signal-core-ring signal-core-ring-public" cx="876" cy="250" r="78" />
               <circle class="signal-core signal-core-public" cx="876" cy="250" r="60" />
               <text class="signal-core-label" x="876" y="243" text-anchor="middle">Verify</text>

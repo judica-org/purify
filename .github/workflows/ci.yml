@@ -21,6 +21,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.os }} / ${{ matrix.mode }}
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -29,33 +32,23 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Enable sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Initialize required submodules
         run: git submodule update --init --depth 1 third_party/secp256k1-zkp third_party/nanobench reference/purify
 
       - name: Configure
-        run: cmake --preset ${{ matrix.mode }}
+        run: >
+          cmake --preset ${{ matrix.mode }}
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
         run: cmake --build --preset ${{ matrix.mode }} --parallel
 
+      - name: Show sccache stats
+        run: sccache --show-stats
+
       - name: Test
         run: ctest --preset ${{ matrix.mode }}
-
-  build-paper:
-    runs-on: ubuntu-latest
-    name: ubuntu-latest / paper
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install LaTeX toolchain
-        run: sudo apt-get update && sudo apt-get install -y latexmk texlive-latex-extra texlive-fonts-recommended texlive-latex-recommended
-
-      - name: Build paper
-        run: ./docs/paper/build.sh
-
-      - name: Upload paper artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: purify-paper-pdf
-          path: docs/paper/purify-paper.pdf

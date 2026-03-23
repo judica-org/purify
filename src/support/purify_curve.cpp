@@ -65,116 +65,6 @@ FieldElement field_from_core(void (*fill)(purify_fe*)) {
     return from_core(out);
 }
 
-CompleteProjectivePoint complete_identity_point() {
-    return {FieldElement::zero(), FieldElement::one(), FieldElement::zero()};
-}
-
-CompleteProjectivePoint secret_input_point(const EllipticCurve& curve, const JacobianPoint& point) {
-    if (point.infinity || point.z.is_zero()) {
-        return complete_identity_point();
-    }
-    if (point.z.is_one()) {
-        return {point.x, point.y, point.z};
-    }
-    AffinePoint normalized = curve.affine(point);
-    return {normalized.x, normalized.y, FieldElement::one()};
-}
-
-void conditional_assign(CompleteProjectivePoint& dst, const CompleteProjectivePoint& src, bool flag) {
-    dst.x.conditional_assign(src.x, flag);
-    dst.y.conditional_assign(src.y, flag);
-    dst.z.conditional_assign(src.z, flag);
-}
-
-void conditional_swap(CompleteProjectivePoint& lhs, CompleteProjectivePoint& rhs, bool flag) {
-    CompleteProjectivePoint tmp = lhs;
-    conditional_assign(lhs, rhs, flag);
-    conditional_assign(rhs, tmp, flag);
-}
-
-CompleteProjectivePoint complete_add(const FieldElement& a, const FieldElement& b,
-                                     const CompleteProjectivePoint& lhs, const CompleteProjectivePoint& rhs) {
-    FieldElement b3 = b + b + b;
-    FieldElement t0 = lhs.x * rhs.x;
-    FieldElement t1 = lhs.y * rhs.y;
-    FieldElement t2 = lhs.z * rhs.z;
-    FieldElement t3 = lhs.x + lhs.y;
-    FieldElement t4 = rhs.x + rhs.y;
-    t3 = t3 * t4;
-    t4 = t0 + t1;
-    t3 = t3 - t4;
-    t4 = lhs.x + lhs.z;
-    FieldElement t5 = rhs.x + rhs.z;
-    t4 = t4 * t5;
-    t5 = t0 + t2;
-    t4 = t4 - t5;
-    t5 = lhs.y + lhs.z;
-    FieldElement x3 = rhs.y + rhs.z;
-    t5 = t5 * x3;
-    x3 = t1 + t2;
-    t5 = t5 - x3;
-    FieldElement z3 = a * t4;
-    x3 = b3 * t2;
-    z3 = x3 + z3;
-    x3 = t1 - z3;
-    z3 = t1 + z3;
-    FieldElement y3 = x3 * z3;
-    t1 = t0 + t0;
-    t1 = t1 + t0;
-    t2 = a * t2;
-    t4 = b3 * t4;
-    t1 = t1 + t2;
-    t2 = t0 - t2;
-    t2 = a * t2;
-    t4 = t4 + t2;
-    t0 = t1 * t4;
-    y3 = y3 + t0;
-    t0 = t5 * t4;
-    x3 = t3 * x3;
-    x3 = x3 - t0;
-    t0 = t3 * t1;
-    z3 = t5 * z3;
-    z3 = z3 + t0;
-    return {x3, y3, z3};
-}
-
-CompleteProjectivePoint complete_double(const FieldElement& a, const FieldElement& b,
-                                        const CompleteProjectivePoint& point) {
-    FieldElement b3 = b + b + b;
-    FieldElement t0 = point.x * point.x;
-    FieldElement t1 = point.y * point.y;
-    FieldElement t2 = point.z * point.z;
-    FieldElement t3 = point.x * point.y;
-    t3 = t3 + t3;
-    FieldElement z3 = point.x * point.z;
-    z3 = z3 + z3;
-    FieldElement x3 = a * z3;
-    FieldElement y3 = b3 * t2;
-    y3 = x3 + y3;
-    x3 = t1 - y3;
-    y3 = t1 + y3;
-    y3 = x3 * y3;
-    x3 = t3 * x3;
-    z3 = b3 * z3;
-    t2 = a * t2;
-    t3 = t0 - t2;
-    t3 = a * t3;
-    t3 = t3 + z3;
-    z3 = t0 + t0;
-    t0 = z3 + t0;
-    t0 = t0 + t2;
-    t0 = t0 * t3;
-    y3 = y3 + t0;
-    t2 = point.y * point.z;
-    t2 = t2 + t2;
-    t0 = t2 * t3;
-    x3 = x3 - t0;
-    z3 = t2 * t1;
-    z3 = z3 + z3;
-    z3 = z3 + z3;
-    return {x3, y3, z3};
-}
-
 purify_curve make_core_curve(const FieldElement& a, const FieldElement& b, const UInt256& n) {
     purify_curve out{};
     out.a = to_core(a);
@@ -260,25 +150,14 @@ JacobianPoint EllipticCurve::mul(const JacobianPoint& point, const UInt256& scal
 }
 
 Result<AffinePoint> EllipticCurve::mul_secret_affine(const JacobianPoint& point, const UInt256& scalar) const {
-    CompleteProjectivePoint r0 = complete_identity_point();
-    CompleteProjectivePoint r1 = secret_input_point(*this, point);
-    unsigned prev_bit = 0;
-    std::size_t bits = n_.bit_length();
-    for (std::size_t i = bits; i-- > 0;) {
-        unsigned bit = scalar.bit(i) ? 1U : 0U;
-        conditional_swap(r0, r1, bit ^ prev_bit);
-        CompleteProjectivePoint sum = complete_add(a_, b_, r0, r1);
-        CompleteProjectivePoint doubled = complete_double(a_, b_, r0);
-        r1 = std::move(sum);
-        r0 = std::move(doubled);
-        prev_bit = bit;
+    purify_curve curve = make_core_curve(a_, b_, n_);
+    purify_jacobian_point point_core = to_core(point);
+    purify_affine_point out{};
+    if (purify_curve_mul_secret_affine(&out, &curve, &point_core, scalar.limbs.data()) == 0) {
+        return unexpected_error(ErrorCode::InternalMismatch,
+                                "EllipticCurve::mul_secret_affine:purify_curve_mul_secret_affine");
     }
-    conditional_swap(r0, r1, prev_bit);
-    if (r0.z.is_zero()) {
-        return unexpected_error(ErrorCode::InternalMismatch, "EllipticCurve::mul_secret_affine:point_at_infinity");
-    }
-    FieldElement inv = r0.z.inverse_consttime();
-    return AffinePoint{r0.x * inv, r0.y * inv, false};
+    return from_core(out);
 }
 
 Bytes bytes_from_ascii(std::string_view input) {
@@ -387,37 +266,12 @@ const EllipticCurve& curve2() {
 }
 
 Result<JacobianPoint> hash_to_curve(const Bytes& data, const EllipticCurve& curve) {
-    static const TaggedHash kHashToCurveTag("Purify/HashToCurve");
-    for (int i = 0; i < 256; ++i) {
-        Bytes info{static_cast<unsigned char>(i)};
-#if PURIFY_USE_LEGACY_FIELD_HASHES
-        std::optional<UInt320> value = hash_to_int(data, two_p(), info);
-#else
-        std::optional<UInt320> value =
-            tagged_hash_to_int<5>(std::span<const unsigned char>(data.data(), data.size()), two_p(), kHashToCurveTag, info);
-#endif
-        if (!value.has_value()) {
-            continue;
-        }
-        UInt320 x_candidate = value->shifted_right(1);
-        Result<UInt256> narrowed = try_narrow<4>(x_candidate);
-        assert(narrowed.has_value() && "hash_to_curve() x-coordinate candidate should fit in 256 bits");
-        if (!narrowed.has_value()) {
-            return unexpected_error(ErrorCode::InternalMismatch, "hash_to_curve:narrow_x_candidate");
-        }
-        FieldElement x = FieldElement::from_uint256(*narrowed);
-        if (curve.is_x_coord(x)) {
-            std::optional<JacobianPoint> point = curve.lift_x(x);
-            if (!point.has_value()) {
-                continue;
-            }
-            if (value->bit(0)) {
-                return curve.negate(*point);
-            }
-            return *point;
-        }
+    purify_curve curve_core = make_core_curve(curve.a_, curve.b_, curve.n_);
+    purify_jacobian_point out{};
+    if (purify_curve_hash_to_curve(&out, &curve_core, data.data(), data.size()) == 0) {
+        return unexpected_error(ErrorCode::HashToCurveExhausted, "hash_to_curve:purify_curve_hash_to_curve");
     }
-    return unexpected_error(ErrorCode::HashToCurveExhausted, "hash_to_curve:exhausted_retries");
+    return from_core(out);
 }
 
 const JacobianPoint& generator1() {

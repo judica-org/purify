@@ -9,7 +9,21 @@
 
 #include "purify/numeric.hpp"
 
+#include "purify_field.h"
+
 namespace purify {
+
+namespace {
+
+purify_fe to_core(const FieldElement& value) {
+    return purify_fe{detail::FieldElementAccess::raw(value)};
+}
+
+FieldElement from_core(const purify_fe& value) {
+    return detail::FieldElementAccess::from_raw(value.value);
+}
+
+}  // namespace
 
 FieldElement::FieldElement() {
     purify_scalar_set_int(&value_, 0);
@@ -100,14 +114,8 @@ bool FieldElement::is_odd() const {
 }
 
 bool FieldElement::is_square() const {
-    if (is_zero()) {
-        return true;
-    }
-    UInt256 exponent = prime_p();
-    exponent.sub_assign(UInt256::one());
-    exponent = exponent.shifted_right(1);
-    FieldElement result = pow(exponent);
-    return result.is_one();
+    const purify_fe input = to_core(*this);
+    return purify_fe_is_square(&input) != 0;
 }
 
 FieldElement FieldElement::negate() const {
@@ -133,68 +141,19 @@ FieldElement FieldElement::inverse() const {
 }
 
 std::optional<FieldElement> FieldElement::sqrt() const {
-    if (is_zero()) {
-        return FieldElement::zero();
-    }
-    if (!is_square()) {
+    const purify_fe input = to_core(*this);
+    purify_fe output{};
+    if (purify_fe_sqrt(&output, &input) == 0) {
         return std::nullopt;
     }
-    UInt256 q = prime_p();
-    q.sub_assign(UInt256::one());
-    unsigned s = 0;
-    while (!q.bit(0)) {
-        q = q.shifted_right(1);
-        ++s;
-    }
-    if (s == 1) {
-        UInt256 exponent = q;
-        exponent.add_small(1);
-        exponent = exponent.shifted_right(1);
-        return pow(exponent);
-    }
-    FieldElement z = FieldElement::from_u64(2);
-    while (legendre_symbol(z) != -1) {
-        z = z + FieldElement::one();
-    }
-    FieldElement c = z.pow(q);
-    UInt256 exponent = q;
-    exponent.add_small(1);
-    exponent = exponent.shifted_right(1);
-    FieldElement x = pow(exponent);
-    FieldElement t = pow(q);
-    unsigned m = s;
-    while (t != FieldElement::one()) {
-        unsigned i = 1;
-        FieldElement t2i = square(t);
-        while (i < m && t2i != FieldElement::one()) {
-            t2i = square(t2i);
-            ++i;
-        }
-        if (i == m) {
-            return std::nullopt;
-        }
-        UInt256 b_exp = UInt256::one();
-        b_exp = b_exp.shifted_left(m - i - 1);
-        FieldElement b = c.pow(b_exp);
-        x = x * b;
-        FieldElement b2 = square(b);
-        t = t * b2;
-        c = b2;
-        m = i;
-    }
-    return x;
+    return from_core(output);
 }
 
 FieldElement FieldElement::pow(const UInt256& exponent) const {
-    FieldElement result = one();
-    std::size_t bits = exponent.bit_length();
-    for (std::size_t i = bits; i-- > 0;) {
-        result = result * result;
-        if (exponent.bit(i)) {
-            result = result * *this;
-        }
-    }
-    return result;
+    const purify_fe input = to_core(*this);
+    purify_fe output{};
+    purify_fe_pow(&output, &input, exponent.limbs.data());
+    return from_core(output);
 }
 
 bool operator==(const FieldElement& lhs, const FieldElement& rhs) {
@@ -222,14 +181,15 @@ FieldElement operator*(const FieldElement& lhs, const FieldElement& rhs) {
 }
 
 FieldElement square(const FieldElement& value) {
-    return value * value;
+    const purify_fe input = to_core(value);
+    purify_fe output{};
+    purify_fe_square(&output, &input);
+    return from_core(output);
 }
 
 int legendre_symbol(const FieldElement& value) {
-    if (value.is_zero()) {
-        return 0;
-    }
-    return value.is_square() ? 1 : -1;
+    const purify_fe input = to_core(value);
+    return purify_fe_legendre_symbol(&input);
 }
 
 }  // namespace purify

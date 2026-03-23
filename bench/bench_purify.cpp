@@ -20,7 +20,7 @@
 
 #include "purify.hpp"
 #include "purify_bppp.hpp"
-#include "../src/purify_bppp_bridge.h"
+#include "../src/bridge/purify_bppp_bridge.h"
 
 namespace {
 

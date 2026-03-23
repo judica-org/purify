@@ -66,6 +66,8 @@ void purify_curve_mul(purify_jacobian_point* out, const purify_curve* curve,
                       const purify_jacobian_point* point, const uint64_t scalar[4]);
 int purify_curve_mul_secret_affine(purify_affine_point* out, const purify_curve* curve,
                                    const purify_jacobian_point* point, const uint64_t scalar[4]);
+int purify_curve_hash_to_curve(purify_jacobian_point* out, const purify_curve* curve,
+                               const unsigned char* data, size_t data_len);
 
 int purify_curve_is_valid_secret_key(const uint64_t value[8]);
 int purify_curve_is_valid_public_key(const uint64_t value[8]);

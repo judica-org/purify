@@ -49,9 +49,140 @@ static const uint64_t kPurifyFieldDi[4] = {
     UINT64_C(0x6666666666666666),
 };
 
+static const char kPurifyHashToCurveTag[] = "Purify/HashToCurve";
+
 static void purify_curve_copy_u256(uint64_t out[4], const uint64_t value[4]) {
     memcpy(out, value, 4u * sizeof(uint64_t));
 }
+
+static void purify_curve_u64_to_be(unsigned char out[8], uint64_t value) {
+    size_t i;
+    for (i = 0; i < 8; ++i) {
+        out[7u - i] = (unsigned char)(value & 0xffu);
+        value >>= 8;
+    }
+}
+
+static void purify_curve_tag_hash(unsigned char out[32]) {
+    purify_sha256(out, (const unsigned char*)kPurifyHashToCurveTag, sizeof(kPurifyHashToCurveTag) - 1u);
+}
+
+static int purify_curve_hash_to_int_tagged_u320(uint64_t out[5],
+                                                const unsigned char* data,
+                                                size_t data_len,
+                                                const uint64_t range[5],
+                                                unsigned char info_byte) {
+    unsigned char tag_hash[32];
+    unsigned char derived[40];
+    unsigned char digest[32];
+    size_t bits = purify_u320_bit_length(range);
+    size_t bytes_needed = (bits + 7u) / 8u;
+    unsigned int attempt;
+
+    purify_curve_tag_hash(tag_hash);
+    for (attempt = 0; attempt < 256u; ++attempt) {
+        size_t derived_len = 0;
+        uint64_t block = 0;
+
+        while (derived_len < bytes_needed) {
+            unsigned char attempt_bytes[8];
+            unsigned char block_bytes[8];
+            const unsigned char* items[6];
+            size_t item_lens[6];
+            size_t copy_len;
+            int ok;
+
+            purify_curve_u64_to_be(attempt_bytes, (uint64_t)attempt);
+            purify_curve_u64_to_be(block_bytes, block);
+            items[0] = tag_hash;
+            item_lens[0] = sizeof(tag_hash);
+            items[1] = tag_hash;
+            item_lens[1] = sizeof(tag_hash);
+            items[2] = data;
+            item_lens[2] = data_len;
+            items[3] = &info_byte;
+            item_lens[3] = 1u;
+            items[4] = attempt_bytes;
+            item_lens[4] = sizeof(attempt_bytes);
+            items[5] = block_bytes;
+            item_lens[5] = sizeof(block_bytes);
+            ok = purify_sha256_many(digest, items, item_lens, 6u);
+            assert(ok != 0);
+            if (ok == 0) {
+                return 0;
+            }
+            copy_len = sizeof(digest);
+            if (copy_len > bytes_needed - derived_len) {
+                copy_len = bytes_needed - derived_len;
+            }
+            memcpy(derived + derived_len, digest, copy_len);
+            derived_len += copy_len;
+            ++block;
+        }
+
+        purify_u320_from_bytes_be(out, derived, bytes_needed);
+        purify_u320_mask_bits(out, bits);
+        if (purify_u320_compare(out, range) < 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+static int purify_curve_hash_to_int_hkdf_u320(uint64_t out[5],
+                                              const unsigned char* data,
+                                              size_t data_len,
+                                              const uint64_t range[5],
+                                              unsigned char info_byte) {
+    unsigned char derived[40];
+    unsigned char prk[32];
+    unsigned char t[32];
+    size_t bits = purify_u320_bit_length(range);
+    size_t bytes_needed = (bits + 7u) / 8u;
+    unsigned int salt_counter;
+
+    for (salt_counter = 0; salt_counter < 256u; ++salt_counter) {
+        unsigned char salt_byte = (unsigned char)salt_counter;
+        size_t offset = 0;
+        unsigned int block_index = 0;
+
+        memset(prk, 0, sizeof(prk));
+        memset(t, 0, sizeof(t));
+        purify_hmac_sha256(prk, &salt_byte, 1u, data, data_len);
+
+        while (offset < bytes_needed) {
+            const size_t prev_len = block_index == 0 ? 0u : sizeof(t);
+            const size_t input_len = prev_len + 2u;
+            unsigned char input[34];
+            size_t copy_len;
+
+            if (prev_len != 0u) {
+                memcpy(input, t, prev_len);
+            }
+            input[prev_len] = info_byte;
+            input[prev_len + 1u] = (unsigned char)(block_index + 1u);
+            purify_hmac_sha256(t, prk, sizeof(prk), input, input_len);
+            copy_len = sizeof(t);
+            if (copy_len > bytes_needed - offset) {
+                copy_len = bytes_needed - offset;
+            }
+            memcpy(derived + offset, t, copy_len);
+            offset += copy_len;
+            ++block_index;
+        }
+
+        purify_u320_from_bytes_be(out, derived, bytes_needed);
+        purify_u320_mask_bits(out, bits);
+        if (purify_u320_compare(out, range) < 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+#endif
 
 static purify_complete_projective_point purify_curve_complete_identity(void) {
     purify_complete_projective_point out;
@@ -572,6 +703,59 @@ int purify_curve_mul_secret_affine(purify_affine_point* out, const purify_curve*
         out->infinity = 0;
     }
     return 1;
+}
+
+int purify_curve_hash_to_curve(purify_jacobian_point* out, const purify_curve* curve,
+                               const unsigned char* data, size_t data_len) {
+    uint64_t range[5];
+    int info_counter;
+
+    if (out == NULL || curve == NULL || (data_len != 0u && data == NULL)) {
+        return 0;
+    }
+
+    purify_curve_jacobian_infinity(out);
+    purify_curve_two_p(range);
+    for (info_counter = 0; info_counter < 256; ++info_counter) {
+        uint64_t value[5];
+        uint64_t x_candidate[5];
+        uint64_t x_words[4];
+        purify_fe x;
+        int ok;
+
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+        ok = purify_curve_hash_to_int_hkdf_u320(value, data, data_len, range, (unsigned char)info_counter);
+#else
+        ok = purify_curve_hash_to_int_tagged_u320(value, data, data_len, range, (unsigned char)info_counter);
+#endif
+        if (ok == 0) {
+            continue;
+        }
+
+        purify_u320_shifted_right(x_candidate, value, 1u);
+        ok = purify_u256_try_narrow_u320(x_words, x_candidate);
+        assert(ok != 0);
+        if (ok == 0) {
+            return 0;
+        }
+        ok = purify_fe_set_u256(&x, x_words);
+        assert(ok != 0);
+        if (ok == 0) {
+            return 0;
+        }
+        if (purify_curve_is_x_coord(curve, &x) == 0) {
+            continue;
+        }
+        if (purify_curve_lift_x(out, curve, &x) == 0) {
+            continue;
+        }
+        if (purify_u320_bit(value, 0u) != 0) {
+            purify_curve_negate(out, out);
+        }
+        return 1;
+    }
+
+    return 0;
 }
 
 int purify_curve_is_valid_secret_key(const uint64_t value[8]) {

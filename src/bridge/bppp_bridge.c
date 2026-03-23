@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_bppp_bridge.c
+ * @file bppp_bridge.c
  * @brief C bridge that binds Purify's lightweight ABI to secp256k1-zkp internals and BPPP helpers.
  */
 
@@ -13,8 +13,8 @@
 #define ENABLE_MODULE_EXTRAKEYS 1
 #define ENABLE_MODULE_SCHNORRSIG 1
 
-#include "purify_bppp_bridge.h"
-#include "purify_secp_bridge.h"
+#include "bppp_bridge.h"
+#include "purify/secp_bridge.h"
 
 #include <stdlib.h>
 #include <string.h>

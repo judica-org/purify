@@ -10,7 +10,7 @@
 #include <string_view>
 
 #include "purify.hpp"
-#include "purify_bppp.hpp"
+#include "purify/bppp.hpp"
 
 namespace {
 

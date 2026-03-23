@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "purify.hpp"
-#include "purify_bppp.hpp"
-#include "purify_secp_bridge.h"
+#include "purify/bppp.hpp"
+#include "purify/secp_bridge.h"
 #include "test_harness.hpp"
 #include "purify_test_helpers.hpp"
 

@@ -18,7 +18,7 @@
 #include <string>
 #include <string_view>
 
-#include "purify_bppp.hpp"
+#include "purify/bppp.hpp"
 #include "purify.hpp"
 
 namespace purify {

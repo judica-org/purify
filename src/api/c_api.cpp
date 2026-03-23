@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_c_api.cpp
+ * @file c_api.cpp
  * @brief C core implementation for Purify key validation, generation, derivation, and evaluation.
  */
 
@@ -17,8 +17,8 @@
 #include "purify/curve.hpp"
 #include "purify/error.hpp"
 #include "purify/secret.hpp"
-#include "purify_core.h"
-#include "purify_error_bridge.hpp"
+#include "core.h"
+#include "error_bridge.hpp"
 
 namespace purify::capi_detail {
 

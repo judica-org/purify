@@ -2,13 +2,13 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
-#include "purify_core.h"
+#include "core.h"
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "purify_secp_bridge.h"
+#include "purify/secp_bridge.h"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX

@@ -3,11 +3,11 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #ifndef PURIFY_UINT_FN
-#error "PURIFY_UINT_FN must be defined before including purify_uint_impl.h"
+#error "PURIFY_UINT_FN must be defined before including uint_impl.h"
 #endif
 
 #ifndef PURIFY_UINT_WORDS
-#error "PURIFY_UINT_WORDS must be defined before including purify_uint_impl.h"
+#error "PURIFY_UINT_WORDS must be defined before including uint_impl.h"
 #endif
 
 int PURIFY_UINT_FN(try_add_small)(uint64_t value[PURIFY_UINT_WORDS], uint32_t addend);

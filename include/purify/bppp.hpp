@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_bppp.hpp
+ * @file purify/bppp.hpp
  * @brief C++ wrappers for the BPPP functionality used by Purify.
  */
 

@@ -19,8 +19,8 @@
 #include <string_view>
 
 #include "purify.hpp"
-#include "purify_bppp.hpp"
-#include "../src/bridge/purify_bppp_bridge.h"
+#include "purify/bppp.hpp"
+#include "../src/bridge/bppp_bridge.h"
 
 namespace {
 

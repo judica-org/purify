@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
-#include "purify_curve_core.h"
+#include "curve.h"
 
 #include <assert.h>
 #include <string.h>

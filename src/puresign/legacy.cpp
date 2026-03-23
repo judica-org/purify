@@ -12,9 +12,9 @@
 #include <algorithm>
 #include <cstring>
 
-#include "purify_bulletproof_internal.hpp"
+#include "bulletproof_internal.hpp"
 #include "detail/common.hpp"
-#include "purify_bppp.hpp"
+#include "purify/bppp.hpp"
 #include "purify/curve.hpp"
 
 namespace purify::puresign {

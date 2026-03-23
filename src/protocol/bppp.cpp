@@ -3,11 +3,11 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_bppp.cpp
+ * @file bppp.cpp
  * @brief C++ convenience wrappers over the low-level BPPP C bridge.
  */
 
-#include "purify_bppp.hpp"
+#include "purify/bppp.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -21,9 +21,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "purify_bppp_bridge.h"
-#include "purify_bulletproof_internal.hpp"
-#include "purify_secp_bridge.h"
+#include "bppp_bridge.h"
+#include "bulletproof_internal.hpp"
+#include "purify/secp_bridge.h"
 
 namespace purify::bppp {
 

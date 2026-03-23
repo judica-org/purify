@@ -3,13 +3,13 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_numeric.cpp
+ * @file numeric.cpp
  * @brief Compiled FieldElement implementation for Purify numeric helpers.
  */
 
 #include "purify/numeric.hpp"
 
-#include "purify_field.h"
+#include "field.h"
 
 namespace purify {
 

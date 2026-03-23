@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_curve.cpp
+ * @file curve.cpp
  * @brief Compiled elliptic-curve helpers, parameters, and key encoding logic for Purify.
  */
 
@@ -11,7 +11,7 @@
 
 #include <algorithm>
 
-#include "purify_curve_core.h"
+#include "curve.h"
 
 namespace purify {
 

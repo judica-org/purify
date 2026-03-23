@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_bppp_bridge.h
+ * @file bppp_bridge.h
  * @brief C ABI bridging Purify C++ code to secp256k1-zkp BPPP functionality.
  */
 

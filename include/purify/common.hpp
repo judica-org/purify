@@ -32,7 +32,7 @@
 #include <vector>
 
 #include "purify/error.hpp"
-#include "purify_secp_bridge.h"
+#include "purify/secp_bridge.h"
 
 #ifndef PURIFY_USE_LEGACY_FIELD_HASHES
 #define PURIFY_USE_LEGACY_FIELD_HASHES 0

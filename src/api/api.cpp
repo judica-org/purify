@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_api.cpp
+ * @file api.cpp
  * @brief High-level Purify API implementations, including key generation and proof helpers.
  */
 
@@ -13,7 +13,7 @@
 #include <cassert>
 
 #include "purify.h"
-#include "purify_error_bridge.hpp"
+#include "error_bridge.hpp"
 
 namespace purify {
 namespace {

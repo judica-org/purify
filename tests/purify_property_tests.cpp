@@ -8,9 +8,9 @@
 #include <optional>
 #include <string_view>
 
-#include "../src/protocol/purify_bulletproof_internal.hpp"
+#include "../src/protocol/bulletproof_internal.hpp"
 #include "purify.hpp"
-#include "purify_bppp.hpp"
+#include "purify/bppp.hpp"
 
 namespace {
 

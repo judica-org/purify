@@ -58,7 +58,7 @@ function(purify_enable_warnings target)
 endfunction()
 
 if(NOT MSVC)
-    set_source_files_properties(src/bridge/purify_bppp_bridge.c PROPERTIES
+    set_source_files_properties(src/bridge/bppp_bridge.c PROPERTIES
         COMPILE_OPTIONS "-Wno-unused-function"
     )
     set_source_files_properties(src/legacy_bulletproof/scratch_frames.c PROPERTIES
@@ -71,7 +71,7 @@ if(MSVC)
     # which trigger a large number of benign narrowing/constant-expression
     # diagnostics under MSVC. Keep warnings enabled for our own code and
     # suppress the known third-party warnings only for this translation unit.
-    set_property(SOURCE src/bridge/purify_bppp_bridge.c APPEND PROPERTY COMPILE_OPTIONS
+    set_property(SOURCE src/bridge/bppp_bridge.c APPEND PROPERTY COMPILE_OPTIONS
         /wd4127
         /wd4146
         /wd4244
@@ -131,23 +131,23 @@ function(purify_enable_release_optimizations target)
 endfunction()
 
 add_library(purify
-    src/core/purify_core.c
-    src/core/purify_curve_core.c
-    src/core/purify_field.c
-    src/core/purify_uint.c
-    src/api/purify_c_api.cpp
-    src/api/purify_api.cpp
-    src/protocol/purify_bulletproof.cpp
-    src/support/purify_curve.cpp
-    src/protocol/purify_expr.cpp
+    src/core/core.c
+    src/core/curve.c
+    src/core/field.c
+    src/core/uint.c
+    src/api/c_api.cpp
+    src/api/api.cpp
+    src/protocol/bulletproof.cpp
+    src/support/curve.cpp
+    src/protocol/expr.cpp
     src/legacy_bulletproof/scratch_frames.c
-    src/support/purify_numeric.cpp
+    src/support/numeric.cpp
     src/puresign/legacy.cpp
     src/puresign/codecs/legacy.cpp
     src/puresign/bppp.cpp
     src/puresign/codecs/bppp.cpp
-    src/protocol/purify_bppp.cpp
-    src/bridge/purify_bppp_bridge.c
+    src/protocol/bppp.cpp
+    src/bridge/bppp_bridge.c
 )
 
 add_library(purify::purify ALIAS purify)
@@ -170,8 +170,6 @@ install(
     FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/include/purify.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/purify.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/include/purify_bppp.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/include/purify_secp_bridge.h"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
@@ -219,23 +217,23 @@ if(PURIFY_BUILD_BENCH)
     add_subdirectory(third_party/nanobench EXCLUDE_FROM_ALL)
 
     add_library(purify_bench_support STATIC
-        src/core/purify_core.c
-        src/core/purify_curve_core.c
-        src/core/purify_field.c
-        src/core/purify_uint.c
-        src/api/purify_c_api.cpp
-        src/api/purify_api.cpp
-        src/protocol/purify_bulletproof.cpp
-        src/support/purify_curve.cpp
-        src/protocol/purify_expr.cpp
+        src/core/core.c
+        src/core/curve.c
+        src/core/field.c
+        src/core/uint.c
+        src/api/c_api.cpp
+        src/api/api.cpp
+        src/protocol/bulletproof.cpp
+        src/support/curve.cpp
+        src/protocol/expr.cpp
         src/legacy_bulletproof/scratch_frames.c
-        src/support/purify_numeric.cpp
+        src/support/numeric.cpp
         src/puresign/legacy.cpp
         src/puresign/codecs/legacy.cpp
         src/puresign/bppp.cpp
         src/puresign/codecs/bppp.cpp
-        src/protocol/purify_bppp.cpp
-        src/bridge/purify_bppp_bridge.c
+        src/protocol/bppp.cpp
+        src/bridge/bppp_bridge.c
     )
 
     purify_configure_library_target(purify_bench_support)

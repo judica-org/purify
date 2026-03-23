@@ -3,13 +3,13 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_bulletproof.cpp
+ * @file bulletproof.cpp
  * @brief Lowering and native circuit helpers for Purify's Bulletproof-style verifier model.
  */
 
 #include "purify/bulletproof.hpp"
-#include "purify_bulletproof_internal.hpp"
-#include "purify_bppp_bridge.h"
+#include "bulletproof_internal.hpp"
+#include "bppp_bridge.h"
 
 #include <algorithm>
 #include <cassert>

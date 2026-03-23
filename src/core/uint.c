@@ -89,19 +89,19 @@ static uint64_t purify_uint_divmod_u32(uint64_t hi, uint64_t lo, uint32_t diviso
 
 #define PURIFY_UINT_FN(name) purify_u256_##name
 #define PURIFY_UINT_WORDS 4
-#include "purify_uint_impl.h"
+#include "uint_impl.h"
 #undef PURIFY_UINT_WORDS
 #undef PURIFY_UINT_FN
 
 #define PURIFY_UINT_FN(name) purify_u320_##name
 #define PURIFY_UINT_WORDS 5
-#include "purify_uint_impl.h"
+#include "uint_impl.h"
 #undef PURIFY_UINT_WORDS
 #undef PURIFY_UINT_FN
 
 #define PURIFY_UINT_FN(name) purify_u512_##name
 #define PURIFY_UINT_WORDS 8
-#include "purify_uint_impl.h"
+#include "uint_impl.h"
 #undef PURIFY_UINT_WORDS
 #undef PURIFY_UINT_FN
 

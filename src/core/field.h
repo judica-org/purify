@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #include "purify/uint.h"
-#include "purify_secp_bridge.h"
+#include "purify/secp_bridge.h"
 
 #ifdef __cplusplus
 extern "C" {

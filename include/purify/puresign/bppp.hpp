@@ -15,7 +15,7 @@
 #include <utility>
 
 #include "purify/api.hpp"
-#include "purify_bppp.hpp"
+#include "purify/bppp.hpp"
 
 namespace purify::puresign_plusplus {
 

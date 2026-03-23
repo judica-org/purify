@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "purify_field.h"
+#include "field.h"
 
 #ifdef __cplusplus
 extern "C" {

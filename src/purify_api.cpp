@@ -13,21 +13,16 @@
 #include <cassert>
 
 #include "purify.h"
+#include "purify_error_bridge.hpp"
 
 namespace purify {
 namespace {
-
-static_assert(static_cast<int>(ErrorCode::TranscriptCheckFailed) + 1 == static_cast<int>(PURIFY_ERROR_TRANSCRIPT_CHECK_FAILED));
-
-constexpr ErrorCode from_core_error_code(purify_error_code code) noexcept {
-    return static_cast<ErrorCode>(static_cast<unsigned>(code) - 1U);
-}
 
 Status status_from_core(purify_error_code code, const char* context) {
     if (code == PURIFY_ERROR_OK) {
         return {};
     }
-    return unexpected_error(from_core_error_code(code), context);
+    return unexpected_error(core_api_detail::from_core_error_code(code), context);
 }
 
 void clear_core_generated_key(purify_generated_key& generated) noexcept {
@@ -119,7 +114,7 @@ Result<GeneratedKey> generate_key() {
     const purify_error_code code = purify_generate_key(&generated);
     if (code != PURIFY_ERROR_OK) {
         clear_core_generated_key(generated);
-        return unexpected_error(from_core_error_code(code), "generate_key:purify_generate_key");
+        return unexpected_error(core_api_detail::from_core_error_code(code), "generate_key:purify_generate_key");
     }
     Result<GeneratedKey> out = generated_key_from_core(generated);
     clear_core_generated_key(generated);
@@ -134,7 +129,7 @@ Result<GeneratedKey> generate_key(KeySeed seed) {
     const purify_error_code code = purify_generate_key_from_seed(&generated, seed.data(), seed.size());
     if (code != PURIFY_ERROR_OK) {
         clear_core_generated_key(generated);
-        return unexpected_error(from_core_error_code(code), "generate_key:purify_generate_key_from_seed");
+        return unexpected_error(core_api_detail::from_core_error_code(code), "generate_key:purify_generate_key_from_seed");
     }
     Result<GeneratedKey> out = generated_key_from_core(generated);
     clear_core_generated_key(generated);
@@ -156,7 +151,7 @@ Result<GeneratedKey> derive_key(SecretKey&& secret) {
     detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
     if (code != PURIFY_ERROR_OK) {
         std::fill(public_key_bytes.begin(), public_key_bytes.end(), 0);
-        return unexpected_error(from_core_error_code(code), "derive_key:purify_derive_public_key");
+        return unexpected_error(core_api_detail::from_core_error_code(code), "derive_key:purify_derive_public_key");
     }
     const UInt512 public_key = UInt512::from_bytes_be(public_key_bytes.data(), public_key_bytes.size());
     std::fill(public_key_bytes.begin(), public_key_bytes.end(), 0);
@@ -170,7 +165,7 @@ Result<Bip340Key> derive_bip340_key(const SecretKey& secret) {
     detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
     if (code != PURIFY_ERROR_OK) {
         clear_core_bip340_key(key);
-        return unexpected_error(from_core_error_code(code), "derive_bip340_key:purify_derive_bip340_key");
+        return unexpected_error(core_api_detail::from_core_error_code(code), "derive_bip340_key:purify_derive_bip340_key");
     }
     Bip340Key out{};
     std::copy(std::begin(key.secret_key), std::end(key.secret_key), out.seckey.begin());
@@ -187,7 +182,7 @@ Result<FieldElement> eval(const SecretKey& secret, const Bytes& message) {
     detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
     if (code != PURIFY_ERROR_OK) {
         std::fill(output_bytes.begin(), output_bytes.end(), 0);
-        return unexpected_error(from_core_error_code(code), "eval:purify_eval");
+        return unexpected_error(core_api_detail::from_core_error_code(code), "eval:purify_eval");
     }
     return FieldElement::try_from_bytes32(output_bytes);
 }

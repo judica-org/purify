@@ -162,7 +162,8 @@ int purify_fe_sqrt(purify_fe* out, const purify_fe* value) {
     purify_fe one;
 
     if (purify_fe_is_zero(value) != 0) {
-        return 0;
+        purify_fe_set_zero(out);
+        return 1;
     }
     if (purify_fe_is_square(value) == 0) {
         return 0;

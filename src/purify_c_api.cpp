@@ -18,14 +18,9 @@
 #include "purify/error.hpp"
 #include "purify/secret.hpp"
 #include "purify_core.h"
+#include "purify_error_bridge.hpp"
 
 namespace purify::capi_detail {
-
-static_assert(static_cast<int>(ErrorCode::TranscriptCheckFailed) + 1 == static_cast<int>(PURIFY_ERROR_TRANSCRIPT_CHECK_FAILED));
-
-constexpr purify_error_code to_c_error(ErrorCode code) noexcept {
-    return static_cast<purify_error_code>(static_cast<unsigned>(code) + 1U);
-}
 
 Bytes copy_bytes(const unsigned char* data, std::size_t size) {
     if (size == 0) {
@@ -79,7 +74,7 @@ Result<UInt512> parse_secret_key(const unsigned char* secret_key) {
     }
     const purify_error_code code = purify_validate_secret_key(secret_key);
     if (code != PURIFY_ERROR_OK) {
-        return unexpected_error(static_cast<ErrorCode>(static_cast<unsigned>(code) - 1U),
+        return unexpected_error(core_api_detail::from_core_error_code(code),
                                 "parse_secret_key:purify_validate_secret_key");
     }
     UInt512 packed = UInt512::from_bytes_be(secret_key, PURIFY_SECRET_KEY_BYTES);
@@ -92,7 +87,7 @@ Result<UInt512> parse_public_key(const unsigned char* public_key) {
     }
     const purify_error_code code = purify_validate_public_key(public_key);
     if (code != PURIFY_ERROR_OK) {
-        return unexpected_error(static_cast<ErrorCode>(static_cast<unsigned>(code) - 1U),
+        return unexpected_error(core_api_detail::from_core_error_code(code),
                                 "parse_public_key:purify_validate_public_key");
     }
     UInt512 packed = UInt512::from_bytes_be(public_key, PURIFY_PUBLIC_KEY_BYTES);
@@ -138,12 +133,12 @@ purify_error_code purify_generate_key(purify_generated_key* out) {
     packed_secret = purify::capi_detail::parse_secret_key(out->secret_key);
     if (!packed_secret.has_value()) {
         purify::capi_detail::clear_generated_key(out);
-        return purify::capi_detail::to_c_error(packed_secret.error().code);
+        return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
     public_key = purify::capi_detail::derive_public_key_from_secret(*packed_secret);
     if (!public_key.has_value()) {
         purify::capi_detail::clear_generated_key(out);
-        return purify::capi_detail::to_c_error(public_key.error().code);
+        return purify::core_api_detail::to_core_error_code(public_key.error().code);
     }
     purify::capi_detail::write_uint512(*public_key, out->public_key);
     return PURIFY_ERROR_OK;
@@ -165,12 +160,12 @@ purify_error_code purify_generate_key_from_seed(purify_generated_key* out, const
     packed_secret = purify::capi_detail::parse_secret_key(out->secret_key);
     if (!packed_secret.has_value()) {
         purify::capi_detail::clear_generated_key(out);
-        return purify::capi_detail::to_c_error(packed_secret.error().code);
+        return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
     public_key = purify::capi_detail::derive_public_key_from_secret(*packed_secret);
     if (!public_key.has_value()) {
         purify::capi_detail::clear_generated_key(out);
-        return purify::capi_detail::to_c_error(public_key.error().code);
+        return purify::core_api_detail::to_core_error_code(public_key.error().code);
     }
     purify::capi_detail::write_uint512(*public_key, out->public_key);
     return PURIFY_ERROR_OK;
@@ -185,12 +180,12 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
 
     purify::Result<purify::UInt512> packed_secret = purify::capi_detail::parse_secret_key(secret_key);
     if (!packed_secret.has_value()) {
-        return purify::capi_detail::to_c_error(packed_secret.error().code);
+        return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
 
     purify::Result<purify::UInt512> public_key = purify::capi_detail::derive_public_key_from_secret(*packed_secret);
     if (!public_key.has_value()) {
-        return purify::capi_detail::to_c_error(public_key.error().code);
+        return purify::core_api_detail::to_core_error_code(public_key.error().code);
     }
 
     purify::capi_detail::write_uint512(*public_key, out_public_key);
@@ -206,7 +201,7 @@ purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
 
     purify::Result<purify::UInt512> packed_secret = purify::capi_detail::parse_secret_key(secret_key);
     if (!packed_secret.has_value()) {
-        return purify::capi_detail::to_c_error(packed_secret.error().code);
+        return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
 
     static const purify::TaggedHash kBip340KeyGenTag("Purify/BIP340/KeyGen");
@@ -251,35 +246,35 @@ purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEME
 
     purify::Result<purify::UInt512> packed_secret = purify::capi_detail::parse_secret_key(secret_key);
     if (!packed_secret.has_value()) {
-        return purify::capi_detail::to_c_error(packed_secret.error().code);
+        return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
 
     purify::Result<std::pair<purify::UInt256, purify::UInt256>> unpacked = purify::unpack_secret(*packed_secret);
     if (!unpacked.has_value()) {
-        return purify::capi_detail::to_c_error(unpacked.error().code);
+        return purify::core_api_detail::to_core_error_code(unpacked.error().code);
     }
 
     const purify::Bytes message_bytes = purify::capi_detail::copy_bytes(message, message_len);
     purify::Result<purify::JacobianPoint> m1 =
         purify::hash_to_curve(purify::capi_detail::tagged_message("Eval/1/", message_bytes), purify::curve1());
     if (!m1.has_value()) {
-        return purify::capi_detail::to_c_error(m1.error().code);
+        return purify::core_api_detail::to_core_error_code(m1.error().code);
     }
     purify::Result<purify::JacobianPoint> m2 =
         purify::hash_to_curve(purify::capi_detail::tagged_message("Eval/2/", message_bytes), purify::curve2());
     if (!m2.has_value()) {
-        return purify::capi_detail::to_c_error(m2.error().code);
+        return purify::core_api_detail::to_core_error_code(m2.error().code);
     }
 
     purify::Result<purify::AffinePoint> q1 =
         purify::curve1().mul_secret_affine(*m1, unpacked->first);
     if (!q1.has_value()) {
-        return purify::capi_detail::to_c_error(q1.error().code);
+        return purify::core_api_detail::to_core_error_code(q1.error().code);
     }
     purify::Result<purify::AffinePoint> q2 =
         purify::curve2().mul_secret_affine(*m2, unpacked->second);
     if (!q2.has_value()) {
-        return purify::capi_detail::to_c_error(q2.error().code);
+        return purify::core_api_detail::to_core_error_code(q2.error().code);
     }
 
     const purify::FieldElement output = purify::combine(q1->x, q2->x);

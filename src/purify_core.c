@@ -31,6 +31,14 @@
 #include <unistd.h>
 #endif
 
+/*
+ * Big-endian encoding of half_n1 * half_n2.
+ *
+ * Packed secrets use the mixed-radix encoding:
+ *   z = (z1 - 1) + half_n1 * (z2 - 1)
+ * with 1 <= z1 <= half_n1 and 1 <= z2 <= half_n2.
+ * Therefore the valid packed range is [0, half_n1 * half_n2).
+ */
 static const unsigned char kPackedSecretKeySpaceSize[PURIFY_SECRET_KEY_BYTES] = {
     0x3f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -42,6 +50,14 @@ static const unsigned char kPackedSecretKeySpaceSize[PURIFY_SECRET_KEY_BYTES] = 
     0xc4, 0x8a, 0xf1, 0x1c, 0xeb, 0xe3, 0xf4, 0x64,
 };
 
+/*
+ * Big-endian encoding of p^2.
+ *
+ * Packed public keys use:
+ *   packed = x1 + p * x2
+ * with 0 <= x1, x2 < p.
+ * Therefore the valid packed range is [0, p^2).
+ */
 static const unsigned char kPackedPublicKeySpaceSize[PURIFY_PUBLIC_KEY_BYTES] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfd,
@@ -334,6 +350,7 @@ purify_error_code purify_core_seed_secret_key(unsigned char out_secret_key[PURIF
         return PURIFY_ERROR_RANGE_VIOLATION;
     }
 
+    /* Preserve the legacy hash_to_int<8>(seed, key_space_size(), "Purify/KeyGen") derivation. */
     for (attempt = 0; attempt < 256; ++attempt) {
         salt[0] = (unsigned char)attempt;
         status = purify_core_hkdf_sha256(out_secret_key,

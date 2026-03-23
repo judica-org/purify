@@ -134,7 +134,7 @@ FieldElement FieldElement::inverse() const {
 
 std::optional<FieldElement> FieldElement::sqrt() const {
     if (is_zero()) {
-        return std::nullopt;
+        return FieldElement::zero();
     }
     if (!is_square()) {
         return std::nullopt;

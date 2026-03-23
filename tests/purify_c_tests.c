@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "../src/purify_field.h"
+#include "../src/core/purify_field.h"
 #include "purify.h"
 
 static int failures = 0;

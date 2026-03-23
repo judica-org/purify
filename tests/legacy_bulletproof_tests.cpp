@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "../src/purify_bppp_bridge.h"
+#include "../src/bridge/purify_bppp_bridge.h"
 #include "purify.hpp"
 #include "purify_bppp.hpp"
 #include "test_harness.hpp"

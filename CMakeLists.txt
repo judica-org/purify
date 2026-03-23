@@ -58,7 +58,7 @@ function(purify_enable_warnings target)
 endfunction()
 
 if(NOT MSVC)
-    set_source_files_properties(src/purify_bppp_bridge.c PROPERTIES
+    set_source_files_properties(src/bridge/purify_bppp_bridge.c PROPERTIES
         COMPILE_OPTIONS "-Wno-unused-function"
     )
     set_source_files_properties(src/legacy_bulletproof/scratch_frames.c PROPERTIES
@@ -71,7 +71,7 @@ if(MSVC)
     # which trigger a large number of benign narrowing/constant-expression
     # diagnostics under MSVC. Keep warnings enabled for our own code and
     # suppress the known third-party warnings only for this translation unit.
-    set_property(SOURCE src/purify_bppp_bridge.c APPEND PROPERTY COMPILE_OPTIONS
+    set_property(SOURCE src/bridge/purify_bppp_bridge.c APPEND PROPERTY COMPILE_OPTIONS
         /wd4127
         /wd4146
         /wd4244
@@ -104,6 +104,11 @@ function(purify_configure_library_target target)
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
         PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/core"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/api"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/support"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/protocol"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bridge"
     )
 
     if(PURIFY_USE_LEGACY_FIELD_HASHES)
@@ -126,23 +131,23 @@ function(purify_enable_release_optimizations target)
 endfunction()
 
 add_library(purify
-    src/purify_core.c
-    src/purify_curve_core.c
-    src/purify_field.c
-    src/purify_uint.c
-    src/purify_c_api.cpp
-    src/purify_api.cpp
-    src/purify_bulletproof.cpp
-    src/purify_curve.cpp
-    src/purify_expr.cpp
+    src/core/purify_core.c
+    src/core/purify_curve_core.c
+    src/core/purify_field.c
+    src/core/purify_uint.c
+    src/api/purify_c_api.cpp
+    src/api/purify_api.cpp
+    src/protocol/purify_bulletproof.cpp
+    src/support/purify_curve.cpp
+    src/protocol/purify_expr.cpp
     src/legacy_bulletproof/scratch_frames.c
-    src/purify_numeric.cpp
+    src/support/purify_numeric.cpp
     src/puresign/legacy.cpp
     src/puresign/codecs/legacy.cpp
     src/puresign/bppp.cpp
     src/puresign/codecs/bppp.cpp
-    src/purify_bppp.cpp
-    src/purify_bppp_bridge.c
+    src/protocol/purify_bppp.cpp
+    src/bridge/purify_bppp_bridge.c
 )
 
 add_library(purify::purify ALIAS purify)
@@ -214,23 +219,23 @@ if(PURIFY_BUILD_BENCH)
     add_subdirectory(third_party/nanobench EXCLUDE_FROM_ALL)
 
     add_library(purify_bench_support STATIC
-        src/purify_core.c
-        src/purify_curve_core.c
-        src/purify_field.c
-        src/purify_uint.c
-        src/purify_c_api.cpp
-        src/purify_api.cpp
-        src/purify_bulletproof.cpp
-        src/purify_curve.cpp
-        src/purify_expr.cpp
+        src/core/purify_core.c
+        src/core/purify_curve_core.c
+        src/core/purify_field.c
+        src/core/purify_uint.c
+        src/api/purify_c_api.cpp
+        src/api/purify_api.cpp
+        src/protocol/purify_bulletproof.cpp
+        src/support/purify_curve.cpp
+        src/protocol/purify_expr.cpp
         src/legacy_bulletproof/scratch_frames.c
-        src/purify_numeric.cpp
+        src/support/purify_numeric.cpp
         src/puresign/legacy.cpp
         src/puresign/codecs/legacy.cpp
         src/puresign/bppp.cpp
         src/puresign/codecs/bppp.cpp
-        src/purify_bppp.cpp
-        src/purify_bppp_bridge.c
+        src/protocol/purify_bppp.cpp
+        src/bridge/purify_bppp_bridge.c
     )
 
     purify_configure_library_target(purify_bench_support)

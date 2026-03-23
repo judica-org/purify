@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <cstring>
 
-#include "../purify_bulletproof_internal.hpp"
+#include "purify_bulletproof_internal.hpp"
 #include "detail/common.hpp"
 #include "purify_bppp.hpp"
 #include "purify/curve.hpp"

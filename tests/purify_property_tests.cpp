@@ -8,7 +8,7 @@
 #include <optional>
 #include <string_view>
 
-#include "../src/purify_bulletproof_internal.hpp"
+#include "../src/protocol/purify_bulletproof_internal.hpp"
 #include "purify.hpp"
 #include "purify_bppp.hpp"
 

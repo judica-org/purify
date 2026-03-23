@@ -108,6 +108,7 @@ purify_error_code purify_generate_key(purify_generated_key* out);
  * @param out Output bundle.
  * @param seed Seed bytes. May be `NULL` only when `seed_len == 0`.
  * @param seed_len Seed length in bytes. Values shorter than 16 bytes are rejected.
+ * Aliasing: supported when `seed` points anywhere inside `out`.
  * @return `PURIFY_ERROR_OK` on success.
  */
 purify_error_code purify_generate_key_from_seed(purify_generated_key* out, const unsigned char* seed, size_t seed_len);
@@ -116,6 +117,7 @@ purify_error_code purify_generate_key_from_seed(purify_generated_key* out, const
  * @brief Derives the packed public key corresponding to one packed Purify secret.
  * @param out_public_key Output 64-byte packed Purify public key.
  * @param secret_key Input 64-byte packed Purify secret.
+ * Aliasing: supported when `out_public_key` overlaps `secret_key`.
  * @return `PURIFY_ERROR_OK` on success.
  */
 purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_PUBLIC_KEY_BYTES],
@@ -125,6 +127,7 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
  * @brief Derives one canonical BIP340 keypair from one packed Purify secret.
  * @param out Output BIP340 keypair.
  * @param secret_key Input 64-byte packed Purify secret.
+ * Aliasing: supported when `out` overlaps `secret_key`.
  * @return `PURIFY_ERROR_OK` on success.
  */
 purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
@@ -136,6 +139,7 @@ purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
  * @param secret_key Input 64-byte packed Purify secret.
  * @param message Message bytes. May be `NULL` only when `message_len == 0`.
  * @param message_len Message length in bytes.
+ * Aliasing: supported when `out_field_element` overlaps `secret_key` and/or `message`.
  * @return `PURIFY_ERROR_OK` on success.
  */
 purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEMENT_BYTES],

@@ -22,6 +22,17 @@
 
 namespace purify::capi_detail {
 
+bool ranges_overlap(const void* lhs, std::size_t lhs_size, const void* rhs, std::size_t rhs_size) noexcept {
+    const auto* lhs_bytes = static_cast<const unsigned char*>(lhs);
+    const auto* rhs_bytes = static_cast<const unsigned char*>(rhs);
+
+    if (lhs_size == 0 || rhs_size == 0 || lhs_bytes == nullptr || rhs_bytes == nullptr) {
+        return false;
+    }
+
+    return lhs_bytes < rhs_bytes + rhs_size && rhs_bytes < lhs_bytes + lhs_size;
+}
+
 Bytes copy_bytes(const unsigned char* data, std::size_t size) {
     if (size == 0) {
         return {};
@@ -144,15 +155,23 @@ purify_error_code purify_generate_key(purify_generated_key* out) {
     return PURIFY_ERROR_OK;
 }
 
-purify_error_code purify_generate_key_from_seed(purify_generated_key* out, const unsigned char* seed, size_t seed_len) {
+purify_error_code purify_generate_key_from_seed(purify_generated_key* out,
+                                                const unsigned char* seed,
+                                                size_t seed_len) {
     purify::Result<purify::UInt512> packed_secret;
     purify::Result<purify::UInt512> public_key;
     purify_error_code status;
+    const unsigned char* seed_input = seed;
+    purify::Bytes seed_copy;
     if (out == nullptr) {
         return PURIFY_ERROR_MISSING_VALUE;
     }
+    if (purify::capi_detail::ranges_overlap(out, sizeof(*out), seed, seed_len)) {
+        seed_copy = purify::capi_detail::copy_bytes(seed, seed_len);
+        seed_input = seed_copy.data();
+    }
     purify::capi_detail::clear_generated_key(out);
-    status = purify_core_seed_secret_key(out->secret_key, seed, seed_len);
+    status = purify_core_seed_secret_key(out->secret_key, seed_input, seed_len);
     if (status != PURIFY_ERROR_OK) {
         purify::capi_detail::clear_generated_key(out);
         return status;
@@ -176,7 +195,6 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
     if (out_public_key == nullptr) {
         return PURIFY_ERROR_MISSING_VALUE;
     }
-    std::fill(out_public_key, out_public_key + PURIFY_PUBLIC_KEY_BYTES, 0);
 
     purify::Result<purify::UInt512> packed_secret = purify::capi_detail::parse_secret_key(secret_key);
     if (!packed_secret.has_value()) {
@@ -188,6 +206,7 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
         return purify::core_api_detail::to_core_error_code(public_key.error().code);
     }
 
+    std::fill(out_public_key, out_public_key + PURIFY_PUBLIC_KEY_BYTES, 0);
     purify::capi_detail::write_uint512(*public_key, out_public_key);
     return PURIFY_ERROR_OK;
 }
@@ -197,12 +216,13 @@ purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
     if (out == nullptr) {
         return PURIFY_ERROR_MISSING_VALUE;
     }
-    purify::capi_detail::clear_bip340_key(out);
 
     purify::Result<purify::UInt512> packed_secret = purify::capi_detail::parse_secret_key(secret_key);
     if (!packed_secret.has_value()) {
         return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
+
+    purify::capi_detail::clear_bip340_key(out);
 
     static const purify::TaggedHash kBip340KeyGenTag("Purify/BIP340/KeyGen");
     std::array<unsigned char, PURIFY_SECRET_KEY_BYTES> packed_secret_bytes = packed_secret->to_bytes_be();
@@ -239,7 +259,6 @@ purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEME
     if (out_field_element == nullptr) {
         return PURIFY_ERROR_MISSING_VALUE;
     }
-    std::fill(out_field_element, out_field_element + PURIFY_FIELD_ELEMENT_BYTES, 0);
     if (message_len != 0 && message == nullptr) {
         return PURIFY_ERROR_MISSING_VALUE;
     }
@@ -255,6 +274,8 @@ purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEME
     }
 
     const purify::Bytes message_bytes = purify::capi_detail::copy_bytes(message, message_len);
+    std::fill(out_field_element, out_field_element + PURIFY_FIELD_ELEMENT_BYTES, 0);
+
     purify::Result<purify::JacobianPoint> m1 =
         purify::hash_to_curve(purify::capi_detail::tagged_message("Eval/1/", message_bytes), purify::curve1());
     if (!m1.has_value()) {

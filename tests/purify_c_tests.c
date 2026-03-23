@@ -84,6 +84,14 @@ int main(void) {
            "purify_generate_key_from_seed preserves the legacy packed-public-key test vector");
     expect(purify_generate_key_from_seed(&second, short_seed, sizeof(short_seed)) == PURIFY_ERROR_RANGE_VIOLATION,
            "purify_generate_key_from_seed rejects short seed material");
+    {
+        purify_generated_key aliased_seed_key = {{0}, {0}};
+        memcpy(aliased_seed_key.secret_key, seed, sizeof(seed));
+        expect(purify_generate_key_from_seed(&aliased_seed_key, aliased_seed_key.secret_key, sizeof(seed)) == PURIFY_ERROR_OK,
+               "purify_generate_key_from_seed accepts seed storage inside the output bundle");
+        expect(memcmp(&aliased_seed_key, &first, sizeof(first)) == 0,
+               "purify_generate_key_from_seed aliasing matches the non-aliased result");
+    }
 
     expect(purify_validate_secret_key(first.secret_key) == PURIFY_ERROR_OK,
            "purify_validate_secret_key accepts generated secrets");
@@ -97,6 +105,14 @@ int main(void) {
            "purify_derive_public_key succeeds");
     expect(memcmp(derived_public_key, first.public_key, sizeof(derived_public_key)) == 0,
            "purify_derive_public_key matches seeded key generation");
+    {
+        unsigned char aliased_public_key[PURIFY_PUBLIC_KEY_BYTES];
+        memcpy(aliased_public_key, first.secret_key, sizeof(aliased_public_key));
+        expect(purify_derive_public_key(aliased_public_key, aliased_public_key) == PURIFY_ERROR_OK,
+               "purify_derive_public_key accepts identical input and output pointers");
+        expect(memcmp(aliased_public_key, first.public_key, sizeof(aliased_public_key)) == 0,
+               "purify_derive_public_key aliasing matches the non-aliased result");
+    }
 
     expect(purify_derive_bip340_key(&bip340, first.secret_key) == PURIFY_ERROR_OK,
            "purify_derive_bip340_key succeeds");
@@ -104,6 +120,14 @@ int main(void) {
            "purify_derive_bip340_key produces a non-zero BIP340 secret");
     expect(!all_zero(bip340.xonly_public_key, sizeof(bip340.xonly_public_key)),
            "purify_derive_bip340_key produces a non-zero x-only public key");
+    {
+        unsigned char aliased_bip340[sizeof(purify_bip340_key)];
+        memcpy(aliased_bip340, first.secret_key, PURIFY_SECRET_KEY_BYTES);
+        expect(purify_derive_bip340_key((purify_bip340_key*)aliased_bip340, aliased_bip340) == PURIFY_ERROR_OK,
+               "purify_derive_bip340_key accepts secret storage inside the output struct");
+        expect(memcmp(aliased_bip340, &bip340, sizeof(bip340)) == 0,
+               "purify_derive_bip340_key aliasing matches the non-aliased result");
+    }
 
     memset(eval_a, 0, sizeof(eval_a));
     memset(eval_b, 0, sizeof(eval_b));
@@ -115,6 +139,21 @@ int main(void) {
            "purify_eval is deterministic");
     expect(!all_zero(eval_a, sizeof(eval_a)),
            "purify_eval produces a non-zero field element for one sample");
+    {
+        unsigned char aliased_eval_secret[PURIFY_SECRET_KEY_BYTES];
+        unsigned char aliased_eval_message[PURIFY_FIELD_ELEMENT_BYTES];
+        memcpy(aliased_eval_secret, first.secret_key, sizeof(aliased_eval_secret));
+        memset(aliased_eval_message, 0, sizeof(aliased_eval_message));
+        memcpy(aliased_eval_message, message, sizeof(message) - 1);
+        expect(purify_eval(aliased_eval_secret, aliased_eval_secret, message, sizeof(message) - 1) == PURIFY_ERROR_OK,
+               "purify_eval accepts output overlapping the secret input");
+        expect(memcmp(aliased_eval_secret, eval_a, sizeof(eval_a)) == 0,
+               "purify_eval with aliased secret input matches the non-aliased result");
+        expect(purify_eval(aliased_eval_message, first.secret_key, aliased_eval_message, sizeof(message) - 1) == PURIFY_ERROR_OK,
+               "purify_eval accepts output overlapping the message input");
+        expect(memcmp(aliased_eval_message, eval_a, sizeof(eval_a)) == 0,
+               "purify_eval with aliased message input matches the non-aliased result");
+    }
 
     purify_fe_set_zero(&zero);
     expect(purify_fe_sqrt(&zero_sqrt, &zero) != 0,

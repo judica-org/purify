@@ -16,6 +16,11 @@
 extern "C" {
 #endif
 
+/*
+ * Unless documented otherwise, helpers in this header do not support overlapping
+ * input and output storage.
+ */
+
 #define PURIFY_DECLARE_UINT_FUNCS(width, words) \
     void purify_u##width##_set_zero(uint64_t out[words]); \
     void purify_u##width##_set_u64(uint64_t out[words], uint64_t value); \

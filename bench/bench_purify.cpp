@@ -56,8 +56,11 @@ struct BenchConfig {
 struct PurifyBenchCase {
     Bytes message;
     BulletproofWitnessData witness;
+    BulletproofWitnessData bppp_witness;
     NativeBulletproofCircuitTemplate circuit_template;
+    NativeBulletproofCircuitTemplate bppp_circuit_template;
     NativeBulletproofCircuit circuit;
+    NativeBulletproofCircuit bppp_circuit;
     ExperimentalBulletproofProof experimental_proof;
     purify::ExperimentalBulletproofBackendCache experimental_bulletproof_cache;
     purify::bppp::ExperimentalCircuitZkNormArgProof experimental_bppp_proof;
@@ -103,6 +106,14 @@ std::size_t estimate_bytes(const NativeBulletproofCircuit& circuit) {
         + estimate_bytes(circuit.wo)
         + estimate_bytes(circuit.wv)
         + estimate_bytes(circuit.c);
+}
+
+std::size_t round_up_power_of_two(std::size_t value) {
+    std::size_t out = 1;
+    while (out < value) {
+        out <<= 1;
+    }
+    return out;
 }
 
 /**
@@ -186,6 +197,14 @@ std::optional<PurifyBenchCase> make_case() {
     }
     out.witness = std::move(*witness);
 
+    purify::Result<BulletproofWitnessData> bppp_witness =
+        purify::prove_assignment_data(out.message, *secret, true);
+    if (!bppp_witness.has_value()) {
+        std::cerr << bppp_witness.error().message() << "\n";
+        return std::nullopt;
+    }
+    out.bppp_witness = std::move(*bppp_witness);
+
     purify::Result<NativeBulletproofCircuitTemplate> circuit_template = purify::verifier_circuit_template(out.message);
     if (!circuit_template.has_value()) {
         std::cerr << circuit_template.error().message() << "\n";
@@ -193,12 +212,28 @@ std::optional<PurifyBenchCase> make_case() {
     }
     out.circuit_template = std::move(*circuit_template);
 
+    purify::Result<NativeBulletproofCircuitTemplate> bppp_circuit_template =
+        purify::verifier_circuit_template(out.message, true);
+    if (!bppp_circuit_template.has_value()) {
+        std::cerr << bppp_circuit_template.error().message() << "\n";
+        return std::nullopt;
+    }
+    out.bppp_circuit_template = std::move(*bppp_circuit_template);
+
     purify::Result<NativeBulletproofCircuit> circuit = purify::verifier_circuit(out.message, out.witness.public_key);
     if (!circuit.has_value()) {
         std::cerr << circuit.error().message() << "\n";
         return std::nullopt;
     }
     out.circuit = std::move(*circuit);
+
+    purify::Result<NativeBulletproofCircuit> bppp_circuit =
+        purify::verifier_circuit(out.message, out.bppp_witness.public_key, true);
+    if (!bppp_circuit.has_value()) {
+        std::cerr << bppp_circuit.error().message() << "\n";
+        return std::nullopt;
+    }
+    out.bppp_circuit = std::move(*bppp_circuit);
 
     std::array<unsigned char, 32> proof_nonce{};
     for (std::size_t i = 0; i < proof_nonce.size(); ++i) {
@@ -217,7 +252,7 @@ std::optional<PurifyBenchCase> make_case() {
 
     purify::Result<purify::bppp::ExperimentalCircuitZkNormArgProof> experimental_bppp_proof =
         purify::bppp::prove_experimental_circuit_zk_norm_arg(
-            out.circuit, out.witness.assignment, proof_nonce,
+            out.bppp_circuit, out.bppp_witness.assignment, proof_nonce,
             purify::bytes_from_ascii("bench-experimental-bppp-proof"), &out.experimental_bppp_cache);
     if (!experimental_bppp_proof.has_value()) {
         std::cerr << experimental_bppp_proof.error().message() << "\n";
@@ -360,6 +395,11 @@ int main(int argc, char** argv) {
     Bytes experimental_binding = purify::bytes_from_ascii("bench-experimental-proof");
     Bytes experimental_bppp_binding = purify::bytes_from_ascii("bench-experimental-bppp-proof");
     std::size_t circuit_bytes = estimate_bytes(bench_case->circuit);
+    std::size_t bppp_circuit_bytes = estimate_bytes(bench_case->bppp_circuit);
+    const std::size_t experimental_bppp_n_vec_len =
+        round_up_power_of_two(std::max<std::size_t>(1, 4 * bench_case->bppp_circuit.n_gates));
+    const std::size_t experimental_bppp_l_vec_len = round_up_power_of_two(
+        std::max<std::size_t>(1, bench_case->bppp_circuit.n_gates + bench_case->bppp_circuit.n_commitments + 1));
     purify::Result<Bytes> proven_signature_bytes = bench_case->proven_signature.serialize();
     if (!proven_signature_bytes.has_value()) {
         std::cerr << proven_signature_bytes.error().message() << "\n";
@@ -372,15 +412,22 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "purify benchmark setup\n";
-    std::cout << "proof_system=legacy_bp_and_bppp_with_puresign_legacy_and_plusplus\n";
+    std::cout << "proof_system=legacy_bp_padded_and_bppp_no_padding_with_puresign_legacy_and_plusplus\n";
     std::cout << "message_bytes=" << bench_case->message.size() << "\n";
     std::cout << "gates=" << bench_case->circuit.n_gates << "\n";
     std::cout << "constraints=" << bench_case->circuit.c.size() << "\n";
     std::cout << "commitments=" << bench_case->circuit.n_commitments << "\n";
     std::cout << "circuit_size_bytes=" << circuit_bytes << "\n";
+    std::cout << "bppp_gates=" << bench_case->bppp_circuit.n_gates << "\n";
+    std::cout << "bppp_constraints=" << bench_case->bppp_circuit.c.size() << "\n";
+    std::cout << "bppp_commitments=" << bench_case->bppp_circuit.n_commitments << "\n";
+    std::cout << "bppp_circuit_size_bytes=" << bppp_circuit_bytes << "\n";
     std::cout << "cache_eval_input_bytes=" << bench_case->message_proof_cache.eval_input.size() << "\n";
     std::cout << "experimental_proof_size_bytes=" << bench_case->experimental_proof.proof.size() << "\n";
     std::cout << "experimental_bppp_proof_size_bytes=" << bench_case->experimental_bppp_proof.proof.size() << "\n";
+    std::cout << "experimental_bppp_n_vec_len=" << experimental_bppp_n_vec_len << "\n";
+    std::cout << "experimental_bppp_l_vec_len=" << experimental_bppp_l_vec_len << "\n";
+    std::cout << "experimental_bppp_c_vec_len=" << experimental_bppp_l_vec_len << "\n";
     std::cout << "norm_arg_n_vec_len=" << bench_case->norm_arg_inputs.n_vec.size() << "\n";
     std::cout << "norm_arg_l_vec_len=" << bench_case->norm_arg_inputs.l_vec.size() << "\n";
     std::cout << "norm_arg_c_vec_len=" << bench_case->norm_arg_inputs.c_vec.size() << "\n";
@@ -397,11 +444,27 @@ int main(int argc, char** argv) {
         ankerl::nanobench::doNotOptimizeAway(built->c.size());
     });
 
+    auto bppp_build_bench = make_bench(*config, "circuit");
+    bppp_build_bench.run("verifier_circuit.native.build.no_padding", [&] {
+        purify::Result<NativeBulletproofCircuit> built =
+            purify::verifier_circuit(bench_case->message, bench_case->bppp_witness.public_key, true);
+        assert(built.has_value() && "benchmark no-padding verifier circuit build should succeed");
+        ankerl::nanobench::doNotOptimizeAway(built->c.size());
+    });
+
     auto instantiate_bench = make_bench(*config, "circuit");
     instantiate_bench.run("verifier_circuit.template.instantiate_native", [&] {
         purify::Result<NativeBulletproofCircuit> built =
             bench_case->circuit_template.instantiate(bench_case->witness.public_key);
         assert(built.has_value() && "benchmark verifier circuit template instantiation should succeed");
+        ankerl::nanobench::doNotOptimizeAway(built->c.size());
+    });
+
+    auto bppp_instantiate_bench = make_bench(*config, "circuit");
+    bppp_instantiate_bench.run("verifier_circuit.template.instantiate_native.no_padding", [&] {
+        purify::Result<NativeBulletproofCircuit> built =
+            bench_case->bppp_circuit_template.instantiate(bench_case->bppp_witness.public_key);
+        assert(built.has_value() && "benchmark no-padding verifier circuit template instantiation should succeed");
         ankerl::nanobench::doNotOptimizeAway(built->c.size());
     });
 
@@ -413,11 +476,27 @@ int main(int argc, char** argv) {
         ankerl::nanobench::doNotOptimizeAway(built->constraint_count());
     });
 
+    auto bppp_instantiate_packed_bench = make_bench(*config, "circuit");
+    bppp_instantiate_packed_bench.run("verifier_circuit.template.instantiate_packed.no_padding", [&] {
+        purify::Result<NativeBulletproofCircuit::PackedWithSlack> built =
+            bench_case->bppp_circuit_template.instantiate_packed(bench_case->bppp_witness.public_key);
+        assert(built.has_value() && "benchmark no-padding packed verifier circuit template instantiation should succeed");
+        ankerl::nanobench::doNotOptimizeAway(built->constraint_count());
+    });
+
     auto template_build_bench = make_bench(*config, "template");
     template_build_bench.run("verifier_circuit.template.build", [&] {
         purify::Result<NativeBulletproofCircuitTemplate> built =
             purify::verifier_circuit_template(bench_case->message);
         assert(built.has_value() && "benchmark verifier circuit template build should succeed");
+        ankerl::nanobench::doNotOptimizeAway(&*built);
+    });
+
+    auto bppp_template_build_bench = make_bench(*config, "template");
+    bppp_template_build_bench.run("verifier_circuit.template.build.no_padding", [&] {
+        purify::Result<NativeBulletproofCircuitTemplate> built =
+            purify::verifier_circuit_template(bench_case->message, true);
+        assert(built.has_value() && "benchmark no-padding verifier circuit template build should succeed");
         ankerl::nanobench::doNotOptimizeAway(&*built);
     });
 
@@ -428,11 +507,27 @@ int main(int argc, char** argv) {
         ankerl::nanobench::doNotOptimizeAway(*ok);
     });
 
+    auto bppp_partial_eval_bench = make_bench(*config, "evaluation");
+    bppp_partial_eval_bench.run("verifier_circuit.template.evaluate_partial.no_padding", [&] {
+        purify::Result<bool> ok = bench_case->bppp_circuit_template.partial_evaluate(bench_case->bppp_witness.assignment);
+        assert(ok.has_value() && *ok && "benchmark no-padding circuit template partial evaluation should succeed");
+        ankerl::nanobench::doNotOptimizeAway(*ok);
+    });
+
     auto final_eval_bench = make_bench(*config, "evaluation");
     final_eval_bench.run("verifier_circuit.template.evaluate_final", [&] {
         purify::Result<bool> ok =
             bench_case->circuit_template.final_evaluate(bench_case->witness.assignment, bench_case->witness.public_key);
         assert(ok.has_value() && *ok && "benchmark circuit template final evaluation should succeed");
+        ankerl::nanobench::doNotOptimizeAway(*ok);
+    });
+
+    auto bppp_final_eval_bench = make_bench(*config, "evaluation");
+    bppp_final_eval_bench.run("verifier_circuit.template.evaluate_final.no_padding", [&] {
+        purify::Result<bool> ok =
+            bench_case->bppp_circuit_template.final_evaluate(bench_case->bppp_witness.assignment,
+                                                             bench_case->bppp_witness.public_key);
+        assert(ok.has_value() && *ok && "benchmark no-padding circuit template final evaluation should succeed");
         ankerl::nanobench::doNotOptimizeAway(*ok);
     });
 
@@ -470,7 +565,7 @@ int main(int argc, char** argv) {
     experimental_bppp_prove_bench.run("experimental_circuit.bppp_zk_norm_arg.prove", [&] {
         purify::Result<purify::bppp::ExperimentalCircuitZkNormArgProof> proof =
             purify::bppp::prove_experimental_circuit_zk_norm_arg(
-                bench_case->circuit, bench_case->witness.assignment, experimental_nonce,
+                bench_case->bppp_circuit, bench_case->bppp_witness.assignment, experimental_nonce,
                 experimental_bppp_binding, &bench_case->experimental_bppp_cache);
         assert(proof.has_value() && "benchmark experimental zk BPPP circuit proof should succeed");
         ankerl::nanobench::doNotOptimizeAway(proof->proof.data());
@@ -481,7 +576,7 @@ int main(int argc, char** argv) {
     experimental_bppp_verify_bench.run("experimental_circuit.bppp_zk_norm_arg.verify", [&] {
         purify::Result<bool> ok =
             purify::bppp::verify_experimental_circuit_zk_norm_arg(
-                bench_case->circuit, bench_case->experimental_bppp_proof, experimental_bppp_binding,
+                bench_case->bppp_circuit, bench_case->experimental_bppp_proof, experimental_bppp_binding,
                 &bench_case->experimental_bppp_cache);
         assert(ok.has_value() && *ok && "benchmark experimental zk BPPP circuit verification should succeed");
         ankerl::nanobench::doNotOptimizeAway(*ok);

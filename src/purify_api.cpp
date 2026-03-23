@@ -245,13 +245,14 @@ Result<std::string> verifier(const Bytes& message, const UInt512& pubkey) {
     return bp.to_string();
 }
 
-Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UInt512& pubkey) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& template_circuit, verifier_circuit_template(message),
+Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UInt512& pubkey,
+                                                  bool no_padding) {
+    PURIFY_ASSIGN_OR_RETURN(const auto& template_circuit, verifier_circuit_template(message, no_padding),
                             "verifier_circuit:verifier_circuit_template");
     return template_circuit.instantiate(pubkey);
 }
 
-Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message) {
+Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message, bool no_padding) {
     PURIFY_ASSIGN_OR_RETURN(const auto& m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
                             "verifier_circuit_template:hash_to_curve_m1");
     PURIFY_ASSIGN_OR_RETURN(const auto& m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
@@ -260,7 +261,8 @@ Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& 
     PURIFY_ASSIGN_OR_RETURN(const auto& result, circuit_main(transcript, m1, m2),
                             "verifier_circuit_template:circuit_main");
     BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, result.n_bits), "verifier_circuit_template:from_transcript");
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, result.n_bits, no_padding),
+                           "verifier_circuit_template:from_transcript");
     Expr p1x = result.p1x;
     Expr p2x = result.p2x;
     Expr out = result.out;
@@ -277,7 +279,8 @@ Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& 
                                                         std::move(out));
 }
 
-Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const SecretKey& secret) {
+Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const SecretKey& secret,
+                                                     bool no_padding) {
     PURIFY_ASSIGN_OR_RETURN(const auto& unpacked, unpack_secret(secret.packed()), "prove_assignment_data:unpack_secret");
     PURIFY_ASSIGN_OR_RETURN(const auto& m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
                             "prove_assignment_data:hash_to_curve_m1");
@@ -308,7 +311,8 @@ Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const
 
     UInt512 pubkey = pack_public(p1.x.to_uint256(), p2.x.to_uint256());
     BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, result.n_bits), "prove_assignment_data:from_transcript");
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, result.n_bits, no_padding),
+                           "prove_assignment_data:from_transcript");
     PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(pubkey, result.p1x, result.p2x, result.out),
                            "prove_assignment_data:add_pubkey_and_out");
     if (!bp.evaluate(transcript.varmap(), native_out)) {
@@ -323,20 +327,22 @@ Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const
     return BulletproofWitnessData{pubkey, native_out, std::move(*assignment)};
 }
 
-Result<bool> evaluate_verifier_circuit(const Bytes& message, const BulletproofWitnessData& witness) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, verifier_circuit(message, witness.public_key),
+Result<bool> evaluate_verifier_circuit(const Bytes& message, const BulletproofWitnessData& witness,
+                                       bool no_padding) {
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, verifier_circuit(message, witness.public_key, no_padding),
                             "evaluate_verifier_circuit:verifier_circuit");
     return circuit.evaluate(witness.assignment);
 }
 
-Result<bool> evaluate_verifier_circuit(const Bytes& message, const SecretKey& secret) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(message, secret),
+Result<bool> evaluate_verifier_circuit(const Bytes& message, const SecretKey& secret, bool no_padding) {
+    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(message, secret, no_padding),
                             "evaluate_verifier_circuit:prove_assignment_data");
-    return evaluate_verifier_circuit(message, witness);
+    return evaluate_verifier_circuit(message, witness, no_padding);
 }
 
-Result<Bytes> prove_assignment(const Bytes& message, const SecretKey& secret) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(message, secret), "prove_assignment:prove_assignment_data");
+Result<Bytes> prove_assignment(const Bytes& message, const SecretKey& secret, bool no_padding) {
+    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(message, secret, no_padding),
+                            "prove_assignment:prove_assignment_data");
     Result<Bytes> serialized = witness.assignment.serialize();
     assert(serialized.has_value() && "prove_assignment() should serialize a well-formed assignment");
     if (!serialized.has_value()) {

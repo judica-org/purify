@@ -226,16 +226,16 @@ ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
   return out;
 }
 
-bool is_power_of_two(std::size_t value) {
-  return value != 0 && (value & (value - 1)) == 0;
-}
-
 std::size_t round_up_power_of_two(std::size_t value) {
   std::size_t out = 1;
   while (out < value) {
     out <<= 1;
   }
   return out;
+}
+
+std::size_t reduced_n_vec_len(std::size_t n_gates) {
+  return round_up_power_of_two(std::max<std::size_t>(1, 4 * n_gates));
 }
 
 CircuitNormArgPublicDataCacheKey circuit_norm_arg_public_data_cache_key(
@@ -322,6 +322,7 @@ struct CircuitNormArgPublicData {
   FieldElement rho = FieldElement::zero();
   ScalarBytes rho_bytes{};
   FieldElement target = FieldElement::zero();
+  std::size_t n_vec_len = 0;
   std::vector<PointBytes> generators;
   std::vector<FieldElement> c_vec;
   std::vector<ScalarBytes> c_vec_bytes;
@@ -349,11 +350,6 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   if (!circuit.has_valid_shape()) {
     return unexpected_error(ErrorCode::InvalidDimensions,
                             "build_circuit_norm_arg_public_data:circuit_shape");
-  }
-  if (!is_power_of_two(circuit.n_gates)) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "build_circuit_norm_arg_public_data:n_gates_power_of_two");
   }
 
   Bytes binding_digest =
@@ -437,6 +433,7 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   auto out = std::make_shared<CircuitNormArgPublicData>();
   out->rho = rho;
   out->rho_bytes = scalar_bytes(rho);
+  out->n_vec_len = reduced_n_vec_len(circuit.n_gates);
   out->plus_terms.resize(circuit.n_gates);
   out->minus_terms.resize(circuit.n_gates);
   out->plus_shift.resize(circuit.n_gates, zero);
@@ -482,7 +479,7 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   out->c_vec_bytes = scalar_bytes(out->c_vec);
 
   PURIFY_ASSIGN_OR_RETURN(
-      auto generators, create_generators(4 * circuit.n_gates + out->c_vec.size()),
+      auto generators, create_generators(out->n_vec_len + out->c_vec.size()),
       "build_circuit_norm_arg_public_data:create_generators");
   out->generators = std::move(generators);
   CircuitNormArgPublicDataPtr shared = out;
@@ -515,23 +512,24 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
 
   CircuitNormArgReduction out;
   out.public_data = public_data;
-  out.n_vec.reserve(4 * circuit.n_gates);
+  out.n_vec.assign(out.public_data->n_vec_len, FieldElement::zero());
   out.l_vec.assign(out.public_data->c_vec.size(), FieldElement::zero());
 
   const FieldElement rho_inv = out.public_data->rho.inverse();
   FieldElement rho_weight_inv = rho_inv;
+  std::size_t n_vec_idx = 0;
   for (std::size_t i = 0; i < circuit.n_gates; ++i) {
     const FieldElement plus_value = assignment.left[i] + assignment.right[i] +
                                     out.public_data->plus_shift[i];
     for (const FieldElement &term : out.public_data->plus_terms[i]) {
-      out.n_vec.push_back(term * plus_value * rho_weight_inv);
+      out.n_vec[n_vec_idx++] = term * plus_value * rho_weight_inv;
       rho_weight_inv = rho_weight_inv * rho_inv;
     }
 
     const FieldElement minus_value = assignment.left[i] - assignment.right[i] +
                                      out.public_data->minus_shift[i];
     for (const FieldElement &term : out.public_data->minus_terms[i]) {
-      out.n_vec.push_back(term * minus_value * rho_weight_inv);
+      out.n_vec[n_vec_idx++] = term * minus_value * rho_weight_inv;
       rho_weight_inv = rho_weight_inv * rho_inv;
     }
 
@@ -1060,11 +1058,6 @@ prove_experimental_circuit_norm_arg_to_commitment(
         ErrorCode::InvalidDimensions,
         "prove_experimental_circuit_norm_arg_to_commitment:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
-    return unexpected_error(ErrorCode::InvalidDimensions,
-                            "prove_experimental_circuit_norm_arg_to_commitment:"
-                            "n_gates_power_of_two");
-  }
   if (assignment.left.size() != circuit.n_gates ||
       assignment.right.size() != circuit.n_gates ||
       assignment.output.size() != circuit.n_gates ||
@@ -1133,11 +1126,6 @@ Result<bool> verify_experimental_circuit_norm_arg(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_norm_arg:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "verify_experimental_circuit_norm_arg:n_gates_power_of_two");
-  }
   if (proof.proof.empty()) {
     return unexpected_error(ErrorCode::EmptyInput,
                             "verify_experimental_circuit_norm_arg:proof_empty");
@@ -1157,7 +1145,7 @@ Result<bool> verify_experimental_circuit_norm_arg(
   bundle.rho = public_data->rho_bytes;
   bundle.generators = public_data->generators;
   bundle.c_vec = public_data->c_vec_bytes;
-  bundle.n_vec_len = 4 * circuit.n_gates;
+  bundle.n_vec_len = public_data->n_vec_len;
   bundle.commitment = anchored_commitment;
   bundle.proof = proof.proof;
   return verify_norm_arg_with_cache(bundle, cache);
@@ -1174,11 +1162,6 @@ prove_experimental_circuit_zk_norm_arg_impl(
     return unexpected_error(
         ErrorCode::InvalidDimensions,
         "prove_experimental_circuit_zk_norm_arg_impl:circuit_shape");
-  }
-  if (!is_power_of_two(circuit.n_gates)) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "prove_experimental_circuit_zk_norm_arg_impl:n_gates_power_of_two");
   }
   if (assignment.left.size() != circuit.n_gates ||
       assignment.right.size() != circuit.n_gates ||
@@ -1384,11 +1367,6 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_zk_norm_arg_impl:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "verify_experimental_circuit_zk_norm_arg_impl:n_gates_power_of_two");
-  }
   if (proof.proof.empty()) {
     return unexpected_error(
         ErrorCode::EmptyInput,
@@ -1426,7 +1404,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
   bundle.rho = public_data->rho_bytes;
   bundle.generators = public_data->generators;
   bundle.c_vec = public_data->c_vec_bytes;
-  bundle.n_vec_len = 4 * circuit.n_gates;
+  bundle.n_vec_len = public_data->n_vec_len;
   bundle.commitment = commitment;
   bundle.proof = proof.proof;
   return verify_norm_arg_with_cache(bundle, cache);
@@ -1476,8 +1454,9 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
 Result<CommittedPurifyWitness>
 commit_output_witness(const Bytes &message, const SecretKey &secret,
                       const ScalarBytes &blind, const GeneratorBytes &value_gen,
-                      const GeneratorBytes &blind_gen) {
-  PURIFY_ASSIGN_OR_RETURN(auto witness, prove_assignment_data(message, secret),
+                      const GeneratorBytes &blind_gen, bool no_padding) {
+  PURIFY_ASSIGN_OR_RETURN(auto witness,
+                          prove_assignment_data(message, secret, no_padding),
                           "commit_output_witness:prove_assignment_data");
   PURIFY_ASSIGN_OR_RETURN(
       const auto &commitment,

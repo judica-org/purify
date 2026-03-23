@@ -1341,7 +1341,8 @@ void BulletproofTranscript::add_assignment(Symbol symbol, Expr expr) {
     assignments_.push_back({symbol, std::move(expr), is_v});
 }
 
-Status BulletproofTranscript::from_transcript(const Transcript& transcript, std::size_t n_bits) {
+Status BulletproofTranscript::from_transcript(const Transcript& transcript, std::size_t n_bits,
+                                              bool no_padding) {
     assignments_.clear();
     constraints_.clear();
     witness_to_a_.assign(transcript.varmap().size(), std::nullopt);
@@ -1374,10 +1375,14 @@ Status BulletproofTranscript::from_transcript(const Transcript& transcript, std:
         }
     }
 
-    std::size_t total_gates = source_muls + unmapped_transcript_vars.size();
-    n_muls_ = 1;
-    while (n_muls_ < std::max<std::size_t>(1, total_gates)) {
-        n_muls_ <<= 1;
+    const std::size_t total_gates = source_muls + unmapped_transcript_vars.size();
+    n_muls_ = std::max<std::size_t>(1, total_gates);
+    if (!no_padding) {
+        std::size_t padded_muls = 1;
+        while (padded_muls < n_muls_) {
+            padded_muls <<= 1;
+        }
+        n_muls_ = padded_muls;
     }
 
     for (std::size_t i = 0; i < unmapped_transcript_vars.size(); ++i) {

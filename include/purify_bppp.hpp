@@ -289,6 +289,7 @@ struct CommittedPurifyWitness {
 Result<CommittedPurifyWitness> commit_output_witness(const Bytes& message, const SecretKey& secret,
                                                      const ScalarBytes& blind,
                                                      const GeneratorBytes& value_gen = value_generator_h(),
-                                                     const GeneratorBytes& blind_gen = base_generator());
+                                                     const GeneratorBytes& blind_gen = base_generator(),
+                                                     bool no_padding = false);
 
 }  // namespace purify::bppp

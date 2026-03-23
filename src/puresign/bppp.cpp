@@ -181,7 +181,7 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
                                                    std::span<const unsigned char> eval_input,
                                                    const NativeBulletproofCircuitTemplate& circuit_template,
                                                    bppp::ExperimentalCircuitCache* circuit_cache) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(detail::copy_bytes(eval_input), secret),
+    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(detail::copy_bytes(eval_input), secret, true),
                             "build_nonce_proof_from_template:prove_assignment_data");
     PURIFY_ASSIGN_OR_RETURN(auto partial_ok, circuit_template.partial_evaluate(witness.assignment),
                             "build_nonce_proof_from_template:partial_evaluate");
@@ -195,7 +195,8 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
     }
     PURIFY_ASSIGN_OR_RETURN(const auto& circuit, circuit_template.instantiate(witness.public_key),
                             "build_nonce_proof_from_template:instantiate");
-    PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit, "build_nonce_proof_from_template:circuit_shape"),
+    PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(
+                               circuit, "build_nonce_proof_from_template:circuit_shape", false),
                            "build_nonce_proof_from_template:validate_proof_cache_circuit");
 
     PURIFY_ASSIGN_OR_RETURN(auto commitment_point, commitment_point_from_scalar(witness.assignment.commitments.front()),
@@ -227,7 +228,8 @@ Result<NonceProof> build_nonce_proof(const SecretKey& secret,
                                      const Nonce& expected_nonce,
                                      bppp::ExperimentalCircuitCache* circuit_cache) {
     const std::string_view nonce_tag = scope == Scope::Message ? kMessageNonceTag : kTopicNonceTag;
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit_template, verifier_circuit_template(detail::tagged_eval_input(nonce_tag, input)),
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit_template,
+                            verifier_circuit_template(detail::tagged_eval_input(nonce_tag, input), true),
                             "build_nonce_proof:verifier_circuit_template");
     Bytes eval_input = detail::tagged_eval_input(nonce_tag, input);
     return build_nonce_proof_from_template(secret, scope, expected_nonce, eval_input, circuit_template,
@@ -241,7 +243,7 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
                                              const char* context,
                                              bppp::ExperimentalCircuitCache* circuit_cache) {
     PURIFY_RETURN_IF_ERROR(validate_public_key_bundle(public_key), context);
-    PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit, context), context);
+    PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit, context, false), context);
     PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(nonce_proof), context);
     if (!match) {
         return false;
@@ -256,7 +258,7 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
 
 Result<MessageProofCache> MessageProofCache::build(std::span<const unsigned char> message) {
     Bytes eval_input = detail::tagged_eval_input(kMessageNonceTag, message);
-    PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(eval_input),
+    PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(eval_input, true),
                             "MessageProofCache::build:verifier_circuit_template");
     MessageProofCache cache{};
     cache.message = detail::copy_bytes(message);
@@ -270,7 +272,7 @@ Result<TopicProofCache> TopicProofCache::build(std::span<const unsigned char> to
         return unexpected_error(ErrorCode::EmptyInput, "TopicProofCache::build:empty_topic");
     }
     Bytes eval_input = detail::tagged_eval_input(kTopicNonceTag, topic);
-    PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(eval_input),
+    PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(eval_input, true),
                             "TopicProofCache::build:verifier_circuit_template");
     TopicProofCache cache{};
     cache.topic = detail::copy_bytes(topic);
@@ -569,7 +571,8 @@ Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<c
                                         const NonceProof& nonce_proof,
                                         bppp::ExperimentalCircuitCache* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(const auto& circuit,
-                            verifier_circuit(detail::tagged_eval_input(kMessageNonceTag, message), public_key.purify_pubkey),
+                            verifier_circuit(detail::tagged_eval_input(kMessageNonceTag, message),
+                                             public_key.purify_pubkey, true),
                             "verify_message_nonce_proof:verifier_circuit");
     return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, Scope::Message,
                                            "verify_message_nonce_proof:verify_nonce_proof_with_circuit",
@@ -594,7 +597,8 @@ Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<con
         return unexpected_error(ErrorCode::EmptyInput, "verify_topic_nonce_proof:empty_topic");
     }
     PURIFY_ASSIGN_OR_RETURN(const auto& circuit,
-                            verifier_circuit(detail::tagged_eval_input(kTopicNonceTag, topic), public_key.purify_pubkey),
+                            verifier_circuit(detail::tagged_eval_input(kTopicNonceTag, topic),
+                                             public_key.purify_pubkey, true),
                             "verify_topic_nonce_proof:verifier_circuit");
     return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, Scope::Topic,
                                            "verify_topic_nonce_proof:verify_nonce_proof_with_circuit",

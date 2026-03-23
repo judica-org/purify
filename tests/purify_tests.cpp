@@ -120,6 +120,10 @@ FieldElement evaluate_toy_bppp_relation(const ToyBpppReduction& reduction) {
     return total;
 }
 
+bool is_power_of_two_size(std::size_t value) {
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
 void test_sha256_many_bridge(TestContext& ctx) {
     const std::array<unsigned char, 2> part1{{'a', 'b'}};
     const std::array<unsigned char, 0> part2{};
@@ -464,6 +468,41 @@ void test_equal_lowering(TestContext& ctx) {
     }
 }
 
+void test_from_transcript_no_padding(TestContext& ctx) {
+    Transcript transcript;
+    Expr x = transcript.secret(FieldElement::from_int(2));
+    Expr y = transcript.secret(FieldElement::from_int(3));
+    Expr z = transcript.secret(FieldElement::from_int(5));
+    (void)transcript.mul(x, y);
+    (void)transcript.mul(y, z);
+    (void)transcript.mul(z, x);
+
+    BulletproofTranscript padded;
+    Status padded_status = padded.from_transcript(transcript, 0);
+    expect_ok(ctx, padded_status, "from_transcript pads a three-mul transcript by default");
+    if (!padded_status.has_value()) {
+        return;
+    }
+
+    BulletproofTranscript unpadded;
+    Status unpadded_status = unpadded.from_transcript(transcript, 0, true);
+    expect_ok(ctx, unpadded_status, "from_transcript accepts no_padding on a three-mul transcript");
+    if (!unpadded_status.has_value()) {
+        return;
+    }
+
+    const NativeBulletproofCircuit padded_circuit = padded.native_circuit();
+    const NativeBulletproofCircuit unpadded_circuit = unpadded.native_circuit();
+    ctx.expect(padded_circuit.n_gates == 4,
+               "default transcript lowering rounds a three-mul transcript up to four gates");
+    ctx.expect(unpadded_circuit.n_gates == 3,
+               "no_padding transcript lowering preserves the original three-gate shape");
+    ctx.expect(is_power_of_two_size(padded_circuit.n_gates),
+               "default transcript lowering preserves a power-of-two gate count");
+    ctx.expect(!is_power_of_two_size(unpadded_circuit.n_gates),
+               "no_padding transcript lowering allows a non-power-of-two gate count");
+}
+
 void test_expr_builder(TestContext& ctx) {
     Transcript transcript;
     Expr x = transcript.secret(FieldElement::from_int(3));
@@ -674,6 +713,57 @@ void test_experimental_circuit_norm_arg_sample_verifier(TestContext& ctx) {
     }
 }
 
+void test_experimental_circuit_norm_arg_three_gate(TestContext& ctx) {
+    NativeBulletproofCircuit circuit(3, 1, 0);
+
+    std::size_t first = circuit.add_constraint(FieldElement::from_int(12));
+    circuit.add_output_term(0, first, FieldElement::one());
+
+    std::size_t second = circuit.add_constraint(FieldElement::from_int(10));
+    circuit.add_output_term(1, second, FieldElement::one());
+
+    std::size_t third = circuit.add_constraint(FieldElement::zero());
+    circuit.add_output_term(2, third, FieldElement::one());
+    circuit.add_commitment_term(0, third, FieldElement::from_int(-1));
+
+    BulletproofAssignmentData assignment;
+    assignment.left = {
+        FieldElement::from_int(3),
+        FieldElement::from_int(2),
+        FieldElement::from_int(1),
+    };
+    assignment.right = {
+        FieldElement::from_int(4),
+        FieldElement::from_int(5),
+        FieldElement::from_int(7),
+    };
+    assignment.output = {
+        FieldElement::from_int(12),
+        FieldElement::from_int(10),
+        FieldElement::from_int(7),
+    };
+    assignment.commitments = {FieldElement::from_int(7)};
+
+    ctx.expect(!is_power_of_two_size(circuit.n_gates),
+               "the three-gate BP++ test circuit is intentionally non-power-of-two");
+    ctx.expect(circuit.evaluate(assignment),
+               "the three-gate BP++ test witness satisfies the native circuit");
+
+    Bytes binding = purify::bytes_from_ascii("three-gate-norm-arg-binding");
+    Result<purify::bppp::ExperimentalCircuitNormArgProof> proof =
+        purify::bppp::prove_experimental_circuit_norm_arg(circuit, assignment, binding);
+    expect_ok(ctx, proof, "prove_experimental_circuit_norm_arg accepts a three-gate non-power-of-two circuit");
+    if (!proof.has_value()) {
+        return;
+    }
+
+    Result<bool> verified = purify::bppp::verify_experimental_circuit_norm_arg(circuit, *proof, binding);
+    expect_ok(ctx, verified, "verify_experimental_circuit_norm_arg succeeds on a three-gate non-power-of-two circuit");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "three-gate non-power-of-two BP++ proof verifies");
+    }
+}
+
 void test_experimental_circuit_zk_norm_arg_one_gate(TestContext& ctx) {
     NativeBulletproofCircuit circuit(1, 1, 0);
     std::size_t constraint = circuit.add_constraint(FieldElement::zero());
@@ -767,6 +857,52 @@ void test_experimental_circuit_zk_norm_arg_sample_verifier(TestContext& ctx) {
     }
 }
 
+void test_experimental_circuit_no_padding_sample_verifier(TestContext& ctx) {
+    Result<purify::SecretKey> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for the no-padding verifier circuit");
+    if (!secret.has_value()) {
+        return;
+    }
+
+    Bytes message = sample_message();
+    Result<purify::BulletproofWitnessData> witness = purify::prove_assignment_data(message, *secret, true);
+    expect_ok(ctx, witness, "prove_assignment_data succeeds in no-padding mode");
+    if (!witness.has_value()) {
+        return;
+    }
+
+    Result<NativeBulletproofCircuit> padded = purify::verifier_circuit(message, witness->public_key);
+    expect_ok(ctx, padded, "verifier_circuit succeeds in padded mode for comparison");
+    Result<NativeBulletproofCircuit> unpadded = purify::verifier_circuit(message, witness->public_key, true);
+    expect_ok(ctx, unpadded, "verifier_circuit succeeds in no-padding mode");
+    if (!padded.has_value() || !unpadded.has_value()) {
+        return;
+    }
+
+    ctx.expect(unpadded->n_gates <= padded->n_gates,
+               "no-padding verifier circuits never introduce more gates than the padded form");
+    ctx.expect(unpadded->evaluate(witness->assignment),
+               "no-padding verifier circuit accepts the no-padding witness");
+
+    purify::bppp::ScalarBytes nonce{};
+    for (std::size_t i = 0; i < nonce.size(); ++i) {
+        nonce[i] = static_cast<unsigned char>(0x33 + i);
+    }
+    Bytes binding = purify::bytes_from_ascii("sample-no-padding-zk-norm-arg-binding");
+    Result<purify::bppp::ExperimentalCircuitZkNormArgProof> proof =
+        purify::bppp::prove_experimental_circuit_zk_norm_arg(*unpadded, witness->assignment, nonce, binding);
+    expect_ok(ctx, proof, "prove_experimental_circuit_zk_norm_arg accepts the no-padding verifier circuit");
+    if (!proof.has_value()) {
+        return;
+    }
+
+    Result<bool> verified = purify::bppp::verify_experimental_circuit_zk_norm_arg(*unpadded, *proof, binding);
+    expect_ok(ctx, verified, "verify_experimental_circuit_zk_norm_arg succeeds on the no-padding verifier circuit");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "no-padding verifier circuit ZK proof verifies");
+    }
+}
+
 void test_packed_circuit_with_slack(TestContext& ctx) {
     NativeBulletproofCircuit circuit(1, 1, 0);
     std::size_t base_constraint = circuit.add_constraint(FieldElement::zero());
@@ -855,14 +991,17 @@ void run_purify_tests(TestContext& ctx) {
     test_secret_key_validation(ctx);
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);
+    test_from_transcript_no_padding(ctx);
     test_expr_builder(ctx);
     test_expr_cache_ordering(ctx);
     test_bppp_move_overload(ctx);
     test_toy_bppp_circuit_reduction(ctx);
     test_experimental_circuit_norm_arg_one_gate(ctx);
     test_experimental_circuit_norm_arg_sample_verifier(ctx);
+    test_experimental_circuit_norm_arg_three_gate(ctx);
     test_experimental_circuit_zk_norm_arg_one_gate(ctx);
     test_experimental_circuit_zk_norm_arg_sample_verifier(ctx);
+    test_experimental_circuit_no_padding_sample_verifier(ctx);
     test_packed_circuit_with_slack(ctx);
     test_circuit_template_partial_final_eval(ctx);
 }

@@ -65,11 +65,12 @@ inline std::size_t circuit_n_commitments(const NativeBulletproofCircuit::PackedW
 }
 
 template <typename CircuitLike>
-Status validate_proof_cache_circuit(const CircuitLike& circuit, const char* context) {
+Status validate_proof_cache_circuit(const CircuitLike& circuit, const char* context,
+                                    bool require_power_of_two_gates = true) {
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, context);
     }
-    if (!is_power_of_two_size(circuit_n_gates(circuit))) {
+    if (require_power_of_two_gates && !is_power_of_two_size(circuit_n_gates(circuit))) {
         return unexpected_error(ErrorCode::InvalidDimensions, context);
     }
     if (circuit_n_commitments(circuit) != 1) {

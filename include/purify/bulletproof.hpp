@@ -352,7 +352,7 @@ Result<bool> verify_experimental_circuit(
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 
 /** @brief Builds a reusable public-key-agnostic verifier-circuit template for a message. */
-Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message);
+Result<NativeBulletproofCircuitTemplate> verifier_circuit_template(const Bytes& message, bool no_padding = false);
 
 /**
  * @brief Lowering helper that converts a symbolic transcript into native Bulletproof witness and circuit forms.
@@ -368,8 +368,8 @@ public:
     /** @brief Adds one symbolic wire assignment to the lowering state. */
     void add_assignment(Symbol symbol, Expr expr);
 
-    /** @brief Imports a symbolic transcript and pads it to a power-of-two multiplication count. */
-    Status from_transcript(const Transcript& transcript, std::size_t n_bits);
+    /** @brief Imports a symbolic transcript and optionally pads it to a power-of-two multiplication count. */
+    Status from_transcript(const Transcript& transcript, std::size_t n_bits, bool no_padding = false);
 
     /** @brief Binds packed public-key coordinates and the output commitment into explicit constraints. */
     Status add_pubkey_and_out(const UInt512& pubkey, Expr p1x, Expr p2x, Expr out);

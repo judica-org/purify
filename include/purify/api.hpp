@@ -239,7 +239,8 @@ Result<std::string> verifier(const Bytes& message, const UInt512& pubkey);
  * @param pubkey Packed public key.
  * @return Native circuit object ready for evaluation or proving, or `ErrorCode::HashToCurveExhausted`.
  */
-Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UInt512& pubkey);
+Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UInt512& pubkey,
+                                                  bool no_padding = false);
 
 /**
  * @brief Computes the native Purify witness for a message and secret.
@@ -247,7 +248,8 @@ Result<NativeBulletproofCircuit> verifier_circuit(const Bytes& message, const UI
  * @param secret Owned secret key.
  * @return Witness bundle containing public key, output, and assignment columns, or `ErrorCode::HashToCurveExhausted`.
  */
-Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const SecretKey& secret);
+Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const SecretKey& secret,
+                                                     bool no_padding = false);
 
 /**
  * @brief Evaluates the generated verifier circuit against an explicit witness.
@@ -255,7 +257,8 @@ Result<BulletproofWitnessData> prove_assignment_data(const Bytes& message, const
  * @param witness Witness bundle to validate.
  * @return True when the witness satisfies the circuit, or `ErrorCode::HashToCurveExhausted`.
  */
-Result<bool> evaluate_verifier_circuit(const Bytes& message, const BulletproofWitnessData& witness);
+Result<bool> evaluate_verifier_circuit(const Bytes& message, const BulletproofWitnessData& witness,
+                                       bool no_padding = false);
 
 /**
  * @brief Evaluates the generated verifier circuit using a witness derived from a secret.
@@ -263,7 +266,8 @@ Result<bool> evaluate_verifier_circuit(const Bytes& message, const BulletproofWi
  * @param secret Owned secret key.
  * @return True when the derived witness satisfies the circuit, or `ErrorCode::HashToCurveExhausted`.
  */
-Result<bool> evaluate_verifier_circuit(const Bytes& message, const SecretKey& secret);
+Result<bool> evaluate_verifier_circuit(const Bytes& message, const SecretKey& secret,
+                                       bool no_padding = false);
 
 /**
  * @brief Serializes the witness assignment produced for a message and secret.
@@ -271,6 +275,7 @@ Result<bool> evaluate_verifier_circuit(const Bytes& message, const SecretKey& se
  * @param secret Owned secret key.
  * @return Serialized witness blob compatible with the legacy assignment format, or `ErrorCode::HashToCurveExhausted`.
  */
-Result<Bytes> prove_assignment(const Bytes& message, const SecretKey& secret);
+Result<Bytes> prove_assignment(const Bytes& message, const SecretKey& secret,
+                               bool no_padding = false);
 
 }  // namespace purify

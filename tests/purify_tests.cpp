@@ -287,6 +287,27 @@ void test_secret_hardening_path(TestContext& ctx) {
                "hardened curve2 message multiplication matches the existing arithmetic");
 }
 
+void test_curve_mul_small_scalar_consistency(TestContext& ctx) {
+    const UInt256 two = UInt256::from_u64(2);
+    const UInt256 three = UInt256::from_u64(3);
+
+    purify::AffinePoint curve1_double = purify::curve1().affine(purify::curve1().double_point(purify::generator1()));
+    purify::AffinePoint curve1_mul2 = purify::curve1().affine(purify::curve1().mul(purify::generator1(), two));
+    ctx.expect(curve1_double.x == curve1_mul2.x && curve1_double.y == curve1_mul2.y,
+               "curve1 double_point matches mul(generator, 2)");
+
+    purify::AffinePoint curve2_double = purify::curve2().affine(purify::curve2().double_point(purify::generator2()));
+    purify::AffinePoint curve2_mul2 = purify::curve2().affine(purify::curve2().mul(purify::generator2(), two));
+    ctx.expect(curve2_double.x == curve2_mul2.x && curve2_double.y == curve2_mul2.y,
+               "curve2 double_point matches mul(generator, 2)");
+
+    purify::AffinePoint curve1_add3 = purify::curve1().affine(
+        purify::curve1().add(purify::curve1().double_point(purify::generator1()), purify::generator1()));
+    purify::AffinePoint curve1_mul3 = purify::curve1().affine(purify::curve1().mul(purify::generator1(), three));
+    ctx.expect(curve1_add3.x == curve1_mul3.x && curve1_add3.y == curve1_mul3.y,
+               "curve1 add(double(generator), generator) matches mul(generator, 3)");
+}
+
 void test_library_key_generation(TestContext& ctx) {
     std::array<unsigned char, 32> seed{};
     for (std::size_t i = 0; i < seed.size(); ++i) {
@@ -850,6 +871,7 @@ void run_purify_tests(TestContext& ctx) {
     test_biguint_arithmetic(ctx);
     test_known_sample(ctx);
     test_secret_hardening_path(ctx);
+    test_curve_mul_small_scalar_consistency(ctx);
     test_library_key_generation(ctx);
     test_bip340_key_derivation(ctx);
     test_secret_key_validation(ctx);

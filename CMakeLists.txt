@@ -126,6 +126,11 @@ function(purify_enable_release_optimizations target)
 endfunction()
 
 add_library(purify
+    src/purify_core.c
+    src/purify_curve_core.c
+    src/purify_field.c
+    src/purify_uint.c
+    src/purify_c_api.cpp
     src/purify_api.cpp
     src/purify_bulletproof.cpp
     src/purify_curve.cpp
@@ -159,6 +164,7 @@ install(TARGETS purify
 install(
     FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/include/purify.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/purify.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/purify_bppp.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/purify_secp_bridge.h"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
@@ -208,6 +214,11 @@ if(PURIFY_BUILD_BENCH)
     add_subdirectory(third_party/nanobench EXCLUDE_FROM_ALL)
 
     add_library(purify_bench_support STATIC
+        src/purify_core.c
+        src/purify_curve_core.c
+        src/purify_field.c
+        src/purify_uint.c
+        src/purify_c_api.cpp
         src/purify_api.cpp
         src/purify_bulletproof.cpp
         src/purify_curve.cpp
@@ -295,6 +306,23 @@ if(PURIFY_BUILD_TESTS)
 
     add_test(NAME purify.property_tests COMMAND purify_property_tests)
     set_tests_properties(purify.property_tests PROPERTIES TIMEOUT 300)
+
+    add_executable(purify_c_tests
+        tests/purify_c_tests.c
+    )
+
+    target_link_libraries(purify_c_tests
+        PRIVATE
+            purify::purify
+    )
+
+    set_target_properties(purify_c_tests PROPERTIES
+        LINKER_LANGUAGE CXX
+    )
+
+    purify_enable_warnings(purify_c_tests)
+
+    add_test(NAME purify.c_api COMMAND purify_c_tests)
 
     if(PURIFY_BUILD_BENCH)
         add_test(NAME purify.bench COMMAND bench_purify --epochs 1 --min-epoch-ms 1)

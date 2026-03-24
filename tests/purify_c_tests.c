@@ -435,6 +435,8 @@ static void test_uint_core(void) {
 
     purify_u256_set_zero(value256);
     expect(purify_u256_is_zero(value256) != 0, "purify_u256_set_zero produces zero");
+    expect(purify_u256_bit_length(value256) == 0u,
+           "purify_u256_bit_length returns zero for zero");
     purify_u256_set_u64(value256, UINT64_C(0x0123456789abcdef));
     expect(purify_u256_is_zero(value256) == 0, "purify_u256_set_u64 produces a non-zero value");
     purify_u256_to_bytes_be(roundtrip32, value256);
@@ -518,6 +520,8 @@ static void test_uint_core(void) {
 
     purify_u320_set_zero(value320);
     expect(purify_u320_is_zero(value320) != 0, "purify_u320_set_zero produces zero");
+    expect(purify_u320_bit_length(value320) == 0u,
+           "purify_u320_bit_length returns zero for zero");
     purify_u320_set_u64(value320, UINT64_C(0xfedcba9876543210));
     purify_u320_to_bytes_be(roundtrip40, value320);
     expect(roundtrip40[32] == 0xfe && roundtrip40[39] == 0x10,
@@ -605,6 +609,8 @@ static void test_uint_core(void) {
 
     purify_u512_set_zero(value512);
     expect(purify_u512_is_zero(value512) != 0, "purify_u512_set_zero produces zero");
+    expect(purify_u512_bit_length(value512) == 0u,
+           "purify_u512_bit_length returns zero for zero");
     purify_u512_set_u64(value512, UINT64_C(0x0f0e0d0c0b0a0908));
     purify_u512_to_bytes_be(roundtrip64, value512);
     expect(roundtrip64[56] == 0x0f && roundtrip64[63] == 0x08,
@@ -1382,6 +1388,14 @@ static void test_curve_core(void) {
     make_generator(&generator1, &curve1, "Generator/1");
     make_generator(&generator1_b, &curve1, "Generator/1");
     make_generator(&generator2, &curve2, "Generator/2");
+    {
+        purify_jacobian_point malformed = generator1;
+        purify_fe_set_zero(&malformed.z);
+        malformed.infinity = 0;
+        purify_curve_affine(&affine1, &curve1, &malformed);
+        expect(affine1.infinity != 0,
+               "purify_curve_affine treats z == 0 as infinity even without the infinity flag");
+    }
     expect(jacobian_eq(&curve1, &generator1, &generator1_b),
            "purify_curve_hash_to_curve is deterministic on the same input");
     expect(point_on_curve(&curve1, &generator1), "curve1 generator lies on the curve");
@@ -1425,11 +1439,18 @@ static void test_curve_core(void) {
     purify_curve_add(&sum, &curve1, &generator1, &infinity);
     expect(jacobian_eq(&curve1, &sum, &generator1),
            "purify_curve_add uses infinity as a right identity");
+    purify_curve_add_mixed(&sum, &curve1, &infinity, &affine1);
+    expect(jacobian_eq(&curve1, &sum, &generator1),
+           "purify_curve_add_mixed uses infinity as a left identity");
 
     purify_curve_negate(&negated, &generator1);
     purify_curve_add(&sum, &curve1, &generator1, &negated);
     expect(sum.infinity != 0 || purify_fe_is_zero(&sum.z) != 0,
            "purify_curve_add(P, -P) returns infinity");
+    purify_curve_affine(&affine2, &curve1, &negated);
+    purify_curve_add_mixed(&sum, &curve1, &generator1, &affine2);
+    expect(sum.infinity != 0 || purify_fe_is_zero(&sum.z) != 0,
+           "purify_curve_add_mixed(P, -P) returns infinity");
 
     purify_curve_double(&doubled, &curve1, &generator1);
     purify_curve_add(&sum, &curve1, &generator1, &generator1);
@@ -1453,6 +1474,12 @@ static void test_curve_core(void) {
     purify_curve_affine(&affine1, &curve1, &sum);
     expect(affine_eq(&secret_affine, &affine1),
            "purify_curve_mul_secret_affine matches affine(purify_curve_mul)");
+    purify_u256_set_u64(z1, 1u);
+    expect(purify_curve_mul_secret_affine(&secret_affine, &curve1, &doubled, z1) != 0,
+           "purify_curve_mul_secret_affine accepts normalized-Jacobian inputs");
+    purify_curve_affine(&affine1, &curve1, &doubled);
+    expect(affine_eq(&secret_affine, &affine1),
+           "purify_curve_mul_secret_affine normalizes Jacobian inputs before multiplying");
     purify_u256_set_zero(z1);
     expect(purify_curve_mul_secret_affine(&secret_affine, &curve1, &generator1, z1) == 0,
            "purify_curve_mul_secret_affine rejects the point at infinity result for scalar zero");

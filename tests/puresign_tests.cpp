@@ -142,6 +142,20 @@ void test_puresign_message_signing(TestContext& ctx) {
         if (cached_proven_ok.has_value()) {
             ctx.expect(*cached_proven_ok, "cached message signature with proof verifies");
         }
+
+        Result<purify::puresign::MessageProofCache> wrong_cache =
+            purify::puresign::MessageProofCache::build(Bytes{0x99, 0x88, 0x77});
+        expect_ok(ctx, wrong_cache, "MessageProofCache::build succeeds for tamper coverage");
+        if (wrong_cache.has_value()) {
+            purify::puresign::MessageProofCache tampered_cache{};
+            tampered_cache.message = proof_cache->message;
+            tampered_cache.eval_input = proof_cache->eval_input;
+            tampered_cache.circuit_template = wrong_cache->circuit_template;
+            tampered_cache.template_digest = proof_cache->template_digest;
+            expect_error(ctx, public_key.verify_message_signature_with_proof(tampered_cache, *cached_proven),
+                         ErrorCode::BindingMismatch,
+                         "cached message signature verification rejects a cache with the wrong circuit template");
+        }
     }
 
     ctx.expect(direct->bytes == cached->bytes, "cached message-bound signing matches direct signing");
@@ -376,6 +390,20 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
               "PureSign++ PublicKey::verify_message_signature_with_proof succeeds with a cached template");
     if (cached_proven_ok.has_value()) {
         ctx.expect(*cached_proven_ok, "PureSign++ cached message signature with proof verifies");
+    }
+
+    Result<purify::puresign_plusplus::MessageProofCache> wrong_cache =
+        purify::puresign_plusplus::MessageProofCache::build(Bytes{0xaa, 0xbb, 0xcc});
+    expect_ok(ctx, wrong_cache, "PureSign++ MessageProofCache::build succeeds for tamper coverage");
+    if (wrong_cache.has_value()) {
+        purify::puresign_plusplus::MessageProofCache tampered_cache{};
+        tampered_cache.message = proof_cache->message;
+        tampered_cache.eval_input = proof_cache->eval_input;
+        tampered_cache.circuit_template = wrong_cache->circuit_template;
+        tampered_cache.template_digest = proof_cache->template_digest;
+        expect_error(ctx, public_key.verify_message_signature_with_proof(tampered_cache, *cached_proven),
+                     ErrorCode::BindingMismatch,
+                     "PureSign++ cached message signature verification rejects a cache with the wrong circuit template");
     }
 
     ctx.expect(direct->bytes == proven->signature.bytes,

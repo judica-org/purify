@@ -371,10 +371,13 @@ Result<MessageProofCache> build_message_proof_cache(std::span<const unsigned cha
     Bytes eval_input = detail::tagged_eval_input(kMessageNonceTag, message);
     PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(eval_input),
                             "build_message_proof_cache:verifier_circuit_template");
+    PURIFY_ASSIGN_OR_RETURN(auto template_digest, circuit_template.integrity_digest(),
+                            "build_message_proof_cache:integrity_digest");
     MessageProofCache cache{};
     cache.message = detail::copy_bytes(message);
     cache.eval_input = std::move(eval_input);
     cache.circuit_template = std::move(circuit_template);
+    cache.template_digest = std::move(template_digest);
     return cache;
 }
 
@@ -385,10 +388,13 @@ Result<TopicProofCache> build_topic_proof_cache(std::span<const unsigned char> t
     Bytes eval_input = detail::tagged_eval_input(kTopicNonceTag, topic);
     PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(eval_input),
                             "build_topic_proof_cache:verifier_circuit_template");
+    PURIFY_ASSIGN_OR_RETURN(auto template_digest, circuit_template.integrity_digest(),
+                            "build_topic_proof_cache:integrity_digest");
     TopicProofCache cache{};
     cache.topic = detail::copy_bytes(topic);
     cache.eval_input = std::move(eval_input);
     cache.circuit_template = std::move(circuit_template);
+    cache.template_digest = std::move(template_digest);
     return cache;
 }
 

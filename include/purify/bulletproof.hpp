@@ -303,6 +303,9 @@ public:
     /** @brief Evaluates only the late-bound public-key/output constraints against one assignment. */
     Result<bool> final_evaluate(const BulletproofAssignmentData& assignment, const UInt512& pubkey) const;
 
+    /** @brief Returns a stable digest of the packed base circuit plus late-bound expressions. */
+    Result<Bytes> integrity_digest() const;
+
     Result<NativeBulletproofCircuit::PackedWithSlack> instantiate_packed(const UInt512& pubkey) const;
     Result<NativeBulletproofCircuit> instantiate(const UInt512& pubkey) const;
 

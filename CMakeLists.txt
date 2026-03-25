@@ -103,6 +103,11 @@ if(NOT MSVC)
     set_source_files_properties(src/legacy_bulletproof/scratch_frames.c PROPERTIES
         COMPILE_OPTIONS "-Wno-unused-function"
     )
+    if(PURIFY_ENABLE_SANITIZERS AND PURIFY_SANITIZER_LIST MATCHES "(^|,)integer(,|$)")
+        set_property(SOURCE src/bridge/bppp_bridge.c APPEND PROPERTY COMPILE_OPTIONS
+            -fno-sanitize=integer
+        )
+    endif()
 endif()
 
 if(MSVC)

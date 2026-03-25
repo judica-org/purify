@@ -54,6 +54,9 @@ typedef struct splitmix64 {
     uint64_t state;
 } splitmix64;
 
+#if defined(__clang__)
+__attribute__((no_sanitize("unsigned-integer-overflow")))
+#endif
 static uint64_t splitmix64_next(splitmix64* rng) {
     uint64_t z = (rng->state += UINT64_C(0x9e3779b97f4a7c15));
     z = (z ^ (z >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);

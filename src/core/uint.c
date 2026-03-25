@@ -56,6 +56,50 @@ static uint64_t purify_uint_add_u64_carry(uint64_t value, uint64_t addend, uint6
 #endif
 }
 
+static uint64_t purify_uint_mask_u64(int flag) {
+    return (uint64_t)0 - (uint64_t)(flag != 0);
+}
+
+static int purify_u512_is_nonzero_ct(const uint64_t value[8]) {
+    uint64_t acc = 0;
+    size_t i;
+    for (i = 0; i < 8u; ++i) {
+        acc |= value[i];
+    }
+    return acc != 0;
+}
+
+static void purify_u512_shift_left_one_or_bit(uint64_t value[8], uint64_t bit) {
+    uint64_t carry = bit & 1u;
+    size_t i;
+    for (i = 0; i < 8u; ++i) {
+        uint64_t next = value[i] >> 63;
+        value[i] = (value[i] << 1) | carry;
+        carry = next;
+    }
+}
+
+static uint64_t purify_u512_sub_with_borrow_ct(uint64_t out[8], const uint64_t lhs[8], const uint64_t rhs[8]) {
+    uint64_t borrow = 0;
+    size_t i;
+    for (i = 0; i < 8u; ++i) {
+        uint64_t rhs_word = rhs[i] + borrow;
+        uint64_t rhs_overflow = rhs_word < rhs[i] ? 1u : 0u;
+        uint64_t diff = lhs[i] - rhs_word;
+        uint64_t needs_borrow = lhs[i] < rhs_word ? 1u : 0u;
+        out[i] = diff;
+        borrow = rhs_overflow | needs_borrow;
+    }
+    return borrow;
+}
+
+static void purify_u512_cmov_words(uint64_t dst[8], const uint64_t src[8], uint64_t mask) {
+    size_t i;
+    for (i = 0; i < 8u; ++i) {
+        dst[i] ^= mask & (dst[i] ^ src[i]);
+    }
+}
+
 static uint64_t purify_uint_divmod_u32(uint64_t hi, uint64_t lo, uint32_t divisor, uint32_t* rem_out) {
 #if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
     unsigned __int128 value = ((unsigned __int128)hi << 64) | lo;
@@ -173,6 +217,34 @@ int purify_u512_try_divmod_same(uint64_t quotient[8], uint64_t remainder[8],
     }
 
     return 1;
+}
+
+int purify_u512_try_divmod_same_consttime(uint64_t quotient[8], uint64_t remainder[8],
+                                          const uint64_t numerator[8], const uint64_t denominator[8]) {
+    uint64_t candidate[8];
+    const uint64_t denominator_mask = purify_uint_mask_u64(purify_u512_is_nonzero_ct(denominator));
+    size_t bit_index;
+
+    purify_u512_set_zero(quotient);
+    purify_u512_set_zero(remainder);
+    for (bit_index = 512u; bit_index != 0; --bit_index) {
+        const size_t idx = bit_index - 1u;
+        const size_t word = idx / 64u;
+        const size_t shift = idx % 64u;
+        const uint64_t quotient_bit = (uint64_t)1u << shift;
+        const uint64_t next_bit = (numerator[word] >> shift) & 1u;
+        uint64_t borrow;
+
+        purify_u512_shift_left_one_or_bit(remainder, next_bit);
+        borrow = purify_u512_sub_with_borrow_ct(candidate, remainder, denominator);
+        {
+            const uint64_t ge_mask = purify_uint_mask_u64(borrow == 0u);
+            purify_u512_cmov_words(remainder, candidate, ge_mask);
+            quotient[word] |= ge_mask & quotient_bit;
+        }
+    }
+
+    return denominator_mask != 0;
 }
 
 void purify_u512_multiply_u256(uint64_t out[8], const uint64_t lhs[4], const uint64_t rhs[4]) {

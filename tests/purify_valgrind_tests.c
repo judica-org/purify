@@ -22,6 +22,8 @@
 
 void purify_curve_mul_secret_ladder_only(purify_complete_projective_point* out, const purify_curve* curve,
                                          const purify_jacobian_point* point, const uint64_t scalar[4]);
+void purify_curve_mul_secret_affine_unchecked(purify_affine_point* out, const purify_curve* curve,
+                                              const purify_jacobian_point* point, const uint64_t scalar[4]);
 
 static int failures = 0;
 
@@ -78,15 +80,77 @@ static void test_secret_ladder_consttime(const purify_curve* curve, const char* 
     VALGRIND_MAKE_MEM_DEFINED(&ladder, sizeof(ladder));
 }
 
-int main(void) {
+static void test_divmod_secret_numerator_consttime(void) {
+    uint64_t numerator[8] = {
+        UINT64_C(0x123456789ABCDEF1), UINT64_C(0x0FEDCBA987654321), UINT64_C(0x1111222233334444), UINT64_C(0x5555666677778888),
+        UINT64_C(0x9999AAAABBBBCCCC), UINT64_C(0xDDDDEEEEFFFF0000), UINT64_C(0x0123456789ABCDEF), UINT64_C(0x0011223344556677)};
+    uint64_t half_n1[4];
+    uint64_t denominator[8];
+    uint64_t quotient[8];
+    uint64_t remainder[8];
+
+    purify_curve_half_n1(half_n1);
+    purify_u512_widen_u256(denominator, half_n1);
+
+    /* Mark only the numerator undefined so Memcheck reports secret-dependent branches or table indices. */
+    VALGRIND_MAKE_MEM_UNDEFINED(numerator, sizeof(numerator));
+    expect(purify_u512_try_divmod_same_consttime(quotient, remainder, numerator, denominator) != 0,
+           "constant-time u512 divider accepts a fixed non-zero denominator");
+    VALGRIND_MAKE_MEM_DEFINED(numerator, sizeof(numerator));
+    VALGRIND_MAKE_MEM_DEFINED(quotient, sizeof(quotient));
+    VALGRIND_MAKE_MEM_DEFINED(remainder, sizeof(remainder));
+}
+
+static void test_secret_affine_consttime(const purify_curve* curve, const char* label) {
+    purify_jacobian_point generator;
+    purify_affine_point affine;
+    uint64_t scalar[4] = {1u, 0u, 0u, 0u};
+
+    if (make_generator(&generator, curve, label) == 0) {
+        return;
+    }
+
+    /* Keep the scalar non-zero while leaving the high 192 bits secret. */
+    VALGRIND_MAKE_MEM_UNDEFINED(&scalar[1], 3u * sizeof(uint64_t));
+    purify_curve_mul_secret_affine_unchecked(&affine, curve, &generator, scalar);
+    VALGRIND_MAKE_MEM_DEFINED(&scalar[1], 3u * sizeof(uint64_t));
+    VALGRIND_MAKE_MEM_DEFINED(&affine, sizeof(affine));
+}
+
+static void run_divmod_tests(void) {
+    test_divmod_secret_numerator_consttime();
+}
+
+static void run_ladder_tests(const purify_curve* curve1, const purify_curve* curve2) {
+    test_secret_ladder_consttime(curve1, "Generator/1");
+    test_secret_ladder_consttime(curve2, "Generator/2");
+}
+
+static void run_affine_tests(const purify_curve* curve1, const purify_curve* curve2) {
+    test_secret_affine_consttime(curve1, "Generator/1");
+    test_secret_affine_consttime(curve2, "Generator/2");
+}
+
+int main(int argc, char** argv) {
     purify_curve curve1;
     purify_curve curve2;
 
     make_curve1(&curve1);
     make_curve2(&curve2);
 
-    test_secret_ladder_consttime(&curve1, "Generator/1");
-    test_secret_ladder_consttime(&curve2, "Generator/2");
+    if (argc <= 1 || strcmp(argv[1], "all") == 0) {
+        run_divmod_tests();
+        run_ladder_tests(&curve1, &curve2);
+        run_affine_tests(&curve1, &curve2);
+    } else if (strcmp(argv[1], "divmod") == 0) {
+        run_divmod_tests();
+    } else if (strcmp(argv[1], "ladder") == 0) {
+        run_ladder_tests(&curve1, &curve2);
+    } else if (strcmp(argv[1], "affine") == 0) {
+        run_affine_tests(&curve1, &curve2);
+    } else {
+        expect(0, "unknown valgrind test selector");
+    }
 
     return failures == 0 ? 0 : 1;
 }

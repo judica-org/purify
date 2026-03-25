@@ -348,7 +348,7 @@ if(PURIFY_BUILD_VALGRIND_TESTS)
     function(purify_add_valgrind_test name target)
         add_test(
             NAME ${name}
-            COMMAND "${PURIFY_VALGRIND_EXECUTABLE}" ${PURIFY_VALGRIND_COMMON_ARGS} $<TARGET_FILE:${target}>
+            COMMAND "${PURIFY_VALGRIND_EXECUTABLE}" ${PURIFY_VALGRIND_COMMON_ARGS} $<TARGET_FILE:${target}> ${ARGN}
         )
         set_tests_properties(${name} PROPERTIES TIMEOUT 900)
     endfunction()
@@ -428,7 +428,9 @@ if(PURIFY_BUILD_TESTS)
         purify_enable_warnings(purify_valgrind_tests)
 
         purify_add_valgrind_test(purify.valgrind.c_api purify_c_tests)
-        purify_add_valgrind_test(purify.valgrind.consttime_secret purify_valgrind_tests)
+        purify_add_valgrind_test(purify.valgrind.consttime_divmod purify_valgrind_tests divmod)
+        purify_add_valgrind_test(purify.valgrind.consttime_ladder purify_valgrind_tests ladder)
+        purify_add_valgrind_test(purify.valgrind.consttime_affine purify_valgrind_tests affine)
     endif()
 
     if(PURIFY_BUILD_BENCH)
@@ -592,6 +594,13 @@ if(PURIFY_BUILD_CBMC)
         u512_divmod_same
         verification/cbmc/u512_divmod_same_harness.c
         600
+        SOURCES
+            src/core/uint.c
+    )
+    purify_add_cbmc_proof(
+        u512_divmod_same_equivalence
+        verification/cbmc/u512_divmod_same_equivalence_harness.c
+        700
         SOURCES
             src/core/uint.c
     )

@@ -22,6 +22,7 @@ check was replaced with the point-average oracle below.
 - `u256_shift_roundtrip_harness.c` (`relational`): lossless left shifts round-trip through `shifted_right`.
 - `u256_widen_narrow_harness.c` (`relational`): widen/narrow helpers preserve canonical inputs and reject non-canonical high limbs.
 - `u512_divmod_same_harness.c` (`relational`): `purify_u512_try_divmod_same()` returns a remainder below the denominator and reconstructs the original numerator.
+- `u512_divmod_same_equivalence_harness.c` (`relational`): for every 512-bit numerator and every non-zero 512-bit denominator, the variable-time and fixed-round masked `u512` dividers return identical status, quotient, and remainder.
 - `core_validate_secret_key_contract_harness.c` (`independent`): `purify_validate_secret_key()` exactly accepts values below the documented 64-byte upper bound and rejects `NULL`, the bound itself, and larger values.
 - `core_validate_public_key_contract_harness.c` (`independent`): `purify_validate_public_key()` exactly accepts values below the documented 64-byte upper bound and rejects `NULL`, the bound itself, and larger values.
 - `field_encoding_boundaries_harness.c` (`independent`): canonical field `b32`/`u256` encodings round-trip, while inputs at or above the modulus are rejected.

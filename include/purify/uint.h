@@ -53,6 +53,9 @@ int purify_u256_try_narrow_u320(uint64_t out[4], const uint64_t value[5]);
 int purify_u256_try_narrow_u512(uint64_t out[4], const uint64_t value[8]);
 int purify_u512_try_divmod_same(uint64_t quotient[8], uint64_t remainder[8],
                                 const uint64_t numerator[8], const uint64_t denominator[8]);
+/* Fixed-round masked long division intended for secret numerators and non-zero public denominators. */
+int purify_u512_try_divmod_same_consttime(uint64_t quotient[8], uint64_t remainder[8],
+                                          const uint64_t numerator[8], const uint64_t denominator[8]);
 void purify_u512_multiply_u256(uint64_t out[8], const uint64_t lhs[4], const uint64_t rhs[4]);
 
 #ifdef __cplusplus

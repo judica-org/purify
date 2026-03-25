@@ -715,6 +715,9 @@ static void test_uint_core(void) {
     purify_u512_widen_u256(denominator, value256);
     expect(purify_u512_try_divmod_same(quotient, remainder, numerator, denominator) != 0,
            "purify_u512_try_divmod_same divides a constructed sample");
+    expect(purify_u512_try_divmod_same_consttime(other512, tmp512, numerator, denominator) != 0 &&
+           u512_eq(other512, quotient) && u512_eq(tmp512, remainder),
+           "purify_u512_try_divmod_same_consttime matches the standard divider on a sample");
     expect(purify_u256_try_narrow_u512(tmp256, quotient) != 0 && u256_eq(tmp256, other256),
            "purify_u512_try_divmod_same returns the expected quotient");
     expect(purify_u256_try_narrow_u512(tmp256, remainder) != 0,
@@ -726,9 +729,14 @@ static void test_uint_core(void) {
     expect(purify_u512_try_divmod_same(quotient, remainder, numerator, denominator) != 0 &&
            purify_u512_is_zero(quotient) != 0 && u512_eq(remainder, numerator),
            "purify_u512_try_divmod_same handles numerator < denominator");
+    expect(purify_u512_try_divmod_same_consttime(other512, tmp512, numerator, denominator) != 0 &&
+           purify_u512_is_zero(other512) != 0 && u512_eq(tmp512, numerator),
+           "purify_u512_try_divmod_same_consttime handles numerator < denominator");
     purify_u512_set_zero(denominator);
     expect(purify_u512_try_divmod_same(quotient, remainder, numerator, denominator) == 0,
            "purify_u512_try_divmod_same rejects division by zero");
+    expect(purify_u512_try_divmod_same_consttime(other512, tmp512, numerator, denominator) == 0,
+           "purify_u512_try_divmod_same_consttime rejects division by zero");
 }
 
 static void test_secp_bridge(void) {

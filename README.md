@@ -128,7 +128,7 @@ cmake --build --preset sanitizers-int --parallel
 ctest --preset sanitizers-int
 ```
 
-For Valgrind memcheck plus a ctgrind-style secret-ladder check:
+For Valgrind memcheck plus ctgrind-style secret-flow checks:
 
 ```sh
 cmake --preset valgrind
@@ -136,9 +136,10 @@ cmake --build --preset valgrind --parallel
 ctest --preset valgrind
 ```
 
-The Valgrind constant-time lane is a negative test, not a proof. It marks secret scalar bytes undefined
-before entering the hardened ladder and fails if Memcheck sees secret-dependent control flow or memory
-addresses on that path.
+The Valgrind constant-time lane is a negative test, not a proof. It now splits into dedicated checks for
+the fixed-round secret divider, the hardened ladder core, and the ladder-plus-affine-normalization path,
+marking secret bytes undefined before entry and failing if Memcheck sees secret-dependent control flow or
+memory addresses on those paths.
 
 For bounded model checking of the pure C wide-integer helpers with CBMC:
 

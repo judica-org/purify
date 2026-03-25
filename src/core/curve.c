@@ -726,6 +726,18 @@ void purify_curve_mul_secret_ladder_only(purify_complete_projective_point* out, 
                                          const purify_jacobian_point* point, const uint64_t scalar[4]) {
     purify_curve_mul_secret_ladder_core(out, curve, point, scalar);
 }
+
+void purify_curve_mul_secret_affine_unchecked(purify_affine_point* out, const purify_curve* curve,
+                                              const purify_jacobian_point* point, const uint64_t scalar[4]) {
+    purify_complete_projective_point r0;
+    purify_fe inv;
+
+    purify_curve_mul_secret_ladder_core(&r0, curve, point, scalar);
+    purify_fe_inverse(&inv, &r0.z);
+    purify_fe_mul(&out->x, &r0.x, &inv);
+    purify_fe_mul(&out->y, &r0.y, &inv);
+    out->infinity = 0;
+}
 #endif
 
 int purify_curve_mul_secret_affine(purify_affine_point* out, const purify_curve* curve,
@@ -822,7 +834,7 @@ int purify_curve_unpack_secret(uint64_t first[4], uint64_t second[4], const uint
     }
 
     purify_u512_widen_u256(denominator, kPurifyHalfN1);
-    if (purify_u512_try_divmod_same(quotient, remainder, value, denominator) == 0) {
+    if (purify_u512_try_divmod_same_consttime(quotient, remainder, value, denominator) == 0) {
         return 0;
     }
     if (purify_u256_try_narrow_u512(first, remainder) == 0 || purify_u256_try_narrow_u512(second, quotient) == 0) {

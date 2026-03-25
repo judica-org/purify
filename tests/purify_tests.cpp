@@ -378,9 +378,15 @@ void test_library_key_generation(TestContext& ctx) {
         ctx.expect(seeded_a->secret.packed().to_hex()
                        == "244033992dfe583985332da27b7cdfddaf05df5c5c3bc8db763af6dd75f07ee28737e8d9a8d5592a3f10944c89f6ae82e53f76ae9dc17c77c22cf7a352cdb59c",
                    "seeded generate_key preserves the legacy packed-secret test vector");
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+        ctx.expect(seeded_a->public_key.to_hex()
+                       == "c000e3169636f34eb81b1d25280219abd1bb2f1185c6b55780e53f2a3b95d97b2b1576df976499bcc7687673d7efeb5621d2e5c6c2939aa4a57276185b6bf09e",
+                   "seeded generate_key preserves the legacy packed-public-key test vector");
+#else
         ctx.expect(seeded_a->public_key.to_hex()
                        == "79b928249e7889d70fe96c9b748d9d3863f5ac48e66340c5c8962aba2f12bd0985bb7f26a806cf0bfc8f149984117903917723d62bd4059475f6287c05622397",
                    "seeded generate_key preserves the legacy packed-public-key test vector");
+#endif
     }
 
     Bytes short_seed(15, 0x42);

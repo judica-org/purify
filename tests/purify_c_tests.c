@@ -974,10 +974,17 @@ static void test_public_c_api(void) {
                == 0,
            "purify_generate_key_from_seed preserves the legacy packed-secret test vector");
     to_hex(hex, first.public_key, sizeof(first.public_key));
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+    expect(strcmp(hex,
+                  "c000e3169636f34eb81b1d25280219abd1bb2f1185c6b55780e53f2a3b95d97b2b1576df976499bcc7687673d7efeb5621d2e5c6c2939aa4a57276185b6bf09e")
+               == 0,
+           "purify_generate_key_from_seed preserves the legacy packed-public-key test vector");
+#else
     expect(strcmp(hex,
                   "79b928249e7889d70fe96c9b748d9d3863f5ac48e66340c5c8962aba2f12bd0985bb7f26a806cf0bfc8f149984117903917723d62bd4059475f6287c05622397")
                == 0,
            "purify_generate_key_from_seed preserves the legacy packed-public-key test vector");
+#endif
     {
         purify_generated_key aliased_seed_key = {{0}, {0}};
         memcpy(aliased_seed_key.secret_key, seed, sizeof(seed));

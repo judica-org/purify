@@ -627,6 +627,17 @@ if(PURIFY_BUILD_CBMC)
             PURIFY_CBMC_MODEL_SMALL_FIELD=1
     )
     purify_add_cbmc_proof(
+        field_inverse_equivalence
+        verification/cbmc/field_inverse_equivalence_harness.c
+        180
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
         curve_lift_x_contract
         verification/cbmc/curve_lift_x_contract_harness.c
         260

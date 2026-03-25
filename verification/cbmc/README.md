@@ -17,6 +17,12 @@ Proof-class legend:
 There are currently no CBMC harnesses in the `tautological` bucket; the old copied-formula `combine`
 check was replaced with the point-average oracle below.
 
+Current variable-time vs constant-time equivalence coverage in this tree is:
+
+- `u512_divmod_same` vs `u512_divmod_same_consttime`
+- `purify_fe_inverse_var` vs `purify_fe_inverse`
+- public `curve_mul` vs secret `curve_mul_secret_affine`
+
 - `u256_bytes_roundtrip_harness.c` (`relational`): 256-bit byte encoding/decoding round-trips exactly.
 - `u256_add_sub_inverse_harness.c` (`relational`): successful `try_add` and `try_sub` calls are algebraic inverses.
 - `u256_shift_roundtrip_harness.c` (`relational`): lossless left shifts round-trip through `shifted_right`.
@@ -27,12 +33,13 @@ check was replaced with the point-average oracle below.
 - `core_validate_public_key_contract_harness.c` (`independent`): `purify_validate_public_key()` exactly accepts values below the documented 64-byte upper bound and rejects `NULL`, the bound itself, and larger values.
 - `field_encoding_boundaries_harness.c` (`independent`): canonical field `b32`/`u256` encodings round-trip, while inputs at or above the modulus are rejected.
 - `field_local_identities_harness.c` (`relational`): field subtraction/addition round-trips, signed conversion matches negation, square roots of squares succeed, and a known non-square is rejected.
+- `field_inverse_equivalence_harness.c` (`relational`): the constant-time and `_var` field inverse paths return identical outputs for every toy-model field element, and both still satisfy the multiplicative-inverse contract.
 - `curve_lift_x_contract_harness.c` (`relational`): `purify_curve_is_x_coord()` and `purify_curve_lift_x()` agree exactly, and successful lifts preserve `x`, produce affine `z = 1`, and land on-curve.
 - `curve_group_laws_harness.c` (`relational`): arbitrary liftable toy-model points, including both `y` signs and arbitrary non-zero projective representatives, satisfy identity/inverse laws, doubling matches addition, and multiplying by the documented subgroup order reaches infinity.
 - `curve_affine_negate_contract_harness.c` (`relational`): projective-to-affine conversion preserves the represented point, negation is involutive, and infinity stays canonical.
 - `curve_add_mixed_equivalence_harness.c` (`relational`): `purify_curve_add_mixed()` matches full Jacobian addition on equivalent non-affine representatives.
 - `curve_double_in_place_harness.c` (`relational`): in-place doubling matches out-of-place doubling and still agrees with `add(p, p)` on arbitrary toy-model points.
-- `curve_secret_mul_consistency_harness.c` (`relational`): the hardened secret-scalar ladder matches affine(public `mul`) on arbitrary toy-model points for every non-zero scalar in range.
+- `curve_secret_mul_consistency_harness.c` (`relational`): the hardened secret-scalar ladder matches affine(public `mul`) on arbitrary toy-model points for every non-zero scalar in range, giving the scalar-multiplication var/const equivalence check.
 - `curve_secret_mul_zero_reject_harness.c` (`independent`): `purify_curve_mul_secret_affine()` rejects the zero scalar exactly on arbitrary toy-model points.
 - `curve_secret_mul_one_identity_harness.c` (`independent`): `purify_curve_mul_secret_affine()` returns the affine input point for scalar one on arbitrary toy-model points.
 - `curve_combine_point_average_harness.c` (`independent`): `purify_curve_combine()` matches the average of `X(P+Q)` and `X(P-Q)` on the untwisted toy-model curve, which is the derivation-level combine spec rather than a copied field formula.

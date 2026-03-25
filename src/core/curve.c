@@ -737,7 +737,7 @@ static void purify_curve_mul_secret_ladder_core(purify_complete_projective_point
     *out = r0;
 }
 
-#if defined(PURIFY_VALGRIND_TESTING)
+#if defined(PURIFY_VALGRIND_TESTING) || defined(PURIFY_CBMC_TESTING)
 void purify_curve_mul_secret_ladder_only(purify_complete_projective_point* out, const purify_curve* curve,
                                          const purify_jacobian_point* point, const uint64_t scalar[4]) {
     purify_curve_mul_secret_ladder_core(out, curve, point, scalar);
@@ -844,9 +844,16 @@ static void purify_curve_unpack_secret_from_valid(uint64_t first[4], uint64_t se
     uint64_t denominator[8];
     uint64_t quotient[8];
     uint64_t remainder[8];
+    int ok;
 
     purify_u512_widen_u256(denominator, kPurifyHalfN1);
-    assert(purify_u512_try_divmod_same_consttime(quotient, remainder, value, denominator) != 0);
+    ok = purify_u512_try_divmod_same_consttime(quotient, remainder, value, denominator);
+    assert(ok != 0);
+    if (ok == 0) {
+        purify_u256_set_zero(first);
+        purify_u256_set_zero(second);
+        return;
+    }
     purify_curve_u256_narrow_u512_unchecked(first, remainder);
     purify_curve_u256_narrow_u512_unchecked(second, quotient);
     purify_curve_u256_add_one_unchecked(first);
@@ -862,7 +869,7 @@ int purify_curve_unpack_secret(uint64_t first[4], uint64_t second[4], const uint
     return 1;
 }
 
-#if defined(PURIFY_VALGRIND_TESTING)
+#if defined(PURIFY_VALGRIND_TESTING) || defined(PURIFY_CBMC_TESTING)
 void purify_curve_unpack_secret_unchecked(uint64_t first[4], uint64_t second[4], const uint64_t value[8]) {
     purify_curve_unpack_secret_from_valid(first, second, value);
 }

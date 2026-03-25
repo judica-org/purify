@@ -42,6 +42,7 @@ Current variable-time vs constant-time equivalence coverage in this tree is:
 - `curve_secret_mul_consistency_harness.c` (`relational`): the hardened secret-scalar ladder matches affine(public `mul`) on arbitrary toy-model points for every non-zero scalar in range, giving the scalar-multiplication var/const equivalence check.
 - `curve_secret_mul_zero_reject_harness.c` (`independent`): `purify_curve_mul_secret_affine()` rejects the zero scalar exactly on arbitrary toy-model points.
 - `curve_secret_mul_one_identity_harness.c` (`independent`): `purify_curve_mul_secret_affine()` returns the affine input point for scalar one on arbitrary toy-model points.
+- `curve_secret_mul_checked_unchecked_equivalence_harness.c` (`relational`): on arbitrary nonzero toy-model secret scalars and subgroup points, the checked and unchecked hardened affine multiplication paths return exactly the same point.
 - `curve_combine_point_average_harness.c` (`independent`): `purify_curve_combine()` matches the average of `X(P+Q)` and `X(P-Q)` on the untwisted toy-model curve, which is the derivation-level combine spec rather than a copied field formula.
 - `curve_hash_to_curve_contract_harness.c` (`independent`): `purify_curve_hash_to_curve()` rejects null arguments that violate its API contract. Concrete hash-to-curve outputs are covered separately by the generator-vector harnesses.
 - `curve_key_to_bits_roundtrip_harness.c` (`independent`): `purify_curve_key_to_bits()` round-trips through a separately written signed-window decoder for all bounded `(value, max_value)` pairs with `1 <= value <= max_value <= 100`.
@@ -49,10 +50,16 @@ Current variable-time vs constant-time equivalence coverage in this tree is:
 - `curve_unpack_public_inverse_harness.c` (`relational`): every valid packed toy-model public key decodes and re-encodes exactly.
 - `curve_unpack_secret_roundtrip_harness.c` (`independent`): mixed-radix packed secrets decode back to the original `(z1, z2)` pair for every in-range toy-model witness.
 - `curve_unpack_secret_inverse_harness.c` (`independent`): every valid packed toy-model secret decodes and re-encodes exactly through a separately written mixed-radix encoder.
+- `curve_unpack_secret_unchecked_roundtrip_harness.c` (`relational`): the unchecked valid-secret unpack path decodes every in-range toy-model `(z1, z2)` witness back to exactly the original pair; together with the checked roundtrip proof above, this pins the refactored unpack boundary.
 - `curve_key_space_invariants_harness.c` (`independent`): key-space constants, upper bounds, and last-valid-element decodings are internally consistent.
 - `curve_invalid_key_rejection_harness.c` (`independent`): out-of-range packed secret and public keys are rejected exactly at the documented space boundary.
 - `hash_to_curve_generator1_point_harness.c` (`independent`): `hash_to_curve("Generator/1")` returns the exact deterministic toy-model generator point on curve 1.
 - `hash_to_curve_generator2_point_harness.c` (`independent`): `hash_to_curve("Generator/2")` returns the exact deterministic toy-model generator point on curve 2.
+
+Experimental extended proofs, disabled by default unless `PURIFY_BUILD_CBMC_EXTENDED=ON`:
+
+- `curve_valid_packed_secret_public1_derivation_equivalence_harness.c` (`relational`): for every valid packed toy-model secret, the unchecked constant-time path from unpack through the curve-1 generator multiplication produces exactly the same public `x1` as the direct semantic derivation from the original witness.
+- `curve_valid_packed_secret_public2_derivation_equivalence_harness.c` (`relational`): for every valid packed toy-model secret, the unchecked constant-time path from unpack through the curve-2 generator multiplication produces exactly the same public `x2` as the direct semantic derivation from the original witness.
 
 The field and curve proofs are intentionally a toy-model argument, not a proof over the production secp backend. They use a verification-only prime field `GF(107)` and prime-order toy curves that preserve the same code paths and algebraic structure while replacing the backend bridge with a narrow deterministic model. That lets CBMC prove local arithmetic and curve logic without claiming that the backend itself is formally verified.
 

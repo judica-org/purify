@@ -29,6 +29,7 @@ set(PURIFY_SANITIZER_LIST "address,undefined" CACHE STRING
     "Comma-separated -fsanitize list used when PURIFY_ENABLE_SANITIZERS=ON."
 )
 option(PURIFY_BUILD_CBMC "Enable optional CBMC proof harnesses for the pure C wide-integer core." OFF)
+option(PURIFY_BUILD_CBMC_EXTENDED "Enable heavier experimental CBMC proofs that are not part of the default CI suite." OFF)
 option(PURIFY_BUILD_VALGRIND_TESTS "Enable optional Valgrind-backed memcheck and constant-time tests." OFF)
 
 if(PURIFY_BUILD_REFERENCE_TESTS AND NOT PURIFY_BUILD_TESTS)
@@ -45,6 +46,10 @@ endif()
 
 if(PURIFY_BUILD_VALGRIND_TESTS AND WIN32)
     message(FATAL_ERROR "PURIFY_BUILD_VALGRIND_TESTS is not supported on Windows")
+endif()
+
+if(PURIFY_BUILD_CBMC_EXTENDED AND NOT PURIFY_BUILD_CBMC)
+    message(FATAL_ERROR "PURIFY_BUILD_CBMC_EXTENDED requires PURIFY_BUILD_CBMC=ON")
 endif()
 
 if(PURIFY_ENABLE_SANITIZERS
@@ -736,6 +741,19 @@ if(PURIFY_BUILD_CBMC)
             PURIFY_CBMC_MODEL_SMALL_FIELD=1
     )
     purify_add_cbmc_proof(
+        curve_secret_mul_checked_unchecked_equivalence
+        verification/cbmc/curve_secret_mul_checked_unchecked_equivalence_harness.c
+        360
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+            PURIFY_CBMC_TESTING=1
+    )
+    purify_add_cbmc_proof(
         curve_combine_point_average
         verification/cbmc/curve_combine_point_average_harness.c
         360
@@ -819,6 +837,47 @@ if(PURIFY_BUILD_CBMC)
         DEFINES
             PURIFY_CBMC_MODEL_SMALL_FIELD=1
     )
+    purify_add_cbmc_proof(
+        curve_unpack_secret_unchecked_roundtrip
+        verification/cbmc/curve_unpack_secret_unchecked_roundtrip_harness.c
+        700
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+            PURIFY_CBMC_TESTING=1
+    )
+    if(PURIFY_BUILD_CBMC_EXTENDED)
+        purify_add_cbmc_proof(
+            curve_valid_packed_secret_public1_derivation_equivalence
+            verification/cbmc/curve_valid_packed_secret_public1_derivation_equivalence_harness.c
+            700
+            SOURCES
+                verification/cbmc/secp_bridge_small_field.c
+                src/core/uint.c
+                src/core/field.c
+                src/core/curve.c
+            DEFINES
+                PURIFY_CBMC_MODEL_SMALL_FIELD=1
+                PURIFY_CBMC_TESTING=1
+        )
+        purify_add_cbmc_proof(
+            curve_valid_packed_secret_public2_derivation_equivalence
+            verification/cbmc/curve_valid_packed_secret_public2_derivation_equivalence_harness.c
+            700
+            SOURCES
+                verification/cbmc/secp_bridge_small_field.c
+                src/core/uint.c
+                src/core/field.c
+                src/core/curve.c
+            DEFINES
+                PURIFY_CBMC_MODEL_SMALL_FIELD=1
+                PURIFY_CBMC_TESTING=1
+        )
+    endif()
     purify_add_cbmc_proof(
         curve_key_space_invariants
         verification/cbmc/curve_key_space_invariants_harness.c

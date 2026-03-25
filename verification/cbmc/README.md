@@ -1,6 +1,10 @@
 # CBMC Harnesses
 
-This directory contains bounded model checking harnesses for the pure C wide-integer core in [`src/core/uint.c`](../../src/core/uint.c).
+This directory contains bounded model checking harnesses for:
+
+- the exact pure C wide-integer core in [`src/core/uint.c`](../../src/core/uint.c)
+- verification-only toy-model checks of [`src/core/field.c`](../../src/core/field.c) and [`src/core/curve.c`](../../src/core/curve.c)
+  under the explicit bridge stub in [`secp_bridge_small_field.c`](secp_bridge_small_field.c)
 
 Current proof scope:
 
@@ -9,8 +13,13 @@ Current proof scope:
 - `u256_shift_roundtrip_harness.c`: lossless left shifts round-trip through `shifted_right`.
 - `u256_widen_narrow_harness.c`: widen/narrow helpers preserve canonical inputs and reject non-canonical high limbs.
 - `u512_divmod_same_harness.c`: `purify_u512_try_divmod_same()` returns a remainder below the denominator and reconstructs the original numerator.
+- `field_local_identities_harness.c`: field subtraction/addition round-trips, signed conversion matches negation, square roots of squares succeed, and a known non-square is rejected.
+- `curve_group_laws_harness.c`: fixed toy-model points lie on the curve, satisfy identity/inverse laws, doubling matches addition, and multiplying by the documented subgroup order reaches infinity.
+- `curve_secret_mul_consistency_harness.c`: the hardened secret-scalar ladder matches affine(public `mul`) on both toy-model curves.
+- `curve_combine_formula_harness.c`: `purify_curve_combine()` matches the direct field formula whenever the denominator is non-zero.
+- `curve_key_to_bits_roundtrip_harness.c`: `purify_curve_key_to_bits()` round-trips through the signed-window decoder on all values in a bounded range.
 
-These harnesses intentionally stop at the wide-integer layer. They do not claim formal coverage for field arithmetic, curve formulas, or protocol logic, because those layers currently depend on the secp256k1-zkp bridge and need additional modeling or stubbing to make a trustworthy CBMC proof.
+The field and curve proofs are intentionally a toy-model argument, not a proof over the production secp backend. They use a verification-only prime field `GF(107)` and prime-order toy curves that preserve the same code paths and algebraic structure while replacing the backend bridge with a narrow deterministic model. That lets CBMC prove local arithmetic and curve logic without claiming that the backend itself is formally verified.
 
 Run through CMake when `cbmc` is on `PATH`:
 

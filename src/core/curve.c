@@ -8,45 +8,70 @@
 #include <string.h>
 
 static const uint64_t kPurifyPrimeP[4] = {
+#if defined(PURIFY_CBMC_MODEL_SMALL_FIELD)
+    #include "verification/cbmc/model_small_field_constants.h"
+    PURIFY_CBMC_MODEL_FIELD_PRIME_INIT
+#else
     UINT64_C(0xBFD25E8CD0364141),
     UINT64_C(0xBAAEDCE6AF48A03B),
     UINT64_C(0xFFFFFFFFFFFFFFFE),
     UINT64_C(0xFFFFFFFFFFFFFFFF),
+#endif
 };
 
 static const uint64_t kPurifyOrderN1[4] = {
+#if defined(PURIFY_CBMC_MODEL_SMALL_FIELD)
+    PURIFY_CBMC_MODEL_CURVE_ORDER_N1_INIT
+#else
     UINT64_C(0x8A5A2A2C58E547E9),
     UINT64_C(0xA328F24405347212),
     UINT64_C(0xFFFFFFFFFFFFFFFF),
     UINT64_C(0xFFFFFFFFFFFFFFFF),
+#endif
 };
 
 static const uint64_t kPurifyOrderN2[4] = {
+#if defined(PURIFY_CBMC_MODEL_SMALL_FIELD)
+    PURIFY_CBMC_MODEL_CURVE_ORDER_N2_INIT
+#else
     UINT64_C(0xF54A92ED47873A9B),
     UINT64_C(0xD234C789595CCE64),
     UINT64_C(0xFFFFFFFFFFFFFFFD),
     UINT64_C(0xFFFFFFFFFFFFFFFF),
+#endif
 };
 
 static const uint64_t kPurifyHalfN1[4] = {
+#if defined(PURIFY_CBMC_MODEL_SMALL_FIELD)
+    PURIFY_CBMC_MODEL_CURVE_HALF_N1_INIT
+#else
     UINT64_C(0x452D15162C72A3F4),
     UINT64_C(0xD1947922029A3909),
     UINT64_C(0xFFFFFFFFFFFFFFFF),
     UINT64_C(0x7FFFFFFFFFFFFFFF),
+#endif
 };
 
 static const uint64_t kPurifyHalfN2[4] = {
+#if defined(PURIFY_CBMC_MODEL_SMALL_FIELD)
+    PURIFY_CBMC_MODEL_CURVE_HALF_N2_INIT
+#else
     UINT64_C(0x7AA54976A3C39D4D),
     UINT64_C(0xE91A63C4ACAE6732),
     UINT64_C(0xFFFFFFFFFFFFFFFE),
     UINT64_C(0x7FFFFFFFFFFFFFFF),
+#endif
 };
 
 static const uint64_t kPurifyFieldDi[4] = {
+#if defined(PURIFY_CBMC_MODEL_SMALL_FIELD)
+    PURIFY_CBMC_MODEL_FIELD_DI_INIT
+#else
     UINT64_C(0x4CBA8C385348E6E7),
     UINT64_C(0xE445F1F5DFB6A67E),
     UINT64_C(0x6666666666666665),
     UINT64_C(0x6666666666666666),
+#endif
 };
 
 static const char kPurifyHashToCurveTag[] = "Purify/HashToCurve";

@@ -7,10 +7,15 @@
 #include <string.h>
 
 static const uint64_t kPurifyFieldPrime[4] = {
+#if defined(PURIFY_CBMC_MODEL_SMALL_FIELD)
+    #include "verification/cbmc/model_small_field_constants.h"
+    PURIFY_CBMC_MODEL_FIELD_PRIME_INIT
+#else
     UINT64_C(0xBFD25E8CD0364141),
     UINT64_C(0xBAAEDCE6AF48A03B),
     UINT64_C(0xFFFFFFFFFFFFFFFE),
     UINT64_C(0xFFFFFFFFFFFFFFFF),
+#endif
 };
 
 static const uint64_t kPurifyU256One[4] = {

@@ -128,7 +128,12 @@ cmake --build --preset cbmc
 ctest --preset cbmc
 ```
 
-The CBMC harnesses currently cover [`src/core/uint.c`](src/core/uint.c) via [`verification/cbmc/`](verification/cbmc/). They do not yet claim formal coverage for field arithmetic, curve formulas, or the higher-level protocol code.
+The CBMC harnesses in [`verification/cbmc/`](verification/cbmc/) now cover:
+
+- exact proofs over [`src/core/uint.c`](src/core/uint.c)
+- toy-model proofs over [`src/core/field.c`](src/core/field.c) and [`src/core/curve.c`](src/core/curve.c) under an explicit verification-only bridge stub
+
+The field and curve proofs are intentionally not a proof of the production `secp256k1-zkp` backend. They are a proof that the local Purify arithmetic and curve logic are internally consistent under a small-field model that exercises the same algorithms.
 
 Generate API documentation with Doxygen:
 

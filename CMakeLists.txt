@@ -402,6 +402,7 @@ endif()
 
 if(PURIFY_BUILD_CBMC)
     find_program(PURIFY_CBMC_EXECUTABLE cbmc REQUIRED)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
     set(PURIFY_CBMC_INCLUDE_ARGS
         "-I${CMAKE_CURRENT_SOURCE_DIR}"
@@ -421,18 +422,37 @@ if(PURIFY_BUILD_CBMC)
     add_custom_target(purify_cbmc)
 
     function(purify_add_cbmc_proof name harness unwind)
+        cmake_parse_arguments(PURIFY_CBMC_PROOF "" "" "SOURCES;DEFINES" ${ARGN})
+
         set(proof_target "purify_cbmc_${name}")
         set(proof_test "purify.cbmc.${name}")
+        set(proof_sources "${CMAKE_CURRENT_SOURCE_DIR}/${harness}")
+        set(proof_cbmc_args)
+
+        foreach(source IN LISTS PURIFY_CBMC_PROOF_SOURCES)
+            list(APPEND proof_sources "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
+        endforeach()
+
+        list(APPEND proof_cbmc_args ${proof_sources})
+        list(APPEND proof_cbmc_args
+            --function main
+            --unwind "${unwind}"
+            ${PURIFY_CBMC_COMMON_ARGS}
+            ${PURIFY_CBMC_INCLUDE_ARGS}
+        )
+
+        foreach(define IN LISTS PURIFY_CBMC_PROOF_DEFINES)
+            list(APPEND proof_cbmc_args "-D${define}")
+        endforeach()
 
         add_custom_target(${proof_target}
             COMMAND
-                "${PURIFY_CBMC_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/${harness}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/src/core/uint.c"
-                --function main
-                --unwind "${unwind}"
-                ${PURIFY_CBMC_COMMON_ARGS}
-                ${PURIFY_CBMC_INCLUDE_ARGS}
+                "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/verification/cbmc/run_cbmc.py"
+                --name "${proof_test}"
+                --cbmc "${PURIFY_CBMC_EXECUTABLE}"
+                --
+                ${proof_cbmc_args}
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
             USES_TERMINAL
             VERBATIM
@@ -442,22 +462,110 @@ if(PURIFY_BUILD_CBMC)
         add_test(
             NAME "${proof_test}"
             COMMAND
-                "${PURIFY_CBMC_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/${harness}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/src/core/uint.c"
-                --function main
-                --unwind "${unwind}"
-                ${PURIFY_CBMC_COMMON_ARGS}
-                ${PURIFY_CBMC_INCLUDE_ARGS}
+                "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/verification/cbmc/run_cbmc.py"
+                --name "${proof_test}"
+                --cbmc "${PURIFY_CBMC_EXECUTABLE}"
+                --
+                ${proof_cbmc_args}
         )
         set_tests_properties("${proof_test}" PROPERTIES TIMEOUT 300)
     endfunction()
 
-    purify_add_cbmc_proof(u256_bytes_roundtrip verification/cbmc/u256_bytes_roundtrip_harness.c 160)
-    purify_add_cbmc_proof(u256_add_sub_inverse verification/cbmc/u256_add_sub_inverse_harness.c 32)
-    purify_add_cbmc_proof(u256_shift_roundtrip verification/cbmc/u256_shift_roundtrip_harness.c 32)
-    purify_add_cbmc_proof(u256_widen_narrow verification/cbmc/u256_widen_narrow_harness.c 32)
-    purify_add_cbmc_proof(u512_divmod_same verification/cbmc/u512_divmod_same_harness.c 600)
+    purify_add_cbmc_proof(
+        u256_bytes_roundtrip
+        verification/cbmc/u256_bytes_roundtrip_harness.c
+        160
+        SOURCES
+            src/core/uint.c
+    )
+    purify_add_cbmc_proof(
+        u256_add_sub_inverse
+        verification/cbmc/u256_add_sub_inverse_harness.c
+        32
+        SOURCES
+            src/core/uint.c
+    )
+    purify_add_cbmc_proof(
+        u256_shift_roundtrip
+        verification/cbmc/u256_shift_roundtrip_harness.c
+        32
+        SOURCES
+            src/core/uint.c
+    )
+    purify_add_cbmc_proof(
+        u256_widen_narrow
+        verification/cbmc/u256_widen_narrow_harness.c
+        32
+        SOURCES
+            src/core/uint.c
+    )
+    purify_add_cbmc_proof(
+        u512_divmod_same
+        verification/cbmc/u512_divmod_same_harness.c
+        600
+        SOURCES
+            src/core/uint.c
+    )
+    purify_add_cbmc_proof(
+        field_local_identities
+        verification/cbmc/field_local_identities_harness.c
+        220
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_group_laws
+        verification/cbmc/curve_group_laws_harness.c
+        320
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_secret_mul_consistency
+        verification/cbmc/curve_secret_mul_consistency_harness.c
+        260
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_combine_formula
+        verification/cbmc/curve_combine_formula_harness.c
+        280
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_key_to_bits_roundtrip
+        verification/cbmc/curve_key_to_bits_roundtrip_harness.c
+        200
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
 endif()
 
 if(PURIFY_BUILD_FUZZ)

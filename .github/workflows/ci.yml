@@ -52,3 +52,64 @@ jobs:
 
       - name: Test
         run: ctest --preset ${{ matrix.mode }}
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    name: ubuntu-latest / sanitizers
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Enable sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Initialize required submodules
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp
+
+      - name: Configure
+        run: >
+          cmake --preset sanitizers
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        run: cmake --build --preset sanitizers --parallel
+
+      - name: Show sccache stats
+        run: sccache --show-stats
+
+      - name: Test
+        run: ctest --preset sanitizers
+
+  cbmc:
+    runs-on: macos-latest
+    name: macos-latest / cbmc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install CBMC
+        run: brew install cbmc
+
+      - name: Initialize required submodules
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp
+
+      - name: Configure
+        run: cmake --preset cbmc
+
+      - name: Build
+        run: cmake --build --preset cbmc
+
+      - name: Test
+        run: ctest --preset cbmc

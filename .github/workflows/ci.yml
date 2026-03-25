@@ -127,8 +127,8 @@ jobs:
         run: ctest --preset valgrind
 
   cbmc:
-    runs-on: macos-latest
-    name: macos-latest / cbmc
+    runs-on: ubuntu-latest
+    name: ubuntu-latest / cbmc
 
     steps:
       - uses: actions/checkout@v4
@@ -138,7 +138,9 @@ jobs:
           python-version: "3.x"
 
       - name: Install CBMC
-        run: brew install cbmc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cbmc
 
       - name: Initialize required submodules
         run: git submodule update --init --depth 1 third_party/secp256k1-zkp

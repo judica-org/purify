@@ -29,6 +29,7 @@ set(PURIFY_SANITIZER_LIST "address,undefined" CACHE STRING
     "Comma-separated -fsanitize list used when PURIFY_ENABLE_SANITIZERS=ON."
 )
 option(PURIFY_BUILD_CBMC "Enable optional CBMC proof harnesses for the pure C wide-integer core." OFF)
+option(PURIFY_BUILD_VALGRIND_TESTS "Enable optional Valgrind-backed memcheck and constant-time tests." OFF)
 
 if(PURIFY_BUILD_REFERENCE_TESTS AND NOT PURIFY_BUILD_TESTS)
     message(FATAL_ERROR "PURIFY_BUILD_REFERENCE_TESTS requires PURIFY_BUILD_TESTS=ON")
@@ -36,6 +37,20 @@ endif()
 
 if(PURIFY_BUILD_REFERENCE_TESTS AND NOT PURIFY_BUILD_CLI)
     message(FATAL_ERROR "PURIFY_BUILD_REFERENCE_TESTS requires PURIFY_BUILD_CLI=ON")
+endif()
+
+if(PURIFY_BUILD_VALGRIND_TESTS AND NOT PURIFY_BUILD_TESTS)
+    message(FATAL_ERROR "PURIFY_BUILD_VALGRIND_TESTS requires PURIFY_BUILD_TESTS=ON")
+endif()
+
+if(PURIFY_BUILD_VALGRIND_TESTS AND WIN32)
+    message(FATAL_ERROR "PURIFY_BUILD_VALGRIND_TESTS is not supported on Windows")
+endif()
+
+if(PURIFY_ENABLE_SANITIZERS
+   AND PURIFY_SANITIZER_LIST MATCHES "(^|,)integer(,|$)"
+   AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "PURIFY_SANITIZER_LIST containing 'integer' requires a Clang-family compiler")
 endif()
 
 if(PURIFY_IS_TOP_LEVEL AND NOT PURIFY_IS_MULTI_CONFIG)
@@ -308,6 +323,28 @@ if(PURIFY_BUILD_TESTS OR PURIFY_BUILD_CBMC)
     enable_testing()
 endif()
 
+if(PURIFY_BUILD_VALGRIND_TESTS)
+    find_program(PURIFY_VALGRIND_EXECUTABLE valgrind REQUIRED)
+    find_path(PURIFY_VALGRIND_INCLUDE_DIR valgrind/memcheck.h REQUIRED)
+    set(PURIFY_VALGRIND_COMMON_ARGS
+        --tool=memcheck
+        --error-exitcode=1
+        --undef-value-errors=yes
+        --leak-check=full
+        --show-leak-kinds=all
+        --errors-for-leak-kinds=all
+        --track-origins=yes
+    )
+
+    function(purify_add_valgrind_test name target)
+        add_test(
+            NAME ${name}
+            COMMAND "${PURIFY_VALGRIND_EXECUTABLE}" ${PURIFY_VALGRIND_COMMON_ARGS} $<TARGET_FILE:${target}>
+        )
+        set_tests_properties(${name} PROPERTIES TIMEOUT 900)
+    endfunction()
+endif()
+
 if(PURIFY_BUILD_TESTS)
     add_executable(purify_tests
         tests/purify_tests_main.cpp
@@ -358,6 +395,32 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_sanitizers(purify_c_tests)
 
     add_test(NAME purify.c_api COMMAND purify_c_tests)
+
+    if(PURIFY_BUILD_VALGRIND_TESTS)
+        target_compile_definitions(purify PRIVATE PURIFY_VALGRIND_TESTING=1)
+
+        add_executable(purify_valgrind_tests
+            tests/purify_valgrind_tests.c
+        )
+
+        target_link_libraries(purify_valgrind_tests
+            PRIVATE
+                purify::purify
+        )
+
+        target_include_directories(purify_valgrind_tests PRIVATE
+            "${PURIFY_VALGRIND_INCLUDE_DIR}"
+        )
+
+        set_target_properties(purify_valgrind_tests PROPERTIES
+            LINKER_LANGUAGE CXX
+        )
+
+        purify_enable_warnings(purify_valgrind_tests)
+
+        purify_add_valgrind_test(purify.valgrind.c_api purify_c_tests)
+        purify_add_valgrind_test(purify.valgrind.consttime_secret purify_valgrind_tests)
+    endif()
 
     if(PURIFY_BUILD_BENCH)
         add_test(NAME purify.bench COMMAND bench_purify --epochs 1 --min-epoch-ms 1)

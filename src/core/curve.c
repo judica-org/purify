@@ -696,8 +696,8 @@ void purify_curve_mul(purify_jacobian_point* out, const purify_curve* curve,
     *out = result;
 }
 
-int purify_curve_mul_secret_affine(purify_affine_point* out, const purify_curve* curve,
-                                   const purify_jacobian_point* point, const uint64_t scalar[4]) {
+static void purify_curve_mul_secret_ladder_core(purify_complete_projective_point* out, const purify_curve* curve,
+                                                const purify_jacobian_point* point, const uint64_t scalar[4]) {
     purify_complete_projective_point r0 = purify_curve_complete_identity();
     purify_complete_projective_point r1 = purify_curve_secret_input_point(curve, point);
     unsigned int prev_bit = 0;
@@ -716,6 +716,21 @@ int purify_curve_mul_secret_affine(purify_affine_point* out, const purify_curve*
         prev_bit = bit;
     }
     purify_curve_complete_swap(&r0, &r1, (int)prev_bit);
+    *out = r0;
+}
+
+#if defined(PURIFY_VALGRIND_TESTING)
+void purify_curve_mul_secret_ladder_only(purify_complete_projective_point* out, const purify_curve* curve,
+                                         const purify_jacobian_point* point, const uint64_t scalar[4]) {
+    purify_curve_mul_secret_ladder_core(out, curve, point, scalar);
+}
+#endif
+
+int purify_curve_mul_secret_affine(purify_affine_point* out, const purify_curve* curve,
+                                   const purify_jacobian_point* point, const uint64_t scalar[4]) {
+    purify_complete_projective_point r0;
+
+    purify_curve_mul_secret_ladder_core(&r0, curve, point, scalar);
     if (purify_fe_is_zero(&r0.z) != 0) {
         return 0;
     }

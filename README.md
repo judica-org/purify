@@ -120,6 +120,26 @@ cmake --build --preset sanitizers --parallel
 ctest --preset sanitizers
 ```
 
+For a Clang ASan/UBSan integer-focused debug build:
+
+```sh
+cmake --preset sanitizers-int
+cmake --build --preset sanitizers-int --parallel
+ctest --preset sanitizers-int
+```
+
+For Valgrind memcheck plus a ctgrind-style secret-ladder check:
+
+```sh
+cmake --preset valgrind
+cmake --build --preset valgrind --parallel
+ctest --preset valgrind
+```
+
+The Valgrind constant-time lane is a negative test, not a proof. It marks secret scalar bytes undefined
+before entering the hardened ladder and fails if Memcheck sees secret-dependent control flow or memory
+addresses on that path.
+
 For bounded model checking of the pure C wide-integer helpers with CBMC:
 
 ```sh

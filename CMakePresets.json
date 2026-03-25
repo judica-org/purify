@@ -47,6 +47,30 @@
       }
     },
     {
+      "name": "sanitizers-int",
+      "inherits": "sanitizers",
+      "binaryDir": "${sourceDir}/build-sanitizers-int",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "PURIFY_SANITIZER_LIST": "address,undefined,integer"
+      }
+    },
+    {
+      "name": "valgrind",
+      "inherits": "ci-base",
+      "binaryDir": "${sourceDir}/build-valgrind",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "PURIFY_BUILD_BENCH": "OFF",
+        "PURIFY_BUILD_CLI": "OFF",
+        "PURIFY_BUILD_DOCS": "OFF",
+        "PURIFY_BUILD_REFERENCE_TESTS": "OFF",
+        "PURIFY_BUILD_VALGRIND_TESTS": "ON",
+        "PURIFY_USE_LEGACY_FIELD_HASHES": "OFF"
+      }
+    },
+    {
       "name": "cbmc",
       "inherits": "ci-base",
       "binaryDir": "${sourceDir}/build-cbmc",
@@ -78,6 +102,16 @@
       "name": "sanitizers",
       "configurePreset": "sanitizers",
       "configuration": "Debug"
+    },
+    {
+      "name": "sanitizers-int",
+      "configurePreset": "sanitizers-int",
+      "configuration": "Debug"
+    },
+    {
+      "name": "valgrind",
+      "configurePreset": "valgrind",
+      "configuration": "RelWithDebInfo"
     },
     {
       "name": "cbmc",
@@ -125,6 +159,32 @@
       "filter": {
         "include": {
           "name": "purify.tests|purify.property_tests|purify.c_api"
+        }
+      }
+    },
+    {
+      "name": "sanitizers-int",
+      "configurePreset": "sanitizers-int",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "purify.tests|purify.property_tests|purify.c_api"
+        }
+      }
+    },
+    {
+      "name": "valgrind",
+      "configurePreset": "valgrind",
+      "configuration": "RelWithDebInfo",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "purify\\.valgrind\\..*"
         }
       }
     },

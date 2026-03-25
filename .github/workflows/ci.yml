@@ -53,12 +53,14 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.mode }}
 
-  sanitizers:
+  sanitizers-int:
     runs-on: ubuntu-latest
-    name: ubuntu-latest / sanitizers
+    name: ubuntu-latest / asan-ubsan-int
     env:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
 
     steps:
       - uses: actions/checkout@v4
@@ -75,18 +77,54 @@ jobs:
 
       - name: Configure
         run: >
-          cmake --preset sanitizers
+          cmake --preset sanitizers-int
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build --preset sanitizers --parallel
+        run: cmake --build --preset sanitizers-int --parallel
 
       - name: Show sccache stats
         run: sccache --show-stats
 
       - name: Test
-        run: ctest --preset sanitizers
+        run: ctest --preset sanitizers-int
+
+  valgrind:
+    runs-on: ubuntu-latest
+    name: ubuntu-latest / valgrind
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind
+
+      - name: Initialize required submodules
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp
+
+      - name: Configure
+        run: >
+          cmake --preset valgrind
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        run: cmake --build --preset valgrind --parallel
+
+      - name: Show sccache stats
+        run: sccache --show-stats
+
+      - name: Test
+        run: ctest --preset valgrind
 
   cbmc:
     runs-on: macos-latest

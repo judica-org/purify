@@ -24,6 +24,11 @@ option(PURIFY_BUILD_TESTS "Build the Purify regression test target." ${PURIFY_IS
 option(PURIFY_BUILD_FUZZ "Build the deterministic fuzz/stress harness." ${PURIFY_IS_TOP_LEVEL})
 option(PURIFY_BUILD_REFERENCE_TESTS "Enable Python reference regression tests from reference/purify." OFF)
 option(PURIFY_USE_LEGACY_FIELD_HASHES "Use the legacy HKDF-based field-hash path for hash_to_curve and BIP340 key derivation." OFF)
+option(PURIFY_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer on supported compilers." OFF)
+set(PURIFY_SANITIZER_LIST "address,undefined" CACHE STRING
+    "Comma-separated -fsanitize list used when PURIFY_ENABLE_SANITIZERS=ON."
+)
+option(PURIFY_BUILD_CBMC "Enable optional CBMC proof harnesses for the pure C wide-integer core." OFF)
 
 if(PURIFY_BUILD_REFERENCE_TESTS AND NOT PURIFY_BUILD_TESTS)
     message(FATAL_ERROR "PURIFY_BUILD_REFERENCE_TESTS requires PURIFY_BUILD_TESTS=ON")
@@ -55,6 +60,25 @@ function(purify_enable_warnings target)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -pedantic)
     endif()
+endfunction()
+
+function(purify_enable_sanitizers target)
+    if(NOT PURIFY_ENABLE_SANITIZERS)
+        return()
+    endif()
+
+    if(MSVC)
+        message(FATAL_ERROR "PURIFY_ENABLE_SANITIZERS requires a compiler with -fsanitize support")
+    endif()
+
+    target_compile_options(${target} PRIVATE
+        -fno-omit-frame-pointer
+        "-fsanitize=${PURIFY_SANITIZER_LIST}"
+    )
+    target_link_options(${target} PRIVATE
+        -fno-omit-frame-pointer
+        "-fsanitize=${PURIFY_SANITIZER_LIST}"
+    )
 endfunction()
 
 if(NOT MSVC)
@@ -118,6 +142,7 @@ function(purify_configure_library_target target)
     endif()
 
     purify_enable_warnings(${target})
+    purify_enable_sanitizers(${target})
 endfunction()
 
 function(purify_enable_release_optimizations target)
@@ -211,6 +236,7 @@ if(PURIFY_BUILD_CLI)
     )
 
     purify_enable_warnings(purify_cpp)
+    purify_enable_sanitizers(purify_cpp)
 endif()
 
 if(PURIFY_BUILD_BENCH)
@@ -274,12 +300,15 @@ if(PURIFY_BUILD_BENCH)
     )
 
     purify_enable_warnings(bench_purify)
+    purify_enable_sanitizers(bench_purify)
     purify_enable_release_optimizations(bench_purify)
 endif()
 
-if(PURIFY_BUILD_TESTS)
+if(PURIFY_BUILD_TESTS OR PURIFY_BUILD_CBMC)
     enable_testing()
+endif()
 
+if(PURIFY_BUILD_TESTS)
     add_executable(purify_tests
         tests/purify_tests_main.cpp
         tests/purify_tests.cpp
@@ -293,6 +322,7 @@ if(PURIFY_BUILD_TESTS)
     )
 
     purify_enable_warnings(purify_tests)
+    purify_enable_sanitizers(purify_tests)
 
     add_test(NAME purify.tests COMMAND purify_tests)
 
@@ -306,6 +336,7 @@ if(PURIFY_BUILD_TESTS)
     )
 
     purify_enable_warnings(purify_property_tests)
+    purify_enable_sanitizers(purify_property_tests)
 
     add_test(NAME purify.property_tests COMMAND purify_property_tests)
     set_tests_properties(purify.property_tests PROPERTIES TIMEOUT 300)
@@ -324,6 +355,7 @@ if(PURIFY_BUILD_TESTS)
     )
 
     purify_enable_warnings(purify_c_tests)
+    purify_enable_sanitizers(purify_c_tests)
 
     add_test(NAME purify.c_api COMMAND purify_c_tests)
 
@@ -368,6 +400,66 @@ if(PURIFY_BUILD_TESTS)
     endif()
 endif()
 
+if(PURIFY_BUILD_CBMC)
+    find_program(PURIFY_CBMC_EXECUTABLE cbmc REQUIRED)
+
+    set(PURIFY_CBMC_INCLUDE_ARGS
+        "-I${CMAKE_CURRENT_SOURCE_DIR}"
+        "-I${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "-I${CMAKE_CURRENT_SOURCE_DIR}/src/core"
+    )
+    set(PURIFY_CBMC_COMMON_ARGS
+        --c11
+        --bounds-check
+        --pointer-check
+        --pointer-overflow-check
+        --div-by-zero-check
+        --signed-overflow-check
+        --unwinding-assertions
+    )
+
+    add_custom_target(purify_cbmc)
+
+    function(purify_add_cbmc_proof name harness unwind)
+        set(proof_target "purify_cbmc_${name}")
+        set(proof_test "purify.cbmc.${name}")
+
+        add_custom_target(${proof_target}
+            COMMAND
+                "${PURIFY_CBMC_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/${harness}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/core/uint.c"
+                --function main
+                --unwind "${unwind}"
+                ${PURIFY_CBMC_COMMON_ARGS}
+                ${PURIFY_CBMC_INCLUDE_ARGS}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            USES_TERMINAL
+            VERBATIM
+        )
+        add_dependencies(purify_cbmc ${proof_target})
+
+        add_test(
+            NAME "${proof_test}"
+            COMMAND
+                "${PURIFY_CBMC_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/${harness}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/core/uint.c"
+                --function main
+                --unwind "${unwind}"
+                ${PURIFY_CBMC_COMMON_ARGS}
+                ${PURIFY_CBMC_INCLUDE_ARGS}
+        )
+        set_tests_properties("${proof_test}" PROPERTIES TIMEOUT 300)
+    endfunction()
+
+    purify_add_cbmc_proof(u256_bytes_roundtrip verification/cbmc/u256_bytes_roundtrip_harness.c 160)
+    purify_add_cbmc_proof(u256_add_sub_inverse verification/cbmc/u256_add_sub_inverse_harness.c 32)
+    purify_add_cbmc_proof(u256_shift_roundtrip verification/cbmc/u256_shift_roundtrip_harness.c 32)
+    purify_add_cbmc_proof(u256_widen_narrow verification/cbmc/u256_widen_narrow_harness.c 32)
+    purify_add_cbmc_proof(u512_divmod_same verification/cbmc/u512_divmod_same_harness.c 600)
+endif()
+
 if(PURIFY_BUILD_FUZZ)
     add_executable(purify_fuzz
         fuzz/purify_fuzz.cpp
@@ -379,6 +471,7 @@ if(PURIFY_BUILD_FUZZ)
     )
 
     purify_enable_warnings(purify_fuzz)
+    purify_enable_sanitizers(purify_fuzz)
     purify_enable_release_optimizations(purify_fuzz)
 endif()
 

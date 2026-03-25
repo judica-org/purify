@@ -110,6 +110,26 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+### Verification
+
+For a sanitizer-enabled debug build:
+
+```sh
+cmake --preset sanitizers
+cmake --build --preset sanitizers --parallel
+ctest --preset sanitizers
+```
+
+For bounded model checking of the pure C wide-integer helpers with CBMC:
+
+```sh
+cmake --preset cbmc
+cmake --build --preset cbmc
+ctest --preset cbmc
+```
+
+The CBMC harnesses currently cover [`src/core/uint.c`](src/core/uint.c) via [`verification/cbmc/`](verification/cbmc/). They do not yet claim formal coverage for field arithmetic, curve formulas, or the higher-level protocol code.
+
 Generate API documentation with Doxygen:
 
 ```sh

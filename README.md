@@ -137,9 +137,9 @@ ctest --preset valgrind
 ```
 
 The Valgrind constant-time lane is a negative test, not a proof. It now splits into dedicated checks for
-the fixed-round secret divider, the hardened ladder core, and the ladder-plus-affine-normalization path,
-marking secret bytes undefined before entry and failing if Memcheck sees secret-dependent control flow or
-memory addresses on those paths.
+the fixed-round secret divider, the hardened ladder core, the ladder-plus-affine-normalization path, and
+the constant-time field inverse path, marking secret bytes undefined before entry and failing if Memcheck
+sees secret-dependent control flow or memory addresses on those paths.
 
 For bounded model checking of the pure C wide-integer helpers with CBMC:
 

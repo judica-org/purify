@@ -117,6 +117,19 @@ static void test_secret_affine_consttime(const purify_curve* curve, const char* 
     VALGRIND_MAKE_MEM_DEFINED(&affine, sizeof(affine));
 }
 
+static void test_secret_inverse_consttime(void) {
+    purify_fe value;
+    purify_fe inverse;
+
+    purify_fe_set_u64(&value, 1u);
+
+    /* Keep the input non-zero while leaving the high 192 bits secret. */
+    VALGRIND_MAKE_MEM_UNDEFINED(&value.value.words[1], 3u * sizeof(uint64_t));
+    purify_fe_inverse(&inverse, &value);
+    VALGRIND_MAKE_MEM_DEFINED(&value.value.words[1], 3u * sizeof(uint64_t));
+    VALGRIND_MAKE_MEM_DEFINED(&inverse, sizeof(inverse));
+}
+
 static void run_divmod_tests(void) {
     test_divmod_secret_numerator_consttime();
 }
@@ -131,6 +144,10 @@ static void run_affine_tests(const purify_curve* curve1, const purify_curve* cur
     test_secret_affine_consttime(curve2, "Generator/2");
 }
 
+static void run_inverse_tests(void) {
+    test_secret_inverse_consttime();
+}
+
 int main(int argc, char** argv) {
     purify_curve curve1;
     purify_curve curve2;
@@ -142,12 +159,15 @@ int main(int argc, char** argv) {
         run_divmod_tests();
         run_ladder_tests(&curve1, &curve2);
         run_affine_tests(&curve1, &curve2);
+        run_inverse_tests();
     } else if (strcmp(argv[1], "divmod") == 0) {
         run_divmod_tests();
     } else if (strcmp(argv[1], "ladder") == 0) {
         run_ladder_tests(&curve1, &curve2);
     } else if (strcmp(argv[1], "affine") == 0) {
         run_affine_tests(&curve1, &curve2);
+    } else if (strcmp(argv[1], "inverse") == 0) {
+        run_inverse_tests();
     } else {
         expect(0, "unknown valgrind test selector");
     }

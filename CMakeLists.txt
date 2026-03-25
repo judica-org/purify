@@ -565,7 +565,7 @@ if(PURIFY_BUILD_CBMC)
     purify_add_cbmc_proof(
         u256_bytes_roundtrip
         verification/cbmc/u256_bytes_roundtrip_harness.c
-        160
+        64
         SOURCES
             src/core/uint.c
     )

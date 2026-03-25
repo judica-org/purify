@@ -142,14 +142,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cbmc
 
+      - name: Show CBMC Version
+        run: cbmc --version
+
       - name: Initialize required submodules
         run: git submodule update --init --depth 1 third_party/secp256k1-zkp
 
       - name: Configure
         run: cmake --preset cbmc
 
-      - name: Build
-        run: cmake --build --preset cbmc
-
       - name: Test
-        run: ctest --preset cbmc
+        run: ctest --preset cbmc --output-on-failure

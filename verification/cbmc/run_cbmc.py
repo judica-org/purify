@@ -26,6 +26,9 @@ def main() -> int:
     proc = subprocess.run(command, capture_output=True, text=True)
 
     if not proc.stdout.strip():
+        print(f"CBMC FAIL {args.name}")
+        print(f"  cbmc exited with code {proc.returncode} and produced no JSON output")
+        print(f"  command: {' '.join(command)}")
         if proc.stderr:
             sys.stderr.write(proc.stderr)
         return proc.returncode or 1
@@ -33,6 +36,9 @@ def main() -> int:
     try:
         events = json.loads(proc.stdout)
     except json.JSONDecodeError:
+        print(f"CBMC FAIL {args.name}")
+        print(f"  cbmc exited with code {proc.returncode} and produced non-JSON output")
+        print(f"  command: {' '.join(command)}")
         sys.stdout.write(proc.stdout)
         if proc.stderr:
             sys.stderr.write(proc.stderr)
@@ -71,6 +77,9 @@ def main() -> int:
         print(f"CBMC FAIL {args.name}")
         for failure in failures[:20]:
             print(f"  {failure}")
+        if proc.returncode != 0 and not failures:
+            print(f"  cbmc exited with code {proc.returncode} without reporting a failed property")
+            print(f"  command: {' '.join(command)}")
         if proc.stderr:
             sys.stderr.write(proc.stderr)
         return 1

@@ -685,9 +685,10 @@ void purify_curve_mul(purify_jacobian_point* out, const purify_curve* curve,
     size_t i;
 
     purify_curve_jacobian_infinity(&result);
-    for (i = bits; i-- > 0;) {
+    for (i = bits; i != 0; --i) {
+        size_t idx = i - 1u;
         purify_curve_double(&result, curve, &result);
-        if (purify_u256_bit(scalar, i) != 0) {
+        if (purify_u256_bit(scalar, idx) != 0) {
             purify_jacobian_point sum;
             purify_curve_add(&sum, curve, &result, point);
             result = sum;
@@ -704,8 +705,9 @@ static void purify_curve_mul_secret_ladder_core(purify_complete_projective_point
     size_t bits = purify_u256_bit_length(curve->n);
     size_t i;
 
-    for (i = bits; i-- > 0;) {
-        unsigned int bit = purify_u256_bit(scalar, i) != 0 ? 1u : 0u;
+    for (i = bits; i != 0; --i) {
+        size_t idx = i - 1u;
+        unsigned int bit = purify_u256_bit(scalar, idx) != 0 ? 1u : 0u;
         purify_curve_complete_swap(&r0, &r1, (int)(bit ^ prev_bit));
         {
             purify_complete_projective_point sum = purify_curve_complete_add(curve, &r0, &r1);

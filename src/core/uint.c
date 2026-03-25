@@ -156,17 +156,18 @@ int purify_u512_try_divmod_same(uint64_t quotient[8], uint64_t remainder[8],
 
     shift = n_bits - d_bits;
     purify_u512_shifted_left(shifted, denominator, shift);
-    for (i = shift + 1; i-- > 0;) {
+    for (i = shift + 1u; i != 0; --i) {
+        size_t idx = i - 1u;
         if (purify_u512_compare(remainder, shifted) >= 0) {
             int sub_ok = purify_u512_try_sub(remainder, shifted);
-            int bit_ok = purify_u512_try_set_bit(quotient, i);
+            int bit_ok = purify_u512_try_set_bit(quotient, idx);
             assert(sub_ok != 0);
             assert(bit_ok != 0);
             if (sub_ok == 0 || bit_ok == 0) {
                 return 0;
             }
         }
-        if (i != 0) {
+        if (idx != 0) {
             purify_u512_shift_right_one(shifted);
         }
     }

@@ -26,6 +26,9 @@ struct SplitMix64 {
 
     explicit SplitMix64(std::uint64_t seed) : state(seed) {}
 
+#if defined(__clang__)
+    __attribute__((no_sanitize("unsigned-integer-overflow")))
+#endif
     std::uint64_t next_u64() {
         std::uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
         z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;

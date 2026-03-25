@@ -287,11 +287,12 @@ struct BigUInt {
         if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
             return detail::BigUIntCBridge<Words>::compare(limbs.data(), other.limbs.data());
         } else {
-            for (std::size_t i = Words; i-- > 0;) {
-                if (limbs[i] < other.limbs[i]) {
+            for (std::size_t i = Words; i != 0; --i) {
+                const std::size_t idx = i - 1;
+                if (limbs[idx] < other.limbs[idx]) {
                     return -1;
                 }
-                if (limbs[i] > other.limbs[i]) {
+                if (limbs[idx] > other.limbs[idx]) {
                     return 1;
                 }
             }
@@ -459,9 +460,10 @@ struct BigUInt {
         if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
             return detail::BigUIntCBridge<Words>::bit_length(limbs.data());
         } else {
-            for (std::size_t i = Words; i-- > 0;) {
-                if (limbs[i] != 0) {
-                    return i * 64 + detail::bit_length_u64(limbs[i]);
+            for (std::size_t i = Words; i != 0; --i) {
+                const std::size_t idx = i - 1;
+                if (limbs[idx] != 0) {
+                    return idx * 64 + detail::bit_length_u64(limbs[idx]);
                 }
             }
             return 0;
@@ -516,14 +518,15 @@ struct BigUInt {
         } else {
             std::size_t word_shift = bits / 64;
             std::size_t bit_shift = bits % 64;
-            for (std::size_t i = Words; i-- > 0;) {
-                if (i < word_shift) {
+            for (std::size_t i = Words; i != 0; --i) {
+                const std::size_t idx = i - 1;
+                if (idx < word_shift) {
                     continue;
                 }
-                std::size_t src = i - word_shift;
-                out.limbs[i] |= limbs[src] << bit_shift;
+                std::size_t src = idx - word_shift;
+                out.limbs[idx] |= limbs[src] << bit_shift;
                 if (bit_shift != 0 && src > 0) {
-                    out.limbs[i] |= limbs[src - 1] >> (64 - bit_shift);
+                    out.limbs[idx] |= limbs[src - 1] >> (64 - bit_shift);
                 }
             }
         }
@@ -588,10 +591,11 @@ struct BigUInt {
             return detail::BigUIntCBridge<Words>::divmod_small(limbs.data(), divisor);
         } else {
             std::uint64_t rem = 0;
-            for (std::size_t i = Words; i-- > 0;) {
-                auto [quotient, next_rem] = detail::UInt128::from_words(rem, limbs[i]).divmod_u32(divisor);
+            for (std::size_t i = Words; i != 0; --i) {
+                const std::size_t idx = i - 1;
+                auto [quotient, next_rem] = detail::UInt128::from_words(rem, limbs[idx]).divmod_u32(divisor);
                 assert(quotient.high64() == 0 && "BigUInt::divmod_small() quotient must fit in 64 bits");
-                limbs[i] = quotient.low64();
+                limbs[idx] = quotient.low64();
                 rem = next_rem;
             }
             return static_cast<std::uint32_t>(rem);
@@ -647,8 +651,8 @@ struct BigUInt {
         }
         std::ostringstream out;
         out << parts.back();
-        for (std::size_t i = parts.size() - 1; i-- > 0;) {
-            out << std::setw(9) << std::setfill('0') << parts[i];
+        for (std::size_t i = parts.size(); i > 1; --i) {
+            out << std::setw(9) << std::setfill('0') << parts[i - 2];
         }
         return out.str();
     }
@@ -726,17 +730,18 @@ Result<std::pair<BigUInt<Words>, BigUInt<Words>>> try_divmod_same(const BigUInt<
         }
         std::size_t shift = n_bits - d_bits;
         BigUInt<Words> shifted = denominator.shifted_left(shift);
-        for (std::size_t i = shift + 1; i-- > 0;) {
+        for (std::size_t i = shift + 1; i != 0; --i) {
+            const std::size_t idx = i - 1;
             if (remainder.compare(shifted) >= 0) {
                 bool sub_ok = remainder.try_sub_assign(shifted);
-                bool bit_ok = quotient.try_set_bit(i);
+                bool bit_ok = quotient.try_set_bit(idx);
                 assert(sub_ok && "divmod_same() subtraction should stay in range");
                 assert(bit_ok && "divmod_same() quotient bit index should stay in range");
                 if (!sub_ok || !bit_ok) {
                     return unexpected_error(ErrorCode::InternalMismatch, "try_divmod_same:internal_step");
                 }
             }
-            if (i != 0) {
+            if (idx != 0) {
                 shifted.shift_right_one();
             }
         }

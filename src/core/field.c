@@ -126,9 +126,10 @@ void purify_fe_pow(purify_fe* out, const purify_fe* value, const uint64_t expone
 
     purify_fe_set_u64(&result, 1);
     bits = purify_u256_bit_length(exponent);
-    for (i = bits; i-- > 0;) {
+    for (i = bits; i != 0; --i) {
+        size_t idx = i - 1u;
         purify_fe_square(&result, &result);
-        if (purify_u256_bit(exponent, i) != 0) {
+        if (purify_u256_bit(exponent, idx) != 0) {
             purify_fe_mul(&result, &result, value);
         }
     }

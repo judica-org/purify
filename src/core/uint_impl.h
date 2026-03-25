@@ -47,11 +47,12 @@ int PURIFY_UINT_FN(is_zero)(const uint64_t value[PURIFY_UINT_WORDS]) {
 
 int PURIFY_UINT_FN(compare)(const uint64_t lhs[PURIFY_UINT_WORDS], const uint64_t rhs[PURIFY_UINT_WORDS]) {
     size_t i;
-    for (i = PURIFY_UINT_WORDS; i-- > 0;) {
-        if (lhs[i] < rhs[i]) {
+    for (i = PURIFY_UINT_WORDS; i != 0; --i) {
+        size_t idx = i - 1u;
+        if (lhs[idx] < rhs[idx]) {
             return -1;
         }
-        if (lhs[i] > rhs[i]) {
+        if (lhs[idx] > rhs[idx]) {
             return 1;
         }
     }
@@ -112,9 +113,10 @@ int PURIFY_UINT_FN(try_sub)(uint64_t value[PURIFY_UINT_WORDS], const uint64_t su
 
 size_t PURIFY_UINT_FN(bit_length)(const uint64_t value[PURIFY_UINT_WORDS]) {
     size_t i;
-    for (i = PURIFY_UINT_WORDS; i-- > 0;) {
-        if (value[i] != 0) {
-            return i * 64u + purify_uint_bit_length_u64(value[i]);
+    for (i = PURIFY_UINT_WORDS; i != 0; --i) {
+        size_t idx = i - 1u;
+        if (value[idx] != 0) {
+            return idx * 64u + purify_uint_bit_length_u64(value[idx]);
         }
     }
     return 0;
@@ -144,15 +146,16 @@ void PURIFY_UINT_FN(shifted_left)(uint64_t out[PURIFY_UINT_WORDS], const uint64_
     size_t bit_shift = bits % 64u;
     size_t i;
     PURIFY_UINT_FN(set_zero)(out);
-    for (i = PURIFY_UINT_WORDS; i-- > 0;) {
+    for (i = PURIFY_UINT_WORDS; i != 0; --i) {
         size_t src;
-        if (i < word_shift) {
+        size_t idx = i - 1u;
+        if (idx < word_shift) {
             continue;
         }
-        src = i - word_shift;
-        out[i] |= value[src] << bit_shift;
+        src = idx - word_shift;
+        out[idx] |= value[src] << bit_shift;
         if (bit_shift != 0 && src > 0) {
-            out[i] |= value[src - 1] >> (64u - bit_shift);
+            out[idx] |= value[src - 1] >> (64u - bit_shift);
         }
     }
 }
@@ -203,10 +206,11 @@ uint32_t PURIFY_UINT_FN(divmod_small)(uint64_t value[PURIFY_UINT_WORDS], uint32_
     uint64_t rem = 0;
     size_t i;
     assert(divisor != 0);
-    for (i = PURIFY_UINT_WORDS; i-- > 0;) {
+    for (i = PURIFY_UINT_WORDS; i != 0; --i) {
+        size_t idx = i - 1u;
         uint32_t next_rem = 0;
-        uint64_t quotient = purify_uint_divmod_u32(rem, value[i], divisor, &next_rem);
-        value[i] = quotient;
+        uint64_t quotient = purify_uint_divmod_u32(rem, value[idx], divisor, &next_rem);
+        value[idx] = quotient;
         rem = next_rem;
     }
     return (uint32_t)rem;

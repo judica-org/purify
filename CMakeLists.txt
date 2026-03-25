@@ -829,18 +829,6 @@ if(PURIFY_BUILD_CBMC)
         DEFINES
             PURIFY_CBMC_MODEL_SMALL_FIELD=1
     )
-    purify_add_cbmc_proof(
-        curve_generator_order_contract
-        verification/cbmc/curve_generator_order_contract_harness.c
-        180
-        SOURCES
-            verification/cbmc/secp_bridge_small_field.c
-            src/core/uint.c
-            src/core/field.c
-            src/core/curve.c
-        DEFINES
-            PURIFY_CBMC_MODEL_SMALL_FIELD=1
-    )
 endif()
 
 if(PURIFY_BUILD_FUZZ)

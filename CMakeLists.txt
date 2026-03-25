@@ -432,6 +432,7 @@ if(PURIFY_BUILD_TESTS)
         purify_add_valgrind_test(purify.valgrind.consttime_ladder purify_valgrind_tests ladder)
         purify_add_valgrind_test(purify.valgrind.consttime_affine purify_valgrind_tests affine)
         purify_add_valgrind_test(purify.valgrind.consttime_inverse purify_valgrind_tests inverse)
+        purify_add_valgrind_test(purify.valgrind.consttime_packed_secret purify_valgrind_tests packed_secret)
     endif()
 
     if(PURIFY_BUILD_BENCH)

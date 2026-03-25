@@ -80,6 +80,22 @@ static void purify_curve_copy_u256(uint64_t out[4], const uint64_t value[4]) {
     memcpy(out, value, 4u * sizeof(uint64_t));
 }
 
+static void purify_curve_u256_narrow_u512_unchecked(uint64_t out[4], const uint64_t value[8]) {
+    memcpy(out, value, 4u * sizeof(uint64_t));
+}
+
+static void purify_curve_u256_add_one_unchecked(uint64_t value[4]) {
+    uint64_t carry = 1u;
+    size_t i;
+
+    for (i = 0; i < 4u; ++i) {
+        uint64_t sum = value[i] + carry;
+        carry = (uint64_t)(sum < value[i]);
+        value[i] = sum;
+    }
+    assert(carry == 0u);
+}
+
 static void purify_curve_u64_to_be(unsigned char out[8], uint64_t value) {
     size_t i;
     for (i = 0; i < 8; ++i) {
@@ -824,26 +840,33 @@ int purify_curve_is_valid_public_key(const uint64_t value[8]) {
     return purify_u512_compare(value, upper_bound) < 0;
 }
 
-int purify_curve_unpack_secret(uint64_t first[4], uint64_t second[4], const uint64_t value[8]) {
+static void purify_curve_unpack_secret_from_valid(uint64_t first[4], uint64_t second[4], const uint64_t value[8]) {
     uint64_t denominator[8];
     uint64_t quotient[8];
     uint64_t remainder[8];
 
+    purify_u512_widen_u256(denominator, kPurifyHalfN1);
+    assert(purify_u512_try_divmod_same_consttime(quotient, remainder, value, denominator) != 0);
+    purify_curve_u256_narrow_u512_unchecked(first, remainder);
+    purify_curve_u256_narrow_u512_unchecked(second, quotient);
+    purify_curve_u256_add_one_unchecked(first);
+    purify_curve_u256_add_one_unchecked(second);
+}
+
+int purify_curve_unpack_secret(uint64_t first[4], uint64_t second[4], const uint64_t value[8]) {
     if (purify_curve_is_valid_secret_key(value) == 0) {
         return 0;
     }
 
-    purify_u512_widen_u256(denominator, kPurifyHalfN1);
-    if (purify_u512_try_divmod_same_consttime(quotient, remainder, value, denominator) == 0) {
-        return 0;
-    }
-    if (purify_u256_try_narrow_u512(first, remainder) == 0 || purify_u256_try_narrow_u512(second, quotient) == 0) {
-        return 0;
-    }
-    purify_u256_try_add_small(first, 1);
-    purify_u256_try_add_small(second, 1);
+    purify_curve_unpack_secret_from_valid(first, second, value);
     return 1;
 }
+
+#if defined(PURIFY_VALGRIND_TESTING)
+void purify_curve_unpack_secret_unchecked(uint64_t first[4], uint64_t second[4], const uint64_t value[8]) {
+    purify_curve_unpack_secret_from_valid(first, second, value);
+}
+#endif
 
 int purify_curve_unpack_public(uint64_t first[4], uint64_t second[4], const uint64_t value[8]) {
     uint64_t denominator[8];

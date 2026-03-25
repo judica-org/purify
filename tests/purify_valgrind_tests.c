@@ -24,6 +24,7 @@ void purify_curve_mul_secret_ladder_only(purify_complete_projective_point* out, 
                                          const purify_jacobian_point* point, const uint64_t scalar[4]);
 void purify_curve_mul_secret_affine_unchecked(purify_affine_point* out, const purify_curve* curve,
                                               const purify_jacobian_point* point, const uint64_t scalar[4]);
+void purify_curve_unpack_secret_unchecked(uint64_t first[4], uint64_t second[4], const uint64_t value[8]);
 
 static int failures = 0;
 
@@ -130,6 +131,35 @@ static void test_secret_inverse_consttime(void) {
     VALGRIND_MAKE_MEM_DEFINED(&inverse, sizeof(inverse));
 }
 
+static void test_valid_packed_secret_path_consttime(const purify_curve* curve1, const purify_curve* curve2) {
+    purify_jacobian_point generator1;
+    purify_jacobian_point generator2;
+    purify_affine_point public1;
+    purify_affine_point public2;
+    uint64_t packed_secret[8] = {0};
+    uint64_t secret1[4];
+    uint64_t secret2[4];
+
+    if (make_generator(&generator1, curve1, "Generator/1") == 0 ||
+        make_generator(&generator2, curve2, "Generator/2") == 0) {
+        return;
+    }
+
+    /*
+     * Keep the top 128 bits zero so every concrete execution stays below the packed-secret space size,
+     * while the low 384 bits remain secret.
+     */
+    VALGRIND_MAKE_MEM_UNDEFINED(packed_secret, 6u * sizeof(uint64_t));
+    purify_curve_unpack_secret_unchecked(secret1, secret2, packed_secret);
+    purify_curve_mul_secret_affine_unchecked(&public1, curve1, &generator1, secret1);
+    purify_curve_mul_secret_affine_unchecked(&public2, curve2, &generator2, secret2);
+    VALGRIND_MAKE_MEM_DEFINED(packed_secret, sizeof(packed_secret));
+    VALGRIND_MAKE_MEM_DEFINED(secret1, sizeof(secret1));
+    VALGRIND_MAKE_MEM_DEFINED(secret2, sizeof(secret2));
+    VALGRIND_MAKE_MEM_DEFINED(&public1, sizeof(public1));
+    VALGRIND_MAKE_MEM_DEFINED(&public2, sizeof(public2));
+}
+
 static void run_divmod_tests(void) {
     test_divmod_secret_numerator_consttime();
 }
@@ -148,6 +178,10 @@ static void run_inverse_tests(void) {
     test_secret_inverse_consttime();
 }
 
+static void run_packed_secret_tests(const purify_curve* curve1, const purify_curve* curve2) {
+    test_valid_packed_secret_path_consttime(curve1, curve2);
+}
+
 int main(int argc, char** argv) {
     purify_curve curve1;
     purify_curve curve2;
@@ -160,6 +194,7 @@ int main(int argc, char** argv) {
         run_ladder_tests(&curve1, &curve2);
         run_affine_tests(&curve1, &curve2);
         run_inverse_tests();
+        run_packed_secret_tests(&curve1, &curve2);
     } else if (strcmp(argv[1], "divmod") == 0) {
         run_divmod_tests();
     } else if (strcmp(argv[1], "ladder") == 0) {
@@ -168,6 +203,8 @@ int main(int argc, char** argv) {
         run_affine_tests(&curve1, &curve2);
     } else if (strcmp(argv[1], "inverse") == 0) {
         run_inverse_tests();
+    } else if (strcmp(argv[1], "packed_secret") == 0) {
+        run_packed_secret_tests(&curve1, &curve2);
     } else {
         expect(0, "unknown valgrind test selector");
     }

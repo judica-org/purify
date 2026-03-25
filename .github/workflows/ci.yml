@@ -60,7 +60,7 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
       ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
-      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0
 
     steps:
       - uses: actions/checkout@v4

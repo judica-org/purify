@@ -107,6 +107,10 @@ if(NOT MSVC)
         set_property(SOURCE src/bridge/bppp_bridge.c APPEND PROPERTY COMPILE_OPTIONS
             -fno-sanitize=integer
         )
+        # The wide-int core intentionally relies on unsigned modular arithmetic.
+        set_property(SOURCE src/core/uint.c APPEND PROPERTY COMPILE_OPTIONS
+            -fno-sanitize=integer
+        )
     endif()
 endif()
 
@@ -818,8 +822,20 @@ if(PURIFY_BUILD_CBMC)
             PURIFY_CBMC_MODEL_SMALL_FIELD=1
     )
     purify_add_cbmc_proof(
-        hash_to_curve_generator_points
-        verification/cbmc/hash_to_curve_generator_points_harness.c
+        hash_to_curve_generator1_point
+        verification/cbmc/hash_to_curve_generator1_point_harness.c
+        140
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        hash_to_curve_generator2_point
+        verification/cbmc/hash_to_curve_generator2_point_harness.c
         140
         SOURCES
             verification/cbmc/secp_bridge_small_field.c

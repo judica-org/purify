@@ -43,7 +43,8 @@ check was replaced with the point-average oracle below.
 - `curve_unpack_secret_inverse_harness.c` (`independent`): every valid packed toy-model secret decodes and re-encodes exactly through a separately written mixed-radix encoder.
 - `curve_key_space_invariants_harness.c` (`independent`): key-space constants, upper bounds, and last-valid-element decodings are internally consistent.
 - `curve_invalid_key_rejection_harness.c` (`independent`): out-of-range packed secret and public keys are rejected exactly at the documented space boundary.
-- `hash_to_curve_generator_points_harness.c` (`independent`): `hash_to_curve("Generator/1")` and `hash_to_curve("Generator/2")` return exact, deterministic toy-model generator points.
+- `hash_to_curve_generator1_point_harness.c` (`independent`): `hash_to_curve("Generator/1")` returns the exact deterministic toy-model generator point on curve 1.
+- `hash_to_curve_generator2_point_harness.c` (`independent`): `hash_to_curve("Generator/2")` returns the exact deterministic toy-model generator point on curve 2.
 
 The field and curve proofs are intentionally a toy-model argument, not a proof over the production secp backend. They use a verification-only prime field `GF(107)` and prime-order toy curves that preserve the same code paths and algebraic structure while replacing the backend bridge with a narrow deterministic model. That lets CBMC prove local arithmetic and curve logic without claiming that the backend itself is formally verified.
 

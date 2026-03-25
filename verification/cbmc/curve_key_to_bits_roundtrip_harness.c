@@ -65,17 +65,23 @@ static int purify_cbmc_decode_key_bits(uint64_t out[4], const int* bits, size_t 
 }
 
 int main(void) {
+    size_t bit_len;
+    uint64_t max_value_u64;
+    uint64_t value_u64;
     uint64_t max_value[4];
     uint64_t value[4];
     uint64_t decoded[4];
     int bits[7];
     const size_t out_len = 7u;
 
-    purify_u256_set_u64(max_value, 100u);
-    purify_u256_set_u64(value, 1u + (nondet_uint64_t() % 100u));
+    max_value_u64 = 1u + (nondet_uint64_t() % 100u);
+    value_u64 = 1u + (nondet_uint64_t() % max_value_u64);
+    purify_u256_set_u64(max_value, max_value_u64);
+    purify_u256_set_u64(value, value_u64);
+    bit_len = purify_u256_bit_length(max_value);
 
     assert(purify_curve_key_to_bits(bits, out_len, value, max_value) != 0);
-    assert(purify_cbmc_decode_key_bits(decoded, bits, out_len) != 0);
+    assert(purify_cbmc_decode_key_bits(decoded, bits, bit_len) != 0);
     assert(purify_u256_compare(decoded, value) == 0);
 
     return 0;

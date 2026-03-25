@@ -27,16 +27,16 @@ check was replaced with the point-average oracle below.
 - `field_encoding_boundaries_harness.c` (`independent`): canonical field `b32`/`u256` encodings round-trip, while inputs at or above the modulus are rejected.
 - `field_local_identities_harness.c` (`relational`): field subtraction/addition round-trips, signed conversion matches negation, square roots of squares succeed, and a known non-square is rejected.
 - `curve_lift_x_contract_harness.c` (`relational`): `purify_curve_is_x_coord()` and `purify_curve_lift_x()` agree exactly, and successful lifts preserve `x`, produce affine `z = 1`, and land on-curve.
-- `curve_group_laws_harness.c` (`relational`): fixed toy-model points lie on the curve, satisfy identity/inverse laws, doubling matches addition, and multiplying by the documented subgroup order reaches infinity.
+- `curve_group_laws_harness.c` (`relational`): arbitrary liftable toy-model points, including both `y` signs and arbitrary non-zero projective representatives, satisfy identity/inverse laws, doubling matches addition, and multiplying by the documented subgroup order reaches infinity.
 - `curve_affine_negate_contract_harness.c` (`relational`): projective-to-affine conversion preserves the represented point, negation is involutive, and infinity stays canonical.
 - `curve_add_mixed_equivalence_harness.c` (`relational`): `purify_curve_add_mixed()` matches full Jacobian addition on equivalent non-affine representatives.
 - `curve_double_in_place_harness.c` (`relational`): in-place doubling matches out-of-place doubling and still agrees with `add(p, p)` on arbitrary toy-model points.
-- `curve_secret_mul_consistency_harness.c` (`relational`): the hardened secret-scalar ladder matches affine(public `mul`) on a toy-model curve for every non-zero scalar in range.
-- `curve_secret_mul_zero_reject_harness.c` (`independent`): on the toy-model curve-1 generator, `purify_curve_mul_secret_affine()` rejects the zero scalar exactly.
-- `curve_secret_mul_one_identity_harness.c` (`independent`): on the toy-model curve-1 generator, `purify_curve_mul_secret_affine()` returns the affine input point for scalar one.
+- `curve_secret_mul_consistency_harness.c` (`relational`): the hardened secret-scalar ladder matches affine(public `mul`) on arbitrary toy-model points for every non-zero scalar in range.
+- `curve_secret_mul_zero_reject_harness.c` (`independent`): `purify_curve_mul_secret_affine()` rejects the zero scalar exactly on arbitrary toy-model points.
+- `curve_secret_mul_one_identity_harness.c` (`independent`): `purify_curve_mul_secret_affine()` returns the affine input point for scalar one on arbitrary toy-model points.
 - `curve_combine_point_average_harness.c` (`independent`): `purify_curve_combine()` matches the average of `X(P+Q)` and `X(P-Q)` on the untwisted toy-model curve, which is the derivation-level combine spec rather than a copied field formula.
-- `curve_hash_to_curve_contract_harness.c` (`relational`): `purify_curve_hash_to_curve()` rejects null arguments that violate its contract and is deterministic on the empty-input path for curve 1.
-- `curve_key_to_bits_roundtrip_harness.c` (`independent`): `purify_curve_key_to_bits()` round-trips through a separately written signed-window decoder on all values in a bounded range.
+- `curve_hash_to_curve_contract_harness.c` (`independent`): `purify_curve_hash_to_curve()` rejects null arguments that violate its API contract. Concrete hash-to-curve outputs are covered separately by the generator-vector harnesses.
+- `curve_key_to_bits_roundtrip_harness.c` (`independent`): `purify_curve_key_to_bits()` round-trips through a separately written signed-window decoder for all bounded `(value, max_value)` pairs with `1 <= value <= max_value <= 100`.
 - `curve_pack_public_roundtrip_harness.c` (`relational`): `purify_curve_pack_public()` and `purify_curve_unpack_public()` round-trip every toy-model public key.
 - `curve_unpack_public_inverse_harness.c` (`relational`): every valid packed toy-model public key decodes and re-encodes exactly.
 - `curve_unpack_secret_roundtrip_harness.c` (`independent`): mixed-radix packed secrets decode back to the original `(z1, z2)` pair for every in-range toy-model witness.

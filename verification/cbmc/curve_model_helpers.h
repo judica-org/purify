@@ -6,7 +6,9 @@
 
 #include <assert.h>
 
+#include "common.h"
 #include "curve.h"
+#include "verification/cbmc/model_small_field_constants.h"
 
 static inline void purify_cbmc_make_curve1(purify_curve* out) {
     purify_curve_field_a(&out->a);
@@ -92,4 +94,21 @@ static inline void purify_cbmc_projective_from_affine(purify_jacobian_point* out
     purify_fe_mul(&out->y, &affine->y, &z3);
     out->z = *z;
     out->infinity = 0;
+}
+
+static inline int purify_cbmc_make_arbitrary_point(purify_jacobian_point* out, const purify_curve* curve) {
+    purify_fe x;
+    purify_fe z;
+    purify_jacobian_point lifted;
+    purify_affine_point affine;
+
+    purify_fe_set_u64(&x, nondet_uint64_t() % PURIFY_CBMC_MODEL_FIELD_PRIME_U64);
+    purify_fe_set_u64(&z, 1u + (nondet_uint64_t() % (PURIFY_CBMC_MODEL_FIELD_PRIME_U64 - 1u)));
+    PURIFY_CBMC_ASSUME(purify_curve_lift_x(&lifted, curve, &x) != 0);
+    if ((nondet_uchar() & 1u) != 0u) {
+        purify_curve_negate(&lifted, &lifted);
+    }
+    purify_curve_affine(&affine, curve, &lifted);
+    purify_cbmc_projective_from_affine(out, &affine, &z);
+    return 1;
 }

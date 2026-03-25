@@ -785,7 +785,7 @@ if(PURIFY_BUILD_CBMC)
     purify_add_cbmc_proof(
         curve_unpack_secret_roundtrip
         verification/cbmc/curve_unpack_secret_roundtrip_harness.c
-        180
+        700
         SOURCES
             verification/cbmc/secp_bridge_small_field.c
             src/core/uint.c
@@ -797,7 +797,7 @@ if(PURIFY_BUILD_CBMC)
     purify_add_cbmc_proof(
         curve_unpack_secret_inverse
         verification/cbmc/curve_unpack_secret_inverse_harness.c
-        220
+        700
         SOURCES
             verification/cbmc/secp_bridge_small_field.c
             src/core/uint.c
@@ -809,7 +809,7 @@ if(PURIFY_BUILD_CBMC)
     purify_add_cbmc_proof(
         curve_key_space_invariants
         verification/cbmc/curve_key_space_invariants_harness.c
-        220
+        700
         SOURCES
             verification/cbmc/secp_bridge_small_field.c
             src/core/uint.c

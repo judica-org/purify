@@ -140,7 +140,8 @@ jobs:
       - name: Install CBMC
         run: |
           sudo apt-get update
-          sudo apt-get install -y cbmc
+          curl -L -o cbmc.deb https://github.com/diffblue/cbmc/releases/download/cbmc-6.8.0/ubuntu-24.04-cbmc-6.8.0-Linux.deb
+          sudo apt-get install -y ./cbmc.deb
 
       - name: Show CBMC Version
         run: cbmc --version

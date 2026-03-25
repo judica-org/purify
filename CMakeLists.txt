@@ -473,6 +473,22 @@ if(PURIFY_BUILD_CBMC)
     endfunction()
 
     purify_add_cbmc_proof(
+        core_validate_secret_key_contract
+        verification/cbmc/core_validate_secret_key_contract_harness.c
+        90
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/core.c
+    )
+    purify_add_cbmc_proof(
+        core_validate_public_key_contract
+        verification/cbmc/core_validate_public_key_contract_harness.c
+        90
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/core.c
+    )
+    purify_add_cbmc_proof(
         u256_bytes_roundtrip
         verification/cbmc/u256_bytes_roundtrip_harness.c
         160
@@ -508,6 +524,17 @@ if(PURIFY_BUILD_CBMC)
             src/core/uint.c
     )
     purify_add_cbmc_proof(
+        field_encoding_boundaries
+        verification/cbmc/field_encoding_boundaries_harness.c
+        120
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
         field_local_identities
         verification/cbmc/field_local_identities_harness.c
         220
@@ -519,9 +546,57 @@ if(PURIFY_BUILD_CBMC)
             PURIFY_CBMC_MODEL_SMALL_FIELD=1
     )
     purify_add_cbmc_proof(
+        curve_lift_x_contract
+        verification/cbmc/curve_lift_x_contract_harness.c
+        260
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
         curve_group_laws
         verification/cbmc/curve_group_laws_harness.c
         320
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_affine_negate_contract
+        verification/cbmc/curve_affine_negate_contract_harness.c
+        260
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_add_mixed_equivalence
+        verification/cbmc/curve_add_mixed_equivalence_harness.c
+        360
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_double_in_place
+        verification/cbmc/curve_double_in_place_harness.c
+        340
         SOURCES
             verification/cbmc/secp_bridge_small_field.c
             src/core/uint.c
@@ -543,9 +618,45 @@ if(PURIFY_BUILD_CBMC)
             PURIFY_CBMC_MODEL_SMALL_FIELD=1
     )
     purify_add_cbmc_proof(
-        curve_combine_formula
-        verification/cbmc/curve_combine_formula_harness.c
-        280
+        curve_secret_mul_zero_reject
+        verification/cbmc/curve_secret_mul_zero_reject_harness.c
+        220
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_secret_mul_one_identity
+        verification/cbmc/curve_secret_mul_one_identity_harness.c
+        220
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_combine_point_average
+        verification/cbmc/curve_combine_point_average_harness.c
+        360
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_hash_to_curve_contract
+        verification/cbmc/curve_hash_to_curve_contract_harness.c
+        220
         SOURCES
             verification/cbmc/secp_bridge_small_field.c
             src/core/uint.c
@@ -558,6 +669,102 @@ if(PURIFY_BUILD_CBMC)
         curve_key_to_bits_roundtrip
         verification/cbmc/curve_key_to_bits_roundtrip_harness.c
         200
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_pack_public_roundtrip
+        verification/cbmc/curve_pack_public_roundtrip_harness.c
+        160
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_unpack_public_inverse
+        verification/cbmc/curve_unpack_public_inverse_harness.c
+        180
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_unpack_secret_roundtrip
+        verification/cbmc/curve_unpack_secret_roundtrip_harness.c
+        180
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_unpack_secret_inverse
+        verification/cbmc/curve_unpack_secret_inverse_harness.c
+        220
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_key_space_invariants
+        verification/cbmc/curve_key_space_invariants_harness.c
+        220
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_invalid_key_rejection
+        verification/cbmc/curve_invalid_key_rejection_harness.c
+        120
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        hash_to_curve_generator_points
+        verification/cbmc/hash_to_curve_generator_points_harness.c
+        140
+        SOURCES
+            verification/cbmc/secp_bridge_small_field.c
+            src/core/uint.c
+            src/core/field.c
+            src/core/curve.c
+        DEFINES
+            PURIFY_CBMC_MODEL_SMALL_FIELD=1
+    )
+    purify_add_cbmc_proof(
+        curve_generator_order_contract
+        verification/cbmc/curve_generator_order_contract_harness.c
+        180
         SOURCES
             verification/cbmc/secp_bridge_small_field.c
             src/core/uint.c

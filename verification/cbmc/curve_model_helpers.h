@@ -74,3 +74,22 @@ static inline int purify_cbmc_point_on_curve(const purify_curve* curve, const pu
     purify_fe_add(&rhs, &rhs, &curve->b);
     return purify_fe_eq(&lhs, &rhs) != 0;
 }
+
+static inline void purify_cbmc_projective_from_affine(purify_jacobian_point* out,
+                                                       const purify_affine_point* affine,
+                                                       const purify_fe* z) {
+    purify_fe z2;
+    purify_fe z3;
+
+    if (affine->infinity != 0) {
+        purify_curve_jacobian_infinity(out);
+        return;
+    }
+
+    purify_fe_mul(&z2, z, z);
+    purify_fe_mul(&z3, &z2, z);
+    purify_fe_mul(&out->x, &affine->x, &z2);
+    purify_fe_mul(&out->y, &affine->y, &z3);
+    out->z = *z;
+    out->infinity = 0;
+}

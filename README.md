@@ -80,6 +80,30 @@ set(PURIFY_BUILD_DOCS ON CACHE BOOL "" FORCE)
 add_subdirectory(external/purifycpp)
 ```
 
+### Vendoring
+
+To produce a pruned source export for downstream integrations, use:
+
+```sh
+./contrib/vendor.sh --output /tmp/purify-vendor --include-extras=minified
+```
+
+Supported `--include-extras` flags are:
+
+- `minified`: trim third-party vendored trees to only the dependency closure needed by the exported sources
+- `tests`: include `tests/`, `verification/`, and the local reference-test patch tree
+- `extras`: include the optional CLI, benchmark, fuzz, and docs support files
+
+Flags can be combined with commas or pipes, for example:
+
+```sh
+./contrib/vendor.sh --output /tmp/purify-vendor-tests --include-extras=minified,tests
+./contrib/vendor.sh --output /tmp/purify-vendor-extras --include-extras=minified|extras
+```
+
+The vendored export always excludes the optional `reference/` subtrees, including the `jonasnick` reference checkout.
+Pruned exports also auto-disable missing optional CMake targets by default, while still failing fast if a caller explicitly enables a target whose source tree is absent.
+
 ### Benchmarks
 
 Benchmarks require the additional `nanobench` submodule:
@@ -170,6 +194,8 @@ Optional reference material can be fetched separately:
 ```sh
 git submodule update --init --depth 1 reference/purify reference/secp256k1-zkp
 ```
+
+The `vendor-tags` workflow keeps fresh moving tags on `master` for the main vendored export variants, including `master-vendored-min`, `master-vendored-min-tests`, and `master-vendored-min-extras`.
 
 ## CLI
 

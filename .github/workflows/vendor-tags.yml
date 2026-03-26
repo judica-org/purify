@@ -1,0 +1,71 @@
+name: vendor-tags
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: vendor-tags-master
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Initialize vendoring submodules
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp third_party/nanobench
+
+      - name: Publish vendored tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+
+          remote_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          commit_date="$(git show -s --format=%cI "${GITHUB_SHA}")"
+
+          publish_tag() {
+            local tag_name="$1"
+            local include_extras="$2"
+            local workdir
+            local source_dir
+
+            workdir="$(mktemp -d)"
+            source_dir="${workdir}/source"
+
+            if [[ -n "${include_extras}" ]]; then
+              ./contrib/vendor.sh --output "${source_dir}" --include-extras="${include_extras}"
+            else
+              ./contrib/vendor.sh --output "${source_dir}"
+            fi
+
+            cmake -S "${source_dir}" -B "${workdir}/build" -DPURIFY_BUILD_DOCS=OFF -DPURIFY_BUILD_REFERENCE_TESTS=OFF
+            cmake --build "${workdir}/build" --parallel
+
+            git -C "${source_dir}" init --initial-branch=vendor
+            git -C "${source_dir}" add -A
+            GIT_AUTHOR_DATE="${commit_date}" GIT_COMMITTER_DATE="${commit_date}" \
+              git -C "${source_dir}" commit -m "Vendor snapshot for ${GITHUB_SHA} (${tag_name})"
+            git -C "${source_dir}" tag -f "${tag_name}"
+            git -C "${source_dir}" remote add origin "${remote_url}"
+            git -C "${source_dir}" push --force origin "refs/tags/${tag_name}"
+          }
+
+          publish_tag "master-vendored" ""
+          publish_tag "master-vendored-min" "minified"
+          publish_tag "master-vendored-min-tests" "minified,tests"
+          publish_tag "master-vendored-min-extras" "minified,extras"
+          publish_tag "master-vendored-min-tests-extras" "minified,tests,extras"

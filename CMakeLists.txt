@@ -17,11 +17,72 @@ endif()
 
 get_property(PURIFY_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
-option(PURIFY_BUILD_CLI "Build the purify_cpp CLI target." ${PURIFY_IS_TOP_LEVEL})
-option(PURIFY_BUILD_BENCH "Build the bench_purify benchmark target." ${PURIFY_IS_TOP_LEVEL})
-option(PURIFY_BUILD_DOCS "Build the Doxygen docs target when Doxygen is available." ${PURIFY_IS_TOP_LEVEL})
-option(PURIFY_BUILD_TESTS "Build the Purify regression test target." ${PURIFY_IS_TOP_LEVEL})
-option(PURIFY_BUILD_FUZZ "Build the deterministic fuzz/stress harness." ${PURIFY_IS_TOP_LEVEL})
+set(PURIFY_HAVE_CLI_SOURCES OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cli/main.cpp")
+    set(PURIFY_HAVE_CLI_SOURCES ON)
+endif()
+
+set(PURIFY_HAVE_BENCH_SOURCES OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/bench/bench_purify.cpp")
+    set(PURIFY_HAVE_BENCH_SOURCES ON)
+endif()
+
+set(PURIFY_HAVE_NANOBENCH OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nanobench/src/include/nanobench.h")
+    set(PURIFY_HAVE_NANOBENCH ON)
+endif()
+
+set(PURIFY_HAVE_DOCS_SOURCES OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in"
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/site/doxygen-awesome-custom.css")
+    set(PURIFY_HAVE_DOCS_SOURCES ON)
+endif()
+
+set(PURIFY_HAVE_TEST_SOURCES OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/purify_tests.cpp")
+    set(PURIFY_HAVE_TEST_SOURCES ON)
+endif()
+
+set(PURIFY_HAVE_FUZZ_SOURCES OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fuzz/purify_fuzz.cpp")
+    set(PURIFY_HAVE_FUZZ_SOURCES ON)
+endif()
+
+set(PURIFY_HAVE_CBMC_SOURCES OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/verification/cbmc/run_cbmc.py")
+    set(PURIFY_HAVE_CBMC_SOURCES ON)
+endif()
+
+set(PURIFY_BUILD_CLI_DEFAULT OFF)
+if(PURIFY_IS_TOP_LEVEL AND PURIFY_HAVE_CLI_SOURCES)
+    set(PURIFY_BUILD_CLI_DEFAULT ON)
+endif()
+
+set(PURIFY_BUILD_BENCH_DEFAULT OFF)
+if(PURIFY_IS_TOP_LEVEL AND PURIFY_HAVE_BENCH_SOURCES AND PURIFY_HAVE_NANOBENCH)
+    set(PURIFY_BUILD_BENCH_DEFAULT ON)
+endif()
+
+set(PURIFY_BUILD_DOCS_DEFAULT OFF)
+if(PURIFY_IS_TOP_LEVEL AND PURIFY_HAVE_DOCS_SOURCES)
+    set(PURIFY_BUILD_DOCS_DEFAULT ON)
+endif()
+
+set(PURIFY_BUILD_TESTS_DEFAULT OFF)
+if(PURIFY_IS_TOP_LEVEL AND PURIFY_HAVE_TEST_SOURCES)
+    set(PURIFY_BUILD_TESTS_DEFAULT ON)
+endif()
+
+set(PURIFY_BUILD_FUZZ_DEFAULT OFF)
+if(PURIFY_IS_TOP_LEVEL AND PURIFY_HAVE_FUZZ_SOURCES)
+    set(PURIFY_BUILD_FUZZ_DEFAULT ON)
+endif()
+
+option(PURIFY_BUILD_CLI "Build the purify_cpp CLI target." ${PURIFY_BUILD_CLI_DEFAULT})
+option(PURIFY_BUILD_BENCH "Build the bench_purify benchmark target." ${PURIFY_BUILD_BENCH_DEFAULT})
+option(PURIFY_BUILD_DOCS "Build the Doxygen docs target when Doxygen is available." ${PURIFY_BUILD_DOCS_DEFAULT})
+option(PURIFY_BUILD_TESTS "Build the Purify regression test target." ${PURIFY_BUILD_TESTS_DEFAULT})
+option(PURIFY_BUILD_FUZZ "Build the deterministic fuzz/stress harness." ${PURIFY_BUILD_FUZZ_DEFAULT})
 option(PURIFY_BUILD_REFERENCE_TESTS "Enable Python reference regression tests from reference/purify." OFF)
 option(PURIFY_USE_LEGACY_FIELD_HASHES "Use the legacy HKDF-based field-hash path for hash_to_curve and BIP340 key derivation." OFF)
 option(PURIFY_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer on supported compilers." OFF)
@@ -31,6 +92,34 @@ set(PURIFY_SANITIZER_LIST "address,undefined" CACHE STRING
 option(PURIFY_BUILD_CBMC "Enable optional CBMC proof harnesses for the pure C wide-integer core." OFF)
 option(PURIFY_BUILD_CBMC_EXTENDED "Enable heavier experimental CBMC proofs that are not part of the default CI suite." OFF)
 option(PURIFY_BUILD_VALGRIND_TESTS "Enable optional Valgrind-backed memcheck and constant-time tests." OFF)
+
+if(PURIFY_BUILD_CLI AND NOT PURIFY_HAVE_CLI_SOURCES)
+    message(FATAL_ERROR "PURIFY_BUILD_CLI=ON requires cli/main.cpp")
+endif()
+
+if(PURIFY_BUILD_BENCH AND NOT PURIFY_HAVE_BENCH_SOURCES)
+    message(FATAL_ERROR "PURIFY_BUILD_BENCH=ON requires bench/bench_purify.cpp")
+endif()
+
+if(PURIFY_BUILD_BENCH AND NOT PURIFY_HAVE_NANOBENCH)
+    message(FATAL_ERROR "Missing third_party/nanobench. Run: git submodule update --init third_party/nanobench")
+endif()
+
+if(PURIFY_BUILD_DOCS AND NOT PURIFY_HAVE_DOCS_SOURCES)
+    message(FATAL_ERROR "PURIFY_BUILD_DOCS=ON requires Doxyfile.in and site/doxygen-awesome-custom.css")
+endif()
+
+if(PURIFY_BUILD_TESTS AND NOT PURIFY_HAVE_TEST_SOURCES)
+    message(FATAL_ERROR "PURIFY_BUILD_TESTS=ON requires the tests/ source tree")
+endif()
+
+if(PURIFY_BUILD_FUZZ AND NOT PURIFY_HAVE_FUZZ_SOURCES)
+    message(FATAL_ERROR "PURIFY_BUILD_FUZZ=ON requires fuzz/purify_fuzz.cpp")
+endif()
+
+if(PURIFY_BUILD_CBMC AND NOT PURIFY_HAVE_CBMC_SOURCES)
+    message(FATAL_ERROR "PURIFY_BUILD_CBMC=ON requires the verification/cbmc/ source tree")
+endif()
 
 if(PURIFY_BUILD_REFERENCE_TESTS AND NOT PURIFY_BUILD_TESTS)
     message(FATAL_ERROR "PURIFY_BUILD_REFERENCE_TESTS requires PURIFY_BUILD_TESTS=ON")
@@ -68,10 +157,6 @@ endif()
 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/secp256k1-zkp/include/secp256k1_bppp.h")
     message(FATAL_ERROR "Missing third_party/secp256k1-zkp. Run: git submodule update --init third_party/secp256k1-zkp")
-endif()
-
-if(PURIFY_BUILD_BENCH AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nanobench/src/include/nanobench.h")
-    message(FATAL_ERROR "Missing third_party/nanobench. Run: git submodule update --init third_party/nanobench")
 endif()
 
 function(purify_enable_warnings target)

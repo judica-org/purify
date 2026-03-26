@@ -187,12 +187,35 @@ append_dependencies_for_source() {
         done
 }
 
+append_minified_secp256k1_target_support() {
+    local rel
+    # The host dependency scan only sees the widemul/field/scalar path selected
+    # on the machine producing the export. Keep the fallback headers that the
+    # existing secp256k1-zkp selection logic may choose on MSVC x64 and 32-bit
+    # builds so vendored consumers do not fail with missing-header errors.
+    for rel in \
+        third_party/secp256k1-zkp/src/field_10x26.h \
+        third_party/secp256k1-zkp/src/field_10x26_impl.h \
+        third_party/secp256k1-zkp/src/int128_struct.h \
+        third_party/secp256k1-zkp/src/int128_struct_impl.h \
+        third_party/secp256k1-zkp/src/modinv32.h \
+        third_party/secp256k1-zkp/src/modinv32_impl.h \
+        third_party/secp256k1-zkp/src/scalar_8x32.h \
+        third_party/secp256k1-zkp/src/scalar_8x32_impl.h \
+        third_party/secp256k1-zkp/src/scalar_low.h \
+        third_party/secp256k1-zkp/src/scalar_low_impl.h
+    do
+        append_file "$rel"
+    done
+}
+
 append_minified_secp256k1() {
     local compiler
     compiler="$(find_c_compiler)" || die "minified exports require a C compiler (set CC or install cc/clang/gcc)"
     append_file "third_party/secp256k1-zkp/COPYING"
     append_dependencies_for_source "$compiler" "src/bridge/bppp_bridge.c"
     append_dependencies_for_source "$compiler" "src/legacy_bulletproof/scratch_frames.c"
+    append_minified_secp256k1_target_support
 }
 
 append_minified_nanobench() {

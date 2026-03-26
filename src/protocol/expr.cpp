@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_expr.cpp
+ * @file expr.cpp
  * @brief Compiled symbolic expression and transcript machinery for Purify.
  */
 

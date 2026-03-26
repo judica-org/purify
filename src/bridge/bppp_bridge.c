@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_bppp_bridge.c
+ * @file bppp_bridge.c
  * @brief C bridge that binds Purify's lightweight ABI to secp256k1-zkp internals and BPPP helpers.
  */
 
@@ -13,8 +13,8 @@
 #define ENABLE_MODULE_EXTRAKEYS 1
 #define ENABLE_MODULE_SCHNORRSIG 1
 
-#include "purify_bppp_bridge.h"
-#include "purify_secp_bridge.h"
+#include "bppp_bridge.h"
+#include "purify/secp_bridge.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +33,12 @@ _Static_assert(_Alignof(purify_scalar) >= _Alignof(secp256k1_scalar), "purify_sc
 
 static secp256k1_context* purify_create_context(void) {
     return secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
+}
+
+static void purify_bridge_secure_clear(void* data, size_t size) {
+    if (data != NULL && size != 0u) {
+        secp256k1_memclear_explicit(data, size);
+    }
 }
 
 struct purify_bulletproof_backend_resources {
@@ -316,12 +322,12 @@ int purify_bip340_key_from_seckey(unsigned char seckey32[32], unsigned char xonl
         ok = secp256k1_ec_seckey_negate(ctx, seckey32);
     }
     if (!ok) {
-        memset(seckey32, 0, 32);
+        purify_bridge_secure_clear(seckey32, 32);
         memset(xonly_pubkey32, 0, 32);
     }
 
-    memset(&keypair, 0, sizeof(keypair));
-    memset(&xonly, 0, sizeof(xonly));
+    purify_bridge_secure_clear(&keypair, sizeof(keypair));
+    purify_bridge_secure_clear(&xonly, sizeof(xonly));
     secp256k1_context_destroy(ctx);
     return ok;
 }
@@ -357,12 +363,12 @@ int purify_bip340_nonce_from_scalar(unsigned char scalar32[32], unsigned char xo
         ok = secp256k1_ec_seckey_negate(ctx, scalar32);
     }
     if (!ok) {
-        memset(scalar32, 0, 32);
+        purify_bridge_secure_clear(scalar32, 32);
         memset(xonly_nonce32, 0, 32);
     }
 
-    memset(&pubkey, 0, sizeof(pubkey));
-    memset(&xonly, 0, sizeof(xonly));
+    purify_bridge_secure_clear(&pubkey, sizeof(pubkey));
+    purify_bridge_secure_clear(&xonly, sizeof(xonly));
     secp256k1_context_destroy(ctx);
     return ok;
 }
@@ -404,8 +410,8 @@ int purify_bip340_xonly_from_point(const unsigned char point33[33], unsigned cha
         memset(xonly32, 0, 32);
     }
 
-    memset(&pubkey, 0, sizeof(pubkey));
-    memset(&xonly, 0, sizeof(xonly));
+    purify_bridge_secure_clear(&pubkey, sizeof(pubkey));
+    purify_bridge_secure_clear(&xonly, sizeof(xonly));
     secp256k1_context_destroy(ctx);
     return ok;
 }
@@ -425,7 +431,7 @@ int purify_bip340_validate_xonly_pubkey(const unsigned char xonly_pubkey32[32]) 
 
     ok = secp256k1_xonly_pubkey_parse(ctx, &xonly, xonly_pubkey32);
 
-    memset(&xonly, 0, sizeof(xonly));
+    purify_bridge_secure_clear(&xonly, sizeof(xonly));
     secp256k1_context_destroy(ctx);
     return ok;
 }
@@ -437,8 +443,8 @@ int purify_bip340_validate_signature(const unsigned char sig64[64]) {
     int overflow = 0;
     int ok = 0;
 
-    memset(&rxonly, 0, sizeof(rxonly));
-    memset(&s, 0, sizeof(s));
+    purify_bridge_secure_clear(&rxonly, sizeof(rxonly));
+    purify_bridge_secure_clear(&s, sizeof(s));
     if (ctx == NULL || sig64 == NULL) {
         if (ctx != NULL) {
             secp256k1_context_destroy(ctx);
@@ -452,7 +458,7 @@ int purify_bip340_validate_signature(const unsigned char sig64[64]) {
         ok = !overflow;
     }
 
-    memset(&rxonly, 0, sizeof(rxonly));
+    purify_bridge_secure_clear(&rxonly, sizeof(rxonly));
     secp256k1_scalar_clear(&s);
     secp256k1_context_destroy(ctx);
     return ok;
@@ -491,10 +497,10 @@ int purify_bip340_sign_with_fixed_nonce(unsigned char sig64[64],
     int ok = 0;
     int overflow = 0;
 
-    memset(&keypair, 0, sizeof(keypair));
-    memset(&nonce_scalar, 0, sizeof(nonce_scalar));
-    memset(canonical_nonce32, 0, sizeof(canonical_nonce32));
-    memset(xonly_nonce32, 0, sizeof(xonly_nonce32));
+    purify_bridge_secure_clear(&keypair, sizeof(keypair));
+    purify_bridge_secure_clear(&nonce_scalar, sizeof(nonce_scalar));
+    purify_bridge_secure_clear(canonical_nonce32, sizeof(canonical_nonce32));
+    purify_bridge_secure_clear(xonly_nonce32, sizeof(xonly_nonce32));
     if (sig64 != NULL) {
         memset(sig64, 0, 64);
     }
@@ -521,10 +527,10 @@ int purify_bip340_sign_with_fixed_nonce(unsigned char sig64[64],
         }
     }
 
-    memset(&keypair, 0, sizeof(keypair));
+    purify_bridge_secure_clear(&keypair, sizeof(keypair));
     secp256k1_scalar_clear(&nonce_scalar);
-    secp256k1_memclear_explicit(canonical_nonce32, sizeof(canonical_nonce32));
-    secp256k1_memclear_explicit(xonly_nonce32, sizeof(xonly_nonce32));
+    purify_bridge_secure_clear(canonical_nonce32, sizeof(canonical_nonce32));
+    purify_bridge_secure_clear(xonly_nonce32, sizeof(xonly_nonce32));
     if (!ok) {
         memset(sig64, 0, 64);
     }

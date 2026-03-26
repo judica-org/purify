@@ -16,7 +16,7 @@
 #include <optional>
 
 #include "../detail/common.hpp"
-#include "purify_secp_bridge.h"
+#include "purify/secp_bridge.h"
 
 namespace purify::puresign_plusplus {
 

@@ -110,6 +110,53 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+### Verification
+
+For a sanitizer-enabled debug build:
+
+```sh
+cmake --preset sanitizers
+cmake --build --preset sanitizers --parallel
+ctest --preset sanitizers
+```
+
+For a Clang ASan/UBSan integer-focused debug build:
+
+```sh
+cmake --preset sanitizers-int
+cmake --build --preset sanitizers-int --parallel
+ctest --preset sanitizers-int
+```
+
+For Valgrind memcheck plus ctgrind-style secret-flow checks:
+
+```sh
+cmake --preset valgrind
+cmake --build --preset valgrind --parallel
+ctest --preset valgrind
+```
+
+The Valgrind constant-time lane is a negative test, not a proof. It now splits into dedicated checks for
+the fixed-round secret divider, the hardened ladder core, the ladder-plus-affine-normalization path, and
+the constant-time field inverse path. It also covers a valid packed-secret subset end to end through
+unchecked secret unpack plus both generator multiplications, marking secret bytes undefined before entry
+and failing if Memcheck sees secret-dependent control flow or memory addresses on those paths.
+
+For bounded model checking of the pure C wide-integer helpers with CBMC:
+
+```sh
+cmake --preset cbmc
+cmake --build --preset cbmc
+ctest --preset cbmc
+```
+
+The CBMC harnesses in [`verification/cbmc/`](verification/cbmc/) now cover:
+
+- exact proofs over [`src/core/uint.c`](src/core/uint.c)
+- toy-model proofs over [`src/core/field.c`](src/core/field.c) and [`src/core/curve.c`](src/core/curve.c) under an explicit verification-only bridge stub
+
+The field and curve proofs are intentionally not a proof of the production `secp256k1-zkp` backend. They are a proof that the local Purify arithmetic and curve logic are internally consistent under a small-field model that exercises the same algorithms.
+
 Generate API documentation with Doxygen:
 
 ```sh

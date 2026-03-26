@@ -86,14 +86,6 @@ public:
      */
     Result<AffinePoint> mul_secret_affine(const JacobianPoint& point, const UInt256& scalar) const;
 
-private:
-    static CompleteProjectivePoint complete_identity();
-    CompleteProjectivePoint secret_input_point(const JacobianPoint& point) const;
-    static void conditional_assign(CompleteProjectivePoint& dst, const CompleteProjectivePoint& src, bool flag);
-    static void conditional_swap(CompleteProjectivePoint& lhs, CompleteProjectivePoint& rhs, bool flag);
-    CompleteProjectivePoint complete_add(const CompleteProjectivePoint& lhs, const CompleteProjectivePoint& rhs) const;
-    CompleteProjectivePoint complete_double(const CompleteProjectivePoint& point) const;
-
     FieldElement a_;
     FieldElement b_;
     UInt256 n_;

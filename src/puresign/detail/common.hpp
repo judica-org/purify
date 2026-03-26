@@ -84,6 +84,11 @@ inline Status validate_message_proof_cache(const CacheLike& cache,
     if (cache.eval_input != tagged_eval_input(nonce_tag, cache.message)) {
         return unexpected_error(ErrorCode::BindingMismatch, "validate_message_proof_cache:eval_input");
     }
+    PURIFY_ASSIGN_OR_RETURN(const auto& template_digest, cache.circuit_template.integrity_digest(),
+                            "validate_message_proof_cache:integrity_digest");
+    if (cache.template_digest != template_digest) {
+        return unexpected_error(ErrorCode::BindingMismatch, "validate_message_proof_cache:circuit_template");
+    }
     return {};
 }
 
@@ -95,6 +100,11 @@ inline Status validate_topic_proof_cache(const CacheLike& cache,
     }
     if (cache.eval_input != tagged_eval_input(nonce_tag, cache.topic)) {
         return unexpected_error(ErrorCode::BindingMismatch, "validate_topic_proof_cache:eval_input");
+    }
+    PURIFY_ASSIGN_OR_RETURN(const auto& template_digest, cache.circuit_template.integrity_digest(),
+                            "validate_topic_proof_cache:integrity_digest");
+    if (cache.template_digest != template_digest) {
+        return unexpected_error(ErrorCode::BindingMismatch, "validate_topic_proof_cache:circuit_template");
     }
     return {};
 }

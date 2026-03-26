@@ -15,7 +15,7 @@
 #include <utility>
 
 #include "purify/api.hpp"
-#include "purify_bppp.hpp"
+#include "purify/bppp.hpp"
 
 namespace purify::puresign_plusplus {
 
@@ -206,6 +206,7 @@ struct MessageProofCache {
     Bytes message;
     Bytes eval_input;
     NativeBulletproofCircuitTemplate circuit_template;
+    Bytes template_digest;
     mutable bppp::ExperimentalCircuitCache backend_cache;
 
     /**
@@ -227,6 +228,7 @@ struct TopicProofCache {
     Bytes topic;
     Bytes eval_input;
     NativeBulletproofCircuitTemplate circuit_template;
+    Bytes template_digest;
     mutable bppp::ExperimentalCircuitCache backend_cache;
 
     /**

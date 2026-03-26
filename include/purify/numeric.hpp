@@ -10,6 +10,7 @@
 #pragma once
 
 #include "purify/common.hpp"
+#include "purify/uint.h"
 
 namespace purify {
 
@@ -118,6 +119,61 @@ private:
     return value == 0 ? 0U : 64U - static_cast<std::size_t>(std::countl_zero(value));
 }
 
+template <std::size_t Words>
+struct BigUIntCBridge {
+    static constexpr bool kAvailable = false;
+};
+
+#define PURIFY_DEFINE_BIGUINT_C_BRIDGE(words, bits) \
+template <> \
+struct BigUIntCBridge<words> { \
+    static constexpr bool kAvailable = true; \
+    static void set_zero(std::uint64_t* out) { purify_u##bits##_set_zero(out); } \
+    static void set_u64(std::uint64_t* out, std::uint64_t value) { purify_u##bits##_set_u64(out, value); } \
+    static void from_bytes_be(std::uint64_t* out, const unsigned char* data, std::size_t size) { \
+        purify_u##bits##_from_bytes_be(out, data, size); \
+    } \
+    static bool is_zero(const std::uint64_t* value) { return purify_u##bits##_is_zero(value) != 0; } \
+    static int compare(const std::uint64_t* lhs, const std::uint64_t* rhs) { return purify_u##bits##_compare(lhs, rhs); } \
+    static bool try_add_small(std::uint64_t* value, std::uint32_t addend) { \
+        return purify_u##bits##_try_add_small(value, addend) != 0; \
+    } \
+    static bool try_mul_small(std::uint64_t* value, std::uint32_t factor) { \
+        return purify_u##bits##_try_mul_small(value, factor) != 0; \
+    } \
+    static bool try_add(std::uint64_t* value, const std::uint64_t* addend) { \
+        return purify_u##bits##_try_add(value, addend) != 0; \
+    } \
+    static bool try_sub(std::uint64_t* value, const std::uint64_t* subtrahend) { \
+        return purify_u##bits##_try_sub(value, subtrahend) != 0; \
+    } \
+    static std::size_t bit_length(const std::uint64_t* value) { return purify_u##bits##_bit_length(value); } \
+    static bool bit(const std::uint64_t* value, std::size_t index) { return purify_u##bits##_bit(value, index) != 0; } \
+    static bool try_set_bit(std::uint64_t* value, std::size_t index) { \
+        return purify_u##bits##_try_set_bit(value, index) != 0; \
+    } \
+    static void shifted_left(std::uint64_t* out, const std::uint64_t* value, std::size_t bits_value) { \
+        purify_u##bits##_shifted_left(out, value, bits_value); \
+    } \
+    static void shifted_right(std::uint64_t* out, const std::uint64_t* value, std::size_t bits_value) { \
+        purify_u##bits##_shifted_right(out, value, bits_value); \
+    } \
+    static void shift_right_one(std::uint64_t* value) { purify_u##bits##_shift_right_one(value); } \
+    static void mask_bits(std::uint64_t* value, std::size_t bits_value) { purify_u##bits##_mask_bits(value, bits_value); } \
+    static std::uint32_t divmod_small(std::uint64_t* value, std::uint32_t divisor) { \
+        return purify_u##bits##_divmod_small(value, divisor); \
+    } \
+    static void to_bytes_be(unsigned char* out, const std::uint64_t* value) { purify_u##bits##_to_bytes_be(out, value); } \
+}
+
+PURIFY_DEFINE_BIGUINT_C_BRIDGE(4, 256);
+PURIFY_DEFINE_BIGUINT_C_BRIDGE(5, 320);
+PURIFY_DEFINE_BIGUINT_C_BRIDGE(8, 512);
+
+#undef PURIFY_DEFINE_BIGUINT_C_BRIDGE
+
+struct FieldElementAccess;
+
 }  // namespace detail
 
 /**
@@ -131,29 +187,45 @@ struct BigUInt {
 
     /** @brief Returns the additive identity. */
     static BigUInt zero() {
-        return {};
+        BigUInt out;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::set_zero(out.limbs.data());
+        }
+        return out;
     }
 
     /** @brief Returns the multiplicative identity. */
     static BigUInt one() {
         BigUInt out;
-        out.limbs[0] = 1;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::set_u64(out.limbs.data(), 1);
+        } else {
+            out.limbs[0] = 1;
+        }
         return out;
     }
 
     /** @brief Constructs a value from a single 64-bit limb. */
     static BigUInt from_u64(std::uint64_t value) {
         BigUInt out;
-        out.limbs[0] = value;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::set_u64(out.limbs.data(), value);
+        } else {
+            out.limbs[0] = value;
+        }
         return out;
     }
 
     /** @brief Parses a big-endian byte string into the fixed-width integer. */
     static BigUInt from_bytes_be(const unsigned char* data, std::size_t size) {
         BigUInt out;
-        for (std::size_t i = 0; i < size; ++i) {
-            out.mul_small(256);
-            out.add_small(data[i]);
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::from_bytes_be(out.limbs.data(), data, size);
+        } else {
+            for (std::size_t i = 0; i < size; ++i) {
+                out.mul_small(256);
+                out.add_small(data[i]);
+            }
         }
         return out;
     }
@@ -198,25 +270,34 @@ struct BigUInt {
 
     /** @brief Returns true when all limbs are zero. */
     bool is_zero() const {
-        for (std::uint64_t limb : limbs) {
-            if (limb != 0) {
-                return false;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            return detail::BigUIntCBridge<Words>::is_zero(limbs.data());
+        } else {
+            for (std::uint64_t limb : limbs) {
+                if (limb != 0) {
+                    return false;
+                }
             }
+            return true;
         }
-        return true;
     }
 
     /** @brief Compares two fixed-width integers using unsigned ordering. */
     int compare(const BigUInt& other) const {
-        for (std::size_t i = Words; i-- > 0;) {
-            if (limbs[i] < other.limbs[i]) {
-                return -1;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            return detail::BigUIntCBridge<Words>::compare(limbs.data(), other.limbs.data());
+        } else {
+            for (std::size_t i = Words; i != 0; --i) {
+                const std::size_t idx = i - 1;
+                if (limbs[idx] < other.limbs[idx]) {
+                    return -1;
+                }
+                if (limbs[idx] > other.limbs[idx]) {
+                    return 1;
+                }
             }
-            if (limbs[i] > other.limbs[i]) {
-                return 1;
-            }
+            return 0;
         }
-        return 0;
     }
 
     bool operator==(const BigUInt& other) const {
@@ -238,14 +319,20 @@ struct BigUInt {
     /** @brief Adds a small unsigned value in place when the result fits. */
     bool try_add_small(std::uint32_t value) {
         BigUInt out = *this;
-        std::uint64_t carry = value;
-        for (std::size_t i = 0; i < Words && carry != 0; ++i) {
-            std::uint64_t sum = out.limbs[i] + carry;
-            carry = (sum < out.limbs[i]) ? 1U : 0U;
-            out.limbs[i] = sum;
-        }
-        if (carry != 0) {
-            return false;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            if (!detail::BigUIntCBridge<Words>::try_add_small(out.limbs.data(), value)) {
+                return false;
+            }
+        } else {
+            std::uint64_t carry = value;
+            for (std::size_t i = 0; i < Words && carry != 0; ++i) {
+                std::uint64_t sum = out.limbs[i] + carry;
+                carry = (sum < out.limbs[i]) ? 1U : 0U;
+                out.limbs[i] = sum;
+            }
+            if (carry != 0) {
+                return false;
+            }
         }
         *this = out;
         return true;
@@ -265,15 +352,21 @@ struct BigUInt {
     /** @brief Multiplies by a small unsigned value in place when the result fits. */
     bool try_mul_small(std::uint32_t value) {
         BigUInt out = *this;
-        std::uint64_t carry = 0;
-        for (std::size_t i = 0; i < Words; ++i) {
-            detail::UInt128 accum = detail::UInt128::mul_u64(out.limbs[i], value);
-            accum = accum.add_u64(carry);
-            out.limbs[i] = accum.low64();
-            carry = accum.high64();
-        }
-        if (carry != 0) {
-            return false;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            if (!detail::BigUIntCBridge<Words>::try_mul_small(out.limbs.data(), value)) {
+                return false;
+            }
+        } else {
+            std::uint64_t carry = 0;
+            for (std::size_t i = 0; i < Words; ++i) {
+                detail::UInt128 accum = detail::UInt128::mul_u64(out.limbs[i], value);
+                accum = accum.add_u64(carry);
+                out.limbs[i] = accum.low64();
+                carry = accum.high64();
+            }
+            if (carry != 0) {
+                return false;
+            }
         }
         *this = out;
         return true;
@@ -293,17 +386,23 @@ struct BigUInt {
     /** @brief Adds another fixed-width integer when the result fits. */
     bool try_add_assign(const BigUInt& other) {
         BigUInt out = *this;
-        std::uint64_t carry = 0;
-        for (std::size_t i = 0; i < Words; ++i) {
-            std::uint64_t sum = out.limbs[i] + other.limbs[i];
-            std::uint64_t carry1 = (sum < out.limbs[i]) ? 1U : 0U;
-            std::uint64_t next = sum + carry;
-            std::uint64_t carry2 = (next < sum) ? 1U : 0U;
-            out.limbs[i] = next;
-            carry = carry1 | carry2;
-        }
-        if (carry != 0) {
-            return false;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            if (!detail::BigUIntCBridge<Words>::try_add(out.limbs.data(), other.limbs.data())) {
+                return false;
+            }
+        } else {
+            std::uint64_t carry = 0;
+            for (std::size_t i = 0; i < Words; ++i) {
+                std::uint64_t sum = out.limbs[i] + other.limbs[i];
+                std::uint64_t carry1 = (sum < out.limbs[i]) ? 1U : 0U;
+                std::uint64_t next = sum + carry;
+                std::uint64_t carry2 = (next < sum) ? 1U : 0U;
+                out.limbs[i] = next;
+                carry = carry1 | carry2;
+            }
+            if (carry != 0) {
+                return false;
+            }
         }
         *this = out;
         return true;
@@ -323,17 +422,23 @@ struct BigUInt {
     /** @brief Subtracts another fixed-width integer when the minuend is large enough. */
     bool try_sub_assign(const BigUInt& other) {
         BigUInt out = *this;
-        std::uint64_t borrow = 0;
-        for (std::size_t i = 0; i < Words; ++i) {
-            std::uint64_t rhs = other.limbs[i] + borrow;
-            std::uint64_t rhs_overflow = (rhs < other.limbs[i]) ? 1U : 0U;
-            std::uint64_t next = out.limbs[i] - rhs;
-            std::uint64_t needs_borrow = (out.limbs[i] < rhs) ? 1U : 0U;
-            out.limbs[i] = next;
-            borrow = rhs_overflow | needs_borrow;
-        }
-        if (borrow != 0) {
-            return false;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            if (!detail::BigUIntCBridge<Words>::try_sub(out.limbs.data(), other.limbs.data())) {
+                return false;
+            }
+        } else {
+            std::uint64_t borrow = 0;
+            for (std::size_t i = 0; i < Words; ++i) {
+                std::uint64_t rhs = other.limbs[i] + borrow;
+                std::uint64_t rhs_overflow = (rhs < other.limbs[i]) ? 1U : 0U;
+                std::uint64_t next = out.limbs[i] - rhs;
+                std::uint64_t needs_borrow = (out.limbs[i] < rhs) ? 1U : 0U;
+                out.limbs[i] = next;
+                borrow = rhs_overflow | needs_borrow;
+            }
+            if (borrow != 0) {
+                return false;
+            }
         }
         *this = out;
         return true;
@@ -352,33 +457,46 @@ struct BigUInt {
 
     /** @brief Returns the index of the highest set bit plus one. */
     std::size_t bit_length() const {
-        for (std::size_t i = Words; i-- > 0;) {
-            if (limbs[i] != 0) {
-                return i * 64 + detail::bit_length_u64(limbs[i]);
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            return detail::BigUIntCBridge<Words>::bit_length(limbs.data());
+        } else {
+            for (std::size_t i = Words; i != 0; --i) {
+                const std::size_t idx = i - 1;
+                if (limbs[idx] != 0) {
+                    return idx * 64 + detail::bit_length_u64(limbs[idx]);
+                }
             }
+            return 0;
         }
-        return 0;
     }
 
     /** @brief Returns the bit at the given little-endian bit index. */
     bool bit(std::size_t index) const {
-        std::size_t word = index / 64;
-        std::size_t shift = index % 64;
-        if (word >= Words) {
-            return false;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            return detail::BigUIntCBridge<Words>::bit(limbs.data(), index);
+        } else {
+            std::size_t word = index / 64;
+            std::size_t shift = index % 64;
+            if (word >= Words) {
+                return false;
+            }
+            return ((limbs[word] >> shift) & 1U) != 0;
         }
-        return ((limbs[word] >> shift) & 1U) != 0;
     }
 
     /** @brief Sets the bit at the given little-endian bit index when it is in range. */
     bool try_set_bit(std::size_t index) {
-        std::size_t word = index / 64;
-        std::size_t shift = index % 64;
-        if (word >= Words) {
-            return false;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            return detail::BigUIntCBridge<Words>::try_set_bit(limbs.data(), index);
+        } else {
+            std::size_t word = index / 64;
+            std::size_t shift = index % 64;
+            if (word >= Words) {
+                return false;
+            }
+            limbs[word] |= (static_cast<std::uint64_t>(1) << shift);
+            return true;
         }
-        limbs[word] |= (static_cast<std::uint64_t>(1) << shift);
-        return true;
     }
 
     /**
@@ -395,16 +513,21 @@ struct BigUInt {
     /** @brief Returns a copy shifted left by the requested bit count. */
     BigUInt shifted_left(std::size_t bits) const {
         BigUInt out;
-        std::size_t word_shift = bits / 64;
-        std::size_t bit_shift = bits % 64;
-        for (std::size_t i = Words; i-- > 0;) {
-            if (i < word_shift) {
-                continue;
-            }
-            std::size_t src = i - word_shift;
-            out.limbs[i] |= limbs[src] << bit_shift;
-            if (bit_shift != 0 && src > 0) {
-                out.limbs[i] |= limbs[src - 1] >> (64 - bit_shift);
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::shifted_left(out.limbs.data(), limbs.data(), bits);
+        } else {
+            std::size_t word_shift = bits / 64;
+            std::size_t bit_shift = bits % 64;
+            for (std::size_t i = Words; i != 0; --i) {
+                const std::size_t idx = i - 1;
+                if (idx < word_shift) {
+                    continue;
+                }
+                std::size_t src = idx - word_shift;
+                out.limbs[idx] |= limbs[src] << bit_shift;
+                if (bit_shift != 0 && src > 0) {
+                    out.limbs[idx] |= limbs[src - 1] >> (64 - bit_shift);
+                }
             }
         }
         return out;
@@ -413,16 +536,20 @@ struct BigUInt {
     /** @brief Returns a copy shifted right by the requested bit count. */
     BigUInt shifted_right(std::size_t bits) const {
         BigUInt out;
-        std::size_t word_shift = bits / 64;
-        std::size_t bit_shift = bits % 64;
-        for (std::size_t i = 0; i < Words; ++i) {
-            std::size_t src = i + word_shift;
-            if (src >= Words) {
-                break;
-            }
-            out.limbs[i] |= limbs[src] >> bit_shift;
-            if (bit_shift != 0 && src + 1 < Words) {
-                out.limbs[i] |= limbs[src + 1] << (64 - bit_shift);
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::shifted_right(out.limbs.data(), limbs.data(), bits);
+        } else {
+            std::size_t word_shift = bits / 64;
+            std::size_t bit_shift = bits % 64;
+            for (std::size_t i = 0; i < Words; ++i) {
+                std::size_t src = i + word_shift;
+                if (src >= Words) {
+                    break;
+                }
+                out.limbs[i] |= limbs[src] >> bit_shift;
+                if (bit_shift != 0 && src + 1 < Words) {
+                    out.limbs[i] |= limbs[src + 1] << (64 - bit_shift);
+                }
             }
         }
         return out;
@@ -430,45 +557,63 @@ struct BigUInt {
 
     /** @brief Shifts the value right by one bit in place. */
     void shift_right_one() {
-        for (std::size_t i = 0; i < Words; ++i) {
-            std::uint64_t next = (i + 1 < Words) ? limbs[i + 1] : 0;
-            limbs[i] = (limbs[i] >> 1) | (next << 63);
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::shift_right_one(limbs.data());
+        } else {
+            for (std::size_t i = 0; i < Words; ++i) {
+                std::uint64_t next = (i + 1 < Words) ? limbs[i + 1] : 0;
+                limbs[i] = (limbs[i] >> 1) | (next << 63);
+            }
         }
     }
 
     /** @brief Clears all bits above the requested width. */
     void mask_bits(std::size_t bits) {
-        std::size_t full_words = bits / 64;
-        std::size_t extra_bits = bits % 64;
-        for (std::size_t i = full_words + (extra_bits != 0 ? 1 : 0); i < Words; ++i) {
-            limbs[i] = 0;
-        }
-        if (extra_bits != 0 && full_words < Words) {
-            std::uint64_t mask = (extra_bits == 64) ? ~static_cast<std::uint64_t>(0) : ((static_cast<std::uint64_t>(1) << extra_bits) - 1);
-            limbs[full_words] &= mask;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::mask_bits(limbs.data(), bits);
+        } else {
+            std::size_t full_words = bits / 64;
+            std::size_t extra_bits = bits % 64;
+            for (std::size_t i = full_words + (extra_bits != 0 ? 1 : 0); i < Words; ++i) {
+                limbs[i] = 0;
+            }
+            if (extra_bits != 0 && full_words < Words) {
+                std::uint64_t mask =
+                    (extra_bits == 64) ? ~static_cast<std::uint64_t>(0) : ((static_cast<std::uint64_t>(1) << extra_bits) - 1);
+                limbs[full_words] &= mask;
+            }
         }
     }
 
     /** @brief Divides by a small unsigned value in place and returns the remainder. */
     std::uint32_t divmod_small(std::uint32_t divisor) {
-        std::uint64_t rem = 0;
-        for (std::size_t i = Words; i-- > 0;) {
-            auto [quotient, next_rem] = detail::UInt128::from_words(rem, limbs[i]).divmod_u32(divisor);
-            assert(quotient.high64() == 0 && "BigUInt::divmod_small() quotient must fit in 64 bits");
-            limbs[i] = quotient.low64();
-            rem = next_rem;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            return detail::BigUIntCBridge<Words>::divmod_small(limbs.data(), divisor);
+        } else {
+            std::uint64_t rem = 0;
+            for (std::size_t i = Words; i != 0; --i) {
+                const std::size_t idx = i - 1;
+                auto [quotient, next_rem] = detail::UInt128::from_words(rem, limbs[idx]).divmod_u32(divisor);
+                assert(quotient.high64() == 0 && "BigUInt::divmod_small() quotient must fit in 64 bits");
+                limbs[idx] = quotient.low64();
+                rem = next_rem;
+            }
+            return static_cast<std::uint32_t>(rem);
         }
-        return static_cast<std::uint32_t>(rem);
     }
 
     /** @brief Serializes the value to a fixed-width big-endian byte array. */
     std::array<unsigned char, Words * 8> to_bytes_be() const {
         std::array<unsigned char, Words * 8> out{};
-        for (std::size_t i = 0; i < Words; ++i) {
-            std::uint64_t limb = limbs[i];
-            for (std::size_t j = 0; j < 8; ++j) {
-                out[out.size() - 1 - (i * 8 + j)] = static_cast<unsigned char>(limb & 0xffU);
-                limb >>= 8;
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::to_bytes_be(out.data(), limbs.data());
+        } else {
+            for (std::size_t i = 0; i < Words; ++i) {
+                std::uint64_t limb = limbs[i];
+                for (std::size_t j = 0; j < 8; ++j) {
+                    out[out.size() - 1 - (i * 8 + j)] = static_cast<unsigned char>(limb & 0xffU);
+                    limb >>= 8;
+                }
             }
         }
         return out;
@@ -506,8 +651,8 @@ struct BigUInt {
         }
         std::ostringstream out;
         out << parts.back();
-        for (std::size_t i = parts.size() - 1; i-- > 0;) {
-            out << std::setw(9) << std::setfill('0') << parts[i];
+        for (std::size_t i = parts.size(); i > 1; --i) {
+            out << std::setw(9) << std::setfill('0') << parts[i - 2];
         }
         return out.str();
     }
@@ -518,8 +663,14 @@ template <std::size_t OutWords, std::size_t InWords>
 BigUInt<OutWords> widen(const BigUInt<InWords>& value) {
     static_assert(OutWords >= InWords, "Cannot narrow with widen");
     BigUInt<OutWords> out;
-    for (std::size_t i = 0; i < InWords; ++i) {
-        out.limbs[i] = value.limbs[i];
+    if constexpr (OutWords == 5 && InWords == 4) {
+        purify_u320_widen_u256(out.limbs.data(), value.limbs.data());
+    } else if constexpr (OutWords == 8 && InWords == 4) {
+        purify_u512_widen_u256(out.limbs.data(), value.limbs.data());
+    } else {
+        for (std::size_t i = 0; i < InWords; ++i) {
+            out.limbs[i] = value.limbs[i];
+        }
     }
     return out;
 }
@@ -529,12 +680,22 @@ template <std::size_t OutWords, std::size_t InWords>
 Result<BigUInt<OutWords>> try_narrow(const BigUInt<InWords>& value) {
     static_assert(OutWords <= InWords, "Cannot widen with narrow");
     BigUInt<OutWords> out;
-    for (std::size_t i = 0; i < OutWords; ++i) {
-        out.limbs[i] = value.limbs[i];
-    }
-    for (std::size_t i = OutWords; i < InWords; ++i) {
-        if (value.limbs[i] != 0) {
+    if constexpr (OutWords == 4 && InWords == 5) {
+        if (!purify_u256_try_narrow_u320(out.limbs.data(), value.limbs.data())) {
             return unexpected_error(ErrorCode::NarrowingOverflow, "try_narrow:high_bits_set");
+        }
+    } else if constexpr (OutWords == 4 && InWords == 8) {
+        if (!purify_u256_try_narrow_u512(out.limbs.data(), value.limbs.data())) {
+            return unexpected_error(ErrorCode::NarrowingOverflow, "try_narrow:high_bits_set");
+        }
+    } else {
+        for (std::size_t i = 0; i < OutWords; ++i) {
+            out.limbs[i] = value.limbs[i];
+        }
+        for (std::size_t i = OutWords; i < InWords; ++i) {
+            if (value.limbs[i] != 0) {
+                return unexpected_error(ErrorCode::NarrowingOverflow, "try_narrow:high_bits_set");
+            }
         }
     }
     return out;
@@ -551,30 +712,38 @@ BigUInt<OutWords> narrow(const BigUInt<InWords>& value) {
 /** @brief Performs long division where numerator and denominator have the same width. */
 template <std::size_t Words>
 Result<std::pair<BigUInt<Words>, BigUInt<Words>>> try_divmod_same(const BigUInt<Words>& numerator, const BigUInt<Words>& denominator) {
-    if (denominator.is_zero()) {
-        return unexpected_error(ErrorCode::DivisionByZero, "try_divmod_same:zero_denominator");
-    }
     BigUInt<Words> quotient;
     BigUInt<Words> remainder = numerator;
-    std::size_t n_bits = remainder.bit_length();
-    std::size_t d_bits = denominator.bit_length();
-    if (n_bits < d_bits) {
-        return std::make_pair(quotient, remainder);
-    }
-    std::size_t shift = n_bits - d_bits;
-    BigUInt<Words> shifted = denominator.shifted_left(shift);
-    for (std::size_t i = shift + 1; i-- > 0;) {
-        if (remainder.compare(shifted) >= 0) {
-            bool sub_ok = remainder.try_sub_assign(shifted);
-            bool bit_ok = quotient.try_set_bit(i);
-            assert(sub_ok && "divmod_same() subtraction should stay in range");
-            assert(bit_ok && "divmod_same() quotient bit index should stay in range");
-            if (!sub_ok || !bit_ok) {
-                return unexpected_error(ErrorCode::InternalMismatch, "try_divmod_same:internal_step");
-            }
+    if constexpr (Words == 8) {
+        if (!purify_u512_try_divmod_same(quotient.limbs.data(), remainder.limbs.data(),
+                                         numerator.limbs.data(), denominator.limbs.data())) {
+            return unexpected_error(ErrorCode::DivisionByZero, "try_divmod_same:zero_denominator");
         }
-        if (i != 0) {
-            shifted.shift_right_one();
+    } else {
+        if (denominator.is_zero()) {
+            return unexpected_error(ErrorCode::DivisionByZero, "try_divmod_same:zero_denominator");
+        }
+        std::size_t n_bits = remainder.bit_length();
+        std::size_t d_bits = denominator.bit_length();
+        if (n_bits < d_bits) {
+            return std::make_pair(quotient, remainder);
+        }
+        std::size_t shift = n_bits - d_bits;
+        BigUInt<Words> shifted = denominator.shifted_left(shift);
+        for (std::size_t i = shift + 1; i != 0; --i) {
+            const std::size_t idx = i - 1;
+            if (remainder.compare(shifted) >= 0) {
+                bool sub_ok = remainder.try_sub_assign(shifted);
+                bool bit_ok = quotient.try_set_bit(idx);
+                assert(sub_ok && "divmod_same() subtraction should stay in range");
+                assert(bit_ok && "divmod_same() quotient bit index should stay in range");
+                if (!sub_ok || !bit_ok) {
+                    return unexpected_error(ErrorCode::InternalMismatch, "try_divmod_same:internal_step");
+                }
+            }
+            if (idx != 0) {
+                shifted.shift_right_one();
+            }
         }
     }
     return std::make_pair(quotient, remainder);
@@ -592,16 +761,20 @@ std::pair<BigUInt<Words>, BigUInt<Words>> divmod_same(const BigUInt<Words>& nume
 template <std::size_t LeftWords, std::size_t RightWords>
 BigUInt<LeftWords + RightWords> multiply(const BigUInt<LeftWords>& lhs, const BigUInt<RightWords>& rhs) {
     BigUInt<LeftWords + RightWords> out;
-    for (std::size_t i = 0; i < LeftWords; ++i) {
-        std::uint64_t carry = 0;
-        for (std::size_t j = 0; j < RightWords; ++j) {
-            detail::UInt128 accum = detail::UInt128::mul_u64(lhs.limbs[i], rhs.limbs[j]);
-            accum = accum.add_u64(out.limbs[i + j]);
-            accum = accum.add_u64(carry);
-            out.limbs[i + j] = accum.low64();
-            carry = accum.high64();
+    if constexpr (LeftWords == 4 && RightWords == 4) {
+        purify_u512_multiply_u256(out.limbs.data(), lhs.limbs.data(), rhs.limbs.data());
+    } else {
+        for (std::size_t i = 0; i < LeftWords; ++i) {
+            std::uint64_t carry = 0;
+            for (std::size_t j = 0; j < RightWords; ++j) {
+                detail::UInt128 accum = detail::UInt128::mul_u64(lhs.limbs[i], rhs.limbs[j]);
+                accum = accum.add_u64(out.limbs[i + j]);
+                accum = accum.add_u64(carry);
+                out.limbs[i + j] = accum.low64();
+                carry = accum.high64();
+            }
+            out.limbs[i + RightWords] += carry;
         }
-        out.limbs[i + RightWords] += carry;
     }
     return out;
 }
@@ -724,10 +897,25 @@ public:
     friend FieldElement operator*(const FieldElement& lhs, const FieldElement& rhs);
 
 private:
+    friend struct detail::FieldElementAccess;
     explicit FieldElement(const purify_scalar& raw) : value_(raw) {}
 
     purify_scalar value_{};
 };
+
+namespace detail {
+
+struct FieldElementAccess {
+    static const purify_scalar& raw(const FieldElement& value) noexcept {
+        return value.value_;
+    }
+
+    static FieldElement from_raw(const purify_scalar& raw) noexcept {
+        return FieldElement(raw);
+    }
+};
+
+}  // namespace detail
 
 /** @brief Squares a field element. */
 FieldElement square(const FieldElement& value);

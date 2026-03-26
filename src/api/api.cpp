@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_api.cpp
+ * @file api.cpp
  * @brief High-level Purify API implementations, including key generation and proof helpers.
  */
 
@@ -11,44 +11,36 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cerrno>
-#include <cstdlib>
-#include <fstream>
 
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#include <bcrypt.h>
-#elif defined(__linux__)
-#include <sys/random.h>
-#include <unistd.h>
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-#include <unistd.h>
-#else
-#include <unistd.h>
-#endif
+#include "purify.h"
+#include "error_bridge.hpp"
 
 namespace purify {
 namespace {
 
-const UInt256& secp256k1_order() {
-    static const UInt256 value =
-        UInt256::from_hex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
-    return value;
+Status status_from_core(purify_error_code code, const char* context) {
+    if (code == PURIFY_ERROR_OK) {
+        return {};
+    }
+    return unexpected_error(core_api_detail::from_core_error_code(code), context);
 }
 
-const UInt256& secp256k1_order_minus_one() {
-    static const UInt256 value = [] {
-        UInt256 out = secp256k1_order();
-        out.sub_assign(UInt256::one());
-        return out;
-    }();
-    return value;
+void clear_core_generated_key(purify_generated_key& generated) noexcept {
+    detail::secure_clear_bytes(generated.secret_key, sizeof(generated.secret_key));
+    std::fill(std::begin(generated.public_key), std::end(generated.public_key), 0);
+}
+
+void clear_core_bip340_key(purify_bip340_key& key) noexcept {
+    detail::secure_clear_bytes(key.secret_key, sizeof(key.secret_key));
+    std::fill(std::begin(key.xonly_public_key), std::end(key.xonly_public_key), 0);
+}
+
+Result<GeneratedKey> generated_key_from_core(const purify_generated_key& generated) {
+    const UInt512 packed_secret = UInt512::from_bytes_be(generated.secret_key, sizeof(generated.secret_key));
+    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(packed_secret),
+                            "generated_key_from_core:from_packed");
+    const UInt512 public_key = UInt512::from_bytes_be(generated.public_key, sizeof(generated.public_key));
+    return GeneratedKey{std::move(owned_secret), public_key};
 }
 
 Bytes tagged_message(std::string_view prefix, const Bytes& message) {
@@ -57,15 +49,6 @@ Bytes tagged_message(std::string_view prefix, const Bytes& message) {
     out.insert(out.end(), prefix.begin(), prefix.end());
     out.insert(out.end(), message.begin(), message.end());
     return out;
-}
-
-Result<UInt512> derive_public_key_from_secret(const UInt512& secret) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& unpacked, unpack_secret(secret), "derive_public_key_from_secret:unpack_secret");
-    PURIFY_ASSIGN_OR_RETURN(const auto& p1, curve1().mul_secret_affine(generator1(), unpacked.first),
-                            "derive_public_key_from_secret:mul_secret_affine_p1");
-    PURIFY_ASSIGN_OR_RETURN(const auto& p2, curve2().mul_secret_affine(generator2(), unpacked.second),
-                            "derive_public_key_from_secret:mul_secret_affine_p2");
-    return pack_public(p1.x.to_uint256(), p2.x.to_uint256());
 }
 
 void add_expr_slack(NativeBulletproofCircuit::PackedSlackPlan& slack, const Expr& expr) {
@@ -118,49 +101,8 @@ NativeBulletproofCircuit::PackedSlackPlan build_template_slack(std::size_t n_gat
 }  // namespace
 
 Status fill_secure_random(std::span<unsigned char> bytes) noexcept {
-#if defined(_WIN32)
-    unsigned char* out = bytes.data();
-    std::size_t size = bytes.size();
-    while (size != 0) {
-        ULONG chunk = static_cast<ULONG>(std::min<std::size_t>(size, static_cast<std::size_t>(0xFFFFFFFFu)));
-        NTSTATUS status = BCryptGenRandom(nullptr, out, chunk, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-        if (status < 0) {
-            return unexpected_error(ErrorCode::EntropyUnavailable, "fill_secure_random:bcrypt");
-        }
-        out += chunk;
-        size -= chunk;
-    }
-    return {};
-#elif defined(__linux__)
-    unsigned char* out = bytes.data();
-    std::size_t size = bytes.size();
-    while (size != 0) {
-        ssize_t written = getrandom(out, size, 0);
-        if (written > 0) {
-            out += static_cast<std::size_t>(written);
-            size -= static_cast<std::size_t>(written);
-            continue;
-        }
-        if (written < 0 && errno == EINTR) {
-            continue;
-        }
-        return unexpected_error(ErrorCode::EntropyUnavailable, "fill_secure_random:getrandom");
-    }
-    return {};
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-    arc4random_buf(bytes.data(), bytes.size());
-    return {};
-#else
-    std::ifstream file("/dev/urandom", std::ios::binary);
-    if (!file) {
-        return unexpected_error(ErrorCode::EntropyUnavailable, "fill_secure_random:open_urandom");
-    }
-    file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    if (!file) {
-        return unexpected_error(ErrorCode::EntropyUnavailable, "fill_secure_random:read_urandom");
-    }
-    return {};
-#endif
+    return status_from_core(purify_fill_secure_random(bytes.data(), bytes.size()),
+                            "fill_secure_random:purify_fill_secure_random");
 }
 
 Result<UInt512> random_below(const UInt512& range) {
@@ -168,19 +110,33 @@ Result<UInt512> random_below(const UInt512& range) {
 }
 
 Result<GeneratedKey> generate_key() {
-    PURIFY_ASSIGN_OR_RETURN(const auto& secret, random_below(key_space_size()), "generate_key:random_below");
-    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(secret), "generate_key:from_packed_secret");
-    return derive_key(std::move(owned_secret));
+    purify_generated_key generated{};
+    const purify_error_code code = purify_generate_key(&generated);
+    if (code != PURIFY_ERROR_OK) {
+        clear_core_generated_key(generated);
+        return unexpected_error(core_api_detail::from_core_error_code(code), "generate_key:purify_generate_key");
+    }
+    Result<GeneratedKey> out = generated_key_from_core(generated);
+    clear_core_generated_key(generated);
+    if (!out.has_value()) {
+        return unexpected_error(out.error(), "generate_key:generated_key_from_core");
+    }
+    return out;
 }
 
 Result<GeneratedKey> generate_key(KeySeed seed) {
-    Bytes seed_bytes(seed.begin(), seed.end());
-    std::optional<UInt512> secret = hash_to_int<8>(seed_bytes, key_space_size(), bytes_from_ascii("Purify/KeyGen"));
-    if (!secret.has_value()) {
-        return unexpected_error(ErrorCode::InternalMismatch, "generate_key:hash_to_int_seed");
+    purify_generated_key generated{};
+    const purify_error_code code = purify_generate_key_from_seed(&generated, seed.data(), seed.size());
+    if (code != PURIFY_ERROR_OK) {
+        clear_core_generated_key(generated);
+        return unexpected_error(core_api_detail::from_core_error_code(code), "generate_key:purify_generate_key_from_seed");
     }
-    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(*secret), "generate_key:from_packed_seed_secret");
-    return derive_key(std::move(owned_secret));
+    Result<GeneratedKey> out = generated_key_from_core(generated);
+    clear_core_generated_key(generated);
+    if (!out.has_value()) {
+        return unexpected_error(out.error(), "generate_key:generated_key_from_core");
+    }
+    return out;
 }
 
 Result<GeneratedKey> derive_key(const SecretKey& secret) {
@@ -189,46 +145,46 @@ Result<GeneratedKey> derive_key(const SecretKey& secret) {
 }
 
 Result<GeneratedKey> derive_key(SecretKey&& secret) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& public_key, derive_public_key_from_secret(secret.packed()),
-                            "derive_key:derive_public_key_from_secret");
+    std::array<unsigned char, PURIFY_SECRET_KEY_BYTES> secret_bytes = secret.packed().to_bytes_be();
+    std::array<unsigned char, PURIFY_PUBLIC_KEY_BYTES> public_key_bytes{};
+    const purify_error_code code = purify_derive_public_key(public_key_bytes.data(), secret_bytes.data());
+    detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
+    if (code != PURIFY_ERROR_OK) {
+        std::fill(public_key_bytes.begin(), public_key_bytes.end(), 0);
+        return unexpected_error(core_api_detail::from_core_error_code(code), "derive_key:purify_derive_public_key");
+    }
+    const UInt512 public_key = UInt512::from_bytes_be(public_key_bytes.data(), public_key_bytes.size());
+    std::fill(public_key_bytes.begin(), public_key_bytes.end(), 0);
     return GeneratedKey{std::move(secret), public_key};
 }
 
 Result<Bip340Key> derive_bip340_key(const SecretKey& secret) {
-    static const TaggedHash kBip340KeyGenTag("Purify/BIP340/KeyGen");
-    std::array<unsigned char, 64> packed_secret = secret.packed().to_bytes_be();
-    Bytes ikm(packed_secret.begin(), packed_secret.end());
-#if PURIFY_USE_LEGACY_FIELD_HASHES
-    std::optional<UInt256> scalar =
-        hash_to_int<4>(ikm, secp256k1_order_minus_one(), bytes_from_ascii("Purify/BIP340/KeyGen"));
-#else
-    std::optional<UInt256> scalar = tagged_hash_to_int<4>(
-        std::span<const unsigned char>(ikm.data(), ikm.size()), secp256k1_order_minus_one(), kBip340KeyGenTag);
-#endif
-    detail::secure_clear_bytes(ikm.data(), ikm.size());
-    detail::secure_clear_bytes(packed_secret.data(), packed_secret.size());
-    if (!scalar.has_value()) {
-        return unexpected_error(ErrorCode::InternalMismatch, "derive_bip340_key:hash_to_int");
+    std::array<unsigned char, PURIFY_SECRET_KEY_BYTES> secret_bytes = secret.packed().to_bytes_be();
+    purify_bip340_key key{};
+    const purify_error_code code = purify_derive_bip340_key(&key, secret_bytes.data());
+    detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
+    if (code != PURIFY_ERROR_OK) {
+        clear_core_bip340_key(key);
+        return unexpected_error(core_api_detail::from_core_error_code(code), "derive_bip340_key:purify_derive_bip340_key");
     }
-    scalar->add_small(1);
-
     Bip340Key out{};
-    out.seckey = scalar->to_bytes_be();
-    if (purify_bip340_key_from_seckey(out.seckey.data(), out.xonly_pubkey.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "derive_bip340_key:bip340_bridge");
-    }
+    std::copy(std::begin(key.secret_key), std::end(key.secret_key), out.seckey.begin());
+    std::copy(std::begin(key.xonly_public_key), std::end(key.xonly_public_key), out.xonly_pubkey.begin());
+    clear_core_bip340_key(key);
     return out;
 }
 
 Result<FieldElement> eval(const SecretKey& secret, const Bytes& message) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& unpacked, unpack_secret(secret.packed()), "eval:unpack_secret");
-    PURIFY_ASSIGN_OR_RETURN(const auto& m1, hash_to_curve(tagged_message("Eval/1/", message), curve1()),
-                            "eval:hash_to_curve_m1");
-    PURIFY_ASSIGN_OR_RETURN(const auto& m2, hash_to_curve(tagged_message("Eval/2/", message), curve2()),
-                            "eval:hash_to_curve_m2");
-    PURIFY_ASSIGN_OR_RETURN(const auto& q1, curve1().mul_secret_affine(m1, unpacked.first), "eval:mul_secret_affine_q1");
-    PURIFY_ASSIGN_OR_RETURN(const auto& q2, curve2().mul_secret_affine(m2, unpacked.second), "eval:mul_secret_affine_q2");
-    return combine(q1.x, q2.x);
+    std::array<unsigned char, PURIFY_SECRET_KEY_BYTES> secret_bytes = secret.packed().to_bytes_be();
+    std::array<unsigned char, PURIFY_FIELD_ELEMENT_BYTES> output_bytes{};
+    const purify_error_code code =
+        purify_eval(output_bytes.data(), secret_bytes.data(), message.data(), message.size());
+    detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
+    if (code != PURIFY_ERROR_OK) {
+        std::fill(output_bytes.begin(), output_bytes.end(), 0);
+        return unexpected_error(core_api_detail::from_core_error_code(code), "eval:purify_eval");
+    }
+    return FieldElement::try_from_bytes32(output_bytes);
 }
 
 Result<std::string> verifier(const Bytes& message, const UInt512& pubkey) {

@@ -3,13 +3,13 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_bulletproof.cpp
+ * @file bulletproof.cpp
  * @brief Lowering and native circuit helpers for Purify's Bulletproof-style verifier model.
  */
 
 #include "purify/bulletproof.hpp"
-#include "purify_bulletproof_internal.hpp"
-#include "purify_bppp_bridge.h"
+#include "bulletproof_internal.hpp"
+#include "bppp_bridge.h"
 
 #include <algorithm>
 #include <cassert>
@@ -227,6 +227,23 @@ void append_u32_le(Bytes& out, std::uint32_t value) {
 void append_u64_le(Bytes& out, std::uint64_t value) {
     for (int i = 0; i < 8; ++i) {
         out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
+    }
+}
+
+void append_symbol_digest(Bytes& out, const purify::Symbol& symbol) {
+    using SymbolRank = std::underlying_type_t<purify::SymbolKind>;
+    append_u64_le(out, static_cast<std::uint64_t>(static_cast<SymbolRank>(symbol.kind)));
+    append_u64_le(out, static_cast<std::uint64_t>(symbol.index));
+}
+
+void append_expr_digest(Bytes& out, const purify::Expr& expr) {
+    const auto constant = expr.constant().to_bytes_be();
+    out.insert(out.end(), constant.begin(), constant.end());
+    append_u64_le(out, static_cast<std::uint64_t>(expr.linear().size()));
+    for (const auto& term : expr.linear()) {
+        append_symbol_digest(out, term.first);
+        const auto coeff = term.second.to_bytes_be();
+        out.insert(out.end(), coeff.begin(), coeff.end());
     }
 }
 
@@ -1597,6 +1614,21 @@ Result<bool> NativeBulletproofCircuitTemplate::final_evaluate(const BulletproofA
     return *actual_p1 == *expected_p1
         && *actual_p2 == *expected_p2
         && *actual_out == assignment.commitments[0];
+}
+
+Result<Bytes> NativeBulletproofCircuitTemplate::integrity_digest() const {
+    if (!base_packed_.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "NativeBulletproofCircuitTemplate::integrity_digest:shape");
+    }
+
+    static const TaggedHash kTemplateDigestTag("Purify/VerifierCircuitTemplate/V1");
+    Bytes serialized = circuit_binding_digest(base_packed_, {});
+    append_expr_digest(serialized, p1x_);
+    append_expr_digest(serialized, p2x_);
+    append_expr_digest(serialized, out_);
+    const std::array<unsigned char, 32> digest =
+        kTemplateDigestTag.digest(std::span<const unsigned char>(serialized.data(), serialized.size()));
+    return Bytes(digest.begin(), digest.end());
 }
 
 Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuitTemplate::instantiate_packed(const UInt512& pubkey) const {

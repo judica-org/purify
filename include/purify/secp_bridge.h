@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 /**
- * @file purify_secp_bridge.h
+ * @file purify/secp_bridge.h
  * @brief Narrow C ABI exposing secp256k1 scalar and HMAC helpers to the C++ headers.
  */
 

@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "purify.hpp"
-#include "purify_bppp.hpp"
-#include "purify_secp_bridge.h"
+#include "purify/bppp.hpp"
+#include "purify/secp_bridge.h"
 #include "test_harness.hpp"
 #include "purify_test_helpers.hpp"
 
@@ -287,6 +287,81 @@ void test_secret_hardening_path(TestContext& ctx) {
                "hardened curve2 message multiplication matches the existing arithmetic");
 }
 
+void test_curve_mul_small_scalar_consistency(TestContext& ctx) {
+    const UInt256 two = UInt256::from_u64(2);
+    const UInt256 three = UInt256::from_u64(3);
+
+    purify::AffinePoint curve1_double = purify::curve1().affine(purify::curve1().double_point(purify::generator1()));
+    purify::AffinePoint curve1_mul2 = purify::curve1().affine(purify::curve1().mul(purify::generator1(), two));
+    ctx.expect(curve1_double.x == curve1_mul2.x && curve1_double.y == curve1_mul2.y,
+               "curve1 double_point matches mul(generator, 2)");
+
+    purify::AffinePoint curve2_double = purify::curve2().affine(purify::curve2().double_point(purify::generator2()));
+    purify::AffinePoint curve2_mul2 = purify::curve2().affine(purify::curve2().mul(purify::generator2(), two));
+    ctx.expect(curve2_double.x == curve2_mul2.x && curve2_double.y == curve2_mul2.y,
+               "curve2 double_point matches mul(generator, 2)");
+
+    purify::AffinePoint curve1_add3 = purify::curve1().affine(
+        purify::curve1().add(purify::curve1().double_point(purify::generator1()), purify::generator1()));
+    purify::AffinePoint curve1_mul3 = purify::curve1().affine(purify::curve1().mul(purify::generator1(), three));
+    ctx.expect(curve1_add3.x == curve1_mul3.x && curve1_add3.y == curve1_mul3.y,
+               "curve1 add(double(generator), generator) matches mul(generator, 3)");
+}
+
+void test_key_space_derivation(TestContext& ctx) {
+    UInt512 twice_half_n1 = purify::widen<8>(purify::half_n1());
+    twice_half_n1.add_assign(purify::widen<8>(purify::half_n1()));
+    twice_half_n1.add_small(1);
+    ctx.expect(twice_half_n1 == purify::widen<8>(purify::order_n1()),
+               "half_n1 is floor(order_n1 / 2)");
+
+    UInt512 twice_half_n2 = purify::widen<8>(purify::half_n2());
+    twice_half_n2.add_assign(purify::widen<8>(purify::half_n2()));
+    twice_half_n2.add_small(1);
+    ctx.expect(twice_half_n2 == purify::widen<8>(purify::order_n2()),
+               "half_n2 is floor(order_n2 / 2)");
+
+    const UInt512 derived_secret_space = purify::multiply(purify::half_n1(), purify::half_n2());
+    ctx.expect(derived_secret_space == purify::packed_secret_key_space_size(),
+               "packed secret key space size is half_n1 * half_n2");
+
+    UInt512 last_secret = purify::packed_secret_key_space_size();
+    last_secret.sub_assign(UInt512::one());
+    Result<std::pair<UInt256, UInt256>> unpacked_secret = purify::unpack_secret(last_secret);
+    expect_ok(ctx, unpacked_secret, "the largest valid packed secret unpacks");
+    if (unpacked_secret.has_value()) {
+        ctx.expect(unpacked_secret->first == purify::half_n1() && unpacked_secret->second == purify::half_n2(),
+                   "the largest valid packed secret decodes to (half_n1, half_n2)");
+    }
+
+    const UInt512 derived_public_space = purify::multiply(purify::prime_p(), purify::prime_p());
+    ctx.expect(derived_public_space == purify::packed_public_key_space_size(),
+               "packed public key space size is p^2");
+
+    UInt256 max_x = purify::prime_p();
+    max_x.sub_assign(UInt256::one());
+    const UInt512 max_public = purify::pack_public(max_x, max_x);
+    UInt512 last_public = purify::packed_public_key_space_size();
+    last_public.sub_assign(UInt512::one());
+    ctx.expect(max_public == last_public,
+               "packing (p - 1, p - 1) reaches the largest valid packed public key");
+
+    Result<std::pair<UInt256, UInt256>> unpacked_public = purify::unpack_public(last_public);
+    expect_ok(ctx, unpacked_public, "the largest valid packed public key unpacks");
+    if (unpacked_public.has_value()) {
+        ctx.expect(unpacked_public->first == max_x && unpacked_public->second == max_x,
+                   "the largest valid packed public key decodes to (p - 1, p - 1)");
+    }
+}
+
+void test_field_sqrt_zero(TestContext& ctx) {
+    std::optional<FieldElement> zero_sqrt = FieldElement::zero().sqrt();
+    ctx.expect(zero_sqrt.has_value(), "FieldElement::sqrt accepts zero");
+    if (zero_sqrt.has_value()) {
+        ctx.expect(zero_sqrt->is_zero(), "FieldElement::sqrt(0) returns 0");
+    }
+}
+
 void test_library_key_generation(TestContext& ctx) {
     std::array<unsigned char, 32> seed{};
     for (std::size_t i = 0; i < seed.size(); ++i) {
@@ -300,6 +375,18 @@ void test_library_key_generation(TestContext& ctx) {
     if (seeded_a.has_value() && seeded_b.has_value()) {
         ctx.expect(seeded_a->secret == seeded_b->secret, "seeded generate_key is deterministic");
         ctx.expect(seeded_a->public_key == seeded_b->public_key, "seeded generate_key derives a stable public key");
+        ctx.expect(seeded_a->secret.packed().to_hex()
+                       == "244033992dfe583985332da27b7cdfddaf05df5c5c3bc8db763af6dd75f07ee28737e8d9a8d5592a3f10944c89f6ae82e53f76ae9dc17c77c22cf7a352cdb59c",
+                   "seeded generate_key preserves the legacy packed-secret test vector");
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+        ctx.expect(seeded_a->public_key.to_hex()
+                       == "c000e3169636f34eb81b1d25280219abd1bb2f1185c6b55780e53f2a3b95d97b2b1576df976499bcc7687673d7efeb5621d2e5c6c2939aa4a57276185b6bf09e",
+                   "seeded generate_key preserves the legacy packed-public-key test vector");
+#else
+        ctx.expect(seeded_a->public_key.to_hex()
+                       == "79b928249e7889d70fe96c9b748d9d3863f5ac48e66340c5c8962aba2f12bd0985bb7f26a806cf0bfc8f149984117903917723d62bd4059475f6287c05622397",
+                   "seeded generate_key preserves the legacy packed-public-key test vector");
+#endif
     }
 
     Bytes short_seed(15, 0x42);
@@ -850,6 +937,9 @@ void run_purify_tests(TestContext& ctx) {
     test_biguint_arithmetic(ctx);
     test_known_sample(ctx);
     test_secret_hardening_path(ctx);
+    test_curve_mul_small_scalar_consistency(ctx);
+    test_key_space_derivation(ctx);
+    test_field_sqrt_zero(ctx);
     test_library_key_generation(ctx);
     test_bip340_key_derivation(ctx);
     test_secret_key_validation(ctx);

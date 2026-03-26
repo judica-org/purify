@@ -10,9 +10,12 @@
 #include "purify/expr.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
-#include <format>
+#include <charconv>
+#include <limits>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -30,6 +33,19 @@ int compare_symbols(const purify::Symbol& lhs, const purify::Symbol& rhs) {
         return 1;
     }
     return 0;
+}
+
+std::string make_symbol_string(std::string_view prefix, std::uint32_t index, std::string_view suffix = {}) {
+    std::array<char, std::numeric_limits<std::uint32_t>::digits10 + 1> digits{};
+    const auto [ptr, ec] = std::to_chars(digits.data(), digits.data() + digits.size(), index);
+    assert(ec == std::errc() && "uint32_t index must format into a fixed-size decimal buffer");
+
+    std::string out;
+    out.reserve(prefix.size() + static_cast<std::size_t>(ptr - digits.data()) + suffix.size());
+    out.append(prefix);
+    out.append(digits.data(), ptr);
+    out.append(suffix);
+    return out;
 }
 
 }  // namespace
@@ -59,15 +75,15 @@ Symbol Symbol::commitment(std::uint32_t index) {
 std::string Symbol::to_string() const {
     switch (kind) {
     case SymbolKind::Witness:
-        return std::format("v[{}]", index);
+        return make_symbol_string("v[", index, "]");
     case SymbolKind::Left:
-        return std::format("L{}", index);
+        return make_symbol_string("L", index);
     case SymbolKind::Right:
-        return std::format("R{}", index);
+        return make_symbol_string("R", index);
     case SymbolKind::Output:
-        return std::format("O{}", index);
+        return make_symbol_string("O", index);
     case SymbolKind::Commitment:
-        return std::format("V{}", index);
+        return make_symbol_string("V", index);
     }
     assert(false && "unknown SymbolKind");
     return "?";

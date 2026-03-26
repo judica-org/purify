@@ -15,7 +15,6 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
-#include <format>
 #include <limits>
 #include <memory>
 #include <sstream>

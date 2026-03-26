@@ -16,7 +16,6 @@
 #include <cctype>
 #include <charconv>
 #include <cstdint>
-#include <format>
 #include <iomanip>
 #include <map>
 #include <optional>

@@ -131,6 +131,47 @@ jobs:
       - name: Test
         run: ctest --preset trapv-i686
 
+  bitcoin-i686-debug:
+    runs-on: ubuntu-24.04
+    name: ubuntu-24.04 / clang-i686-bitcoin-debug
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install Bitcoin-like 32-bit toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm clang g++-multilib libc6-dev-i386
+
+      - name: Show compiler versions
+        run: |
+          clang --version | head -n 1
+          clang++ --version | head -n 1
+
+      - name: Initialize required submodules
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp third_party/nanobench
+
+      - name: Configure
+        run: >
+          cmake --preset bitcoin-i686-debug
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        run: cmake --build --preset bitcoin-i686-debug --parallel
+
+      - name: Show sccache stats
+        run: sccache --show-stats
+
+      - name: Test
+        run: ctest --preset bitcoin-i686-debug
+
   valgrind:
     runs-on: ubuntu-latest
     name: ubuntu-latest / valgrind

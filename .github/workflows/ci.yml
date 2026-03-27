@@ -90,6 +90,47 @@ jobs:
       - name: Test
         run: ctest --preset sanitizers-int
 
+  trapv-i686:
+    runs-on: ubuntu-latest
+    name: ubuntu-latest / gcc-trapv-i686
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install 32-bit multilib toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
+
+      - name: Show compiler versions
+        run: |
+          gcc --version | head -n 1
+          g++ --version | head -n 1
+
+      - name: Initialize required submodules
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp
+
+      - name: Configure
+        run: >
+          cmake --preset trapv-i686
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        run: cmake --build --preset trapv-i686 --parallel
+
+      - name: Show sccache stats
+        run: sccache --show-stats
+
+      - name: Test
+        run: ctest --preset trapv-i686
+
   valgrind:
     runs-on: ubuntu-latest
     name: ubuntu-latest / valgrind

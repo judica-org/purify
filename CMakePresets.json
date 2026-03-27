@@ -57,6 +57,23 @@
       }
     },
     {
+      "name": "trapv-i686",
+      "inherits": "ci-base",
+      "binaryDir": "${sourceDir}/build-trapv-i686",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_C_FLAGS": "-m32 -ftrapv",
+        "CMAKE_CXX_FLAGS": "-m32 -ftrapv",
+        "CMAKE_EXE_LINKER_FLAGS": "-m32 -ftrapv",
+        "CMAKE_SHARED_LINKER_FLAGS": "-m32 -ftrapv",
+        "PURIFY_BUILD_CLI": "OFF",
+        "PURIFY_BUILD_REFERENCE_TESTS": "OFF",
+        "PURIFY_USE_LEGACY_FIELD_HASHES": "OFF"
+      }
+    },
+    {
       "name": "valgrind",
       "inherits": "ci-base",
       "binaryDir": "${sourceDir}/build-valgrind",
@@ -106,6 +123,11 @@
     {
       "name": "sanitizers-int",
       "configurePreset": "sanitizers-int",
+      "configuration": "Debug"
+    },
+    {
+      "name": "trapv-i686",
+      "configurePreset": "trapv-i686",
       "configuration": "Debug"
     },
     {
@@ -172,6 +194,19 @@
       "filter": {
         "include": {
           "name": "purify.tests|purify.property_tests|purify.c_api"
+        }
+      }
+    },
+    {
+      "name": "trapv-i686",
+      "configurePreset": "trapv-i686",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "purify.tests|purify.c_api"
         }
       }
     },

@@ -152,6 +152,15 @@ cmake --build --preset sanitizers-int --parallel
 ctest --preset sanitizers-int
 ```
 
+For a Linux/GCC 32-bit debug build with `-ftrapv` enabled:
+
+```sh
+sudo apt-get install gcc-multilib g++-multilib libc6-dev-i386
+cmake --preset trapv-i686
+cmake --build --preset trapv-i686 --parallel
+ctest --preset trapv-i686
+```
+
 For Valgrind memcheck plus ctgrind-style secret-flow checks:
 
 ```sh

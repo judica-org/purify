@@ -40,7 +40,8 @@
 \begin{abstract}
 This note explains how \texttt{purify-cpp} implements Purify and how the repository builds two proof systems
 around it. Purify is a provably secure, circuit-friendly pseudorandom function
-(PRF)~\cite{purify-ref}: the design pushes the expensive message hashing
+(PRF)~\cite{musig-dn,purify-ref}: the design pushes the expensive
+message hashing
 outside the arithmetic circuit while keeping the in-circuit work close to low-degree field
 arithmetic. In this repository, the same native Purify verifier circuit supports two different
 proof encodings:
@@ -53,11 +54,25 @@ The important point is that both backends prove the same underlying Purify state
 only in how each backend encodes that statement into a zero-knowledge proof.
 \end{abstract}
 
+\section{Contribution}
+\label{sec:contribution}
+
+Purify itself, including the combine formula and the legacy circuit encoding
+used below, comes from MuSig-DN and the upstream reference
+implementation~\cite{musig-dn,purify-ref}. The contribution of
+\texttt{purify-cpp} is a practical C/C++ implementation of that existing
+construction, together with the engineering required to realize it on both the
+legacy \bp\ backend and the \bppp\ backend. The discussion below is a
+high-level explanation of that implementation and backend integration, not a
+formal proof of Purify or of the circuit encoding.
+
 \section{What Purify Is}
 
 Purify is a PRF over a prime field $\mathbb{F}_P$ chosen to have low multiplicative complexity in
 arithmetic circuits. The reference construction fixes curve coefficients $A, B \in \mathbb{F}_P$,
-a non-square $D \in \mathbb{F}_P$, and then works with two elliptic curves over the same field~\cite{purify-ref}:
+a non-square $D \in \mathbb{F}_P$, and then works with two elliptic
+curves over the same
+field~\cite{musig-dn,purify-ref}:
 \[
 \begin{aligned}
 E_1 &: y^2 = x^3 + Ax + B, \\
@@ -231,6 +246,11 @@ The important implementation point is that the repository does \emph{not} build 
 ``elliptic-curve circuit'' and then plug Purify into it. Instead, it constructs one
 message-specific symbolic transcript for the exact Purify relation and then lowers that transcript
 into a native sparse arithmetic circuit.
+As noted in Section~\ref{sec:contribution}, that basic encoding
+strategy already appears in the
+upstream Purify reference code; the focus here is how
+\texttt{purify-cpp} implements and reuses it
+across both the legacy \bp\ backend and the \bppp\ path.
 
 \subsection{Step 1: Fix the Public Message Points}
 
@@ -1021,7 +1041,7 @@ The verifier reruns the same \emph{public} reduction from the circuit and the st
 bytes, reconstructs the same anchored commitment $C$ from the transmitted
 $C_{\mathrm{wit}}$, and checks a norm-argument proof for
 \[
-\exists (n,\ell)\ \text{such that}\ 
+\exists (n,\ell)\ \text{such that}\
 \sum_{k=0}^{4N-1} \mu_k n_k^2 + \langle \ell, c \rangle = T
 \]
 under that commitment. This framing makes the \bppp\ design easiest to read: it proves the same Purify

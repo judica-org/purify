@@ -11,6 +11,7 @@ using purify_test::TestContext;
 void run_purify_tests(TestContext& ctx);
 void run_puresign_tests(TestContext& ctx);
 void run_legacy_bulletproof_tests(TestContext& ctx);
+void run_expected_tests(TestContext& ctx);
 
 int main() {
     TestContext ctx;
@@ -18,6 +19,7 @@ int main() {
     run_purify_tests(ctx);
     run_puresign_tests(ctx);
     run_legacy_bulletproof_tests(ctx);
+    run_expected_tests(ctx);
 
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " test(s) failed\n";

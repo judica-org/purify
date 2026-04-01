@@ -138,6 +138,25 @@ h2 {
   line-height: 1.6;
 }
 
+.hero-note {
+  max-width: 48rem;
+  margin: 1rem 0 0;
+  color: rgba(27, 38, 43, 0.74);
+  font-size: 0.98rem;
+  line-height: 1.65;
+}
+
+.hero-note a {
+  color: rgb(var(--signal-secret-rgb) / 0.9);
+  text-decoration-color: rgba(48, 92, 103, 0.36);
+  text-underline-offset: 0.14em;
+}
+
+.hero-note a:hover,
+.hero-note a:focus-visible {
+  text-decoration-color: rgba(48, 92, 103, 0.7);
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

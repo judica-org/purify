@@ -152,6 +152,25 @@ cmake --build --preset sanitizers-int --parallel
 ctest --preset sanitizers-int
 ```
 
+For a Linux/GCC 32-bit debug build with `-ftrapv` enabled:
+
+```sh
+sudo apt-get install gcc-multilib g++-multilib libc6-dev-i386
+cmake --preset trapv-i686
+cmake --build --preset trapv-i686 --parallel
+ctest --preset trapv-i686
+```
+
+For a closer approximation of Bitcoin Core's i686 debug lane, use Clang 32-bit
+with libstdc++ debug mode, extra hardening flags, and the benchmark target enabled:
+
+```sh
+sudo apt-get install llvm clang g++-multilib libc6-dev-i386
+cmake --preset bitcoin-i686-debug
+cmake --build --preset bitcoin-i686-debug --parallel
+ctest --preset bitcoin-i686-debug
+```
+
 For Valgrind memcheck plus ctgrind-style secret-flow checks:
 
 ```sh

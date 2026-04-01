@@ -57,6 +57,44 @@
       }
     },
     {
+      "name": "trapv-i686",
+      "inherits": "ci-base",
+      "binaryDir": "${sourceDir}/build-trapv-i686",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_C_FLAGS": "-m32 -ftrapv",
+        "CMAKE_CXX_FLAGS": "-m32 -ftrapv",
+        "CMAKE_EXE_LINKER_FLAGS": "-m32 -ftrapv",
+        "CMAKE_SHARED_LINKER_FLAGS": "-m32 -ftrapv",
+        "PURIFY_BUILD_CLI": "OFF",
+        "PURIFY_BUILD_REFERENCE_TESTS": "OFF",
+        "PURIFY_USE_LEGACY_FIELD_HASHES": "OFF"
+      }
+    },
+    {
+      "name": "bitcoin-i686-debug",
+      "inherits": "ci-base",
+      "binaryDir": "${sourceDir}/build-bitcoin-i686-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_FLAGS": "-m32 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -Wstack-protector -fstack-protector-all -fcf-protection=full -fstack-clash-protection",
+        "CMAKE_CXX_FLAGS": "-m32 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -Wstack-protector -fstack-protector-all -fcf-protection=full -fstack-clash-protection -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG -DBOOST_MULTI_INDEX_ENABLE_SAFE_MODE",
+        "CMAKE_C_FLAGS_DEBUG": "-O0 -ftrapv -O1 -g3 -g3",
+        "CMAKE_CXX_FLAGS_DEBUG": "-O0 -ftrapv -O1 -g3 -g3",
+        "CMAKE_EXE_LINKER_FLAGS": "-m32 -ftrapv -O1 -g3 -g3 -fstack-protector-all -fcf-protection=full -fstack-clash-protection -Wl,-z,relro -Wl,-z,now -Wl,-z,separate-code -fPIE -pie",
+        "CMAKE_SHARED_LINKER_FLAGS": "-m32 -ftrapv -O1 -g3 -g3 -fstack-protector-all -fcf-protection=full -fstack-clash-protection -Wl,-z,relro -Wl,-z,now -Wl,-z,separate-code",
+        "PURIFY_BUILD_BENCH": "ON",
+        "PURIFY_BUILD_CLI": "OFF",
+        "PURIFY_BUILD_FUZZ": "OFF",
+        "PURIFY_BUILD_REFERENCE_TESTS": "OFF",
+        "PURIFY_USE_LEGACY_FIELD_HASHES": "OFF"
+      }
+    },
+    {
       "name": "valgrind",
       "inherits": "ci-base",
       "binaryDir": "${sourceDir}/build-valgrind",
@@ -106,6 +144,16 @@
     {
       "name": "sanitizers-int",
       "configurePreset": "sanitizers-int",
+      "configuration": "Debug"
+    },
+    {
+      "name": "trapv-i686",
+      "configurePreset": "trapv-i686",
+      "configuration": "Debug"
+    },
+    {
+      "name": "bitcoin-i686-debug",
+      "configurePreset": "bitcoin-i686-debug",
       "configuration": "Debug"
     },
     {
@@ -172,6 +220,32 @@
       "filter": {
         "include": {
           "name": "purify.tests|purify.property_tests|purify.c_api"
+        }
+      }
+    },
+    {
+      "name": "trapv-i686",
+      "configurePreset": "trapv-i686",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "purify.tests|purify.c_api"
+        }
+      }
+    },
+    {
+      "name": "bitcoin-i686-debug",
+      "configurePreset": "bitcoin-i686-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "purify.tests|purify.property_tests|purify.c_api|purify.bench"
         }
       }
     },

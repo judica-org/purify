@@ -450,6 +450,7 @@ if(PURIFY_BUILD_TESTS)
         tests/purify_tests.cpp
         tests/puresign_tests.cpp
         tests/legacy_bulletproof_tests.cpp
+        tests/expected_tests.cpp
     )
 
     target_link_libraries(purify_tests

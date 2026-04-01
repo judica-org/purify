@@ -11,6 +11,7 @@
 
 #include <exception>
 #include <memory>
+#include <new>
 #include <type_traits>
 #include <utility>
 
@@ -88,111 +89,251 @@ public:
     using error_type = E;
     using unexpected_type = Unexpected<E>;
 
-    constexpr Expected()
+    Expected()
     requires std::is_default_constructible_v<T>
-        : storage_(std::in_place_index<0>) {}
-
-    constexpr Expected(const T& value) : storage_(std::in_place_index<0>, value) {}
-    constexpr Expected(T&& value) : storage_(std::in_place_index<0>, std::move(value)) {}
-    constexpr Expected(const Unexpected<E>& error) : storage_(std::in_place_index<1>, error.error()) {}
-    constexpr Expected(Unexpected<E>&& error) : storage_(std::in_place_index<1>, std::move(error).error()) {}
-
-    constexpr Expected(const Expected&) = default;
-    constexpr Expected(Expected&&) noexcept = default;
-    constexpr Expected& operator=(const Expected&) = default;
-    constexpr Expected& operator=(Expected&&) noexcept = default;
-    ~Expected() = default;
-
-    [[nodiscard]] constexpr bool has_value() const noexcept {
-        return storage_.index() == 0;
+    {
+        ConstructValue();
     }
 
-    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+    Expected(const T& value)
+    {
+        ConstructValue(value);
+    }
+    Expected(T&& value)
+    {
+        ConstructValue(std::move(value));
+    }
+    Expected(const Unexpected<E>& error)
+    {
+        ConstructError(error.error());
+    }
+    Expected(Unexpected<E>&& error)
+    {
+        ConstructError(std::move(error).error());
+    }
+
+    Expected(const Expected& other)
+    {
+        if (other.has_value()) {
+            ConstructValue(other.ValueRef());
+        } else {
+            ConstructError(other.ErrorRef());
+        }
+    }
+
+    Expected(Expected&& other) noexcept(std::is_nothrow_move_constructible_v<T> &&
+                                        std::is_nothrow_move_constructible_v<E>)
+    {
+        if (other.has_value()) {
+            ConstructValue(std::move(other.ValueRef()));
+        } else {
+            ConstructError(std::move(other.ErrorRef()));
+        }
+    }
+
+    Expected& operator=(const Expected& other)
+    {
+        if (this == &other) {
+            return *this;
+        }
+        if (has_value() && other.has_value()) {
+            ValueRef() = other.ValueRef();
+            return *this;
+        }
+        if (!has_value() && !other.has_value()) {
+            ErrorRef() = other.ErrorRef();
+            return *this;
+        }
+        if (other.has_value()) {
+            T tmp(other.ValueRef());
+            Destroy();
+            ConstructValue(std::move(tmp));
+            return *this;
+        }
+        E tmp(other.ErrorRef());
+        Destroy();
+        ConstructError(std::move(tmp));
+        return *this;
+    }
+
+    Expected& operator=(Expected&& other) noexcept(std::is_nothrow_move_assignable_v<T> &&
+                                                   std::is_nothrow_move_assignable_v<E> &&
+                                                   std::is_nothrow_move_constructible_v<T> &&
+                                                   std::is_nothrow_move_constructible_v<E>)
+    {
+        if (this == &other) {
+            return *this;
+        }
+        if (has_value() && other.has_value()) {
+            ValueRef() = std::move(other.ValueRef());
+            return *this;
+        }
+        if (!has_value() && !other.has_value()) {
+            ErrorRef() = std::move(other.ErrorRef());
+            return *this;
+        }
+        if (other.has_value()) {
+            T tmp(std::move(other.ValueRef()));
+            Destroy();
+            ConstructValue(std::move(tmp));
+            return *this;
+        }
+        E tmp(std::move(other.ErrorRef()));
+        Destroy();
+        ConstructError(std::move(tmp));
+        return *this;
+    }
+
+    ~Expected()
+    {
+        Destroy();
+    }
+
+    [[nodiscard]] bool has_value() const noexcept {
+        return m_has_value;
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept {
         return has_value();
     }
 
-    [[nodiscard]] constexpr T& operator*() & {
+    [[nodiscard]] T& operator*() & {
         return value();
     }
 
-    [[nodiscard]] constexpr const T& operator*() const& {
+    [[nodiscard]] const T& operator*() const& {
         return value();
     }
 
-    [[nodiscard]] constexpr T&& operator*() && {
+    [[nodiscard]] T&& operator*() && {
         return std::move(value());
     }
 
-    [[nodiscard]] constexpr const T&& operator*() const&& {
+    [[nodiscard]] const T&& operator*() const&& {
         return std::move(value());
     }
 
-    [[nodiscard]] constexpr T* operator->() {
+    [[nodiscard]] T* operator->() {
         return std::addressof(value());
     }
 
-    [[nodiscard]] constexpr const T* operator->() const {
+    [[nodiscard]] const T* operator->() const {
         return std::addressof(value());
     }
 
-    [[nodiscard]] constexpr T& value() & {
+    [[nodiscard]] T& value() & {
         if (!has_value()) {
             throw bad_expected_access<E>();
         }
-        return std::get<0>(storage_);
+        return ValueRef();
     }
 
-    [[nodiscard]] constexpr const T& value() const& {
+    [[nodiscard]] const T& value() const& {
         if (!has_value()) {
             throw bad_expected_access<E>();
         }
-        return std::get<0>(storage_);
+        return ValueRef();
     }
 
-    [[nodiscard]] constexpr T&& value() && {
+    [[nodiscard]] T&& value() && {
         if (!has_value()) {
             throw bad_expected_access<E>();
         }
-        return std::move(std::get<0>(storage_));
+        return std::move(ValueRef());
     }
 
-    [[nodiscard]] constexpr const T&& value() const&& {
+    [[nodiscard]] const T&& value() const&& {
         if (!has_value()) {
             throw bad_expected_access<E>();
         }
-        return std::move(std::get<0>(storage_));
+        return std::move(ValueRef());
     }
 
-    [[nodiscard]] constexpr E& error() & {
+    [[nodiscard]] E& error() & {
         if (has_value()) {
             throw bad_expected_access<E>();
         }
-        return std::get<1>(storage_);
+        return ErrorRef();
     }
 
-    [[nodiscard]] constexpr const E& error() const& {
+    [[nodiscard]] const E& error() const& {
         if (has_value()) {
             throw bad_expected_access<E>();
         }
-        return std::get<1>(storage_);
+        return ErrorRef();
     }
 
-    [[nodiscard]] constexpr E&& error() && {
+    [[nodiscard]] E&& error() && {
         if (has_value()) {
             throw bad_expected_access<E>();
         }
-        return std::move(std::get<1>(storage_));
+        return std::move(ErrorRef());
     }
 
-    [[nodiscard]] constexpr const E&& error() const&& {
+    [[nodiscard]] const E&& error() const&& {
         if (has_value()) {
             throw bad_expected_access<E>();
         }
-        return std::move(std::get<1>(storage_));
+        return std::move(ErrorRef());
     }
 
 private:
-    std::variant<T, E> storage_;
+    union Storage {
+        char empty;
+        T value;
+        E error;
+
+        Storage() noexcept : empty() {}
+        ~Storage() {}
+    };
+
+    template <typename... Args>
+    void ConstructValue(Args&&... args)
+    {
+        std::construct_at(std::addressof(storage_.value), std::forward<Args>(args)...);
+        m_has_value = true;
+    }
+
+    template <typename... Args>
+    void ConstructError(Args&&... args)
+    {
+        std::construct_at(std::addressof(storage_.error), std::forward<Args>(args)...);
+        m_has_value = false;
+    }
+
+    void Destroy() noexcept
+    {
+        if (m_has_value) {
+            std::destroy_at(std::addressof(storage_.value));
+            return;
+        }
+        std::destroy_at(std::addressof(storage_.error));
+    }
+
+    T& ValueRef() & noexcept
+    {
+        return storage_.value;
+    }
+
+    const T& ValueRef() const& noexcept
+    {
+        return storage_.value;
+    }
+
+    E& ErrorRef() & noexcept
+    {
+        return storage_.error;
+    }
+
+    const E& ErrorRef() const& noexcept
+    {
+        return storage_.error;
+    }
+
+    // Keep the fallback explicitly tagged; i686 was surfacing valueless
+    // std::variant states through Purify's checked-return path.
+    bool m_has_value{false};
+    Storage storage_{};
 };
 
 template <typename E>

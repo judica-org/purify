@@ -86,18 +86,22 @@ struct NativeBulletproofCircuit {
     };
 
     /**
-     * @brief Resettable packed circuit representation backed by contiguous typed buffers.
+     * @brief Resettable packed circuit representation backed by one aligned owning slab.
      *
-     * This keeps row metadata, sparse terms, and constants in compact contiguous buffers sized for
-     * the base circuit plus caller-supplied slack. It supports two cache-friendly modes:
-     * copying the object cheaply for const use, or mutating it in place and then calling `reset()`
-     * to return to the original packed base shape.
+     * This keeps row metadata, sparse terms, and constants in one compact slab sized for the base
+     * circuit plus caller-supplied slack. It supports two cache-friendly modes: copying the object
+     * cheaply for const use, or mutating it in place and then calling `reset()` to return to the
+     * original packed base shape.
      */
     class PackedWithSlack {
     public:
         PackedWithSlack() = default;
+        PackedWithSlack(const PackedWithSlack& other);
+        PackedWithSlack& operator=(const PackedWithSlack& other);
+        PackedWithSlack(PackedWithSlack&& other) noexcept = default;
+        PackedWithSlack& operator=(PackedWithSlack&& other) noexcept = default;
 
-        /** @brief Packs a native circuit into compact contiguous buffers with caller-supplied row and constraint slack. */
+        /** @brief Packs a native circuit into one aligned slab with caller-supplied row and constraint slack. */
         [[nodiscard]] static Result<PackedWithSlack> from_circuit(
             const NativeBulletproofCircuit& circuit,
             const PackedSlackPlan& slack);
@@ -181,13 +185,21 @@ struct NativeBulletproofCircuit {
         const NativeBulletproofCircuitTerm* term_data() const noexcept;
         FieldElement* constant_data() noexcept;
         const FieldElement* constant_data() const noexcept;
+        unsigned char* raw_storage_bytes() noexcept;
+        const unsigned char* raw_storage_bytes() const noexcept;
+        static bool compute_storage_layout(std::size_t row_count, std::size_t term_capacity,
+                                           std::size_t constraint_capacity, std::size_t& term_bytes_offset,
+                                           std::size_t& constant_bytes_offset, std::size_t& storage_bytes) noexcept;
+        void start_storage_lifetimes() noexcept;
         NativeBulletproofCircuitRow::PackedWithSlack row_view(const PackedRowHeader& header) const noexcept;
         void add_row_term(RowFamily family, std::size_t expected_size, std::size_t row_idx,
                           std::size_t constraint_idx, const FieldElement& scalar);
 
-        using PackedRowHeaderStorage = std::vector<PackedRowHeader>;
-        using PackedTermStorage = std::vector<NativeBulletproofCircuitTerm>;
-        using PackedConstantStorage = std::vector<FieldElement>;
+        struct PackedStorageDeleter {
+            void operator()(std::byte* storage) const noexcept;
+        };
+
+        using PackedStorageOwner = std::unique_ptr<std::byte[], PackedStorageDeleter>;
 
         std::size_t n_gates_ = 0;
         std::size_t n_commitments_ = 0;
@@ -195,16 +207,26 @@ struct NativeBulletproofCircuit {
         std::size_t constraint_size_ = 0;
         std::size_t constraint_base_size_ = 0;
         std::size_t constraint_capacity_ = 0;
-        PackedRowHeaderStorage row_headers_;
-        PackedTermStorage terms_;
-        PackedConstantStorage constants_;
+        std::size_t term_capacity_ = 0;
+        std::size_t term_bytes_offset_ = 0;
+        std::size_t constant_bytes_offset_ = 0;
+        std::size_t storage_bytes_ = 0;
+        PackedStorageOwner storage_;
 
-        static_assert(std::is_same_v<decltype(&PackedWithSlack::row_headers_), PackedRowHeaderStorage PackedWithSlack::*>,
-                      "PackedWithSlack row metadata must stay in typed header storage");
-        static_assert(std::is_same_v<decltype(&PackedWithSlack::terms_), PackedTermStorage PackedWithSlack::*>,
-                      "PackedWithSlack sparse terms must stay in typed term storage");
-        static_assert(std::is_same_v<decltype(&PackedWithSlack::constants_), PackedConstantStorage PackedWithSlack::*>,
-                      "PackedWithSlack constants must stay in typed constant storage");
+        static_assert(std::is_trivially_copyable_v<PackedRowHeader>,
+                      "PackedWithSlack row headers must remain trivially copyable");
+        static_assert(std::is_trivially_destructible_v<PackedRowHeader>,
+                      "PackedWithSlack row headers must remain trivially destructible");
+        static_assert(std::is_trivially_copyable_v<NativeBulletproofCircuitTerm>,
+                      "PackedWithSlack sparse terms must remain trivially copyable");
+        static_assert(std::is_trivially_destructible_v<NativeBulletproofCircuitTerm>,
+                      "PackedWithSlack sparse terms must remain trivially destructible");
+        static_assert(std::is_trivially_copyable_v<FieldElement>,
+                      "PackedWithSlack constants must remain trivially copyable");
+        static_assert(std::is_trivially_destructible_v<FieldElement>,
+                      "PackedWithSlack constants must remain trivially destructible");
+        static_assert(std::is_same_v<decltype(&PackedWithSlack::storage_), PackedStorageOwner PackedWithSlack::*>,
+                      "PackedWithSlack must keep its backing storage in one owning slab");
 
     };
 

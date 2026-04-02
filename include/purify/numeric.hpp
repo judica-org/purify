@@ -16,6 +16,15 @@ namespace purify {
 
 namespace detail {
 
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+#endif
+
+// `UInt128` intentionally uses the compiler `__int128` extension when it is
+// available; the fallback branch below remains the standards-only path.
 class UInt128 {
 public:
     [[nodiscard]] static UInt128 from_words(std::uint64_t hi, std::uint64_t lo) {
@@ -114,6 +123,12 @@ private:
     std::uint64_t hi_ = 0;
 #endif
 };
+
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+#endif
 
 [[nodiscard]] inline std::size_t bit_length_u64(std::uint64_t value) {
     return value == 0 ? 0U : 64U - static_cast<std::size_t>(std::countl_zero(value));

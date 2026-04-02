@@ -8,6 +8,7 @@
 #ifndef PURIFY_LEGACY_BULLETPROOF_CORE_H
 #define PURIFY_LEGACY_BULLETPROOF_CORE_H
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -71,6 +72,28 @@ struct secp256k1_bulletproof_generators {
     secp256k1_ge *blinding_gen;
 };
 
+static int purify_checked_mul_size(size_t lhs, size_t rhs, size_t* out) {
+    if (out == NULL) {
+        return 0;
+    }
+    if (lhs != 0 && rhs > SIZE_MAX / lhs) {
+        return 0;
+    }
+    *out = lhs * rhs;
+    return 1;
+}
+
+static int purify_checked_add_size(size_t lhs, size_t rhs, size_t* out) {
+    if (out == NULL) {
+        return 0;
+    }
+    if (rhs > SIZE_MAX - lhs) {
+        return 0;
+    }
+    *out = lhs + rhs;
+    return 1;
+}
+
 static secp256k1_bulletproof_generators *secp256k1_bulletproof_generators_create(
     const secp256k1_context *ctx,
     const secp256k1_generator *blinding_gen,
@@ -79,6 +102,9 @@ static secp256k1_bulletproof_generators *secp256k1_bulletproof_generators_create
 ) {
     secp256k1_bulletproof_generators *ret;
     secp256k1_rfc6979_hmac_sha256 rng;
+    size_t blinding_offset = 0;
+    size_t generator_slots = 0;
+    size_t allocation_bytes = 0;
     unsigned char seed[64];
     secp256k1_gej precompj;
     size_t i;
@@ -91,12 +117,18 @@ static secp256k1_bulletproof_generators *secp256k1_bulletproof_generators_create
     if (ret == NULL) {
         return NULL;
     }
-    ret->gens = (secp256k1_ge *)checked_malloc(&ctx->error_callback, (precomp_n * (n + 1)) * sizeof(*ret->gens));
+    if (!purify_checked_mul_size(precomp_n, n, &blinding_offset) ||
+        !purify_checked_add_size(blinding_offset, precomp_n, &generator_slots) ||
+        !purify_checked_mul_size(generator_slots, sizeof(*ret->gens), &allocation_bytes)) {
+        free(ret);
+        return NULL;
+    }
+    ret->gens = (secp256k1_ge *)checked_malloc(&ctx->error_callback, allocation_bytes);
     if (ret->gens == NULL) {
         free(ret);
         return NULL;
     }
-    ret->blinding_gen = &ret->gens[precomp_n * n];
+    ret->blinding_gen = &ret->gens[blinding_offset];
     ret->n = n;
 
     secp256k1_fe_get_b32(&seed[0], &secp256k1_ge_const_g.x);

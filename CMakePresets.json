@@ -201,7 +201,7 @@
       "configuration": "Release",
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.reference_circuit"
+          "name": "purify.tests|purify\\.property\\..*|purify.reference_circuit"
         }
       }
     },
@@ -223,7 +223,7 @@
       "configuration": "Debug",
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.c_api"
+          "name": "purify.tests|purify\\.property\\..*|purify.c_api"
         }
       }
     },
@@ -234,7 +234,7 @@
       "configuration": "Debug",
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.c_api"
+          "name": "purify.tests|purify\\.property\\..*|purify.c_api"
         }
       }
     },
@@ -256,7 +256,7 @@
       "configuration": "Debug",
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.c_api|purify.bench"
+          "name": "purify.tests|purify\\.property\\..*|purify.c_api|purify.bench"
         }
       }
     },
@@ -267,7 +267,7 @@
       "configuration": "Debug",
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.c_api"
+          "name": "purify.tests|purify\\.property\\..*|purify.c_api"
         }
       }
     },

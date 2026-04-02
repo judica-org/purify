@@ -492,17 +492,76 @@ void test_random_puresign_plusplus_proven_signature_properties(TestContext& ctx)
                "tampering a PureSign++ ProvenSignature is rejected");
 }
 
+using SuiteFn = void (*)(TestContext&);
+
+struct SuiteSpec {
+    std::string_view name;
+    SuiteFn run;
+};
+
+constexpr std::array<SuiteSpec, 6> kSuites{{
+    {"key_and_circuit", &test_seeded_key_and_circuit_properties},
+    {"experimental", &test_random_experimental_proof_properties},
+    {"split_eval", &test_template_split_eval_differential},
+    {"assume_valid_proof", &test_assume_valid_proof_matches_validated_proof},
+    {"puresign", &test_random_puresign_proven_signature_properties},
+    {"puresign_plusplus", &test_random_puresign_plusplus_proven_signature_properties},
+}};
+
+const SuiteSpec* find_suite(std::string_view name) {
+    for (const SuiteSpec& suite : kSuites) {
+        if (suite.name == name) {
+            return &suite;
+        }
+    }
+    return nullptr;
+}
+
+void print_usage(std::ostream& out, std::string_view program) {
+    out << "Usage: " << program << " [--list-suites] [--suite <name>]...\n";
+}
+
+void print_suites(std::ostream& out) {
+    out << "Available suites:\n";
+    for (const SuiteSpec& suite : kSuites) {
+        out << "  " << suite.name << "\n";
+    }
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     TestContext ctx;
 
-    test_seeded_key_and_circuit_properties(ctx);
-    test_random_experimental_proof_properties(ctx);
-    test_template_split_eval_differential(ctx);
-    test_assume_valid_proof_matches_validated_proof(ctx);
-    test_random_puresign_proven_signature_properties(ctx);
-    test_random_puresign_plusplus_proven_signature_properties(ctx);
+    if (argc == 1) {
+        for (const SuiteSpec& suite : kSuites) {
+            suite.run(ctx);
+        }
+    } else {
+        for (int i = 1; i < argc; ++i) {
+            std::string_view arg = argv[i];
+            if (arg == "--list-suites") {
+                print_suites(std::cout);
+                return 0;
+            }
+            if (arg == "--suite") {
+                if (i + 1 >= argc) {
+                    print_usage(std::cerr, argv[0]);
+                    return 1;
+                }
+                const SuiteSpec* suite = find_suite(argv[++i]);
+                if (suite == nullptr) {
+                    std::cerr << "unknown suite: " << argv[i] << "\n";
+                    print_suites(std::cerr);
+                    return 1;
+                }
+                suite->run(ctx);
+                continue;
+            }
+            print_usage(std::cerr, argv[0]);
+            return 1;
+        }
+    }
 
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " property test(s) failed\n";

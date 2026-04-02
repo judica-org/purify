@@ -482,8 +482,17 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_warnings(purify_property_tests)
     purify_enable_sanitizers(purify_property_tests)
 
-    add_test(NAME purify.property_tests COMMAND purify_property_tests)
-    set_tests_properties(purify.property_tests PROPERTIES TIMEOUT 300)
+    function(purify_add_property_suite_test suite_name)
+        add_test(NAME "purify.property.${suite_name}" COMMAND purify_property_tests --suite "${suite_name}")
+        set_tests_properties("purify.property.${suite_name}" PROPERTIES TIMEOUT 300)
+    endfunction()
+
+    purify_add_property_suite_test(key_and_circuit)
+    purify_add_property_suite_test(experimental)
+    purify_add_property_suite_test(split_eval)
+    purify_add_property_suite_test(assume_valid_proof)
+    purify_add_property_suite_test(puresign)
+    purify_add_property_suite_test(puresign_plusplus)
 
     add_executable(purify_c_tests
         tests/purify_c_tests.c

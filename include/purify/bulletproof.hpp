@@ -85,18 +85,18 @@ struct NativeBulletproofCircuit {
     };
 
     /**
-     * @brief Resettable packed circuit representation backed by one aligned slab allocation.
+     * @brief Resettable packed circuit representation backed by contiguous typed buffers.
      *
-     * This keeps row metadata, sparse terms, and constants in a single allocation sized for the
-     * base circuit plus caller-supplied slack. It supports two cache-friendly modes:
-     * copying the object cheaply as one slab for const use, or mutating it in place and then
-     * calling `reset()` to return to the original packed base shape.
+     * This keeps row metadata, sparse terms, and constants in compact contiguous buffers sized for
+     * the base circuit plus caller-supplied slack. It supports two cache-friendly modes:
+     * copying the object cheaply for const use, or mutating it in place and then calling `reset()`
+     * to return to the original packed base shape.
      */
     class PackedWithSlack {
     public:
         PackedWithSlack() = default;
 
-        /** @brief Packs a native circuit into one aligned slab with caller-supplied row and constraint slack. */
+        /** @brief Packs a native circuit into compact contiguous buffers with caller-supplied row and constraint slack. */
         [[nodiscard]] static Result<PackedWithSlack> from_circuit(
             const NativeBulletproofCircuit& circuit,
             const PackedSlackPlan& slack);
@@ -190,9 +190,9 @@ struct NativeBulletproofCircuit {
         std::size_t constraint_size_ = 0;
         std::size_t constraint_base_size_ = 0;
         std::size_t constraint_capacity_ = 0;
-        std::size_t term_bytes_offset_ = 0;
-        std::size_t constant_bytes_offset_ = 0;
-        std::vector<std::max_align_t> storage_;
+        std::vector<PackedRowHeader> row_headers_;
+        std::vector<NativeBulletproofCircuitTerm> terms_;
+        std::vector<FieldElement> constants_;
 
     };
 

@@ -90,6 +90,37 @@ Result<GeneratedKey> random_key(SplitMix64& rng) {
     return purify::generate_key(seed);
 }
 
+bool rows_equal(const std::vector<purify::NativeBulletproofCircuitRow>& lhs,
+                const std::vector<purify::NativeBulletproofCircuitRow>& rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+        if (lhs[i].entries.size() != rhs[i].entries.size()) {
+            return false;
+        }
+        for (std::size_t j = 0; j < lhs[i].entries.size(); ++j) {
+            const purify::NativeBulletproofCircuitTerm& left = lhs[i].entries[j];
+            const purify::NativeBulletproofCircuitTerm& right = rhs[i].entries[j];
+            if (left.idx != right.idx || left.scalar != right.scalar) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool circuits_equal(const NativeBulletproofCircuit& lhs, const NativeBulletproofCircuit& rhs) {
+    return lhs.n_gates == rhs.n_gates
+        && lhs.n_commitments == rhs.n_commitments
+        && lhs.n_bits == rhs.n_bits
+        && rows_equal(lhs.wl, rhs.wl)
+        && rows_equal(lhs.wr, rhs.wr)
+        && rows_equal(lhs.wo, rhs.wo)
+        && rows_equal(lhs.wv, rhs.wv)
+        && lhs.c == rhs.c;
+}
+
 bool proof_rejected_after_tamper(const NativeBulletproofCircuit& circuit,
                                  const ExperimentalBulletproofProof& proof,
                                  std::span<const unsigned char> binding) {
@@ -314,13 +345,22 @@ void test_template_split_eval_differential(TestContext& ctx) {
             Result<purify::NativeBulletproofCircuit::PackedWithSlack> instantiated =
                 circuit_template->instantiate_packed(pubkey);
             expect_ok(ctx, instantiated, label);
-            if (!instantiated.has_value()) {
+            Result<purify::NativeBulletproofCircuit> unpacked = circuit_template->instantiate(pubkey);
+            expect_ok(ctx, unpacked, label);
+            if (!instantiated.has_value() || !unpacked.has_value()) {
+                return;
+            }
+            Result<purify::NativeBulletproofCircuit> roundtrip = instantiated->unpack();
+            expect_ok(ctx, roundtrip, label);
+            if (!roundtrip.has_value()) {
                 return;
             }
 
             bool split_ok = *partial && *final;
             bool full_ok = instantiated->evaluate(assignment);
             ctx.expect(split_ok == full_ok, label);
+            ctx.expect(unpacked->evaluate(assignment) == full_ok, "instantiate() preserves packed circuit evaluation");
+            ctx.expect(circuits_equal(*unpacked, *roundtrip), "instantiate() matches instantiate_packed().unpack()");
         };
 
         compare_split_vs_full(witness->assignment, key->public_key,

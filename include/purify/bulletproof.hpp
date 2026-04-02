@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -184,15 +185,26 @@ struct NativeBulletproofCircuit {
         void add_row_term(RowFamily family, std::size_t expected_size, std::size_t row_idx,
                           std::size_t constraint_idx, const FieldElement& scalar);
 
+        using PackedRowHeaderStorage = std::vector<PackedRowHeader>;
+        using PackedTermStorage = std::vector<NativeBulletproofCircuitTerm>;
+        using PackedConstantStorage = std::vector<FieldElement>;
+
         std::size_t n_gates_ = 0;
         std::size_t n_commitments_ = 0;
         std::size_t n_bits_ = 0;
         std::size_t constraint_size_ = 0;
         std::size_t constraint_base_size_ = 0;
         std::size_t constraint_capacity_ = 0;
-        std::vector<PackedRowHeader> row_headers_;
-        std::vector<NativeBulletproofCircuitTerm> terms_;
-        std::vector<FieldElement> constants_;
+        PackedRowHeaderStorage row_headers_;
+        PackedTermStorage terms_;
+        PackedConstantStorage constants_;
+
+        static_assert(std::is_same_v<decltype(&PackedWithSlack::row_headers_), PackedRowHeaderStorage PackedWithSlack::*>,
+                      "PackedWithSlack row metadata must stay in typed header storage");
+        static_assert(std::is_same_v<decltype(&PackedWithSlack::terms_), PackedTermStorage PackedWithSlack::*>,
+                      "PackedWithSlack sparse terms must stay in typed term storage");
+        static_assert(std::is_same_v<decltype(&PackedWithSlack::constants_), PackedConstantStorage PackedWithSlack::*>,
+                      "PackedWithSlack constants must stay in typed constant storage");
 
     };
 

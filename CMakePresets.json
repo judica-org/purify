@@ -95,6 +95,14 @@
       }
     },
     {
+      "name": "bitcoin-i686-smallstack",
+      "inherits": "bitcoin-i686-debug",
+      "binaryDir": "${sourceDir}/build-bitcoin-i686-smallstack",
+      "cacheVariables": {
+        "PURIFY_BUILD_BENCH": "OFF"
+      }
+    },
+    {
       "name": "valgrind",
       "inherits": "ci-base",
       "binaryDir": "${sourceDir}/build-valgrind",
@@ -154,6 +162,11 @@
     {
       "name": "bitcoin-i686-debug",
       "configurePreset": "bitcoin-i686-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "bitcoin-i686-smallstack",
+      "configurePreset": "bitcoin-i686-smallstack",
       "configuration": "Debug"
     },
     {
@@ -246,6 +259,19 @@
       "filter": {
         "include": {
           "name": "purify.tests|purify.property_tests|purify.c_api|purify.bench"
+        }
+      }
+    },
+    {
+      "name": "bitcoin-i686-smallstack",
+      "configurePreset": "bitcoin-i686-smallstack",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "purify.tests|purify.property_tests|purify.c_api"
         }
       }
     },

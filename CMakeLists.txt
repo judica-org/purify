@@ -461,7 +461,14 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_warnings(purify_tests)
     purify_enable_sanitizers(purify_tests)
 
-    add_test(NAME purify.tests COMMAND purify_tests)
+    function(purify_add_cpp_suite_test suite_name)
+        add_test(NAME "purify.tests.${suite_name}" COMMAND purify_tests --suite "${suite_name}")
+    endfunction()
+
+    purify_add_cpp_suite_test(core)
+    purify_add_cpp_suite_test(puresign)
+    purify_add_cpp_suite_test(legacy_bulletproof)
+    purify_add_cpp_suite_test(expected)
 
     add_executable(purify_property_tests
         tests/purify_property_tests.cpp

@@ -185,25 +185,31 @@
   ],
   "testPresets": [
     {
-      "name": "tagged",
-      "configurePreset": "tagged",
-      "configuration": "Release",
+      "name": "test-base",
+      "hidden": true,
       "output": {
         "outputOnFailure": true
       },
+      "execution": {
+        "jobs": 0
+      }
+    },
+    {
+      "name": "tagged",
+      "inherits": "test-base",
+      "configurePreset": "tagged",
+      "configuration": "Release",
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.reference_circuit"
+          "name": "purify.tests|purify\\.property\\..*|purify.reference_circuit"
         }
       }
     },
     {
       "name": "legacy",
+      "inherits": "test-base",
       "configurePreset": "legacy",
       "configuration": "Release",
-      "output": {
-        "outputOnFailure": true
-      },
       "filter": {
         "include": {
           "name": "purify.tests|purify.reference_circuit"
@@ -212,37 +218,31 @@
     },
     {
       "name": "sanitizers",
+      "inherits": "test-base",
       "configurePreset": "sanitizers",
       "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      },
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.c_api"
+          "name": "purify.tests|purify\\.property\\..*|purify.c_api"
         }
       }
     },
     {
       "name": "sanitizers-int",
+      "inherits": "test-base",
       "configurePreset": "sanitizers-int",
       "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      },
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.c_api"
+          "name": "purify.tests|purify\\.property\\..*|purify.c_api"
         }
       }
     },
     {
       "name": "trapv-i686",
+      "inherits": "test-base",
       "configurePreset": "trapv-i686",
       "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      },
       "filter": {
         "include": {
           "name": "purify.tests|purify.c_api"
@@ -251,37 +251,31 @@
     },
     {
       "name": "bitcoin-i686-debug",
+      "inherits": "test-base",
       "configurePreset": "bitcoin-i686-debug",
       "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      },
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.c_api|purify.bench"
+          "name": "purify.tests|purify\\.property\\..*|purify.c_api|purify.bench"
         }
       }
     },
     {
       "name": "bitcoin-i686-smallstack",
+      "inherits": "test-base",
       "configurePreset": "bitcoin-i686-smallstack",
       "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      },
       "filter": {
         "include": {
-          "name": "purify.tests|purify.property_tests|purify.c_api"
+          "name": "purify.tests|purify\\.property\\..*|purify.c_api"
         }
       }
     },
     {
       "name": "valgrind",
+      "inherits": "test-base",
       "configurePreset": "valgrind",
       "configuration": "RelWithDebInfo",
-      "output": {
-        "outputOnFailure": true
-      },
       "filter": {
         "include": {
           "name": "purify\\.valgrind\\..*"
@@ -290,11 +284,9 @@
     },
     {
       "name": "cbmc",
+      "inherits": "test-base",
       "configurePreset": "cbmc",
       "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      },
       "filter": {
         "include": {
           "name": "purify\\.cbmc\\..*"

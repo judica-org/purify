@@ -121,7 +121,7 @@ Build and run the regression suite with:
 ```sh
 cmake -S . -B build -DPURIFY_BUILD_BENCH=OFF -DPURIFY_BUILD_DOCS=OFF -DPURIFY_BUILD_TESTS=ON
 cmake --build build -j
-ctest --test-dir build --output-on-failure
+ctest --test-dir build --output-on-failure --parallel
 ```
 
 To compare the generated verifier circuit against the checked-out Python reference implementation, initialize the
@@ -131,7 +131,7 @@ reference submodule and enable the extra regression:
 git submodule update --init --depth 1 reference/purify
 cmake -S . -B build -DPURIFY_BUILD_BENCH=OFF -DPURIFY_BUILD_DOCS=OFF -DPURIFY_BUILD_TESTS=ON -DPURIFY_BUILD_REFERENCE_TESTS=ON
 cmake --build build -j
-ctest --test-dir build --output-on-failure
+ctest --test-dir build --output-on-failure --parallel
 ```
 
 ### Verification

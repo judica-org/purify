@@ -7,6 +7,13 @@
 #include <assert.h>
 #include <string.h>
 
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+#endif
+
 static size_t purify_uint_bit_length_u64(uint64_t value) {
     if (value == 0) {
         return 0;
@@ -130,6 +137,12 @@ static uint64_t purify_uint_divmod_u32(uint64_t hi, uint64_t lo, uint32_t diviso
     return ((uint64_t)q1 << 32) | q0;
 #endif
 }
+
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER)
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+#endif
 
 #define PURIFY_UINT_FN(name) purify_u256_##name
 #define PURIFY_UINT_WORDS 4

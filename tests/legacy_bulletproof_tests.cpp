@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 #include "../src/bridge/bppp_bridge.h"
@@ -198,10 +199,70 @@ void test_legacy_bridge_zero_constraint_roundtrip(TestContext& ctx) {
     ctx.expect(verified == 1, "legacy bridge verifies zero-explicit-constraint circuits");
 }
 
+void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
+    constexpr std::size_t kOverflowGateCount =
+        std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 1);
+    constexpr std::size_t kOverflowGeneratorCount =
+        (std::numeric_limits<std::size_t>::max() / 33u) + 1u;
+    constexpr std::size_t kHugeRowSize =
+        (std::numeric_limits<std::size_t>::max() / 2u) + 1u;
+
+    purify_bulletproof_backend_resources* bulletproof_resources =
+        purify_bulletproof_backend_resources_create(kOverflowGateCount);
+    ctx.expect(bulletproof_resources == nullptr,
+               "legacy bulletproof backend rejects generator-table size overflow on large gate counts");
+    if (bulletproof_resources != nullptr) {
+        purify_bulletproof_backend_resources_destroy(bulletproof_resources);
+    }
+
+    const auto base_generator = purify::bppp::base_generator();
+    purify_bppp_backend_resources* bppp_resources =
+        purify_bppp_backend_resources_create(base_generator.data(), kOverflowGeneratorCount);
+    ctx.expect(bppp_resources == nullptr,
+               "BPPP backend rejects serialized generator length overflow");
+    if (bppp_resources != nullptr) {
+        purify_bppp_backend_resources_destroy(bppp_resources);
+    }
+
+    std::size_t serialized_len = 1;
+    int created = purify_bppp_create_generators(kOverflowGeneratorCount, nullptr, &serialized_len);
+    ctx.expect(created == 0, "generator creation reports failure when the serialized length would overflow");
+    ctx.expect(serialized_len == 0,
+               "generator creation zeroes the reported output length when the serialized size cannot be represented");
+
+    const std::array<std::size_t, 1> dummy_indices{0};
+    const std::array<unsigned char, 32> dummy_scalar{};
+    const std::array<unsigned char, 1> dummy_proof{};
+    const purify_bulletproof_row_view overflowing_rows[2] = {
+        {kHugeRowSize, dummy_indices.data(), dummy_scalar.data()},
+        {kHugeRowSize, dummy_indices.data(), dummy_scalar.data()},
+    };
+    const purify_bulletproof_circuit_view overflowing_circuit = {
+        2,
+        0,
+        1,
+        0,
+        overflowing_rows,
+        overflowing_rows,
+        overflowing_rows,
+        nullptr,
+        dummy_scalar.data(),
+    };
+    int verified = purify_bulletproof_verify_circuit(&overflowing_circuit,
+                                                     nullptr,
+                                                     base_generator.data(),
+                                                     nullptr,
+                                                     0,
+                                                     dummy_proof.data(),
+                                                     dummy_proof.size());
+    ctx.expect(verified == 0, "legacy bridge rejects overflowed row-entry totals before allocating or parsing");
+}
+
 }  // namespace
 
 void run_legacy_bulletproof_tests(TestContext& ctx) {
     test_experimental_bulletproof_roundtrip(ctx);
     test_experimental_bulletproof_rejects_malformed_inner_product_point(ctx);
     test_legacy_bridge_zero_constraint_roundtrip(ctx);
+    test_legacy_bridge_rejects_overflowed_sizes(ctx);
 }

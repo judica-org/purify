@@ -190,6 +190,13 @@ struct NativeBulletproofCircuit {
         static bool compute_storage_layout(std::size_t row_count, std::size_t term_capacity,
                                            std::size_t constraint_capacity, std::size_t& term_bytes_offset,
                                            std::size_t& constant_bytes_offset, std::size_t& storage_bytes) noexcept;
+        static constexpr std::size_t kPackedStorageAlignment =
+            alignof(PackedRowHeader) > alignof(NativeBulletproofCircuitTerm)
+                ? (alignof(PackedRowHeader) > alignof(FieldElement) ? alignof(PackedRowHeader) : alignof(FieldElement))
+                : (alignof(NativeBulletproofCircuitTerm) > alignof(FieldElement)
+                       ? alignof(NativeBulletproofCircuitTerm)
+                       : alignof(FieldElement));
+        static std::byte* allocate_storage(std::size_t bytes);
         void reset_to_empty() noexcept;
         void start_storage_lifetimes() noexcept;
         NativeBulletproofCircuitRow::PackedWithSlack row_view(const PackedRowHeader& header) const noexcept;
@@ -226,6 +233,12 @@ struct NativeBulletproofCircuit {
                       "PackedWithSlack constants must remain trivially copyable");
         static_assert(std::is_trivially_destructible_v<FieldElement>,
                       "PackedWithSlack constants must remain trivially destructible");
+        static_assert(alignof(PackedRowHeader) <= kPackedStorageAlignment,
+                      "PackedWithSlack slab alignment must cover row headers");
+        static_assert(alignof(NativeBulletproofCircuitTerm) <= kPackedStorageAlignment,
+                      "PackedWithSlack slab alignment must cover sparse terms");
+        static_assert(alignof(FieldElement) <= kPackedStorageAlignment,
+                      "PackedWithSlack slab alignment must cover constants");
         static_assert(std::is_same_v<decltype(&PackedWithSlack::storage_), PackedStorageOwner PackedWithSlack::*>,
                       "PackedWithSlack must keep its backing storage in one owning slab");
 

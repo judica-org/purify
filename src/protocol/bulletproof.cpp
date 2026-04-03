@@ -234,13 +234,6 @@ bool packed_row_count(std::size_t n_gates, std::size_t n_commitments, std::size_
     return checked_mul_size(n_gates, 3, gate_rows) && checked_add_size(gate_rows, n_commitments, out);
 }
 
-std::byte* allocate_packed_circuit_storage(std::size_t bytes) {
-    if (bytes == 0) {
-        return nullptr;
-    }
-    return static_cast<std::byte*>(::operator new(bytes, std::align_val_t(alignof(std::max_align_t))));
-}
-
 void append_u32_le(Bytes& out, std::uint32_t value) {
     for (int i = 0; i < 4; ++i) {
         out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
@@ -850,8 +843,15 @@ void NativeBulletproofCircuit::add_row_term(std::vector<NativeBulletproofCircuit
 
 void NativeBulletproofCircuit::PackedWithSlack::PackedStorageDeleter::operator()(std::byte* storage) const noexcept {
     if (storage != nullptr) {
-        ::operator delete(storage, std::align_val_t(alignof(std::max_align_t)));
+        ::operator delete(storage, std::align_val_t(NativeBulletproofCircuit::PackedWithSlack::kPackedStorageAlignment));
     }
+}
+
+std::byte* NativeBulletproofCircuit::PackedWithSlack::allocate_storage(std::size_t bytes) {
+    if (bytes == 0) {
+        return nullptr;
+    }
+    return static_cast<std::byte*>(::operator new(bytes, std::align_val_t(kPackedStorageAlignment)));
 }
 
 NativeBulletproofCircuit::PackedWithSlack::PackedWithSlack(const PackedWithSlack& other)
@@ -860,8 +860,10 @@ NativeBulletproofCircuit::PackedWithSlack::PackedWithSlack(const PackedWithSlack
       constraint_capacity_(other.constraint_capacity_), term_capacity_(other.term_capacity_),
       term_bytes_offset_(other.term_bytes_offset_), constant_bytes_offset_(other.constant_bytes_offset_),
       storage_bytes_(other.storage_bytes_) {
+    assert((other.storage_ != nullptr) == (other.storage_bytes_ != 0)
+           && "PackedWithSlack source storage must match its byte count");
     if (storage_bytes_ != 0) {
-        storage_.reset(allocate_packed_circuit_storage(storage_bytes_));
+        storage_.reset(allocate_storage(storage_bytes_));
         start_storage_lifetimes();
         std::memcpy(storage_.get(), other.storage_.get(), storage_bytes_);
     }
@@ -1333,7 +1335,7 @@ Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::Pack
                                 packed.term_bytes_offset_, packed.constant_bytes_offset_, packed.storage_bytes_)) {
         return unexpected_error(ErrorCode::Overflow, "NativeBulletproofCircuit::PackedWithSlack::from_circuit:storage_layout");
     }
-    packed.storage_.reset(allocate_packed_circuit_storage(packed.storage_bytes_));
+    packed.storage_.reset(allocate_storage(packed.storage_bytes_));
     packed.start_storage_lifetimes();
 
     PackedWithSlack::PackedRowHeader* headers =

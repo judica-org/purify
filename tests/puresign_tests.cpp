@@ -562,6 +562,75 @@ void test_puresign_plusplus_topic_signing(TestContext& ctx) {
     }
 }
 
+void test_puresign_plusplus_topic_proof_cache_reuse(TestContext& ctx) {
+    Result<SecretKey> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for PureSign++ repeated topic proof generation");
+    if (!secret.has_value()) {
+        return;
+    }
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
+    Bytes topic = purify::bytes_from_ascii("session-pp-reuse");
+    Result<purify::puresign_plusplus::KeyPair> key_pair =
+        purify::puresign_plusplus::KeyPair::from_secret(*secret, context.get());
+    expect_ok(ctx, key_pair, "PureSign++ KeyPair::from_secret succeeds for repeated topic proof generation");
+    Result<purify::puresign_plusplus::TopicProofCache> proof_cache =
+        purify::puresign_plusplus::TopicProofCache::build(topic);
+    expect_ok(ctx, proof_cache, "PureSign++ TopicProofCache::build succeeds for repeated topic proof generation");
+    if (!key_pair.has_value() || !proof_cache.has_value()) {
+        return;
+    }
+
+    purify::bppp::ExperimentalCircuitCache shared_cache;
+    const purify::puresign_plusplus::PublicKey& public_key = key_pair->public_key();
+
+    Result<purify::puresign_plusplus::PreparedNonceWithProof> prepared_a =
+        key_pair->prepare_topic_nonce_with_proof(*proof_cache, context.get(), &shared_cache);
+    expect_ok(ctx, prepared_a, "PureSign++ cached topic proof generation succeeds on the first call");
+    const std::size_t cache_size_after_a = shared_cache.size();
+    ctx.expect(cache_size_after_a > 0, "PureSign++ repeated topic proof generation populates the shared cache");
+
+    Result<purify::puresign_plusplus::PreparedNonceWithProof> prepared_b =
+        key_pair->prepare_topic_nonce_with_proof(*proof_cache, context.get(), &shared_cache);
+    expect_ok(ctx, prepared_b, "PureSign++ cached topic proof generation succeeds on the second call");
+    ctx.expect(shared_cache.size() == cache_size_after_a,
+               "PureSign++ repeated topic proof generation reuses the shared cache entries");
+
+    Result<purify::puresign_plusplus::PreparedNonceWithProof> prepared_c =
+        key_pair->prepare_topic_nonce_with_proof(*proof_cache, context.get(), &shared_cache);
+    expect_ok(ctx, prepared_c, "PureSign++ cached topic proof generation succeeds on the third call");
+    ctx.expect(shared_cache.size() == cache_size_after_a,
+               "PureSign++ repeated topic proof generation keeps the shared cache stable");
+
+    if (!prepared_a.has_value() || !prepared_b.has_value() || !prepared_c.has_value()) {
+        return;
+    }
+
+    Result<bool> prepared_a_ok =
+        public_key.verify_topic_nonce_proof(*proof_cache, prepared_a->proof(), context.get(), &shared_cache);
+    expect_ok(ctx, prepared_a_ok, "PureSign++ first cached topic proof verifies with the shared cache");
+    if (prepared_a_ok.has_value()) {
+        ctx.expect(*prepared_a_ok, "PureSign++ first cached topic proof is accepted");
+    }
+
+    Result<bool> prepared_b_ok =
+        public_key.verify_topic_nonce_proof(*proof_cache, prepared_b->proof(), context.get(), &shared_cache);
+    expect_ok(ctx, prepared_b_ok, "PureSign++ second cached topic proof verifies with the shared cache");
+    if (prepared_b_ok.has_value()) {
+        ctx.expect(*prepared_b_ok, "PureSign++ second cached topic proof is accepted");
+    }
+
+    Result<bool> prepared_c_ok =
+        public_key.verify_topic_nonce_proof(*proof_cache, prepared_c->proof(), context.get(), &shared_cache);
+    expect_ok(ctx, prepared_c_ok, "PureSign++ third cached topic proof verifies with the shared cache");
+    if (prepared_c_ok.has_value()) {
+        ctx.expect(*prepared_c_ok, "PureSign++ third cached topic proof is accepted");
+    }
+}
+
 }  // namespace
 
 void run_puresign_tests(purify_test::TestContext& ctx) {
@@ -570,4 +639,5 @@ void run_puresign_tests(purify_test::TestContext& ctx) {
     test_puresign_binding_checks(ctx);
     test_puresign_plusplus_message_signing(ctx);
     test_puresign_plusplus_topic_signing(ctx);
+    test_puresign_plusplus_topic_proof_cache_reuse(ctx);
 }

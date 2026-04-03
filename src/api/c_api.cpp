@@ -212,7 +212,8 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
 }
 
 purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
-                                           const unsigned char secret_key[PURIFY_SECRET_KEY_BYTES]) {
+                                           const unsigned char secret_key[PURIFY_SECRET_KEY_BYTES],
+                                           purify_secp_context* secp_context) {
     if (out == nullptr) {
         return PURIFY_ERROR_MISSING_VALUE;
     }
@@ -245,12 +246,11 @@ purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
 
     const std::array<unsigned char, PURIFY_BIP340_SECRET_KEY_BYTES> scalar_bytes = scalar->to_bytes_be();
     std::copy(scalar_bytes.begin(), scalar_bytes.end(), out->secret_key);
-    purify::SecpContextPtr context = purify::make_secp_context();
-    if (context == nullptr) {
+    if (secp_context == nullptr) {
         purify::capi_detail::clear_bip340_key(out);
-        return PURIFY_ERROR_INTERNAL_MISMATCH;
+        return PURIFY_ERROR_MISSING_VALUE;
     }
-    if (purify_bip340_key_from_seckey(context.get(), out->secret_key, out->xonly_public_key) == 0) {
+    if (purify_bip340_key_from_seckey(secp_context, out->secret_key, out->xonly_public_key) == 0) {
         purify::capi_detail::clear_bip340_key(out);
         return PURIFY_ERROR_BACKEND_REJECTED_INPUT;
     }

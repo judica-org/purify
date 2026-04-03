@@ -1038,13 +1038,13 @@ static void test_public_c_api(void) {
                "purify_derive_public_key aliasing matches the non-aliased result");
     }
 
-    expect(purify_derive_bip340_key(NULL, first.secret_key) == PURIFY_ERROR_MISSING_VALUE,
+    expect(purify_derive_bip340_key(NULL, first.secret_key, context) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_bip340_key rejects a null output pointer");
-    expect(purify_derive_bip340_key(&bip340, NULL) == PURIFY_ERROR_MISSING_VALUE,
+    expect(purify_derive_bip340_key(&bip340, NULL, context) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_bip340_key rejects a null secret pointer");
-    expect(purify_derive_bip340_key(&bip340, invalid_secret) == PURIFY_ERROR_RANGE_VIOLATION,
+    expect(purify_derive_bip340_key(&bip340, invalid_secret, context) == PURIFY_ERROR_RANGE_VIOLATION,
            "purify_derive_bip340_key rejects out-of-range packed secrets");
-    expect(purify_derive_bip340_key(&bip340, first.secret_key) == PURIFY_ERROR_OK,
+    expect(purify_derive_bip340_key(&bip340, first.secret_key, context) == PURIFY_ERROR_OK,
            "purify_derive_bip340_key succeeds");
     expect(!all_zero(bip340.secret_key, sizeof(bip340.secret_key)),
            "purify_derive_bip340_key produces a non-zero BIP340 secret");
@@ -1063,7 +1063,7 @@ static void test_public_c_api(void) {
     {
         unsigned char aliased_bip340[sizeof(purify_bip340_key)];
         memcpy(aliased_bip340, first.secret_key, PURIFY_SECRET_KEY_BYTES);
-        expect(purify_derive_bip340_key((purify_bip340_key*)aliased_bip340, aliased_bip340) == PURIFY_ERROR_OK,
+        expect(purify_derive_bip340_key((purify_bip340_key*)aliased_bip340, aliased_bip340, context) == PURIFY_ERROR_OK,
                "purify_derive_bip340_key accepts secret storage inside the output struct");
         expect(memcmp(aliased_bip340, &bip340, sizeof(bip340)) == 0,
                "purify_derive_bip340_key aliasing matches the non-aliased result");
@@ -1130,7 +1130,7 @@ static void test_public_c_api(void) {
                "purify_derive_public_key succeeds across the property matrix");
         expect(memcmp(derived_public_key, loop_key.public_key, sizeof(derived_public_key)) == 0,
                "purify_derive_public_key matches generate_key_from_seed across the property matrix");
-        expect(purify_derive_bip340_key(&loop_bip340, loop_key.secret_key) == PURIFY_ERROR_OK,
+        expect(purify_derive_bip340_key(&loop_bip340, loop_key.secret_key, context) == PURIFY_ERROR_OK,
                "purify_derive_bip340_key succeeds across the property matrix");
         expect(purify_bip340_validate_xonly_pubkey(context, loop_bip340.xonly_public_key) == 1,
                "property-matrix BIP340 public keys validate");

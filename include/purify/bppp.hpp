@@ -30,15 +30,15 @@ using PointBytes = std::array<unsigned char, 33>;
 using GeneratorBytes = std::array<unsigned char, 33>;
 
 /** @brief Returns the serialized secp256k1 base generator used as the blind generator. */
-GeneratorBytes base_generator();
+GeneratorBytes base_generator(purify_secp_context* secp_context);
 /** @brief Returns the serialized alternate generator used for committed values. */
-GeneratorBytes value_generator_h();
+GeneratorBytes value_generator_h(purify_secp_context* secp_context);
 /**
  * @brief Expands the BPPP generator list.
  * @param count Number of generators requested.
  * @return Serialized generator points, or a BPPP input/backend error.
  */
-Result<std::vector<PointBytes>> create_generators(std::size_t count);
+Result<std::vector<PointBytes>> create_generators(std::size_t count, purify_secp_context* secp_context);
 
 /**
  * @brief Computes a Pedersen commitment to an arbitrary 32-byte scalar value.
@@ -48,9 +48,14 @@ Result<std::vector<PointBytes>> create_generators(std::size_t count);
  * @param blind_gen Generator used for the blind term.
  * @return Serialized compressed commitment point, or a backend rejection error.
  */
-Result<PointBytes> pedersen_commit_char(const ScalarBytes& blind, const ScalarBytes& value,
-                                        const GeneratorBytes& value_gen = value_generator_h(),
-                                        const GeneratorBytes& blind_gen = base_generator());
+Result<PointBytes> pedersen_commit_char(const ScalarBytes& blind,
+                                        const ScalarBytes& value,
+                                        purify_secp_context* secp_context);
+Result<PointBytes> pedersen_commit_char(const ScalarBytes& blind,
+                                        const ScalarBytes& value,
+                                        purify_secp_context* secp_context,
+                                        const GeneratorBytes& value_gen,
+                                        const GeneratorBytes& blind_gen);
 
 /**
  * @brief Serializes a Purify field element into the scalar encoding expected by the BPPP bridge.
@@ -85,7 +90,7 @@ struct NormArgInputs {
 };
 
 /** @brief Computes the public BPPP commitment for a standalone norm-argument input bundle. */
-Result<PointBytes> commit_norm_arg(const NormArgInputs& inputs);
+Result<PointBytes> commit_norm_arg(const NormArgInputs& inputs, purify_secp_context* secp_context);
 
 /** @brief Standalone BPPP norm-argument proof bundle with all verifier-side inputs. */
 struct NormArgProof {
@@ -114,7 +119,9 @@ public:
     /** @brief Stores opaque cached reduction data by digest key. */
     void insert_public_data(std::array<unsigned char, 32> key, std::shared_ptr<const void> value);
     /** @brief Returns cached backend resources for this generator set, creating them on first use. */
-    [[nodiscard]] purify_bppp_backend_resources* get_or_create_backend_resources(std::span<const PointBytes> generators);
+    [[nodiscard]] purify_bppp_backend_resources* get_or_create_backend_resources(
+        std::span<const PointBytes> generators,
+        purify_secp_context* secp_context);
 
 private:
     struct Impl;
@@ -126,17 +133,19 @@ private:
  * @param inputs Prover inputs and optional generators.
  * @return Proof bundle containing all verifier-side inputs, or a BPPP input/backend error.
  */
-Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs);
+Result<NormArgProof> prove_norm_arg(const NormArgInputs& inputs, purify_secp_context* secp_context);
 /** @brief Produces a standalone BPPP norm argument, moving large inputs into the returned proof when possible. */
-Result<NormArgProof> prove_norm_arg(NormArgInputs&& inputs);
+Result<NormArgProof> prove_norm_arg(NormArgInputs&& inputs, purify_secp_context* secp_context);
 /** @brief Produces a standalone BPPP norm argument anchored to a caller-supplied public commitment. */
-Result<NormArgProof> prove_norm_arg_to_commitment(const NormArgInputs& inputs, const PointBytes& commitment);
+Result<NormArgProof> prove_norm_arg_to_commitment(const NormArgInputs& inputs,
+                                                  const PointBytes& commitment,
+                                                  purify_secp_context* secp_context);
 /**
  * @brief Verifies a standalone BPPP norm argument.
  * @param proof Proof bundle returned by prove_norm_arg.
  * @return True when the proof verifies.
  */
-bool verify_norm_arg(const NormArgProof& proof);
+bool verify_norm_arg(const NormArgProof& proof, purify_secp_context* secp_context);
 
 /** @brief Experimental transparent circuit proof backed by the standalone BPPP norm argument. */
 struct ExperimentalCircuitNormArgProof {
@@ -163,6 +172,7 @@ struct ExperimentalCircuitZkNormArgProof {
 Result<PointBytes> commit_experimental_circuit_witness(
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitCache* cache = nullptr);
 
@@ -176,6 +186,7 @@ Result<PointBytes> commit_experimental_circuit_witness(
 Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitCache* cache = nullptr);
 
@@ -191,6 +202,7 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg_to_c
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
     const PointBytes& witness_commitment,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitCache* cache = nullptr);
 
@@ -204,6 +216,7 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg_to_c
 Result<bool> verify_experimental_circuit_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitNormArgProof& proof,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitCache* cache = nullptr);
 
@@ -225,6 +238,7 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
     const ScalarBytes& nonce,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitCache* cache = nullptr);
 
@@ -238,6 +252,7 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
 Result<bool> verify_experimental_circuit_zk_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitZkNormArgProof& proof,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitCache* cache = nullptr);
 
@@ -253,6 +268,7 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
     const BulletproofAssignmentData& assignment,
     const ScalarBytes& nonce,
     std::span<const PointBytes> public_commitments,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitCache* cache = nullptr);
 
@@ -266,6 +282,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitZkNormArgProof& proof,
     std::span<const PointBytes> public_commitments,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitCache* cache = nullptr);
 
@@ -288,7 +305,12 @@ struct CommittedPurifyWitness {
  */
 Result<CommittedPurifyWitness> commit_output_witness(const Bytes& message, const SecretKey& secret,
                                                      const ScalarBytes& blind,
-                                                     const GeneratorBytes& value_gen = value_generator_h(),
-                                                     const GeneratorBytes& blind_gen = base_generator());
+                                                     purify_secp_context* secp_context);
+Result<CommittedPurifyWitness> commit_output_witness(const Bytes& message,
+                                                     const SecretKey& secret,
+                                                     const ScalarBytes& blind,
+                                                     purify_secp_context* secp_context,
+                                                     const GeneratorBytes& value_gen,
+                                                     const GeneratorBytes& blind_gen);
 
 }  // namespace purify::bppp

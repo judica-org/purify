@@ -95,7 +95,7 @@ Result<GeneratedKey> derive_key(SecretKey&& secret);
  *
  * The derivation is deterministic and domain-separated from the Purify public key derivation.
  */
-Result<Bip340Key> derive_bip340_key(const SecretKey& secret);
+Result<Bip340Key> derive_bip340_key(const SecretKey& secret, purify_secp_context* secp_context);
 
 /** @brief Returns the size of the packed Purify secret-key space. */
 inline UInt512 key_space_size() {

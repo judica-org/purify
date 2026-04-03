@@ -21,6 +21,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_assume_valid(
     const BulletproofAssignmentData& assignment,
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     std::optional<BulletproofScalarBytes> blind = std::nullopt,
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);

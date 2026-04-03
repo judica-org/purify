@@ -322,7 +322,8 @@ public:
     void clear();
     [[nodiscard]] std::size_t size() const noexcept;
     /** @brief Returns cached backend resources for this gate count, creating them on first use. */
-    [[nodiscard]] purify_bulletproof_backend_resources* get_or_create(std::size_t n_gates);
+    [[nodiscard]] purify_bulletproof_backend_resources* get_or_create(std::size_t n_gates,
+                                                                      purify_secp_context* secp_context);
 
 private:
     struct Impl;
@@ -376,6 +377,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofAssignmentData& assignment,
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     std::optional<BulletproofScalarBytes> blind = std::nullopt,
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
@@ -384,6 +386,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofAssignmentData& assignment,
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     std::optional<BulletproofScalarBytes> blind = std::nullopt,
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
@@ -393,12 +396,14 @@ Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit::PackedWithSlack& circuit,
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 

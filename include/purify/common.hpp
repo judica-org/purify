@@ -52,6 +52,13 @@ inline SecpContextPtr make_secp_context() noexcept {
     return SecpContextPtr(purify_secp_context_create());
 }
 
+inline Status require_secp_context(const purify_secp_context* context, const char* error_context) {
+    if (context == nullptr) {
+        return unexpected_error(ErrorCode::MissingValue, error_context);
+    }
+    return {};
+}
+
 /** @brief Dynamically sized byte string used for messages, serialized witnesses, and proofs. */
 using Bytes = std::vector<unsigned char>;
 

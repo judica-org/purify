@@ -22,6 +22,8 @@
 extern "C" {
 #endif
 
+typedef struct purify_secp_context purify_secp_context;
+
 /** @brief Machine-readable status code returned by the Purify C core. */
 typedef enum purify_error_code {
     PURIFY_ERROR_OK = 0,
@@ -131,7 +133,8 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
  * @return `PURIFY_ERROR_OK` on success.
  */
 purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
-                                           const unsigned char secret_key[PURIFY_SECRET_KEY_BYTES]);
+                                           const unsigned char secret_key[PURIFY_SECRET_KEY_BYTES],
+                                           purify_secp_context* secp_context);
 
 /**
  * @brief Evaluates the Purify PRF for one packed secret and message.

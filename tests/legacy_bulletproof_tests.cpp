@@ -24,6 +24,12 @@ using purify::FieldElement;
 using purify::NativeBulletproofCircuit;
 using purify::Result;
 
+purify::SecpContextPtr make_test_secp_context(TestContext& ctx) {
+    purify::SecpContextPtr context = purify::make_secp_context();
+    ctx.expect(context != nullptr, "secp context creation succeeds for legacy bulletproof tests");
+    return context;
+}
+
 std::size_t floor_lg_size_t(std::size_t n) {
     std::size_t out = 0;
     while (n > 1) {
@@ -45,6 +51,11 @@ std::size_t first_inner_product_point_x_offset(std::size_t n_gates) {
 }
 
 void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
     NativeBulletproofCircuit circuit(1, 1, 0);
     std::size_t constraint = circuit.add_constraint(FieldElement::zero());
     circuit.add_output_term(0, constraint, FieldElement::one());
@@ -63,7 +74,8 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
     Bytes binding = purify::bytes_from_ascii("toy-circuit-binding");
 
     Result<purify::ExperimentalBulletproofProof> proof =
-        purify::prove_experimental_circuit(circuit, assignment, nonce, purify::bppp::base_generator(), binding);
+        purify::prove_experimental_circuit(circuit, assignment, nonce, purify::bppp::base_generator(context.get()),
+                                           context.get(), binding);
     expect_ok(ctx, proof, "prove_experimental_circuit succeeds on a one-gate circuit");
     if (!proof.has_value()) {
         return;
@@ -73,7 +85,8 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
                "experimental circuit proof includes a concrete public commitment");
 
     Result<bool> verified =
-        purify::verify_experimental_circuit(circuit, *proof, purify::bppp::base_generator(), binding);
+        purify::verify_experimental_circuit(circuit, *proof, purify::bppp::base_generator(context.get()),
+                                            context.get(), binding);
     expect_ok(ctx, verified, "verify_experimental_circuit succeeds on the generated proof");
     if (verified.has_value()) {
         ctx.expect(*verified, "experimental circuit proof verifies");
@@ -92,14 +105,16 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
     }
 
     Result<bool> reparsed =
-        purify::verify_experimental_circuit(circuit, *decoded, purify::bppp::base_generator(), binding);
+        purify::verify_experimental_circuit(circuit, *decoded, purify::bppp::base_generator(context.get()),
+                                            context.get(), binding);
     expect_ok(ctx, reparsed, "verify_experimental_circuit accepts the reparsed proof");
     if (reparsed.has_value()) {
         ctx.expect(*reparsed, "reparsed experimental circuit proof verifies");
     }
 
     Result<bool> wrong_binding =
-        purify::verify_experimental_circuit(circuit, *proof, purify::bppp::base_generator(),
+        purify::verify_experimental_circuit(circuit, *proof, purify::bppp::base_generator(context.get()),
+                                            context.get(),
                                             purify::bytes_from_ascii("toy-circuit-binding-wrong"));
     expect_ok(ctx, wrong_binding, "verify_experimental_circuit runs with a wrong binding");
     if (wrong_binding.has_value()) {
@@ -111,6 +126,11 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
  * serialized inner-product point so verification must reject the proof.
  */
 void test_experimental_bulletproof_rejects_malformed_inner_product_point(TestContext& ctx) {
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
     NativeBulletproofCircuit circuit(4, 1, 0);
     std::size_t constraint = circuit.add_constraint(FieldElement::zero());
     circuit.add_output_term(0, constraint, FieldElement::one());
@@ -129,7 +149,8 @@ void test_experimental_bulletproof_rejects_malformed_inner_product_point(TestCon
     Bytes binding = purify::bytes_from_ascii("malformed-inner-product-point");
 
     Result<purify::ExperimentalBulletproofProof> proof =
-        purify::prove_experimental_circuit(circuit, assignment, nonce, purify::bppp::base_generator(), binding);
+        purify::prove_experimental_circuit(circuit, assignment, nonce, purify::bppp::base_generator(context.get()),
+                                           context.get(), binding);
     expect_ok(ctx, proof, "prove_experimental_circuit succeeds on a multi-round circuit");
     if (!proof.has_value()) {
         return;
@@ -144,7 +165,8 @@ void test_experimental_bulletproof_rejects_malformed_inner_product_point(TestCon
     std::fill_n(tampered.proof.begin() + static_cast<std::ptrdiff_t>(offset), 32, static_cast<unsigned char>(0xff));
 
     Result<bool> verified =
-        purify::verify_experimental_circuit(circuit, tampered, purify::bppp::base_generator(), binding);
+        purify::verify_experimental_circuit(circuit, tampered, purify::bppp::base_generator(context.get()),
+                                            context.get(), binding);
     expect_ok(ctx, verified, "verify_experimental_circuit runs on a malformed inner-product point proof");
     if (verified.has_value()) {
         ctx.expect(!*verified, "malformed inner-product point encodings are rejected");
@@ -184,22 +206,23 @@ void test_legacy_bridge_zero_constraint_roundtrip(TestContext& ctx) {
     for (std::size_t i = 0; i < nonce.size(); ++i) {
         nonce[i] = static_cast<unsigned char>(0x20 + i);
     }
-    purify::SecpContextPtr context = purify::make_secp_context();
-    ctx.expect(context != nullptr, "bridge context creation succeeds for direct legacy bridge tests");
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
     if (context == nullptr) {
         return;
     }
 
     std::vector<unsigned char> proof(purify_bulletproof_required_proof_size(1));
     std::size_t proof_len = proof.size();
-    int proved = purify_bulletproof_prove_circuit(context.get(), &circuit, &assignment, nullptr, purify::bppp::base_generator().data(),
+    int proved = purify_bulletproof_prove_circuit(context.get(), &circuit, &assignment, nullptr,
+                                                  purify::bppp::base_generator(context.get()).data(),
                                                   nonce.data(), nullptr, 0, nullptr, proof.data(), &proof_len);
     ctx.expect(proved == 1, "legacy bridge proves zero-explicit-constraint circuits");
     if (proved != 1) {
         return;
     }
 
-    int verified = purify_bulletproof_verify_circuit(context.get(), &circuit, nullptr, purify::bppp::base_generator().data(),
+    int verified = purify_bulletproof_verify_circuit(context.get(), &circuit, nullptr,
+                                                     purify::bppp::base_generator(context.get()).data(),
                                                      nullptr, 0, proof.data(), proof_len);
     ctx.expect(verified == 1, "legacy bridge verifies zero-explicit-constraint circuits");
 }
@@ -211,9 +234,7 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
         (std::numeric_limits<std::size_t>::max() / 33u) + 1u;
     constexpr std::size_t kHugeRowSize =
         (std::numeric_limits<std::size_t>::max() / 2u) + 1u;
-    purify::SecpContextPtr context = purify::make_secp_context();
-
-    ctx.expect(context != nullptr, "bridge secp context creation succeeds for overflow regression tests");
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
     if (context == nullptr) {
         return;
     }
@@ -226,7 +247,7 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
         purify_bulletproof_backend_resources_destroy(bulletproof_resources);
     }
 
-    const auto base_generator = purify::bppp::base_generator();
+    const auto base_generator = purify::bppp::base_generator(context.get());
     purify_bppp_backend_resources* bppp_resources =
         purify_bppp_backend_resources_create(context.get(), base_generator.data(), kOverflowGeneratorCount);
     ctx.expect(bppp_resources == nullptr,

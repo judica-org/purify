@@ -740,6 +740,7 @@ static void test_uint_core(void) {
 }
 
 static void test_secp_bridge(void) {
+    purify_secp_context* context = purify_secp_context_create();
     purify_scalar scalar_a;
     purify_scalar scalar_b;
     purify_scalar scalar_c;
@@ -788,6 +789,11 @@ static void test_secp_bridge(void) {
     static const unsigned char* kItems[2] = {kMsgAbc, kMsgAbc + 1};
     static const size_t kItemLens[2] = {1u, 2u};
     static const unsigned char kSignMsg[] = "c api bridge sign";
+
+    expect(context != NULL, "purify_secp_context_create returns a reusable bridge context");
+    if (context == NULL) {
+        return;
+    }
 
     purify_scalar_set_int(&scalar_a, 1u);
     expect(purify_scalar_is_zero(&scalar_a) == 0, "purify_scalar_is_zero rejects one");
@@ -860,11 +866,11 @@ static void test_secp_bridge(void) {
            "purify_hmac_sha256 matches the RFC 4231 test vector");
 
     seckey32[31] = 1u;
-    expect(purify_bip340_key_from_seckey(seckey32, xonly32) == 1,
+    expect(purify_bip340_key_from_seckey(context, seckey32, xonly32) == 1,
            "purify_bip340_key_from_seckey accepts secret key one");
-    expect(purify_bip340_validate_xonly_pubkey(xonly32) == 1,
+    expect(purify_bip340_validate_xonly_pubkey(context, xonly32) == 1,
            "purify_bip340_key_from_seckey produces a valid x-only public key");
-    expect(purify_bip340_validate_xonly_pubkey((const unsigned char[32]){
+    expect(purify_bip340_validate_xonly_pubkey(context, (const unsigned char[32]){
                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -873,7 +879,7 @@ static void test_secp_bridge(void) {
            "purify_bip340_validate_xonly_pubkey rejects out-of-range coordinates");
 
     memset(xonly32, 0, sizeof(xonly32));
-    expect(purify_bip340_xonly_from_point(kSecpGeneratorCompressed, xonly32, &parity) == 1,
+    expect(purify_bip340_xonly_from_point(context, kSecpGeneratorCompressed, xonly32, &parity) == 1,
            "purify_bip340_xonly_from_point parses the compressed secp generator");
     expect(memcmp(xonly32, kSecpGeneratorXonly, sizeof(xonly32)) == 0,
            "purify_bip340_xonly_from_point returns the generator x-coordinate");
@@ -881,26 +887,29 @@ static void test_secp_bridge(void) {
 
     memset(nonce32, 0, sizeof(nonce32));
     nonce32[31] = 2u;
-    expect(purify_bip340_nonce_from_scalar(nonce32, nonce_pub32) == 1,
+    expect(purify_bip340_nonce_from_scalar(context, nonce32, nonce_pub32) == 1,
            "purify_bip340_nonce_from_scalar accepts a non-zero scalar");
-    expect(purify_bip340_validate_xonly_pubkey(nonce_pub32) == 1,
+    expect(purify_bip340_validate_xonly_pubkey(context, nonce_pub32) == 1,
            "purify_bip340_nonce_from_scalar produces a valid x-only public key");
 
     memset(sig64, 0, sizeof(sig64));
-    expect(purify_bip340_sign_with_fixed_nonce(sig64, kSignMsg, sizeof(kSignMsg) - 1u, seckey32, nonce32) == 1,
+    expect(purify_bip340_sign_with_fixed_nonce(context, sig64, kSignMsg, sizeof(kSignMsg) - 1u, seckey32, nonce32) == 1,
            "purify_bip340_sign_with_fixed_nonce signs with a prepared nonce");
-    expect(purify_bip340_validate_signature(sig64) == 1,
+    expect(purify_bip340_validate_signature(context, sig64) == 1,
            "purify_bip340_validate_signature accepts a generated signature");
-    expect(purify_bip340_verify(sig64, kSignMsg, sizeof(kSignMsg) - 1u, xonly32) == 1,
+    expect(purify_bip340_verify(context, sig64, kSignMsg, sizeof(kSignMsg) - 1u, xonly32) == 1,
            "purify_bip340_verify accepts the matching signature");
     sig64[0] ^= 1u;
-    expect(purify_bip340_verify(sig64, kSignMsg, sizeof(kSignMsg) - 1u, xonly32) == 0,
+    expect(purify_bip340_verify(context, sig64, kSignMsg, sizeof(kSignMsg) - 1u, xonly32) == 0,
            "purify_bip340_verify rejects a tampered signature");
-    expect(purify_bip340_validate_signature((const unsigned char[64]){0}) == 0,
+    expect(purify_bip340_validate_signature(context, (const unsigned char[64]){0}) == 0,
            "purify_bip340_validate_signature rejects the zero signature");
+
+    purify_secp_context_destroy(context);
 }
 
 static void test_public_c_api(void) {
+    purify_secp_context* context = purify_secp_context_create();
     unsigned char derived_public_key[PURIFY_PUBLIC_KEY_BYTES];
     unsigned char eval_a[PURIFY_FIELD_ELEMENT_BYTES];
     unsigned char eval_b[PURIFY_FIELD_ELEMENT_BYTES];
@@ -931,6 +940,11 @@ static void test_public_c_api(void) {
     const unsigned char message[] = "c api smoke";
     const unsigned char other_message[] = "c api smoke?";
     int i;
+
+    expect(context != NULL, "purify_secp_context_create succeeds for the public C API tests");
+    if (context == NULL) {
+        return;
+    }
 
     purify_curve_packed_secret_key_space_size(secret_space);
     purify_u512_to_bytes_be(invalid_secret, secret_space);
@@ -1024,23 +1038,23 @@ static void test_public_c_api(void) {
                "purify_derive_public_key aliasing matches the non-aliased result");
     }
 
-    expect(purify_derive_bip340_key(NULL, first.secret_key) == PURIFY_ERROR_MISSING_VALUE,
+    expect(purify_derive_bip340_key(NULL, first.secret_key, context) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_bip340_key rejects a null output pointer");
-    expect(purify_derive_bip340_key(&bip340, NULL) == PURIFY_ERROR_MISSING_VALUE,
+    expect(purify_derive_bip340_key(&bip340, NULL, context) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_bip340_key rejects a null secret pointer");
-    expect(purify_derive_bip340_key(&bip340, invalid_secret) == PURIFY_ERROR_RANGE_VIOLATION,
+    expect(purify_derive_bip340_key(&bip340, invalid_secret, context) == PURIFY_ERROR_RANGE_VIOLATION,
            "purify_derive_bip340_key rejects out-of-range packed secrets");
-    expect(purify_derive_bip340_key(&bip340, first.secret_key) == PURIFY_ERROR_OK,
+    expect(purify_derive_bip340_key(&bip340, first.secret_key, context) == PURIFY_ERROR_OK,
            "purify_derive_bip340_key succeeds");
     expect(!all_zero(bip340.secret_key, sizeof(bip340.secret_key)),
            "purify_derive_bip340_key produces a non-zero BIP340 secret");
-    expect(purify_bip340_validate_xonly_pubkey(bip340.xonly_public_key) == 1,
+    expect(purify_bip340_validate_xonly_pubkey(context, bip340.xonly_public_key) == 1,
            "purify_derive_bip340_key produces a valid x-only public key");
     {
         unsigned char canonical_secret[PURIFY_BIP340_SECRET_KEY_BYTES];
         unsigned char canonical_xonly[PURIFY_BIP340_XONLY_PUBKEY_BYTES];
         memcpy(canonical_secret, bip340.secret_key, sizeof(canonical_secret));
-        expect(purify_bip340_key_from_seckey(canonical_secret, canonical_xonly) == 1,
+        expect(purify_bip340_key_from_seckey(context, canonical_secret, canonical_xonly) == 1,
                "purify_derive_bip340_key returns a canonical BIP340 secret");
         expect(memcmp(canonical_secret, bip340.secret_key, sizeof(canonical_secret)) == 0 &&
                memcmp(canonical_xonly, bip340.xonly_public_key, sizeof(canonical_xonly)) == 0,
@@ -1049,7 +1063,7 @@ static void test_public_c_api(void) {
     {
         unsigned char aliased_bip340[sizeof(purify_bip340_key)];
         memcpy(aliased_bip340, first.secret_key, PURIFY_SECRET_KEY_BYTES);
-        expect(purify_derive_bip340_key((purify_bip340_key*)aliased_bip340, aliased_bip340) == PURIFY_ERROR_OK,
+        expect(purify_derive_bip340_key((purify_bip340_key*)aliased_bip340, aliased_bip340, context) == PURIFY_ERROR_OK,
                "purify_derive_bip340_key accepts secret storage inside the output struct");
         expect(memcmp(aliased_bip340, &bip340, sizeof(bip340)) == 0,
                "purify_derive_bip340_key aliasing matches the non-aliased result");
@@ -1116,9 +1130,9 @@ static void test_public_c_api(void) {
                "purify_derive_public_key succeeds across the property matrix");
         expect(memcmp(derived_public_key, loop_key.public_key, sizeof(derived_public_key)) == 0,
                "purify_derive_public_key matches generate_key_from_seed across the property matrix");
-        expect(purify_derive_bip340_key(&loop_bip340, loop_key.secret_key) == PURIFY_ERROR_OK,
+        expect(purify_derive_bip340_key(&loop_bip340, loop_key.secret_key, context) == PURIFY_ERROR_OK,
                "purify_derive_bip340_key succeeds across the property matrix");
-        expect(purify_bip340_validate_xonly_pubkey(loop_bip340.xonly_public_key) == 1,
+        expect(purify_bip340_validate_xonly_pubkey(context, loop_bip340.xonly_public_key) == 1,
                "property-matrix BIP340 public keys validate");
         expect(purify_eval(eval_a, loop_key.secret_key, loop_message, msg_len) == PURIFY_ERROR_OK,
                "purify_eval succeeds across the property matrix");
@@ -1131,6 +1145,8 @@ static void test_public_c_api(void) {
         expect(memcmp(eval_a, eval_manual, sizeof(eval_a)) == 0,
                "purify_eval matches direct C core evaluation across the property matrix");
     }
+
+    purify_secp_context_destroy(context);
 }
 
 static void test_field_core(void) {

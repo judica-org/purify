@@ -57,8 +57,10 @@ std::size_t ExperimentalBulletproofBackendCache::size() const noexcept {
     return impl_ != nullptr ? impl_->resources.size() : 0;
 }
 
-purify_bulletproof_backend_resources* ExperimentalBulletproofBackendCache::get_or_create(std::size_t n_gates) {
-    if (impl_ == nullptr) {
+purify_bulletproof_backend_resources* ExperimentalBulletproofBackendCache::get_or_create(
+    std::size_t n_gates,
+    purify_secp_context* secp_context) {
+    if (impl_ == nullptr || secp_context == nullptr) {
         return nullptr;
     }
 
@@ -67,7 +69,8 @@ purify_bulletproof_backend_resources* ExperimentalBulletproofBackendCache::get_o
         return it->second.get();
     }
 
-    purify_bulletproof_backend_resources* created = purify_bulletproof_backend_resources_create(n_gates);
+    purify_bulletproof_backend_resources* created =
+        purify_bulletproof_backend_resources_create(secp_context, n_gates);
     if (created == nullptr) {
         return nullptr;
     }
@@ -86,6 +89,7 @@ using purify::ExperimentalBulletproofBackendCache;
 using purify::ExperimentalBulletproofProof;
 using purify::FieldElement;
 using purify::Result;
+using purify::require_secp_context;
 using purify::Symbol;
 using purify::SymbolKind;
 using purify::WitnessAssignments;
@@ -548,29 +552,17 @@ std::size_t circuit_n_commitments(const PackedCircuit& circuit) {
 
 struct ResolvedBulletproofBackendResources {
     purify_bulletproof_backend_resources* resources = nullptr;
-    purify::BulletproofBackendResourcePtr owned_resources;
 };
 
 ResolvedBulletproofBackendResources resolve_bulletproof_backend_resources(
     std::size_t n_gates,
+    purify_secp_context* secp_context,
     purify::ExperimentalBulletproofBackendCache* cache) {
     ResolvedBulletproofBackendResources out;
 
     if (cache != nullptr) {
-        out.resources = cache->get_or_create(n_gates);
-        if (out.resources != nullptr) {
-            return out;
-        }
-        return out;
+        out.resources = cache->get_or_create(n_gates, secp_context);
     }
-
-    purify_bulletproof_backend_resources* created = purify_bulletproof_backend_resources_create(n_gates);
-    if (created == nullptr) {
-        return out;
-    }
-
-    out.owned_resources.reset(created);
-    out.resources = out.owned_resources.get();
     return out;
 }
 
@@ -580,6 +572,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_impl(
     const BulletproofAssignmentData& assignment,
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding,
     std::optional<BulletproofScalarBytes> blind,
     ExperimentalBulletproofBackendCache* backend_cache,
@@ -591,6 +584,8 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_impl(
     const char* assignment_invalid_context,
     const char* proof_size_context,
     const char* bridge_context) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "prove_experimental_circuit:secp_context"),
+                           "prove_experimental_circuit:secp_context");
     ExperimentalBulletproofProof out;
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, shape_context);
@@ -619,21 +614,36 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_impl(
     BulletproofPointBytes commitment{};
     const unsigned char* blind_ptr = blind.has_value() ? blind->data() : nullptr;
     ResolvedBulletproofBackendResources resolved =
-        resolve_bulletproof_backend_resources(circuit_n_gates(circuit), backend_cache);
+        resolve_bulletproof_backend_resources(circuit_n_gates(circuit), secp_context, backend_cache);
     purify_bulletproof_backend_resources* resources = resolved.resources;
 
-    if (proof_len == 0 || resources == nullptr) {
+    if (proof_len == 0) {
         return unexpected_error(ErrorCode::UnexpectedSize, proof_size_context);
     }
-    const int ok = require_assignment_validation
-        ? purify_bulletproof_prove_circuit_with_resources(resources, &flat_circuit.view, &flat_assignment.view, blind_ptr,
-                                                          value_generator.data(), nonce.data(),
-                                                          binding_digest.data(), binding_digest.size(),
-                                                          commitment.data(), proof_bytes.data(), &proof_len)
-        : purify_bulletproof_prove_circuit_assume_valid_with_resources(resources, &flat_circuit.view, &flat_assignment.view, blind_ptr,
-                                                                       value_generator.data(), nonce.data(),
-                                                                       binding_digest.data(), binding_digest.size(),
-                                                                       commitment.data(), proof_bytes.data(), &proof_len);
+    const int ok =
+        resources != nullptr
+            ? (require_assignment_validation
+                   ? purify_bulletproof_prove_circuit_with_resources(
+                         resources, &flat_circuit.view, &flat_assignment.view, blind_ptr,
+                         value_generator.data(), nonce.data(),
+                         binding_digest.data(), binding_digest.size(),
+                         commitment.data(), proof_bytes.data(), &proof_len)
+                   : purify_bulletproof_prove_circuit_assume_valid_with_resources(
+                         resources, &flat_circuit.view, &flat_assignment.view, blind_ptr,
+                         value_generator.data(), nonce.data(),
+                         binding_digest.data(), binding_digest.size(),
+                         commitment.data(), proof_bytes.data(), &proof_len))
+            : (require_assignment_validation
+                   ? purify_bulletproof_prove_circuit(
+                         secp_context, &flat_circuit.view, &flat_assignment.view, blind_ptr,
+                         value_generator.data(), nonce.data(),
+                         binding_digest.data(), binding_digest.size(),
+                         commitment.data(), proof_bytes.data(), &proof_len)
+                   : purify_bulletproof_prove_circuit_assume_valid(
+                         secp_context, &flat_circuit.view, &flat_assignment.view, blind_ptr,
+                         value_generator.data(), nonce.data(),
+                         binding_digest.data(), binding_digest.size(),
+                         commitment.data(), proof_bytes.data(), &proof_len));
     if (!ok) {
         return unexpected_error(ErrorCode::BackendRejectedInput, bridge_context);
     }
@@ -1424,10 +1434,11 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofAssignmentData& assignment,
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding,
     std::optional<BulletproofScalarBytes> blind,
     ExperimentalBulletproofBackendCache* backend_cache) {
-    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding,
+    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, secp_context, statement_binding,
                                            blind, backend_cache, true,
                                            "prove_experimental_circuit:circuit_shape",
                                            "prove_experimental_circuit:n_gates_power_of_two",
@@ -1443,10 +1454,11 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofAssignmentData& assignment,
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding,
     std::optional<BulletproofScalarBytes> blind,
     ExperimentalBulletproofBackendCache* backend_cache) {
-    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding,
+    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, secp_context, statement_binding,
                                            blind, backend_cache, true,
                                            "prove_experimental_circuit:packed_circuit_shape",
                                            "prove_experimental_circuit:packed_n_gates_power_of_two",
@@ -1462,10 +1474,11 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_assume_valid(
     const BulletproofAssignmentData& assignment,
     const BulletproofScalarBytes& nonce,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding,
     std::optional<BulletproofScalarBytes> blind,
     ExperimentalBulletproofBackendCache* backend_cache) {
-    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, statement_binding,
+    return prove_experimental_circuit_impl(circuit, assignment, nonce, value_generator, secp_context, statement_binding,
                                            blind, backend_cache, false,
                                            "prove_experimental_circuit_assume_valid:packed_circuit_shape",
                                            "prove_experimental_circuit_assume_valid:packed_n_gates_power_of_two",
@@ -1480,8 +1493,11 @@ Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding,
     ExperimentalBulletproofBackendCache* backend_cache) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "verify_experimental_circuit:secp_context"),
+                           "verify_experimental_circuit:secp_context");
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:circuit_shape");
     }
@@ -1497,15 +1513,19 @@ Result<bool> verify_experimental_circuit(
 
     FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
     Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
-    ResolvedBulletproofBackendResources resolved = resolve_bulletproof_backend_resources(circuit.n_gates, backend_cache);
+    ResolvedBulletproofBackendResources resolved =
+        resolve_bulletproof_backend_resources(circuit.n_gates, secp_context, backend_cache);
     purify_bulletproof_backend_resources* resources = resolved.resources;
-    if (resources == nullptr) {
-        return unexpected_error(ErrorCode::UnexpectedSize, "verify_experimental_circuit:backend_resources");
-    }
-    bool ok = purify_bulletproof_verify_circuit_with_resources(resources, &flat_circuit.view, proof.commitment.data(),
+    bool ok =
+        resources != nullptr
+            ? purify_bulletproof_verify_circuit_with_resources(resources, &flat_circuit.view, proof.commitment.data(),
                                                                value_generator.data(), binding_digest.data(),
                                                                binding_digest.size(), proof.proof.data(),
-                                                               proof.proof.size()) != 0;
+                                                               proof.proof.size()) != 0
+            : purify_bulletproof_verify_circuit(secp_context, &flat_circuit.view, proof.commitment.data(),
+                                                value_generator.data(), binding_digest.data(),
+                                                binding_digest.size(), proof.proof.data(),
+                                                proof.proof.size()) != 0;
     return ok;
 }
 
@@ -1513,8 +1533,11 @@ Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit::PackedWithSlack& circuit,
     const ExperimentalBulletproofProof& proof,
     const BulletproofGeneratorBytes& value_generator,
+    purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding,
     ExperimentalBulletproofBackendCache* backend_cache) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "verify_experimental_circuit:packed_secp_context"),
+                           "verify_experimental_circuit:packed_secp_context");
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:packed_circuit_shape");
     }
@@ -1531,15 +1554,18 @@ Result<bool> verify_experimental_circuit(
     FlattenedCircuitView flat_circuit = flatten_circuit_view(circuit);
     Bytes binding_digest = circuit_binding_digest(circuit, statement_binding);
     ResolvedBulletproofBackendResources resolved =
-        resolve_bulletproof_backend_resources(circuit.n_gates(), backend_cache);
+        resolve_bulletproof_backend_resources(circuit.n_gates(), secp_context, backend_cache);
     purify_bulletproof_backend_resources* resources = resolved.resources;
-    if (resources == nullptr) {
-        return unexpected_error(ErrorCode::UnexpectedSize, "verify_experimental_circuit:packed_backend_resources");
-    }
-    bool ok = purify_bulletproof_verify_circuit_with_resources(resources, &flat_circuit.view, proof.commitment.data(),
+    bool ok =
+        resources != nullptr
+            ? purify_bulletproof_verify_circuit_with_resources(resources, &flat_circuit.view, proof.commitment.data(),
                                                                value_generator.data(), binding_digest.data(),
                                                                binding_digest.size(), proof.proof.data(),
-                                                               proof.proof.size()) != 0;
+                                                               proof.proof.size()) != 0
+            : purify_bulletproof_verify_circuit(secp_context, &flat_circuit.view, proof.commitment.data(),
+                                                value_generator.data(), binding_digest.data(),
+                                                binding_digest.size(), proof.proof.data(),
+                                                proof.proof.size()) != 0;
     return ok;
 }
 

@@ -48,14 +48,16 @@ struct PublicKey {
      * @param serialized The byte sequence previously produced by `serialize()`.
      * @return The parsed public-key bundle on success, or an error if the payload is malformed.
      */
-    [[nodiscard]] static Result<PublicKey> deserialize(std::span<const unsigned char> serialized);
+    [[nodiscard]] static Result<PublicKey> deserialize(std::span<const unsigned char> serialized,
+                                                       purify_secp_context* secp_context);
 
     /**
      * @brief Derives both public identities from one packed Purify secret.
      * @param secret The owned secret used to derive the Purify and BIP340 public keys.
      * @return The derived public-key bundle.
      */
-    [[nodiscard]] static Result<PublicKey> from_secret(const SecretKey& secret);
+    [[nodiscard]] static Result<PublicKey> from_secret(const SecretKey& secret,
+                                                       purify_secp_context* secp_context);
 
     /**
      * @brief Verifies a plain BIP340 signature against this bundle's x-only public key.
@@ -64,7 +66,8 @@ struct PublicKey {
      * @return `true` when the signature is valid for `(message, bip340_pubkey)`.
      */
     [[nodiscard]] Result<bool> verify_signature(std::span<const unsigned char> message,
-                                                const Signature& signature) const;
+                                                const Signature& signature,
+                                                purify_secp_context* secp_context) const;
 
     /**
      * @brief Verifies a message-bound BPPP nonce proof against this public key.
@@ -76,6 +79,7 @@ struct PublicKey {
     [[nodiscard]] Result<bool> verify_message_nonce_proof(
         std::span<const unsigned char> message,
         const NonceProof& nonce_proof,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -88,6 +92,7 @@ struct PublicKey {
     [[nodiscard]] Result<bool> verify_message_nonce_proof(
         const MessageProofCache& cache,
         const NonceProof& nonce_proof,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -100,6 +105,7 @@ struct PublicKey {
     [[nodiscard]] Result<bool> verify_topic_nonce_proof(
         std::span<const unsigned char> topic,
         const NonceProof& nonce_proof,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -112,6 +118,7 @@ struct PublicKey {
     [[nodiscard]] Result<bool> verify_topic_nonce_proof(
         const TopicProofCache& cache,
         const NonceProof& nonce_proof,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -124,6 +131,7 @@ struct PublicKey {
     [[nodiscard]] Result<bool> verify_message_signature_with_proof(
         std::span<const unsigned char> message,
         const ProvenSignature& signature,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -136,6 +144,7 @@ struct PublicKey {
     [[nodiscard]] Result<bool> verify_message_signature_with_proof(
         const MessageProofCache& cache,
         const ProvenSignature& signature,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -150,6 +159,7 @@ struct PublicKey {
         std::span<const unsigned char> message,
         std::span<const unsigned char> topic,
         const ProvenSignature& signature,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -164,6 +174,7 @@ struct PublicKey {
         const TopicProofCache& cache,
         std::span<const unsigned char> message,
         const ProvenSignature& signature,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 };
 
@@ -176,7 +187,8 @@ struct Nonce {
     /** @brief Serializes this x-only nonce into its fixed-size wire format. */
     [[nodiscard]] Bytes serialize() const;
     /** @brief Parses a serialized x-only nonce. */
-    [[nodiscard]] static Result<Nonce> deserialize(std::span<const unsigned char> serialized);
+    [[nodiscard]] static Result<Nonce> deserialize(std::span<const unsigned char> serialized,
+                                                   purify_secp_context* secp_context);
 };
 
 /** @brief Standard 64-byte BIP340 signature. */
@@ -192,7 +204,8 @@ struct Signature {
     /** @brief Serializes this signature into its fixed-size wire format. */
     [[nodiscard]] Bytes serialize() const;
     /** @brief Parses a serialized BIP340 signature. */
-    [[nodiscard]] static Result<Signature> deserialize(std::span<const unsigned char> serialized);
+    [[nodiscard]] static Result<Signature> deserialize(std::span<const unsigned char> serialized,
+                                                       purify_secp_context* secp_context);
 };
 
 /**
@@ -246,8 +259,9 @@ struct NonceProof {
     bppp::PointBytes commitment_point{};
     bppp::ExperimentalCircuitZkNormArgProof proof;
 
-    [[nodiscard]] Result<Bytes> serialize() const;
-    [[nodiscard]] static Result<NonceProof> deserialize(std::span<const unsigned char> serialized);
+    [[nodiscard]] Result<Bytes> serialize(purify_secp_context* secp_context) const;
+    [[nodiscard]] static Result<NonceProof> deserialize(std::span<const unsigned char> serialized,
+                                                        purify_secp_context* secp_context);
 };
 
 struct ProvenSignature {
@@ -256,8 +270,9 @@ struct ProvenSignature {
     Signature signature;
     NonceProof nonce_proof;
 
-    [[nodiscard]] Result<Bytes> serialize() const;
-    [[nodiscard]] static Result<ProvenSignature> deserialize(std::span<const unsigned char> serialized);
+    [[nodiscard]] Result<Bytes> serialize(purify_secp_context* secp_context) const;
+    [[nodiscard]] static Result<ProvenSignature> deserialize(std::span<const unsigned char> serialized,
+                                                             purify_secp_context* secp_context);
 };
 
 /**
@@ -317,7 +332,8 @@ public:
      * @return The resulting BIP340 signature.
      */
     [[nodiscard]] Result<Signature> sign_message(const Bip340Key& signer,
-                                                 std::span<const unsigned char> message) &&;
+                                                 std::span<const unsigned char> message,
+                                                 purify_secp_context* secp_context) &&;
 
     /**
      * @brief Consumes this topic-bound nonce and signs a message under that topic binding.
@@ -326,7 +342,8 @@ public:
      * @return The resulting BIP340 signature.
      */
     [[nodiscard]] Result<Signature> sign_topic_message(const Bip340Key& signer,
-                                                       std::span<const unsigned char> message) &&;
+                                                       std::span<const unsigned char> message,
+                                                       purify_secp_context* secp_context) &&;
 
 private:
     PreparedNonce(Scope scope, const Scalar32& scalar, const Nonce& nonce,
@@ -389,7 +406,8 @@ public:
      * @return The resulting signature bundled with its nonce proof.
      */
     [[nodiscard]] Result<ProvenSignature> sign_message(const SecretKey& secret,
-                                                       std::span<const unsigned char> message) &&;
+                                                       std::span<const unsigned char> message,
+                                                       purify_secp_context* secp_context) &&;
 
     /**
      * @brief Consumes this topic-bound prepared proof bundle and signs the message.
@@ -398,7 +416,8 @@ public:
      * @return The resulting signature bundled with its nonce proof.
      */
     [[nodiscard]] Result<ProvenSignature> sign_topic_message(const SecretKey& secret,
-                                                             std::span<const unsigned char> message) &&;
+                                                             std::span<const unsigned char> message,
+                                                             purify_secp_context* secp_context) &&;
 
 private:
     PreparedNonceWithProof(PreparedNonce prepared, NonceProof proof)
@@ -421,14 +440,16 @@ public:
      * @param secret The secret to clone into the returned key pair.
      * @return A move-only signer object bundling the secret and public key.
      */
-    [[nodiscard]] static Result<KeyPair> from_secret(const SecretKey& secret);
+    [[nodiscard]] static Result<KeyPair> from_secret(const SecretKey& secret,
+                                                     purify_secp_context* secp_context);
 
     /**
      * @brief Derives a PureSign++ signing key pair from one owned Purify secret.
      * @param secret The secret to move into the returned key pair.
      * @return A move-only signer object bundling the secret and public key.
      */
-    [[nodiscard]] static Result<KeyPair> from_secret(SecretKey&& secret);
+    [[nodiscard]] static Result<KeyPair> from_secret(SecretKey&& secret,
+                                                     purify_secp_context* secp_context);
 
     /**
      * @brief Returns the public key bundle associated with this signer.
@@ -443,7 +464,8 @@ public:
      * @param message The message to bind into the nonce derivation.
      * @return The move-only prepared nonce.
      */
-    [[nodiscard]] Result<PreparedNonce> prepare_message_nonce(std::span<const unsigned char> message) const;
+    [[nodiscard]] Result<PreparedNonce> prepare_message_nonce(std::span<const unsigned char> message,
+                                                              purify_secp_context* secp_context) const;
 
     /**
      * @brief Deterministically prepares a message-bound nonce together with its BPPP proof.
@@ -453,6 +475,7 @@ public:
      */
     [[nodiscard]] Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(
         std::span<const unsigned char> message,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -463,6 +486,7 @@ public:
      */
     [[nodiscard]] Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(
         const MessageProofCache& cache,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -470,7 +494,8 @@ public:
      * @param topic The topic to bind into the nonce derivation.
      * @return The move-only prepared nonce.
      */
-    [[nodiscard]] Result<PreparedNonce> prepare_topic_nonce(std::span<const unsigned char> topic) const;
+    [[nodiscard]] Result<PreparedNonce> prepare_topic_nonce(std::span<const unsigned char> topic,
+                                                            purify_secp_context* secp_context) const;
 
     /**
      * @brief Deterministically prepares a topic-bound nonce together with its BPPP proof.
@@ -480,6 +505,7 @@ public:
      */
     [[nodiscard]] Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(
         std::span<const unsigned char> topic,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -490,6 +516,7 @@ public:
      */
     [[nodiscard]] Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(
         const TopicProofCache& cache,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -497,7 +524,8 @@ public:
      * @param message The message to sign.
      * @return The resulting BIP340 signature.
      */
-    [[nodiscard]] Result<Signature> sign_message(std::span<const unsigned char> message) const;
+    [[nodiscard]] Result<Signature> sign_message(std::span<const unsigned char> message,
+                                                 purify_secp_context* secp_context) const;
 
     /**
      * @brief Signs a message using an already prepared message-bound nonce.
@@ -506,7 +534,8 @@ public:
      * @return The resulting BIP340 signature.
      */
     [[nodiscard]] Result<Signature> sign_message_with_prepared(std::span<const unsigned char> message,
-                                                               PreparedNonce&& prepared) const;
+                                                               PreparedNonce&& prepared,
+                                                               purify_secp_context* secp_context) const;
 
     /**
      * @brief Signs a message using an already prepared message-bound nonce proof bundle.
@@ -516,7 +545,8 @@ public:
      */
     [[nodiscard]] Result<ProvenSignature> sign_message_with_prepared_proof(
         std::span<const unsigned char> message,
-        PreparedNonceWithProof&& prepared) const;
+        PreparedNonceWithProof&& prepared,
+        purify_secp_context* secp_context) const;
 
     /**
      * @brief Signs a message using a topic-bound deterministic nonce.
@@ -525,8 +555,8 @@ public:
      * @return The resulting BIP340 signature.
      */
     [[nodiscard]] Result<Signature> sign_with_topic(std::span<const unsigned char> message,
-                                                    std::span<const unsigned char> topic) const;
-
+                                                    std::span<const unsigned char> topic,
+                                                    purify_secp_context* secp_context) const;
     /**
      * @brief Signs a message using an already prepared topic-bound nonce.
      * @param message The message to sign.
@@ -534,7 +564,8 @@ public:
      * @return The resulting BIP340 signature.
      */
     [[nodiscard]] Result<Signature> sign_with_prepared_topic(std::span<const unsigned char> message,
-                                                             PreparedNonce&& prepared) const;
+                                                             PreparedNonce&& prepared,
+                                                             purify_secp_context* secp_context) const;
 
     /**
      * @brief Signs a message using an already prepared topic-bound nonce proof bundle.
@@ -544,7 +575,8 @@ public:
      */
     [[nodiscard]] Result<ProvenSignature> sign_with_prepared_topic_proof(
         std::span<const unsigned char> message,
-        PreparedNonceWithProof&& prepared) const;
+        PreparedNonceWithProof&& prepared,
+        purify_secp_context* secp_context) const;
 
     /**
      * @brief Signs a message and returns the signature bundled with its BPPP nonce proof.
@@ -554,6 +586,7 @@ public:
      */
     [[nodiscard]] Result<ProvenSignature> sign_message_with_proof(
         std::span<const unsigned char> message,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -564,6 +597,7 @@ public:
      */
     [[nodiscard]] Result<ProvenSignature> sign_message_with_proof(
         const MessageProofCache& cache,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -576,6 +610,7 @@ public:
     [[nodiscard]] Result<ProvenSignature> sign_with_topic_proof(
         std::span<const unsigned char> message,
         std::span<const unsigned char> topic,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
     /**
@@ -588,6 +623,7 @@ public:
     [[nodiscard]] Result<ProvenSignature> sign_with_topic_proof(
         std::span<const unsigned char> message,
         const TopicProofCache& cache,
+        purify_secp_context* secp_context,
         bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
 
 private:

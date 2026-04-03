@@ -158,10 +158,10 @@ Result<GeneratedKey> derive_key(SecretKey&& secret) {
     return GeneratedKey{std::move(secret), public_key};
 }
 
-Result<Bip340Key> derive_bip340_key(const SecretKey& secret) {
+Result<Bip340Key> derive_bip340_key(const SecretKey& secret, purify_secp_context* secp_context) {
     std::array<unsigned char, PURIFY_SECRET_KEY_BYTES> secret_bytes = secret.packed().to_bytes_be();
     purify_bip340_key key{};
-    const purify_error_code code = purify_derive_bip340_key(&key, secret_bytes.data());
+    const purify_error_code code = purify_derive_bip340_key(&key, secret_bytes.data(), secp_context);
     detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
     if (code != PURIFY_ERROR_OK) {
         clear_core_bip340_key(key);

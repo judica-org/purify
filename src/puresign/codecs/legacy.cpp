@@ -22,10 +22,12 @@ namespace purify::puresign {
 
 namespace {
 
-Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof) {
+Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof, purify_secp_context* secp_context) {
     XOnly32 xonly{};
     int parity = 0;
-    if (purify_bip340_xonly_from_point(nonce_proof.proof.commitment.data(), xonly.data(), &parity) == 0) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "nonce_proof_matches_nonce:secp_context"),
+                           "nonce_proof_matches_nonce:secp_context");
+    if (purify_bip340_xonly_from_point(secp_context, nonce_proof.proof.commitment.data(), xonly.data(), &parity) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "nonce_proof_matches_nonce:invalid_commitment");
     }
     (void)parity;
@@ -43,7 +45,8 @@ Bytes PublicKey::serialize() const {
     return out;
 }
 
-Result<PublicKey> PublicKey::deserialize(std::span<const unsigned char> serialized) {
+Result<PublicKey> PublicKey::deserialize(std::span<const unsigned char> serialized,
+                                         purify_secp_context* secp_context) {
     if (serialized.size() != kSerializedSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "PublicKey::deserialize:size");
     }
@@ -53,7 +56,9 @@ Result<PublicKey> PublicKey::deserialize(std::span<const unsigned char> serializ
     PublicKey out{};
     out.purify_pubkey = purify_pubkey;
     std::copy(serialized.begin() + 64, serialized.end(), out.bip340_pubkey.begin());
-    if (purify_bip340_validate_xonly_pubkey(out.bip340_pubkey.data()) == 0) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "PublicKey::deserialize:secp_context"),
+                           "PublicKey::deserialize:secp_context");
+    if (purify_bip340_validate_xonly_pubkey(secp_context, out.bip340_pubkey.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "PublicKey::deserialize:bip340_validate_xonly_pubkey");
     }
     return out;
@@ -63,13 +68,16 @@ Bytes Nonce::serialize() const {
     return Bytes(xonly.begin(), xonly.end());
 }
 
-Result<Nonce> Nonce::deserialize(std::span<const unsigned char> serialized) {
+Result<Nonce> Nonce::deserialize(std::span<const unsigned char> serialized,
+                                 purify_secp_context* secp_context) {
     if (serialized.size() != kSerializedSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "Nonce::deserialize:size");
     }
     Nonce out{};
     std::copy(serialized.begin(), serialized.end(), out.xonly.begin());
-    if (purify_bip340_validate_xonly_pubkey(out.xonly.data()) == 0) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "Nonce::deserialize:secp_context"),
+                           "Nonce::deserialize:secp_context");
+    if (purify_bip340_validate_xonly_pubkey(secp_context, out.xonly.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "Nonce::deserialize:bip340_validate_xonly_pubkey");
     }
     return out;
@@ -91,19 +99,27 @@ Bytes Signature::serialize() const {
     return Bytes(bytes.begin(), bytes.end());
 }
 
-Result<Signature> Signature::deserialize(std::span<const unsigned char> serialized) {
+Result<Signature> Signature::deserialize(std::span<const unsigned char> serialized,
+                                         purify_secp_context* secp_context) {
     if (serialized.size() != kSerializedSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "Signature::deserialize:size");
     }
     Signature out{};
     std::copy(serialized.begin(), serialized.end(), out.bytes.begin());
-    if (purify_bip340_validate_signature(out.bytes.data()) == 0) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "Signature::deserialize:secp_context"),
+                           "Signature::deserialize:secp_context");
+    if (purify_bip340_validate_signature(secp_context, out.bytes.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "Signature::deserialize:bip340_validate_signature");
     }
     return out;
 }
 
-Result<Bytes> NonceProof::serialize() const {
+Result<Bytes> NonceProof::serialize(purify_secp_context* secp_context) const {
+    PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(*this, secp_context),
+                            "NonceProof::serialize:nonce_proof_matches_nonce");
+    if (!match) {
+        return unexpected_error(ErrorCode::BindingMismatch, "NonceProof::serialize:nonce_mismatch");
+    }
     PURIFY_ASSIGN_OR_RETURN(const auto& proof_bytes, proof.serialize(), "NonceProof::serialize:proof");
     if (proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return unexpected_error(ErrorCode::UnexpectedSize, "NonceProof::serialize:proof_size");
@@ -118,7 +134,8 @@ Result<Bytes> NonceProof::serialize() const {
     return out;
 }
 
-Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serialized) {
+Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serialized,
+                                           purify_secp_context* secp_context) {
     if (serialized.size() < 37) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:header");
     }
@@ -137,7 +154,7 @@ Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serial
                             ExperimentalBulletproofProof::deserialize(serialized.subspan(37, *proof_size)),
                             "NonceProof::deserialize:proof");
     out.proof = std::move(proof_value);
-    PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(out),
+    PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(out, secp_context),
                             "NonceProof::deserialize:nonce_proof_matches_nonce");
     if (!match) {
         return unexpected_error(ErrorCode::BindingMismatch, "NonceProof::deserialize:nonce_mismatch");
@@ -145,8 +162,9 @@ Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serial
     return out;
 }
 
-Result<Bytes> ProvenSignature::serialize() const {
-    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_proof_bytes, nonce_proof.serialize(), "ProvenSignature::serialize:nonce_proof");
+Result<Bytes> ProvenSignature::serialize(purify_secp_context* secp_context) const {
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_proof_bytes, nonce_proof.serialize(secp_context),
+                            "ProvenSignature::serialize:nonce_proof");
     if (nonce_proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return unexpected_error(ErrorCode::UnexpectedSize, "ProvenSignature::serialize:nonce_proof_size");
     }
@@ -160,7 +178,8 @@ Result<Bytes> ProvenSignature::serialize() const {
     return out;
 }
 
-Result<ProvenSignature> ProvenSignature::deserialize(std::span<const unsigned char> serialized) {
+Result<ProvenSignature> ProvenSignature::deserialize(std::span<const unsigned char> serialized,
+                                                     purify_secp_context* secp_context) {
     if (serialized.size() < 69) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "ProvenSignature::deserialize:header");
     }
@@ -173,10 +192,11 @@ Result<ProvenSignature> ProvenSignature::deserialize(std::span<const unsigned ch
         return unexpected_error(ErrorCode::InvalidFixedSize, "ProvenSignature::deserialize:size");
     }
 
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_proof_value, NonceProof::deserialize(serialized.subspan(5, *nonce_proof_size)),
+    PURIFY_ASSIGN_OR_RETURN(auto nonce_proof_value,
+                            NonceProof::deserialize(serialized.subspan(5, *nonce_proof_size), secp_context),
                             "ProvenSignature::deserialize:nonce_proof");
     PURIFY_ASSIGN_OR_RETURN(auto signature_value,
-                            Signature::deserialize(serialized.subspan(5 + *nonce_proof_size, 64)),
+                            Signature::deserialize(serialized.subspan(5 + *nonce_proof_size, 64), secp_context),
                             "ProvenSignature::deserialize:signature");
     return ProvenSignature{signature_value, nonce_proof_value};
 }

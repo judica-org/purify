@@ -21,6 +21,14 @@ typedef struct purify_scalar {
     uint64_t words[4];
 } purify_scalar;
 
+/** @brief Caller-owned secp256k1 context handle reused across bridge operations. */
+typedef struct purify_secp_context purify_secp_context;
+
+/** @brief Creates one reusable secp256k1 context for the bridge helpers below. */
+purify_secp_context* purify_secp_context_create(void);
+/** @brief Destroys a context returned by `purify_secp_context_create`. */
+void purify_secp_context_destroy(purify_secp_context* context);
+
 /** @brief Initializes a scalar from an unsigned integer. */
 void purify_scalar_set_int(purify_scalar* out, unsigned int value);
 /** @brief Initializes a scalar from a 64-bit unsigned integer. */
@@ -93,7 +101,9 @@ void purify_hmac_sha256(unsigned char output32[32],
  * The input/output `seckey32` buffer is rewritten in place to the even-Y canonical secret scalar
  * corresponding to the returned x-only public key. Returns zero when the input scalar is invalid.
  */
-int purify_bip340_key_from_seckey(unsigned char seckey32[32], unsigned char xonly_pubkey32[32]);
+int purify_bip340_key_from_seckey(purify_secp_context* context,
+                                  unsigned char seckey32[32],
+                                  unsigned char xonly_pubkey32[32]);
 
 /**
  * @brief Canonicalizes a valid secp256k1 nonce scalar for BIP340 and derives its x-only public nonce.
@@ -101,7 +111,9 @@ int purify_bip340_key_from_seckey(unsigned char seckey32[32], unsigned char xonl
  * The input/output `scalar32` buffer is rewritten in place to the even-Y representative corresponding
  * to the returned x-only public nonce. Returns zero when the input scalar is invalid or zero.
  */
-int purify_bip340_nonce_from_scalar(unsigned char scalar32[32], unsigned char xonly_nonce32[32]);
+int purify_bip340_nonce_from_scalar(purify_secp_context* context,
+                                    unsigned char scalar32[32],
+                                    unsigned char xonly_nonce32[32]);
 
 /**
  * @brief Converts a compressed secp256k1 point into its x-only public key encoding.
@@ -110,10 +122,14 @@ int purify_bip340_nonce_from_scalar(unsigned char scalar32[32], unsigned char xo
  * original point parity as returned by `secp256k1_xonly_pubkey_from_pubkey` (`0` for even Y,
  * `1` for odd Y).
  */
-int purify_bip340_xonly_from_point(const unsigned char point33[33], unsigned char xonly32[32], int* parity_out);
+int purify_bip340_xonly_from_point(purify_secp_context* context,
+                                   const unsigned char point33[33],
+                                   unsigned char xonly32[32],
+                                   int* parity_out);
 
 /** @brief Returns nonzero when the x-only public key encoding parses successfully. */
-int purify_bip340_validate_xonly_pubkey(const unsigned char xonly_pubkey32[32]);
+int purify_bip340_validate_xonly_pubkey(purify_secp_context* context,
+                                        const unsigned char xonly_pubkey32[32]);
 
 /**
  * @brief Returns nonzero when the 64-byte BIP340 signature has a syntactically valid encoding.
@@ -121,7 +137,8 @@ int purify_bip340_validate_xonly_pubkey(const unsigned char xonly_pubkey32[32]);
  * This only checks the standalone encoding shape (`r` as a valid x-only point and `s` as a scalar
  * below the curve order). It does not verify the signature against a message or public key.
  */
-int purify_bip340_validate_signature(const unsigned char sig64[64]);
+int purify_bip340_validate_signature(purify_secp_context* context,
+                                     const unsigned char sig64[64]);
 
 /**
  * @brief Signs a message with a caller-supplied BIP340 nonce scalar.
@@ -130,7 +147,8 @@ int purify_bip340_validate_signature(const unsigned char sig64[64]);
  * scalar whose public point has even Y, for example the output of `purify_bip340_nonce_from_scalar`.
  * Returns zero when any input is invalid.
  */
-int purify_bip340_sign_with_fixed_nonce(unsigned char sig64[64],
+int purify_bip340_sign_with_fixed_nonce(purify_secp_context* context,
+                                        unsigned char sig64[64],
                                         const unsigned char* msg, size_t msglen,
                                         const unsigned char seckey32[32],
                                         const unsigned char nonce32[32]);
@@ -139,7 +157,8 @@ int purify_bip340_sign_with_fixed_nonce(unsigned char sig64[64],
  * @brief Verifies a BIP340 signature against a serialized x-only public key.
  * @return Nonzero when the signature verifies.
  */
-int purify_bip340_verify(const unsigned char sig64[64],
+int purify_bip340_verify(purify_secp_context* context,
+                         const unsigned char sig64[64],
                          const unsigned char* msg, size_t msglen,
                          const unsigned char xonly_pubkey32[32]);
 

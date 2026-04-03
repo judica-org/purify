@@ -266,6 +266,10 @@ inline int run_cli(int argc, char** argv) {
             usage();
             return 1;
         }
+        SecpContextPtr secp_context = make_secp_context();
+        if (secp_context == nullptr) {
+            return print_error(Error{ErrorCode::BackendRejectedInput});
+        }
         Result<SecretKey> secret = SecretKey::from_hex(argv[2]);
         if (!secret.has_value()) {
             return print_error(secret.error());
@@ -278,7 +282,8 @@ inline int run_cli(int argc, char** argv) {
         if (!blind.has_value()) {
             return print_error(blind.error());
         }
-        Result<bppp::CommittedPurifyWitness> committed = bppp::commit_output_witness(*message, *secret, *blind);
+        Result<bppp::CommittedPurifyWitness> committed =
+            bppp::commit_output_witness(*message, *secret, *blind, secp_context.get());
         if (!committed.has_value()) {
             return print_error(committed.error());
         }

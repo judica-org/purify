@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <map>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <span>
@@ -38,6 +39,25 @@
 #endif
 
 namespace purify {
+
+struct SecpContextDeleter {
+    void operator()(purify_secp_context* context) const noexcept {
+        purify_secp_context_destroy(context);
+    }
+};
+
+using SecpContextPtr = std::unique_ptr<purify_secp_context, SecpContextDeleter>;
+
+inline SecpContextPtr make_secp_context() noexcept {
+    return SecpContextPtr(purify_secp_context_create());
+}
+
+inline Status require_secp_context(const purify_secp_context* context, const char* error_context) {
+    if (context == nullptr) {
+        return unexpected_error(ErrorCode::MissingValue, error_context);
+    }
+    return {};
+}
 
 /** @brief Dynamically sized byte string used for messages, serialized witnesses, and proofs. */
 using Bytes = std::vector<unsigned char>;

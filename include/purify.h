@@ -22,6 +22,14 @@
 extern "C" {
 #endif
 
+/** @brief Caller-owned reusable secp256k1 context handle required by BIP340-backed C APIs. */
+typedef struct purify_secp_context purify_secp_context;
+
+/** @brief Creates one reusable secp256k1 context for the BIP340-backed C APIs below. */
+purify_secp_context* purify_secp_context_create(void);
+/** @brief Destroys a context returned by `purify_secp_context_create`. */
+void purify_secp_context_destroy(purify_secp_context* context);
+
 /** @brief Machine-readable status code returned by the Purify C core. */
 typedef enum purify_error_code {
     PURIFY_ERROR_OK = 0,
@@ -127,11 +135,13 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
  * @brief Derives one canonical BIP340 keypair from one packed Purify secret.
  * @param out Output BIP340 keypair.
  * @param secret_key Input 64-byte packed Purify secret.
+ * @param secp_context Caller-owned reusable context created by `purify_secp_context_create`.
  * Aliasing: supported when `out` overlaps `secret_key`.
  * @return `PURIFY_ERROR_OK` on success.
  */
 purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
-                                           const unsigned char secret_key[PURIFY_SECRET_KEY_BYTES]);
+                                           const unsigned char secret_key[PURIFY_SECRET_KEY_BYTES],
+                                           purify_secp_context* secp_context);
 
 /**
  * @brief Evaluates the Purify PRF for one packed secret and message.

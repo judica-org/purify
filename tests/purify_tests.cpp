@@ -36,6 +36,12 @@ using purify::Transcript;
 using purify::UInt256;
 using purify::UInt512;
 
+purify::SecpContextPtr make_test_secp_context(TestContext& ctx) {
+    purify::SecpContextPtr context = purify::make_secp_context();
+    ctx.expect(context != nullptr, "secp context creation succeeds");
+    return context;
+}
+
 std::string hex32(const std::array<unsigned char, 32>& bytes) {
     return purify::UInt256::from_bytes_be(bytes.data(), bytes.size()).to_hex();
 }
@@ -459,9 +465,14 @@ void test_bip340_key_derivation(TestContext& ctx) {
         return;
     }
 
-    Result<purify::Bip340Key> key_a = purify::derive_bip340_key(*secret);
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
+    Result<purify::Bip340Key> key_a = purify::derive_bip340_key(*secret, context.get());
     expect_ok(ctx, key_a, "derive_bip340_key succeeds");
-    Result<purify::Bip340Key> key_b = purify::derive_bip340_key(*secret);
+    Result<purify::Bip340Key> key_b = purify::derive_bip340_key(*secret, context.get());
     expect_ok(ctx, key_b, "derive_bip340_key is deterministic");
     if (!key_a.has_value() || !key_b.has_value()) {
         return;
@@ -483,7 +494,7 @@ void test_bip340_key_derivation(TestContext& ctx) {
 
     std::array<unsigned char, 32> canonical = key_a->seckey;
     std::array<unsigned char, 32> xonly = {};
-    ctx.expect(purify_bip340_key_from_seckey(canonical.data(), xonly.data()) == 1,
+    ctx.expect(purify_bip340_key_from_seckey(context.get(), canonical.data(), xonly.data()) == 1,
                "bridge accepts the derived canonical BIP340 secret key");
     ctx.expect(canonical == key_a->seckey,
                "derive_bip340_key returns an idempotently canonicalized even-Y secret key");
@@ -493,6 +504,10 @@ void test_bip340_key_derivation(TestContext& ctx) {
 
 void test_secret_key_validation(TestContext& ctx) {
     Bytes message = sample_message();
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
 
     UInt512 invalid = purify::key_space_size();
     expect_error(ctx, purify::SecretKey::from_packed(invalid), ErrorCode::RangeViolation,
@@ -507,7 +522,7 @@ void test_secret_key_validation(TestContext& ctx) {
         expect_ok(ctx, purify::eval(*canonical_secret, message), "eval accepts the last canonical packed secret");
         expect_ok(ctx, purify::prove_assignment_data(message, *canonical_secret),
                   "prove_assignment_data accepts the last canonical packed secret");
-        expect_ok(ctx, purify::derive_bip340_key(*canonical_secret),
+        expect_ok(ctx, purify::derive_bip340_key(*canonical_secret, context.get()),
                   "derive_bip340_key accepts the last canonical packed secret");
     }
 }
@@ -593,12 +608,22 @@ void test_expr_cache_ordering(TestContext& ctx) {
 }
 
 void test_bppp_move_overload(TestContext& ctx) {
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
     purify::bppp::NormArgInputs inputs;
-    Result<purify::bppp::NormArgProof> proof = purify::bppp::prove_norm_arg(std::move(inputs));
+    Result<purify::bppp::NormArgProof> proof = purify::bppp::prove_norm_arg(std::move(inputs), context.get());
     expect_error(ctx, proof, ErrorCode::EmptyInput, "rvalue prove_norm_arg overload preserves empty-input validation");
 }
 
 void test_toy_bppp_circuit_reduction(TestContext& ctx) {
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
     std::optional<FieldElement> sqrt_minus_one = FieldElement::from_int(-1).sqrt();
     ctx.expect(sqrt_minus_one.has_value(), "the secp256k1 scalar field admits sqrt(-1) for the toy BPPP reduction");
     if (!sqrt_minus_one.has_value()) {
@@ -615,12 +640,12 @@ void test_toy_bppp_circuit_reduction(TestContext& ctx) {
     ctx.expect(valid.folded_value.is_zero(),
                "the satisfying one-gate witness reduces to a zero folded scalar");
 
-    Result<purify::bppp::NormArgProof> valid_proof = purify::bppp::prove_norm_arg(valid.inputs);
+    Result<purify::bppp::NormArgProof> valid_proof = purify::bppp::prove_norm_arg(valid.inputs, context.get());
     expect_ok(ctx, valid_proof, "toy BPPP reduction proves a satisfying one-gate relation");
     if (!valid_proof.has_value()) {
         return;
     }
-    ctx.expect(purify::bppp::verify_norm_arg(*valid_proof),
+    ctx.expect(purify::bppp::verify_norm_arg(*valid_proof, context.get()),
                "toy BPPP reduction verifies for a satisfying one-gate witness");
 
     const ToyBpppReduction invalid =
@@ -632,41 +657,46 @@ void test_toy_bppp_circuit_reduction(TestContext& ctx) {
     ctx.expect(!invalid.folded_value.is_zero(),
                "the non-satisfying one-gate witness reduces to a non-zero folded scalar");
 
-    Result<purify::bppp::NormArgProof> invalid_proof = purify::bppp::prove_norm_arg(invalid.inputs);
+    Result<purify::bppp::NormArgProof> invalid_proof = purify::bppp::prove_norm_arg(invalid.inputs, context.get());
     expect_ok(ctx, invalid_proof, "toy BPPP reduction also proves a non-satisfying witness under its own commitment");
     if (!invalid_proof.has_value()) {
         return;
     }
-    ctx.expect(purify::bppp::verify_norm_arg(*invalid_proof),
+    ctx.expect(purify::bppp::verify_norm_arg(*invalid_proof, context.get()),
                "standalone BPPP accepts the non-satisfying toy witness because it proves the committed relation value");
 
     purify::bppp::NormArgProof rebound = *invalid_proof;
     rebound.commitment = valid_proof->commitment;
-    ctx.expect(!purify::bppp::verify_norm_arg(rebound),
+    ctx.expect(!purify::bppp::verify_norm_arg(rebound, context.get()),
                "swapping in the satisfying commitment rejects the non-satisfying toy witness proof");
 
-    Result<purify::bppp::PointBytes> anchored_commitment = purify::bppp::commit_norm_arg(valid.inputs);
+    Result<purify::bppp::PointBytes> anchored_commitment = purify::bppp::commit_norm_arg(valid.inputs, context.get());
     expect_ok(ctx, anchored_commitment, "toy BPPP reduction computes an external satisfying commitment");
     if (!anchored_commitment.has_value()) {
         return;
     }
 
     Result<purify::bppp::NormArgProof> anchored_valid =
-        purify::bppp::prove_norm_arg_to_commitment(valid.inputs, *anchored_commitment);
+        purify::bppp::prove_norm_arg_to_commitment(valid.inputs, *anchored_commitment, context.get());
     expect_ok(ctx, anchored_valid, "toy BPPP reduction proves against an external satisfying commitment");
     if (!anchored_valid.has_value()) {
         return;
     }
-    ctx.expect(purify::bppp::verify_norm_arg(*anchored_valid),
+    ctx.expect(purify::bppp::verify_norm_arg(*anchored_valid, context.get()),
                "anchored toy BPPP proof verifies against the external satisfying commitment");
 
     Result<purify::bppp::NormArgProof> anchored_invalid =
-        purify::bppp::prove_norm_arg_to_commitment(invalid.inputs, *anchored_commitment);
+        purify::bppp::prove_norm_arg_to_commitment(invalid.inputs, *anchored_commitment, context.get());
     expect_error(ctx, anchored_invalid, ErrorCode::BackendRejectedInput,
                  "toy BPPP reduction rejects a non-satisfying witness against the satisfying commitment");
 }
 
 void test_experimental_circuit_norm_arg_one_gate(TestContext& ctx) {
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
     NativeBulletproofCircuit circuit(1, 1, 0);
     std::size_t constraint = circuit.add_constraint(FieldElement::zero());
     circuit.add_output_term(0, constraint, FieldElement::one());
@@ -681,14 +711,15 @@ void test_experimental_circuit_norm_arg_one_gate(TestContext& ctx) {
     Bytes binding = purify::bytes_from_ascii("one-gate-norm-arg-binding");
 
     Result<purify::bppp::PointBytes> witness_commitment =
-        purify::bppp::commit_experimental_circuit_witness(circuit, assignment, binding);
+        purify::bppp::commit_experimental_circuit_witness(circuit, assignment, context.get(), binding);
     expect_ok(ctx, witness_commitment, "commit_experimental_circuit_witness commits the reduced one-gate witness");
     if (!witness_commitment.has_value()) {
         return;
     }
 
     Result<purify::bppp::ExperimentalCircuitNormArgProof> proof =
-        purify::bppp::prove_experimental_circuit_norm_arg_to_commitment(circuit, assignment, *witness_commitment, binding);
+        purify::bppp::prove_experimental_circuit_norm_arg_to_commitment(circuit, assignment, *witness_commitment,
+                                                                        context.get(), binding);
     expect_ok(ctx, proof, "prove_experimental_circuit_norm_arg_to_commitment proves a satisfying one-gate circuit");
     if (!proof.has_value()) {
         return;
@@ -696,7 +727,7 @@ void test_experimental_circuit_norm_arg_one_gate(TestContext& ctx) {
     ctx.expect(proof->witness_commitment == *witness_commitment,
                "experimental circuit norm argument preserves the caller-supplied reduced witness commitment");
 
-    Result<bool> verified = purify::bppp::verify_experimental_circuit_norm_arg(circuit, *proof, binding);
+    Result<bool> verified = purify::bppp::verify_experimental_circuit_norm_arg(circuit, *proof, context.get(), binding);
     expect_ok(ctx, verified, "verify_experimental_circuit_norm_arg succeeds on the one-gate proof");
     if (verified.has_value()) {
         ctx.expect(*verified, "experimental circuit norm argument verifies on the one-gate circuit");
@@ -704,6 +735,7 @@ void test_experimental_circuit_norm_arg_one_gate(TestContext& ctx) {
 
     Result<bool> wrong_binding =
         purify::bppp::verify_experimental_circuit_norm_arg(circuit, *proof,
+                                                           context.get(),
                                                            purify::bytes_from_ascii("one-gate-norm-arg-binding-wrong"));
     expect_ok(ctx, wrong_binding, "verify_experimental_circuit_norm_arg runs with a wrong one-gate binding");
     if (wrong_binding.has_value()) {
@@ -713,7 +745,7 @@ void test_experimental_circuit_norm_arg_one_gate(TestContext& ctx) {
     BulletproofAssignmentData invalid = assignment;
     invalid.output[0] = FieldElement::from_int(11);
     Result<purify::bppp::ExperimentalCircuitNormArgProof> invalid_proof =
-        purify::bppp::prove_experimental_circuit_norm_arg(circuit, invalid, binding);
+        purify::bppp::prove_experimental_circuit_norm_arg(circuit, invalid, context.get(), binding);
     expect_error(ctx, invalid_proof, ErrorCode::EquationMismatch,
                  "prove_experimental_circuit_norm_arg rejects a non-satisfying one-gate witness");
 }
@@ -722,6 +754,10 @@ void test_experimental_circuit_norm_arg_sample_verifier(TestContext& ctx) {
     Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for the experimental circuit norm argument");
     if (!secret.has_value()) {
+        return;
+    }
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
         return;
     }
 
@@ -740,13 +776,14 @@ void test_experimental_circuit_norm_arg_sample_verifier(TestContext& ctx) {
 
     Bytes binding = purify::bytes_from_ascii("sample-verifier-norm-arg-binding");
     Result<purify::bppp::ExperimentalCircuitNormArgProof> proof =
-        purify::bppp::prove_experimental_circuit_norm_arg(*circuit, witness->assignment, binding);
+        purify::bppp::prove_experimental_circuit_norm_arg(*circuit, witness->assignment, context.get(), binding);
     expect_ok(ctx, proof, "prove_experimental_circuit_norm_arg proves the sample verifier circuit");
     if (!proof.has_value()) {
         return;
     }
 
-    Result<bool> verified = purify::bppp::verify_experimental_circuit_norm_arg(*circuit, *proof, binding);
+    Result<bool> verified =
+        purify::bppp::verify_experimental_circuit_norm_arg(*circuit, *proof, context.get(), binding);
     expect_ok(ctx, verified, "verify_experimental_circuit_norm_arg succeeds on the sample verifier circuit");
     if (verified.has_value()) {
         ctx.expect(*verified, "experimental circuit norm argument verifies on the sample verifier circuit");
@@ -754,7 +791,8 @@ void test_experimental_circuit_norm_arg_sample_verifier(TestContext& ctx) {
 
     purify::bppp::ExperimentalCircuitNormArgProof tampered = *proof;
     tampered.proof.back() ^= 0x01;
-    Result<bool> tampered_ok = purify::bppp::verify_experimental_circuit_norm_arg(*circuit, tampered, binding);
+    Result<bool> tampered_ok =
+        purify::bppp::verify_experimental_circuit_norm_arg(*circuit, tampered, context.get(), binding);
     expect_ok(ctx, tampered_ok, "verify_experimental_circuit_norm_arg runs on a tampered sample proof");
     if (tampered_ok.has_value()) {
         ctx.expect(!*tampered_ok, "tampering the sample norm-argument proof is detected");
@@ -762,6 +800,11 @@ void test_experimental_circuit_norm_arg_sample_verifier(TestContext& ctx) {
 }
 
 void test_experimental_circuit_zk_norm_arg_one_gate(TestContext& ctx) {
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
     NativeBulletproofCircuit circuit(1, 1, 0);
     std::size_t constraint = circuit.add_constraint(FieldElement::zero());
     circuit.add_output_term(0, constraint, FieldElement::one());
@@ -780,7 +823,7 @@ void test_experimental_circuit_zk_norm_arg_one_gate(TestContext& ctx) {
     Bytes binding = purify::bytes_from_ascii("one-gate-zk-norm-arg-binding");
 
     Result<purify::bppp::ExperimentalCircuitZkNormArgProof> proof =
-        purify::bppp::prove_experimental_circuit_zk_norm_arg(circuit, assignment, nonce, binding);
+        purify::bppp::prove_experimental_circuit_zk_norm_arg(circuit, assignment, nonce, context.get(), binding);
     expect_ok(ctx, proof, "prove_experimental_circuit_zk_norm_arg proves a satisfying one-gate circuit");
     if (!proof.has_value()) {
         return;
@@ -791,7 +834,8 @@ void test_experimental_circuit_zk_norm_arg_one_gate(TestContext& ctx) {
     ctx.expect(proof->s_commitment != purify::bppp::PointBytes{},
                "experimental circuit ZK proof carries a non-empty S commitment");
 
-    Result<bool> verified = purify::bppp::verify_experimental_circuit_zk_norm_arg(circuit, *proof, binding);
+    Result<bool> verified =
+        purify::bppp::verify_experimental_circuit_zk_norm_arg(circuit, *proof, context.get(), binding);
     expect_ok(ctx, verified, "verify_experimental_circuit_zk_norm_arg succeeds on the one-gate proof");
     if (verified.has_value()) {
         ctx.expect(*verified, "experimental circuit ZK norm argument verifies on the one-gate circuit");
@@ -799,6 +843,7 @@ void test_experimental_circuit_zk_norm_arg_one_gate(TestContext& ctx) {
 
     Result<bool> wrong_binding =
         purify::bppp::verify_experimental_circuit_zk_norm_arg(circuit, *proof,
+                                                              context.get(),
                                                               purify::bytes_from_ascii("one-gate-zk-norm-arg-binding-wrong"));
     expect_ok(ctx, wrong_binding, "verify_experimental_circuit_zk_norm_arg runs with a wrong one-gate binding");
     if (wrong_binding.has_value()) {
@@ -810,6 +855,10 @@ void test_experimental_circuit_zk_norm_arg_sample_verifier(TestContext& ctx) {
     Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for the experimental circuit ZK norm argument");
     if (!secret.has_value()) {
+        return;
+    }
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
         return;
     }
 
@@ -833,13 +882,15 @@ void test_experimental_circuit_zk_norm_arg_sample_verifier(TestContext& ctx) {
     Bytes binding = purify::bytes_from_ascii("sample-verifier-zk-norm-arg-binding");
 
     Result<purify::bppp::ExperimentalCircuitZkNormArgProof> proof =
-        purify::bppp::prove_experimental_circuit_zk_norm_arg(*circuit, witness->assignment, nonce, binding);
+        purify::bppp::prove_experimental_circuit_zk_norm_arg(*circuit, witness->assignment, nonce, context.get(),
+                                                             binding);
     expect_ok(ctx, proof, "prove_experimental_circuit_zk_norm_arg proves the sample verifier circuit");
     if (!proof.has_value()) {
         return;
     }
 
-    Result<bool> verified = purify::bppp::verify_experimental_circuit_zk_norm_arg(*circuit, *proof, binding);
+    Result<bool> verified =
+        purify::bppp::verify_experimental_circuit_zk_norm_arg(*circuit, *proof, context.get(), binding);
     expect_ok(ctx, verified, "verify_experimental_circuit_zk_norm_arg succeeds on the sample verifier circuit");
     if (verified.has_value()) {
         ctx.expect(*verified, "experimental circuit ZK norm argument verifies on the sample verifier circuit");
@@ -847,7 +898,8 @@ void test_experimental_circuit_zk_norm_arg_sample_verifier(TestContext& ctx) {
 
     purify::bppp::ExperimentalCircuitZkNormArgProof tampered = *proof;
     tampered.proof.back() ^= 0x01;
-    Result<bool> tampered_ok = purify::bppp::verify_experimental_circuit_zk_norm_arg(*circuit, tampered, binding);
+    Result<bool> tampered_ok =
+        purify::bppp::verify_experimental_circuit_zk_norm_arg(*circuit, tampered, context.get(), binding);
     expect_ok(ctx, tampered_ok, "verify_experimental_circuit_zk_norm_arg runs on a tampered sample proof");
     if (tampered_ok.has_value()) {
         ctx.expect(!*tampered_ok, "tampering the sample ZK norm-argument proof is detected");
@@ -927,6 +979,11 @@ void test_packed_circuit_move_leaves_empty_source(TestContext& ctx) {
 }
 
 void test_packed_circuit_zero_constraint_roundtrip(TestContext& ctx) {
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
     NativeBulletproofCircuit circuit(1, 1, 0);
 
     BulletproofAssignmentData assignment;
@@ -950,14 +1007,16 @@ void test_packed_circuit_zero_constraint_roundtrip(TestContext& ctx) {
     Bytes binding = purify::bytes_from_ascii("zero-constraint-packed-binding");
 
     Result<purify::ExperimentalBulletproofProof> proof =
-        purify::prove_experimental_circuit(*packed, assignment, nonce, purify::bppp::base_generator(), binding);
+        purify::prove_experimental_circuit(*packed, assignment, nonce, purify::bppp::base_generator(context.get()),
+                                           context.get(), binding);
     expect_ok(ctx, proof, "prove_experimental_circuit accepts a zero-constraint packed circuit");
     if (!proof.has_value()) {
         return;
     }
 
     Result<bool> verified =
-        purify::verify_experimental_circuit(*packed, *proof, purify::bppp::base_generator(), binding);
+        purify::verify_experimental_circuit(*packed, *proof, purify::bppp::base_generator(context.get()),
+                                            context.get(), binding);
     expect_ok(ctx, verified, "verify_experimental_circuit accepts a zero-constraint packed circuit proof");
     if (verified.has_value()) {
         ctx.expect(*verified, "zero-constraint packed circuit proof verifies");

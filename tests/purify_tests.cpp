@@ -926,6 +926,44 @@ void test_packed_circuit_move_leaves_empty_source(TestContext& ctx) {
     ctx.expect(packed->constants().empty(), "moved-from packed circuit exposes no constants");
 }
 
+void test_packed_circuit_zero_constraint_roundtrip(TestContext& ctx) {
+    NativeBulletproofCircuit circuit(1, 1, 0);
+
+    BulletproofAssignmentData assignment;
+    assignment.left = {FieldElement::from_int(3)};
+    assignment.right = {FieldElement::from_int(4)};
+    assignment.output = {FieldElement::from_int(12)};
+    assignment.commitments = {FieldElement::from_int(7)};
+
+    Result<NativeBulletproofCircuit::PackedWithSlack> packed = circuit.pack_with_slack();
+    expect_ok(ctx, packed, "pack_with_slack succeeds for a zero-constraint packed circuit");
+    if (!packed.has_value()) {
+        return;
+    }
+
+    ctx.expect(packed->has_valid_shape(), "zero-constraint packed circuit remains internally consistent");
+
+    std::array<unsigned char, 32> nonce{};
+    for (std::size_t i = 0; i < nonce.size(); ++i) {
+        nonce[i] = static_cast<unsigned char>(0x40 + i);
+    }
+    Bytes binding = purify::bytes_from_ascii("zero-constraint-packed-binding");
+
+    Result<purify::ExperimentalBulletproofProof> proof =
+        purify::prove_experimental_circuit(*packed, assignment, nonce, purify::bppp::base_generator(), binding);
+    expect_ok(ctx, proof, "prove_experimental_circuit accepts a zero-constraint packed circuit");
+    if (!proof.has_value()) {
+        return;
+    }
+
+    Result<bool> verified =
+        purify::verify_experimental_circuit(*packed, *proof, purify::bppp::base_generator(), binding);
+    expect_ok(ctx, verified, "verify_experimental_circuit accepts a zero-constraint packed circuit proof");
+    if (verified.has_value()) {
+        ctx.expect(*verified, "zero-constraint packed circuit proof verifies");
+    }
+}
+
 void test_circuit_template_partial_final_eval(TestContext& ctx) {
     Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for template partial/final evaluation");
@@ -985,5 +1023,6 @@ void run_purify_tests(TestContext& ctx) {
     test_experimental_circuit_zk_norm_arg_sample_verifier(ctx);
     test_packed_circuit_with_slack(ctx);
     test_packed_circuit_move_leaves_empty_source(ctx);
+    test_packed_circuit_zero_constraint_roundtrip(ctx);
     test_circuit_template_partial_final_eval(ctx);
 }

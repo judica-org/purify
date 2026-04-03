@@ -494,8 +494,13 @@ FlattenedCircuitView flatten_circuit_view(const PackedCircuit& circuit) {
     flat.wv = flatten_row_family_generic(circuit.n_commitments(),
                                          [&](std::size_t i) { return circuit.commitment_row(i).entries_view(); },
                                          implicit_bit_constraints);
-    std::vector<FieldElement> explicit_constants(circuit.constants().begin() + static_cast<std::ptrdiff_t>(implicit_bit_constraints),
-                                                 circuit.constants().end());
+    std::vector<FieldElement> explicit_constants;
+    std::span<const FieldElement> constants = circuit.constants();
+    if (constants.size() > implicit_bit_constraints) {
+        const FieldElement* constants_begin = constants.data();
+        explicit_constants.assign(constants_begin + static_cast<std::ptrdiff_t>(implicit_bit_constraints),
+                                  constants_begin + static_cast<std::ptrdiff_t>(constants.size()));
+    }
     flat.constants32 = flatten_scalars32(explicit_constants);
     flat.view.n_gates = circuit.n_gates();
     flat.view.n_commits = circuit.n_commitments();

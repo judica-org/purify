@@ -13,6 +13,7 @@
 #define ENABLE_MODULE_EXTRAKEYS 1
 #define ENABLE_MODULE_SCHNORRSIG 1
 
+#include "purify.h"
 #include "bppp_bridge.h"
 #include "purify/secp_bridge.h"
 
@@ -36,11 +37,14 @@ struct purify_secp_context {
     secp256k1_context* ctx;
 };
 
+static void purify_bridge_secure_clear(void* data, size_t size);
+
 static secp256k1_context* purify_context_handle(const purify_secp_context* context) {
     return context != NULL ? context->ctx : NULL;
 }
 
 purify_secp_context* purify_secp_context_create(void) {
+    unsigned char seed32[32] = {0};
     purify_secp_context* context =
         (purify_secp_context*)calloc(1, sizeof(*context));
     if (context == NULL) {
@@ -51,6 +55,14 @@ purify_secp_context* purify_secp_context_create(void) {
         free(context);
         return NULL;
     }
+    if (purify_fill_secure_random(seed32, sizeof(seed32)) != PURIFY_ERROR_OK
+        || !secp256k1_context_randomize(context->ctx, seed32)) {
+        purify_bridge_secure_clear(seed32, sizeof(seed32));
+        secp256k1_context_destroy(context->ctx);
+        free(context);
+        return NULL;
+    }
+    purify_bridge_secure_clear(seed32, sizeof(seed32));
     return context;
 }
 

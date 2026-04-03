@@ -173,7 +173,10 @@ bool require_true(const Result<bool>& result, const char* step, std::size_t iter
     return false;
 }
 
-bool run_iteration(const FuzzConfig& config, std::size_t iteration, std::uint64_t case_seed) {
+bool run_iteration(const FuzzConfig& config,
+                   purify_secp_context* secp_context,
+                   std::size_t iteration,
+                   std::uint64_t case_seed) {
     SplitMix64 rng(case_seed);
 
     Bytes short_seed = random_bytes(rng, 0, 15);
@@ -223,17 +226,17 @@ bool run_iteration(const FuzzConfig& config, std::size_t iteration, std::uint64_
         return false;
     }
 
-    Result<purify::puresign::KeyPair> key_pair = purify::puresign::KeyPair::from_secret(key->secret);
+    Result<purify::puresign::KeyPair> key_pair = purify::puresign::KeyPair::from_secret(key->secret, secp_context);
     if (!require_result(key_pair, "KeyPair::from_secret", iteration, case_seed)) {
         return false;
     }
     const purify::puresign::PublicKey& public_key = key_pair->public_key();
 
-    Result<purify::puresign::Signature> signature = key_pair->sign_message(message);
+    Result<purify::puresign::Signature> signature = key_pair->sign_message(message, secp_context);
     if (!require_result(signature, "KeyPair::sign_message", iteration, case_seed)) {
         return false;
     }
-    if (!require_true(public_key.verify_signature(message, *signature),
+    if (!require_true(public_key.verify_signature(message, *signature, secp_context),
                       "PublicKey::verify_signature", iteration, case_seed)) {
         return false;
     }
@@ -243,15 +246,16 @@ bool run_iteration(const FuzzConfig& config, std::size_t iteration, std::uint64_
         return true;
     }
 
-    Result<purify::puresign::ProvenSignature> proven = key_pair->sign_message_with_proof(message);
+    Result<purify::puresign::ProvenSignature> proven = key_pair->sign_message_with_proof(message, secp_context);
     if (!require_result(proven, "KeyPair::sign_message_with_proof", iteration, case_seed)) {
         return false;
     }
-    if (!require_true(public_key.verify_message_signature_with_proof(message, *proven),
+    if (!require_true(public_key.verify_message_signature_with_proof(message, *proven, secp_context),
                       "PublicKey::verify_message_signature_with_proof", iteration, case_seed)) {
         return false;
     }
-    Result<bool> wrong_message = public_key.verify_message_signature_with_proof(random_bytes(rng, 1, 16), *proven);
+    Result<bool> wrong_message =
+        public_key.verify_message_signature_with_proof(random_bytes(rng, 1, 16), *proven, secp_context);
     if (!require_result(wrong_message,
                         "PublicKey::verify_message_signature_with_proof_wrong_message",
                         iteration, case_seed)) {
@@ -264,16 +268,18 @@ bool run_iteration(const FuzzConfig& config, std::size_t iteration, std::uint64_
         return false;
     }
 
-    Result<purify::puresign::ProvenSignature> topic_signature = key_pair->sign_with_topic_proof(message, topic);
+    Result<purify::puresign::ProvenSignature> topic_signature =
+        key_pair->sign_with_topic_proof(message, topic, secp_context);
     if (!require_result(topic_signature, "KeyPair::sign_with_topic_proof", iteration, case_seed)) {
         return false;
     }
-    if (!require_true(public_key.verify_topic_signature_with_proof(message, topic, *topic_signature),
+    if (!require_true(public_key.verify_topic_signature_with_proof(message, topic, *topic_signature, secp_context),
                       "PublicKey::verify_topic_signature_with_proof", iteration, case_seed)) {
         return false;
     }
     Result<bool> wrong_topic =
-        public_key.verify_topic_signature_with_proof(message, random_bytes(rng, 1, 16), *topic_signature);
+        public_key.verify_topic_signature_with_proof(message, random_bytes(rng, 1, 16), *topic_signature,
+                                                     secp_context);
     if (!require_result(wrong_topic,
                         "PublicKey::verify_topic_signature_with_proof_wrong_topic",
                         iteration, case_seed)) {
@@ -289,11 +295,14 @@ bool run_iteration(const FuzzConfig& config, std::size_t iteration, std::uint64_
     std::array<unsigned char, 32> nonce = random_array<32>(rng);
     Bytes binding = random_bytes(rng, 0, 24);
     Result<purify::ExperimentalBulletproofProof> proof =
-        purify::prove_experimental_circuit(*circuit, witness->assignment, nonce, purify::bppp::base_generator(), binding);
+        purify::prove_experimental_circuit(*circuit, witness->assignment, nonce,
+                                           purify::bppp::base_generator(secp_context), secp_context, binding);
     if (!require_result(proof, "prove_experimental_circuit", iteration, case_seed)) {
         return false;
     }
-    if (!require_true(purify::verify_experimental_circuit(*circuit, *proof, purify::bppp::base_generator(), binding),
+    if (!require_true(purify::verify_experimental_circuit(*circuit, *proof,
+                                                          purify::bppp::base_generator(secp_context),
+                                                          secp_context, binding),
                       "verify_experimental_circuit", iteration, case_seed)) {
         return false;
     }
@@ -310,10 +319,16 @@ int main(int argc, char** argv) {
         return parse_exit_code < 0 ? 1 : parse_exit_code;
     }
 
+    purify::SecpContextPtr secp_context = purify::make_secp_context();
+    if (secp_context == nullptr) {
+        std::cerr << "failed to create secp context\n";
+        return 1;
+    }
+
     SplitMix64 master(config->seed);
     for (std::size_t iteration = 0; iteration < config->iterations; ++iteration) {
         std::uint64_t case_seed = master.next_u64();
-        if (!run_iteration(*config, iteration, case_seed)) {
+        if (!run_iteration(*config, secp_context.get(), iteration, case_seed)) {
             return 1;
         }
     }

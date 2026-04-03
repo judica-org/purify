@@ -6,6 +6,7 @@
 #include <charconv>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string_view>
 
@@ -55,6 +56,9 @@ bool parse_u64(std::string_view text, std::uint64_t& out) {
 bool parse_size(std::string_view text, std::size_t& out) {
     std::uint64_t parsed = 0;
     if (!parse_u64(text, parsed)) {
+        return false;
+    }
+    if (parsed > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
         return false;
     }
     out = static_cast<std::size_t>(parsed);

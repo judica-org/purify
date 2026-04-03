@@ -20,7 +20,7 @@ inline Bytes copy_bytes(std::span<const unsigned char> input) {
 
 inline Bytes tagged_eval_input(std::string_view tag, std::span<const unsigned char> input) {
     Bytes out;
-    out.reserve(tag.size() + input.size());
+    best_effort_reserve_add(out, tag.size(), input.size());
     out.insert(out.end(), tag.begin(), tag.end());
     out.insert(out.end(), input.begin(), input.end());
     return out;
@@ -35,17 +35,13 @@ inline void append_u32_le(Bytes& out, std::uint32_t value) {
 inline std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes,
                                                 std::size_t offset) {
     std::uint32_t value = 0;
-    if (offset + 4 > bytes.size()) {
+    if (offset > bytes.size() || bytes.size() - offset < 4) {
         return std::nullopt;
     }
     for (int i = 0; i < 4; ++i) {
         value |= static_cast<std::uint32_t>(bytes[offset + i]) << (8 * i);
     }
     return value;
-}
-
-inline bool is_power_of_two_size(std::size_t value) {
-    return value != 0 && (value & (value - 1)) == 0;
 }
 
 inline std::size_t circuit_n_gates(const NativeBulletproofCircuit& circuit) {

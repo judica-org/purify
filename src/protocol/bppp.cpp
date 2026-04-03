@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -229,13 +230,16 @@ ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
   return out;
 }
 
-bool is_power_of_two(std::size_t value) {
-  return value != 0 && (value & (value - 1)) == 0;
-}
-
-std::size_t round_up_power_of_two(std::size_t value) {
+Result<std::size_t> round_up_power_of_two(std::size_t value,
+                                          const char *context) {
+  if (value == 0) {
+    return unexpected_error(ErrorCode::Overflow, context);
+  }
   std::size_t out = 1;
   while (out < value) {
+    if (out > std::numeric_limits<std::size_t>::max() / 2) {
+      return unexpected_error(ErrorCode::Overflow, context);
+    }
     out <<= 1;
   }
   return out;
@@ -267,7 +271,11 @@ Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
                                            const TaggedHash& tag,
                                            std::size_t index) {
   Bytes prefix(seed.begin(), seed.end());
-  append_u64_le(prefix, static_cast<std::uint64_t>(index));
+  PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index,
+                          narrow_size_to_u64(index,
+                                             "derive_nonzero_scalar:index"),
+                          "derive_nonzero_scalar:index");
+  append_u64_le(prefix, encoded_index);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
     Bytes input = prefix;
     append_u64_le(input, counter);
@@ -288,7 +296,10 @@ Result<FieldElement> derive_scalar(std::span<const unsigned char> seed,
                                    const TaggedHash& tag, std::size_t index,
                                    std::uint64_t attempt = 0) {
   Bytes prefix(seed.begin(), seed.end());
-  append_u64_le(prefix, static_cast<std::uint64_t>(index));
+  PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index,
+                          narrow_size_to_u64(index, "derive_scalar:index"),
+                          "derive_scalar:index");
+  append_u64_le(prefix, encoded_index);
   append_u64_le(prefix, attempt);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
     Bytes input = prefix;
@@ -357,14 +368,16 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
     return unexpected_error(ErrorCode::InvalidDimensions,
                             "build_circuit_norm_arg_public_data:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
         "build_circuit_norm_arg_public_data:n_gates_power_of_two");
   }
 
-  Bytes binding_digest =
-      experimental_circuit_binding_digest(circuit, statement_binding);
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &binding_digest,
+      experimental_circuit_binding_digest(circuit, statement_binding),
+      "build_circuit_norm_arg_public_data:binding_digest");
   PURIFY_ASSIGN_OR_RETURN(
       const auto &rho,
       derive_nonzero_scalar(binding_digest, kCircuitNormArgRhoTaggedHash, 0),
@@ -469,11 +482,20 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
     out->minus_terms[i] = two_square_terms(d_minus);
   }
 
-  const std::size_t l_value_count =
-      circuit.n_gates + (externalize_commitments ? 0 : circuit.n_commitments) +
-      1;
-  const std::size_t l_vec_len =
-      round_up_power_of_two(std::max<std::size_t>(1, l_value_count));
+  std::size_t l_value_count = 0;
+  if (!checked_add_size(circuit.n_gates,
+                        externalize_commitments ? 0 : circuit.n_commitments,
+                        l_value_count) ||
+      !checked_add_size(l_value_count, 1, l_value_count)) {
+    return unexpected_error(
+        ErrorCode::Overflow,
+        "build_circuit_norm_arg_public_data:l_value_count");
+  }
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &l_vec_len,
+      round_up_power_of_two(std::max<std::size_t>(1, l_value_count),
+                            "build_circuit_norm_arg_public_data:l_vec_len"),
+      "build_circuit_norm_arg_public_data:l_vec_len");
   out->c_vec.assign(l_vec_len, zero);
   for (std::size_t i = 0; i < circuit.n_gates; ++i) {
     out->c_vec[i] = output_coeffs[i];
@@ -488,8 +510,17 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   out->target = constant.negate();
   out->c_vec_bytes = scalar_bytes(out->c_vec);
 
+  std::size_t witness_generator_count = 0;
+  std::size_t generator_count = 0;
+  if (!checked_mul_size(circuit.n_gates, 4, witness_generator_count) ||
+      !checked_add_size(witness_generator_count, out->c_vec.size(),
+                        generator_count)) {
+    return unexpected_error(
+        ErrorCode::Overflow,
+        "build_circuit_norm_arg_public_data:generator_count");
+  }
   PURIFY_ASSIGN_OR_RETURN(
-      auto generators, create_generators(4 * circuit.n_gates + out->c_vec.size(), secp_context),
+      auto generators, create_generators(generator_count, secp_context),
       "build_circuit_norm_arg_public_data:create_generators");
   out->generators = std::move(generators);
   CircuitNormArgPublicDataPtr shared = out;
@@ -523,7 +554,13 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
 
   CircuitNormArgReduction out;
   out.public_data = public_data;
-  out.n_vec.reserve(4 * circuit.n_gates);
+  std::size_t n_vec_capacity = 0;
+  if (!checked_mul_size(circuit.n_gates, 4, n_vec_capacity)) {
+    return unexpected_error(
+        ErrorCode::Overflow,
+        "reduce_experimental_circuit_to_norm_arg:n_vec_capacity");
+  }
+  out.n_vec.reserve(n_vec_capacity);
   out.l_vec.assign(out.public_data->c_vec.size(), FieldElement::zero());
 
   const FieldElement rho_inv = out.public_data->rho.inverse();
@@ -665,15 +702,38 @@ Result<PointBytes> point_from_scalar_base(const FieldElement &scalar,
                               base_generator(secp_context));
 }
 
-Bytes bind_public_commitments(
+Result<Bytes> bind_public_commitments(
     std::span<const PointBytes> public_commitments,
     std::span<const unsigned char> statement_binding) {
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &encoded_commitment_count,
+      narrow_size_to_u64(public_commitments.size(),
+                         "bind_public_commitments:count"),
+      "bind_public_commitments:count");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &encoded_binding_size,
+      narrow_size_to_u64(statement_binding.size(),
+                         "bind_public_commitments:statement_binding"),
+      "bind_public_commitments:statement_binding");
+
+  std::size_t point_bytes = 0;
+  std::size_t total_size = 0;
   Bytes out = bytes_from_ascii(kCircuitNormArgPublicCommitmentTag);
-  append_u64_le(out, static_cast<std::uint64_t>(public_commitments.size()));
+  if (!checked_mul_size(public_commitments.size(), sizeof(PointBytes),
+                        point_bytes) ||
+      !checked_add_size(out.size(), 8, total_size) ||
+      !checked_add_size(total_size, point_bytes, total_size) ||
+      !checked_add_size(total_size, 8, total_size) ||
+      !checked_add_size(total_size, statement_binding.size(), total_size)) {
+    return unexpected_error(ErrorCode::Overflow,
+                            "bind_public_commitments:reserve");
+  }
+  out.reserve(total_size);
+  append_u64_le(out, encoded_commitment_count);
   for (const PointBytes &point : public_commitments) {
     out.insert(out.end(), point.begin(), point.end());
   }
-  append_u64_le(out, static_cast<std::uint64_t>(statement_binding.size()));
+  append_u64_le(out, encoded_binding_size);
   out.insert(out.end(), statement_binding.begin(), statement_binding.end());
   return out;
 }
@@ -1133,7 +1193,7 @@ prove_experimental_circuit_norm_arg_to_commitment(
         ErrorCode::InvalidDimensions,
         "prove_experimental_circuit_norm_arg_to_commitment:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(ErrorCode::InvalidDimensions,
                             "prove_experimental_circuit_norm_arg_to_commitment:"
                             "n_gates_power_of_two");
@@ -1208,7 +1268,7 @@ Result<bool> verify_experimental_circuit_norm_arg(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_norm_arg:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_norm_arg:n_gates_power_of_two");
@@ -1232,7 +1292,11 @@ Result<bool> verify_experimental_circuit_norm_arg(
   bundle.rho = public_data->rho_bytes;
   bundle.generators = public_data->generators;
   bundle.c_vec = public_data->c_vec_bytes;
-  bundle.n_vec_len = 4 * circuit.n_gates;
+  if (!checked_mul_size(circuit.n_gates, 4, bundle.n_vec_len)) {
+    return unexpected_error(
+        ErrorCode::Overflow,
+        "verify_experimental_circuit_norm_arg:n_vec_len");
+  }
   bundle.commitment = anchored_commitment;
   bundle.proof = proof.proof;
   return verify_norm_arg_with_cache(bundle, secp_context, cache);
@@ -1251,7 +1315,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
         ErrorCode::InvalidDimensions,
         "prove_experimental_circuit_zk_norm_arg_impl:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
         "prove_experimental_circuit_zk_norm_arg_impl:n_gates_power_of_two");
@@ -1270,10 +1334,16 @@ prove_experimental_circuit_zk_norm_arg_impl(
         "prove_experimental_circuit_zk_norm_arg_impl:assignment_invalid");
   }
 
-  Bytes bound_statement_binding =
-      externalize_commitments
-          ? bind_public_commitments(public_commitments, statement_binding)
-          : Bytes(statement_binding.begin(), statement_binding.end());
+  Bytes bound_statement_binding;
+  if (externalize_commitments) {
+    PURIFY_ASSIGN_OR_RETURN(
+        bound_statement_binding,
+        bind_public_commitments(public_commitments, statement_binding),
+        "prove_experimental_circuit_zk_norm_arg_impl:bound_statement_binding");
+  } else {
+    bound_statement_binding =
+        Bytes(statement_binding.begin(), statement_binding.end());
+  }
   if (externalize_commitments) {
     PURIFY_RETURN_IF_ERROR(
         validate_public_commitments(public_commitments, assignment.commitments, secp_context),
@@ -1288,12 +1358,20 @@ prove_experimental_circuit_zk_norm_arg_impl(
                                               externalize_commitments, cache),
       "prove_experimental_circuit_zk_norm_arg_impl:reduce");
 
-  Bytes binding_digest =
-      experimental_circuit_binding_digest(circuit, bound_statement_binding);
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &binding_digest,
+      experimental_circuit_binding_digest(circuit, bound_statement_binding),
+      "prove_experimental_circuit_zk_norm_arg_impl:binding_digest");
   Bytes seed = binding_digest;
   seed.insert(seed.end(), nonce.begin(), nonce.end());
-  const std::size_t used_l =
-      circuit.n_gates + (externalize_commitments ? 0 : circuit.n_commitments);
+  std::size_t used_l = 0;
+  if (!checked_add_size(circuit.n_gates,
+                        externalize_commitments ? 0 : circuit.n_commitments,
+                        used_l)) {
+    return unexpected_error(
+        ErrorCode::Overflow,
+        "prove_experimental_circuit_zk_norm_arg_impl:used_l");
+  }
   std::optional<Error> masked_failure;
 
   for (std::uint64_t attempt = 0; attempt < 32; ++attempt) {
@@ -1461,7 +1539,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_zk_norm_arg_impl:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_zk_norm_arg_impl:n_gates_power_of_two");
@@ -1472,10 +1550,16 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
         "verify_experimental_circuit_zk_norm_arg_impl:proof_empty");
   }
 
-  Bytes bound_statement_binding =
-      externalize_commitments
-          ? bind_public_commitments(public_commitments, statement_binding)
-          : Bytes(statement_binding.begin(), statement_binding.end());
+  Bytes bound_statement_binding;
+  if (externalize_commitments) {
+    PURIFY_ASSIGN_OR_RETURN(
+        bound_statement_binding,
+        bind_public_commitments(public_commitments, statement_binding),
+        "verify_experimental_circuit_zk_norm_arg_impl:bound_statement_binding");
+  } else {
+    bound_statement_binding =
+        Bytes(statement_binding.begin(), statement_binding.end());
+  }
   PURIFY_ASSIGN_OR_RETURN(
       const auto &public_data,
       build_circuit_norm_arg_public_data(circuit, bound_statement_binding, secp_context,
@@ -1488,8 +1572,10 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
       const auto &a_commitment,
       anchor_zk_a_commitment(proof.a_commitment, *public_data, public_commitments, secp_context),
       "verify_experimental_circuit_zk_norm_arg_impl:a_commitment");
-  Bytes binding_digest =
-      experimental_circuit_binding_digest(circuit, bound_statement_binding);
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &binding_digest,
+      experimental_circuit_binding_digest(circuit, bound_statement_binding),
+      "verify_experimental_circuit_zk_norm_arg_impl:binding_digest");
   PURIFY_ASSIGN_OR_RETURN(
       const auto &challenge,
       derive_zk_challenge(binding_digest, a_commitment, proof.s_commitment, t2),
@@ -1503,7 +1589,11 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
   bundle.rho = public_data->rho_bytes;
   bundle.generators = public_data->generators;
   bundle.c_vec = public_data->c_vec_bytes;
-  bundle.n_vec_len = 4 * circuit.n_gates;
+  if (!checked_mul_size(circuit.n_gates, 4, bundle.n_vec_len)) {
+    return unexpected_error(
+        ErrorCode::Overflow,
+        "verify_experimental_circuit_zk_norm_arg_impl:n_vec_len");
+  }
   bundle.commitment = commitment;
   bundle.proof = proof.proof;
   return verify_norm_arg_with_cache(bundle, secp_context, cache);

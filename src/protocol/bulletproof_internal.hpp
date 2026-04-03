@@ -8,11 +8,11 @@
 
 namespace purify {
 
-Bytes experimental_circuit_binding_digest(
+Result<Bytes> experimental_circuit_binding_digest(
     const NativeBulletproofCircuit& circuit,
     std::span<const unsigned char> statement_binding = {});
 
-Bytes experimental_circuit_binding_digest(
+Result<Bytes> experimental_circuit_binding_digest(
     const NativeBulletproofCircuit::PackedWithSlack& circuit,
     std::span<const unsigned char> statement_binding = {});
 

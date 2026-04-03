@@ -3,6 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include <array>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
@@ -124,6 +125,12 @@ FieldElement evaluate_toy_bppp_relation(const ToyBpppReduction& reduction) {
         total = total + (reduction.l_vec[i] * reduction.c_vec[i]);
     }
     return total;
+}
+
+void overwrite_u32_le(Bytes& bytes, std::size_t offset, std::uint32_t value) {
+    for (std::size_t i = 0; i < 4; ++i) {
+        bytes[offset + i] = static_cast<unsigned char>((value >> (8 * i)) & 0xffU);
+    }
 }
 
 void test_sha256_many_bridge(TestContext& ctx) {
@@ -1056,6 +1063,23 @@ void test_circuit_template_partial_final_eval(TestContext& ctx) {
     }
 }
 
+void test_experimental_bulletproof_deserialize_rejects_huge_length(TestContext& ctx) {
+    purify::ExperimentalBulletproofProof proof{};
+    proof.proof = Bytes{0x01, 0x02, 0x03};
+
+    Result<Bytes> serialized = proof.serialize();
+    expect_ok(ctx, serialized, "ExperimentalBulletproofProof serializes for length-mismatch coverage");
+    if (!serialized.has_value()) {
+        return;
+    }
+
+    Bytes tampered = *serialized;
+    overwrite_u32_le(tampered, 1, 0xffffffffU);
+    expect_error(ctx, purify::ExperimentalBulletproofProof::deserialize(tampered),
+                 ErrorCode::InvalidFixedSize,
+                 "ExperimentalBulletproofProof rejects a huge declared proof length");
+}
+
 }  // namespace
 
 void run_purify_tests(TestContext& ctx) {
@@ -1083,5 +1107,6 @@ void run_purify_tests(TestContext& ctx) {
     test_packed_circuit_with_slack(ctx);
     test_packed_circuit_move_leaves_empty_source(ctx);
     test_packed_circuit_zero_constraint_roundtrip(ctx);
+    test_experimental_bulletproof_deserialize_rejects_huge_length(ctx);
     test_circuit_template_partial_final_eval(ctx);
 }

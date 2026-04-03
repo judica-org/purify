@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <span>
 #include <string_view>
 
@@ -23,14 +24,16 @@
 namespace purify::capi_detail {
 
 bool ranges_overlap(const void* lhs, std::size_t lhs_size, const void* rhs, std::size_t rhs_size) noexcept {
-    const auto* lhs_bytes = static_cast<const unsigned char*>(lhs);
-    const auto* rhs_bytes = static_cast<const unsigned char*>(rhs);
-
-    if (lhs_size == 0 || rhs_size == 0 || lhs_bytes == nullptr || rhs_bytes == nullptr) {
+    if (lhs_size == 0 || rhs_size == 0 || lhs == nullptr || rhs == nullptr) {
         return false;
     }
 
-    return lhs_bytes < rhs_bytes + rhs_size && rhs_bytes < lhs_bytes + lhs_size;
+    const auto lhs_addr = reinterpret_cast<std::uintptr_t>(lhs);
+    const auto rhs_addr = reinterpret_cast<std::uintptr_t>(rhs);
+    if (lhs_addr <= rhs_addr) {
+        return (rhs_addr - lhs_addr) < lhs_size;
+    }
+    return (lhs_addr - rhs_addr) < rhs_size;
 }
 
 Bytes copy_bytes(const unsigned char* data, std::size_t size) {

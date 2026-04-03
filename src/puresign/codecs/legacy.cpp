@@ -22,14 +22,6 @@ namespace purify::puresign {
 
 namespace {
 
-bool checked_add_size(std::size_t lhs, std::size_t rhs, std::size_t& out) {
-    if (rhs > std::numeric_limits<std::size_t>::max() - lhs) {
-        return false;
-    }
-    out = lhs + rhs;
-    return true;
-}
-
 Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof, purify_secp_context* secp_context) {
     XOnly32 xonly{};
     int parity = 0;

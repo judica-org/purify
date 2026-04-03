@@ -230,29 +230,6 @@ ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
   return out;
 }
 
-bool is_power_of_two(std::size_t value) {
-  return value != 0 && (value & (value - 1)) == 0;
-}
-
-bool checked_add_size(std::size_t lhs, std::size_t rhs, std::size_t *out) {
-  if (out == nullptr ||
-      rhs > std::numeric_limits<std::size_t>::max() - lhs) {
-    return false;
-  }
-  *out = lhs + rhs;
-  return true;
-}
-
-bool checked_mul_size(std::size_t lhs, std::size_t rhs, std::size_t *out) {
-  if (out == nullptr ||
-      (lhs != 0 &&
-       rhs > std::numeric_limits<std::size_t>::max() / lhs)) {
-    return false;
-  }
-  *out = lhs * rhs;
-  return true;
-}
-
 Result<std::size_t> round_up_power_of_two(std::size_t value,
                                           const char *context) {
   if (value == 0) {
@@ -288,15 +265,6 @@ void append_u64_le(Bytes &out, std::uint64_t value) {
   for (int i = 0; i < 8; ++i) {
     out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
   }
-}
-
-Result<std::uint64_t> narrow_size_to_u64(std::size_t value,
-                                         const char *context) {
-  if (value >
-      static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max())) {
-    return unexpected_error(ErrorCode::UnexpectedSize, context);
-  }
-  return static_cast<std::uint64_t>(value);
 }
 
 Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
@@ -400,7 +368,7 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
     return unexpected_error(ErrorCode::InvalidDimensions,
                             "build_circuit_norm_arg_public_data:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
         "build_circuit_norm_arg_public_data:n_gates_power_of_two");
@@ -517,8 +485,8 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   std::size_t l_value_count = 0;
   if (!checked_add_size(circuit.n_gates,
                         externalize_commitments ? 0 : circuit.n_commitments,
-                        &l_value_count) ||
-      !checked_add_size(l_value_count, 1, &l_value_count)) {
+                        l_value_count) ||
+      !checked_add_size(l_value_count, 1, l_value_count)) {
     return unexpected_error(
         ErrorCode::Overflow,
         "build_circuit_norm_arg_public_data:l_value_count");
@@ -544,9 +512,9 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
 
   std::size_t witness_generator_count = 0;
   std::size_t generator_count = 0;
-  if (!checked_mul_size(circuit.n_gates, 4, &witness_generator_count) ||
+  if (!checked_mul_size(circuit.n_gates, 4, witness_generator_count) ||
       !checked_add_size(witness_generator_count, out->c_vec.size(),
-                        &generator_count)) {
+                        generator_count)) {
     return unexpected_error(
         ErrorCode::Overflow,
         "build_circuit_norm_arg_public_data:generator_count");
@@ -587,7 +555,7 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
   CircuitNormArgReduction out;
   out.public_data = public_data;
   std::size_t n_vec_capacity = 0;
-  if (!checked_mul_size(circuit.n_gates, 4, &n_vec_capacity)) {
+  if (!checked_mul_size(circuit.n_gates, 4, n_vec_capacity)) {
     return unexpected_error(
         ErrorCode::Overflow,
         "reduce_experimental_circuit_to_norm_arg:n_vec_capacity");
@@ -752,11 +720,11 @@ Result<Bytes> bind_public_commitments(
   std::size_t total_size = 0;
   Bytes out = bytes_from_ascii(kCircuitNormArgPublicCommitmentTag);
   if (!checked_mul_size(public_commitments.size(), sizeof(PointBytes),
-                        &point_bytes) ||
-      !checked_add_size(out.size(), 8, &total_size) ||
-      !checked_add_size(total_size, point_bytes, &total_size) ||
-      !checked_add_size(total_size, 8, &total_size) ||
-      !checked_add_size(total_size, statement_binding.size(), &total_size)) {
+                        point_bytes) ||
+      !checked_add_size(out.size(), 8, total_size) ||
+      !checked_add_size(total_size, point_bytes, total_size) ||
+      !checked_add_size(total_size, 8, total_size) ||
+      !checked_add_size(total_size, statement_binding.size(), total_size)) {
     return unexpected_error(ErrorCode::Overflow,
                             "bind_public_commitments:reserve");
   }
@@ -1225,7 +1193,7 @@ prove_experimental_circuit_norm_arg_to_commitment(
         ErrorCode::InvalidDimensions,
         "prove_experimental_circuit_norm_arg_to_commitment:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(ErrorCode::InvalidDimensions,
                             "prove_experimental_circuit_norm_arg_to_commitment:"
                             "n_gates_power_of_two");
@@ -1300,7 +1268,7 @@ Result<bool> verify_experimental_circuit_norm_arg(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_norm_arg:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_norm_arg:n_gates_power_of_two");
@@ -1324,7 +1292,7 @@ Result<bool> verify_experimental_circuit_norm_arg(
   bundle.rho = public_data->rho_bytes;
   bundle.generators = public_data->generators;
   bundle.c_vec = public_data->c_vec_bytes;
-  if (!checked_mul_size(circuit.n_gates, 4, &bundle.n_vec_len)) {
+  if (!checked_mul_size(circuit.n_gates, 4, bundle.n_vec_len)) {
     return unexpected_error(
         ErrorCode::Overflow,
         "verify_experimental_circuit_norm_arg:n_vec_len");
@@ -1347,7 +1315,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
         ErrorCode::InvalidDimensions,
         "prove_experimental_circuit_zk_norm_arg_impl:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
         "prove_experimental_circuit_zk_norm_arg_impl:n_gates_power_of_two");
@@ -1399,7 +1367,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
   std::size_t used_l = 0;
   if (!checked_add_size(circuit.n_gates,
                         externalize_commitments ? 0 : circuit.n_commitments,
-                        &used_l)) {
+                        used_l)) {
     return unexpected_error(
         ErrorCode::Overflow,
         "prove_experimental_circuit_zk_norm_arg_impl:used_l");
@@ -1571,7 +1539,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_zk_norm_arg_impl:circuit_shape");
   }
-  if (!is_power_of_two(circuit.n_gates)) {
+  if (!is_power_of_two_size(circuit.n_gates)) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
         "verify_experimental_circuit_zk_norm_arg_impl:n_gates_power_of_two");
@@ -1621,7 +1589,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
   bundle.rho = public_data->rho_bytes;
   bundle.generators = public_data->generators;
   bundle.c_vec = public_data->c_vec_bytes;
-  if (!checked_mul_size(circuit.n_gates, 4, &bundle.n_vec_len)) {
+  if (!checked_mul_size(circuit.n_gates, 4, bundle.n_vec_len)) {
     return unexpected_error(
         ErrorCode::Overflow,
         "verify_experimental_circuit_zk_norm_arg_impl:n_vec_len");

@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <map>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <ostream>
 #include <span>
@@ -59,8 +60,64 @@ inline Status require_secp_context(const purify_secp_context* context, const cha
     return {};
 }
 
+[[nodiscard]] inline bool checked_add_size(std::size_t lhs, std::size_t rhs, std::size_t& out) noexcept {
+    if (rhs > std::numeric_limits<std::size_t>::max() - lhs) {
+        return false;
+    }
+    out = lhs + rhs;
+    return true;
+}
+
+[[nodiscard]] inline bool checked_mul_size(std::size_t lhs, std::size_t rhs, std::size_t& out) noexcept {
+    if (lhs != 0 && rhs > std::numeric_limits<std::size_t>::max() / lhs) {
+        return false;
+    }
+    out = lhs * rhs;
+    return true;
+}
+
+[[nodiscard]] inline bool size_fits_u32(std::size_t value) noexcept {
+    return value <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
+}
+
+[[nodiscard]] inline bool size_fits_u64(std::size_t value) noexcept {
+    return value <= static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max());
+}
+
+[[nodiscard]] inline Result<std::uint64_t> narrow_size_to_u64(std::size_t value, const char* context) {
+    if (!size_fits_u64(value)) {
+        return unexpected_error(ErrorCode::UnexpectedSize, context);
+    }
+    return static_cast<std::uint64_t>(value);
+}
+
+[[nodiscard]] inline bool is_power_of_two_size(std::size_t value) noexcept {
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
 /** @brief Dynamically sized byte string used for messages, serialized witnesses, and proofs. */
 using Bytes = std::vector<unsigned char>;
+
+/**
+ * @brief Reserve capacity when the size arithmetic fits, otherwise skip the hint.
+ *
+ * Reserve is only a performance hint. Callers use this when overflow should not change semantics.
+ */
+template <typename T>
+inline void best_effort_reserve_add(std::vector<T>& out, std::size_t lhs, std::size_t rhs) {
+    std::size_t reserve_size = 0;
+    if (checked_add_size(lhs, rhs, reserve_size)) {
+        out.reserve(reserve_size);
+    }
+}
+
+template <typename T>
+inline void best_effort_reserve_mul(std::vector<T>& out, std::size_t lhs, std::size_t rhs) {
+    std::size_t reserve_size = 0;
+    if (checked_mul_size(lhs, rhs, reserve_size)) {
+        out.reserve(reserve_size);
+    }
+}
 
 /**
  * @brief Checked span wrapper that guarantees a minimum runtime length.

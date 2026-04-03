@@ -94,6 +94,13 @@ using purify::Symbol;
 using purify::SymbolKind;
 using purify::WitnessAssignments;
 using purify::Bytes;
+using purify::best_effort_reserve_mul;
+using purify::checked_add_size;
+using purify::checked_mul_size;
+using purify::is_power_of_two_size;
+using purify::narrow_size_to_u64;
+using purify::size_fits_u32;
+using purify::size_fits_u64;
 using purify::Status;
 using purify::BulletproofAssignmentData;
 using purify::BulletproofGeneratorBytes;
@@ -204,26 +211,6 @@ Result<FieldElement> evaluate_known(const Expr& expr, const ResolvedValues& valu
     return out;
 }
 
-bool is_power_of_two(std::size_t value) {
-    return value != 0 && (value & (value - 1)) == 0;
-}
-
-bool checked_add_size(std::size_t lhs, std::size_t rhs, std::size_t& out) {
-    if (rhs > std::numeric_limits<std::size_t>::max() - lhs) {
-        return false;
-    }
-    out = lhs + rhs;
-    return true;
-}
-
-bool checked_mul_size(std::size_t lhs, std::size_t rhs, std::size_t& out) {
-    if (lhs != 0 && rhs > std::numeric_limits<std::size_t>::max() / lhs) {
-        return false;
-    }
-    out = lhs * rhs;
-    return true;
-}
-
 bool checked_align_up(std::size_t value, std::size_t alignment, std::size_t& out) {
     assert(alignment != 0 && "alignment must be non-zero");
     const std::size_t remainder = value % alignment;
@@ -250,9 +237,6 @@ void append_u64_le(Bytes& out, std::uint64_t value) {
         out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
     }
 }
-
-bool size_fits_u64(std::size_t value);
-Result<std::uint64_t> narrow_size_to_u64(std::size_t value, const char* context);
 
 Status append_symbol_digest(Bytes& out, const purify::Symbol& symbol) {
     using SymbolRank = std::underlying_type_t<purify::SymbolKind>;
@@ -288,27 +272,9 @@ std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes, s
     return value;
 }
 
-bool size_fits_u32(std::size_t value) {
-    return value <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
-}
-
-bool size_fits_u64(std::size_t value) {
-    return value <= static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max());
-}
-
-Result<std::uint64_t> narrow_size_to_u64(std::size_t value, const char* context) {
-    if (!size_fits_u64(value)) {
-        return unexpected_error(ErrorCode::UnexpectedSize, context);
-    }
-    return static_cast<std::uint64_t>(value);
-}
-
 Bytes flatten_scalars32(const std::vector<FieldElement>& values) {
     Bytes out;
-    std::size_t reserve_size = 0;
-    if (checked_mul_size(values.size(), 32, reserve_size)) {
-        out.reserve(reserve_size);
-    }
+    best_effort_reserve_mul(out, values.size(), 32);
     for (const FieldElement& value : values) {
         auto bytes = value.to_bytes_be();
         out.insert(out.end(), bytes.begin(), bytes.end());
@@ -497,7 +463,7 @@ FlattenedRowFamily flatten_row_family_generic(std::size_t row_count, const RowEn
                                        [&](const auto& entry) { return entry.idx >= constraint_offset; });
     }
     flat.indices.reserve(total_entries);
-    flat.scalars32.reserve(total_entries * 32);
+    best_effort_reserve_mul(flat.scalars32, total_entries, 32);
 
     for (std::size_t i = 0; i < row_count; ++i) {
         std::span<const purify::NativeBulletproofCircuitTerm> entries = row_entries(i);
@@ -682,7 +648,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_impl(
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, shape_context);
     }
-    if (!is_power_of_two(circuit_n_gates(circuit))) {
+    if (!is_power_of_two_size(circuit_n_gates(circuit))) {
         return unexpected_error(ErrorCode::InvalidDimensions, gates_context);
     }
     if (circuit_n_commitments(circuit) != 1) {
@@ -1613,7 +1579,7 @@ Result<bool> verify_experimental_circuit(
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:circuit_shape");
     }
-    if (!is_power_of_two(circuit.n_gates)) {
+    if (!is_power_of_two_size(circuit.n_gates)) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:n_gates_power_of_two");
     }
     if (circuit.n_commitments != 1) {
@@ -1654,7 +1620,7 @@ Result<bool> verify_experimental_circuit(
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:packed_circuit_shape");
     }
-    if (!is_power_of_two(circuit.n_gates())) {
+    if (!is_power_of_two_size(circuit.n_gates())) {
         return unexpected_error(ErrorCode::InvalidDimensions, "verify_experimental_circuit:packed_n_gates_power_of_two");
     }
     if (circuit.n_commitments() != 1) {

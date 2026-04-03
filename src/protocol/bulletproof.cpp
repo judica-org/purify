@@ -234,13 +234,6 @@ bool packed_row_count(std::size_t n_gates, std::size_t n_commitments, std::size_
     return checked_mul_size(n_gates, 3, gate_rows) && checked_add_size(gate_rows, n_commitments, out);
 }
 
-std::byte* allocate_packed_circuit_storage(std::size_t bytes) {
-    if (bytes == 0) {
-        return nullptr;
-    }
-    return static_cast<std::byte*>(::operator new(bytes, std::align_val_t(alignof(std::max_align_t))));
-}
-
 void append_u32_le(Bytes& out, std::uint32_t value) {
     for (int i = 0; i < 4; ++i) {
         out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
@@ -494,8 +487,13 @@ FlattenedCircuitView flatten_circuit_view(const PackedCircuit& circuit) {
     flat.wv = flatten_row_family_generic(circuit.n_commitments(),
                                          [&](std::size_t i) { return circuit.commitment_row(i).entries_view(); },
                                          implicit_bit_constraints);
-    std::vector<FieldElement> explicit_constants(circuit.constants().begin() + static_cast<std::ptrdiff_t>(implicit_bit_constraints),
-                                                 circuit.constants().end());
+    std::vector<FieldElement> explicit_constants;
+    std::span<const FieldElement> constants = circuit.constants();
+    if (constants.size() > implicit_bit_constraints) {
+        const FieldElement* constants_begin = constants.data();
+        explicit_constants.assign(constants_begin + static_cast<std::ptrdiff_t>(implicit_bit_constraints),
+                                  constants_begin + static_cast<std::ptrdiff_t>(constants.size()));
+    }
     flat.constants32 = flatten_scalars32(explicit_constants);
     flat.view.n_gates = circuit.n_gates();
     flat.view.n_commits = circuit.n_commitments();
@@ -845,8 +843,15 @@ void NativeBulletproofCircuit::add_row_term(std::vector<NativeBulletproofCircuit
 
 void NativeBulletproofCircuit::PackedWithSlack::PackedStorageDeleter::operator()(std::byte* storage) const noexcept {
     if (storage != nullptr) {
-        ::operator delete(storage, std::align_val_t(alignof(std::max_align_t)));
+        ::operator delete(storage, std::align_val_t(NativeBulletproofCircuit::PackedWithSlack::kPackedStorageAlignment));
     }
+}
+
+std::byte* NativeBulletproofCircuit::PackedWithSlack::allocate_storage(std::size_t bytes) {
+    if (bytes == 0) {
+        return nullptr;
+    }
+    return static_cast<std::byte*>(::operator new(bytes, std::align_val_t(kPackedStorageAlignment)));
 }
 
 NativeBulletproofCircuit::PackedWithSlack::PackedWithSlack(const PackedWithSlack& other)
@@ -855,11 +860,22 @@ NativeBulletproofCircuit::PackedWithSlack::PackedWithSlack(const PackedWithSlack
       constraint_capacity_(other.constraint_capacity_), term_capacity_(other.term_capacity_),
       term_bytes_offset_(other.term_bytes_offset_), constant_bytes_offset_(other.constant_bytes_offset_),
       storage_bytes_(other.storage_bytes_) {
+    assert((other.storage_ != nullptr) == (other.storage_bytes_ != 0)
+           && "PackedWithSlack source storage must match its byte count");
     if (storage_bytes_ != 0) {
-        storage_.reset(allocate_packed_circuit_storage(storage_bytes_));
+        storage_.reset(allocate_storage(storage_bytes_));
         start_storage_lifetimes();
         std::memcpy(storage_.get(), other.storage_.get(), storage_bytes_);
     }
+}
+
+NativeBulletproofCircuit::PackedWithSlack::PackedWithSlack(PackedWithSlack&& other) noexcept
+    : n_gates_(other.n_gates_), n_commitments_(other.n_commitments_), n_bits_(other.n_bits_),
+      constraint_size_(other.constraint_size_), constraint_base_size_(other.constraint_base_size_),
+      constraint_capacity_(other.constraint_capacity_), term_capacity_(other.term_capacity_),
+      term_bytes_offset_(other.term_bytes_offset_), constant_bytes_offset_(other.constant_bytes_offset_),
+      storage_bytes_(other.storage_bytes_), storage_(std::move(other.storage_)) {
+    other.reset_to_empty();
 }
 
 NativeBulletproofCircuit::PackedWithSlack&
@@ -869,6 +885,26 @@ NativeBulletproofCircuit::PackedWithSlack::operator=(const PackedWithSlack& othe
     }
     PackedWithSlack copy(other);
     *this = std::move(copy);
+    return *this;
+}
+
+NativeBulletproofCircuit::PackedWithSlack&
+NativeBulletproofCircuit::PackedWithSlack::operator=(PackedWithSlack&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+    n_gates_ = other.n_gates_;
+    n_commitments_ = other.n_commitments_;
+    n_bits_ = other.n_bits_;
+    constraint_size_ = other.constraint_size_;
+    constraint_base_size_ = other.constraint_base_size_;
+    constraint_capacity_ = other.constraint_capacity_;
+    term_capacity_ = other.term_capacity_;
+    term_bytes_offset_ = other.term_bytes_offset_;
+    constant_bytes_offset_ = other.constant_bytes_offset_;
+    storage_bytes_ = other.storage_bytes_;
+    storage_ = std::move(other.storage_);
+    other.reset_to_empty();
     return *this;
 }
 
@@ -896,6 +932,20 @@ bool NativeBulletproofCircuit::PackedWithSlack::compute_storage_layout(std::size
         return false;
     }
     return checked_add_size(constant_bytes_offset, constants_bytes, storage_bytes);
+}
+
+void NativeBulletproofCircuit::PackedWithSlack::reset_to_empty() noexcept {
+    storage_.reset();
+    n_gates_ = 0;
+    n_commitments_ = 0;
+    n_bits_ = 0;
+    constraint_size_ = 0;
+    constraint_base_size_ = 0;
+    constraint_capacity_ = 0;
+    term_capacity_ = 0;
+    term_bytes_offset_ = 0;
+    constant_bytes_offset_ = 0;
+    storage_bytes_ = 0;
 }
 
 bool NativeBulletproofCircuit::PackedWithSlack::has_valid_shape() const noexcept {
@@ -1285,7 +1335,7 @@ Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::Pack
                                 packed.term_bytes_offset_, packed.constant_bytes_offset_, packed.storage_bytes_)) {
         return unexpected_error(ErrorCode::Overflow, "NativeBulletproofCircuit::PackedWithSlack::from_circuit:storage_layout");
     }
-    packed.storage_.reset(allocate_packed_circuit_storage(packed.storage_bytes_));
+    packed.storage_.reset(allocate_storage(packed.storage_bytes_));
     packed.start_storage_lifetimes();
 
     PackedWithSlack::PackedRowHeader* headers =

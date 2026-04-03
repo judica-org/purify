@@ -373,12 +373,14 @@ int main(int argc, char** argv) {
     Bytes experimental_binding = purify::bytes_from_ascii("bench-experimental-proof");
     Bytes experimental_bppp_binding = purify::bytes_from_ascii("bench-experimental-bppp-proof");
     std::size_t circuit_bytes = estimate_bytes(bench_case->circuit);
-    purify::Result<Bytes> proven_signature_bytes = bench_case->proven_signature.serialize();
+    purify::Result<Bytes> proven_signature_bytes =
+        bench_case->proven_signature.serialize(bench_case->secp_context.get());
     if (!proven_signature_bytes.has_value()) {
         std::cerr << proven_signature_bytes.error().message() << "\n";
         return 1;
     }
-    purify::Result<Bytes> proven_signature_plusplus_bytes = bench_case->proven_signature_plusplus.serialize();
+    purify::Result<Bytes> proven_signature_plusplus_bytes =
+        bench_case->proven_signature_plusplus.serialize(bench_case->secp_context.get());
     if (!proven_signature_plusplus_bytes.has_value()) {
         std::cerr << proven_signature_plusplus_bytes.error().message() << "\n";
         return 1;

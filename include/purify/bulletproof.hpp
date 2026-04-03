@@ -98,8 +98,8 @@ struct NativeBulletproofCircuit {
         PackedWithSlack() = default;
         PackedWithSlack(const PackedWithSlack& other);
         PackedWithSlack& operator=(const PackedWithSlack& other);
-        PackedWithSlack(PackedWithSlack&& other) noexcept = default;
-        PackedWithSlack& operator=(PackedWithSlack&& other) noexcept = default;
+        PackedWithSlack(PackedWithSlack&& other) noexcept;
+        PackedWithSlack& operator=(PackedWithSlack&& other) noexcept;
 
         /** @brief Packs a native circuit into one aligned slab with caller-supplied row and constraint slack. */
         [[nodiscard]] static Result<PackedWithSlack> from_circuit(
@@ -190,6 +190,7 @@ struct NativeBulletproofCircuit {
         static bool compute_storage_layout(std::size_t row_count, std::size_t term_capacity,
                                            std::size_t constraint_capacity, std::size_t& term_bytes_offset,
                                            std::size_t& constant_bytes_offset, std::size_t& storage_bytes) noexcept;
+        void reset_to_empty() noexcept;
         void start_storage_lifetimes() noexcept;
         NativeBulletproofCircuitRow::PackedWithSlack row_view(const PackedRowHeader& header) const noexcept;
         void add_row_term(RowFamily family, std::size_t expected_size, std::size_t row_idx,

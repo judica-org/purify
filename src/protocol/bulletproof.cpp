@@ -862,6 +862,15 @@ NativeBulletproofCircuit::PackedWithSlack::PackedWithSlack(const PackedWithSlack
     }
 }
 
+NativeBulletproofCircuit::PackedWithSlack::PackedWithSlack(PackedWithSlack&& other) noexcept
+    : n_gates_(other.n_gates_), n_commitments_(other.n_commitments_), n_bits_(other.n_bits_),
+      constraint_size_(other.constraint_size_), constraint_base_size_(other.constraint_base_size_),
+      constraint_capacity_(other.constraint_capacity_), term_capacity_(other.term_capacity_),
+      term_bytes_offset_(other.term_bytes_offset_), constant_bytes_offset_(other.constant_bytes_offset_),
+      storage_bytes_(other.storage_bytes_), storage_(std::move(other.storage_)) {
+    other.reset_to_empty();
+}
+
 NativeBulletproofCircuit::PackedWithSlack&
 NativeBulletproofCircuit::PackedWithSlack::operator=(const PackedWithSlack& other) {
     if (this == &other) {
@@ -869,6 +878,26 @@ NativeBulletproofCircuit::PackedWithSlack::operator=(const PackedWithSlack& othe
     }
     PackedWithSlack copy(other);
     *this = std::move(copy);
+    return *this;
+}
+
+NativeBulletproofCircuit::PackedWithSlack&
+NativeBulletproofCircuit::PackedWithSlack::operator=(PackedWithSlack&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+    n_gates_ = other.n_gates_;
+    n_commitments_ = other.n_commitments_;
+    n_bits_ = other.n_bits_;
+    constraint_size_ = other.constraint_size_;
+    constraint_base_size_ = other.constraint_base_size_;
+    constraint_capacity_ = other.constraint_capacity_;
+    term_capacity_ = other.term_capacity_;
+    term_bytes_offset_ = other.term_bytes_offset_;
+    constant_bytes_offset_ = other.constant_bytes_offset_;
+    storage_bytes_ = other.storage_bytes_;
+    storage_ = std::move(other.storage_);
+    other.reset_to_empty();
     return *this;
 }
 
@@ -896,6 +925,20 @@ bool NativeBulletproofCircuit::PackedWithSlack::compute_storage_layout(std::size
         return false;
     }
     return checked_add_size(constant_bytes_offset, constants_bytes, storage_bytes);
+}
+
+void NativeBulletproofCircuit::PackedWithSlack::reset_to_empty() noexcept {
+    storage_.reset();
+    n_gates_ = 0;
+    n_commitments_ = 0;
+    n_bits_ = 0;
+    constraint_size_ = 0;
+    constraint_base_size_ = 0;
+    constraint_capacity_ = 0;
+    term_capacity_ = 0;
+    term_bytes_offset_ = 0;
+    constant_bytes_offset_ = 0;
+    storage_bytes_ = 0;
 }
 
 bool NativeBulletproofCircuit::PackedWithSlack::has_valid_shape() const noexcept {

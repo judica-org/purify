@@ -896,6 +896,36 @@ void test_packed_circuit_with_slack(TestContext& ctx) {
     ctx.expect(unpacked->evaluate(assignment), "unpacked reset circuit still accepts the original witness");
 }
 
+void test_packed_circuit_move_leaves_empty_source(TestContext& ctx) {
+    NativeBulletproofCircuit circuit(1, 1, 0);
+    std::size_t constraint = circuit.add_constraint(FieldElement::zero());
+    circuit.add_output_term(0, constraint, FieldElement::one());
+    circuit.add_commitment_term(0, constraint, FieldElement::from_int(-1));
+
+    BulletproofAssignmentData assignment;
+    assignment.left = {FieldElement::from_int(2)};
+    assignment.right = {FieldElement::from_int(5)};
+    assignment.output = {FieldElement::from_int(10)};
+    assignment.commitments = {FieldElement::from_int(10)};
+
+    Result<NativeBulletproofCircuit::PackedWithSlack> packed = circuit.pack_with_slack();
+    expect_ok(ctx, packed, "pack_with_slack succeeds before move regression coverage");
+    if (!packed.has_value()) {
+        return;
+    }
+
+    NativeBulletproofCircuit::PackedWithSlack moved = std::move(*packed);
+    ctx.expect(moved.has_valid_shape(), "moved-to packed circuit remains valid");
+    ctx.expect(moved.evaluate(assignment), "moved-to packed circuit still evaluates the original witness");
+
+    ctx.expect(packed->has_valid_shape(), "moved-from packed circuit remains internally consistent");
+    ctx.expect(packed->n_gates() == 0, "moved-from packed circuit clears its gate count");
+    ctx.expect(packed->n_commitments() == 0, "moved-from packed circuit clears its commitment count");
+    ctx.expect(packed->constraint_count() == 0, "moved-from packed circuit clears its constraint count");
+    ctx.expect(packed->constraint_capacity() == 0, "moved-from packed circuit clears its constraint capacity");
+    ctx.expect(packed->constants().empty(), "moved-from packed circuit exposes no constants");
+}
+
 void test_circuit_template_partial_final_eval(TestContext& ctx) {
     Result<purify::SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for template partial/final evaluation");
@@ -954,5 +984,6 @@ void run_purify_tests(TestContext& ctx) {
     test_experimental_circuit_zk_norm_arg_one_gate(ctx);
     test_experimental_circuit_zk_norm_arg_sample_verifier(ctx);
     test_packed_circuit_with_slack(ctx);
+    test_packed_circuit_move_leaves_empty_source(ctx);
     test_circuit_template_partial_final_eval(ctx);
 }

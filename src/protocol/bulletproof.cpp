@@ -57,6 +57,29 @@ std::size_t ExperimentalBulletproofBackendCache::size() const noexcept {
     return impl_ != nullptr ? impl_->resources.size() : 0;
 }
 
+Result<ExperimentalBulletproofBackendCache> ExperimentalBulletproofBackendCache::clone_for_thread(
+    std::size_t n_gates) const {
+    ExperimentalBulletproofBackendCache clone;
+    if (impl_ == nullptr) {
+        return clone;
+    }
+
+    auto it = impl_->resources.find(n_gates);
+    if (it == impl_->resources.end()) {
+        return clone;
+    }
+
+    purify_bulletproof_backend_resources* cloned =
+        purify_bulletproof_backend_resources_clone(it->second.get());
+    if (cloned == nullptr) {
+        return unexpected_error(
+            ErrorCode::BackendRejectedInput,
+            "ExperimentalBulletproofBackendCache::clone_for_thread:backend_resources");
+    }
+    clone.impl_->resources.emplace(it->first, BulletproofBackendResourcePtr(cloned));
+    return clone;
+}
+
 purify_bulletproof_backend_resources* ExperimentalBulletproofBackendCache::get_or_create(
     std::size_t n_gates,
     purify_secp_context* secp_context) {

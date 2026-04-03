@@ -22,6 +22,10 @@ struct purify_bppp_backend_resources;
 
 namespace purify::bppp {
 
+namespace detail {
+struct ExperimentalCircuitBackendAccess;
+}
+
 /** @brief Big-endian 32-byte scalar encoding. */
 using ScalarBytes = std::array<unsigned char, 32>;
 /** @brief Compressed 33-byte curve-point encoding. */
@@ -102,8 +106,75 @@ struct NormArgProof {
     Bytes proof;
 };
 
+/** @brief Common interface for reusable experimental BPPP backend state. */
+class ExperimentalCircuitBackend {
+public:
+    ExperimentalCircuitBackend(const ExperimentalCircuitBackend&) = delete;
+    ExperimentalCircuitBackend& operator=(const ExperimentalCircuitBackend&) = delete;
+    ExperimentalCircuitBackend(ExperimentalCircuitBackend&&) noexcept = default;
+    ExperimentalCircuitBackend& operator=(ExperimentalCircuitBackend&&) noexcept = default;
+    virtual ~ExperimentalCircuitBackend();
+
+protected:
+    ExperimentalCircuitBackend() = default;
+
+private:
+    friend struct detail::ExperimentalCircuitBackendAccess;
+
+    [[nodiscard]] virtual std::shared_ptr<const void> find_public_data_impl(
+        const std::array<unsigned char, 32>& key) const = 0;
+    virtual void insert_public_data_impl(std::array<unsigned char, 32> key,
+                                         std::shared_ptr<const void> value) = 0;
+    [[nodiscard]] virtual purify_bppp_backend_resources* get_or_create_backend_resources_impl(
+        std::span<const PointBytes> generators,
+        purify_secp_context* secp_context) = 0;
+};
+
+/** @brief Internal access helpers for experimental BPPP backend implementations. */
+namespace detail {
+struct ExperimentalCircuitBackendAccess {
+    [[nodiscard]] static std::shared_ptr<const void> find_public_data(
+        const ExperimentalCircuitBackend* backend,
+        const std::array<unsigned char, 32>& key);
+    static void insert_public_data(ExperimentalCircuitBackend* backend,
+                                   std::array<unsigned char, 32> key,
+                                   std::shared_ptr<const void> value);
+    [[nodiscard]] static purify_bppp_backend_resources* get_or_create_backend_resources(
+        ExperimentalCircuitBackend* backend,
+        std::span<const PointBytes> generators,
+        purify_secp_context* secp_context);
+};
+}  // namespace detail
+
+/** @brief Thread-local clone of one warmed experimental BPPP backend-resource line. */
+class ExperimentalCircuitCacheLine final : public ExperimentalCircuitBackend {
+public:
+    ExperimentalCircuitCacheLine();
+    ExperimentalCircuitCacheLine(const ExperimentalCircuitCacheLine&) = delete;
+    ExperimentalCircuitCacheLine& operator=(const ExperimentalCircuitCacheLine&) = delete;
+    ExperimentalCircuitCacheLine(ExperimentalCircuitCacheLine&& other) noexcept;
+    ExperimentalCircuitCacheLine& operator=(ExperimentalCircuitCacheLine&& other) noexcept;
+    ~ExperimentalCircuitCacheLine() override;
+
+    [[nodiscard]] bool empty() const noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+
+    [[nodiscard]] std::shared_ptr<const void> find_public_data_impl(
+        const std::array<unsigned char, 32>& key) const override;
+    void insert_public_data_impl(std::array<unsigned char, 32> key,
+                                 std::shared_ptr<const void> value) override;
+    [[nodiscard]] purify_bppp_backend_resources* get_or_create_backend_resources_impl(
+        std::span<const PointBytes> generators,
+        purify_secp_context* secp_context) override;
+
+    friend class ExperimentalCircuitCache;
+};
+
 /** @brief Caller-owned cache for reusable experimental circuit reduction and BPPP backend data. */
-class ExperimentalCircuitCache {
+class ExperimentalCircuitCache final : public ExperimentalCircuitBackend {
 public:
     ExperimentalCircuitCache();
     ExperimentalCircuitCache(const ExperimentalCircuitCache&) = delete;
@@ -114,6 +185,18 @@ public:
 
     void clear();
     [[nodiscard]] std::size_t size() const noexcept;
+    /**
+     * @brief Clones one warmed backend-resource line for thread-local use.
+     *
+     * If a warmed backend entry matching `generators` exists, it is deep-cloned so the returned
+     * line has its own scratch space and mutable generator scratch buffers for that one entry. No
+     * public reduction data is copied into the clone. If no warmed entry matches, the returned
+     * line is empty.
+     *
+     * @return A thread-local one-line clone, or a backend/internal error if duplication fails.
+     */
+    [[nodiscard]] Result<ExperimentalCircuitCacheLine> clone_line_for_thread(
+        std::span<const PointBytes> generators) const;
     /** @brief Looks up opaque cached reduction data by digest key. */
     [[nodiscard]] std::shared_ptr<const void> find_public_data(const std::array<unsigned char, 32>& key) const;
     /** @brief Stores opaque cached reduction data by digest key. */
@@ -126,6 +209,14 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+
+    [[nodiscard]] std::shared_ptr<const void> find_public_data_impl(
+        const std::array<unsigned char, 32>& key) const override;
+    void insert_public_data_impl(std::array<unsigned char, 32> key,
+                                 std::shared_ptr<const void> value) override;
+    [[nodiscard]] purify_bppp_backend_resources* get_or_create_backend_resources_impl(
+        std::span<const PointBytes> generators,
+        purify_secp_context* secp_context) override;
 };
 
 /**
@@ -174,7 +265,7 @@ Result<PointBytes> commit_experimental_circuit_witness(
     const BulletproofAssignmentData& assignment,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    ExperimentalCircuitCache* cache = nullptr);
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /**
  * @brief Produces an anchored transparent circuit proof using the experimental circuit-to-BPPP reduction.
@@ -188,7 +279,7 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
     const BulletproofAssignmentData& assignment,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    ExperimentalCircuitCache* cache = nullptr);
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /**
  * @brief Produces an anchored transparent circuit proof against a caller-supplied reduced witness commitment.
@@ -204,7 +295,7 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg_to_c
     const PointBytes& witness_commitment,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    ExperimentalCircuitCache* cache = nullptr);
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /**
  * @brief Verifies an experimental transparent circuit proof produced by `prove_experimental_circuit_norm_arg`.
@@ -218,7 +309,7 @@ Result<bool> verify_experimental_circuit_norm_arg(
     const ExperimentalCircuitNormArgProof& proof,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    ExperimentalCircuitCache* cache = nullptr);
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /**
  * @brief Produces an experimental masked circuit proof over the reduced BPPP relation.
@@ -240,7 +331,7 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
     const ScalarBytes& nonce,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    ExperimentalCircuitCache* cache = nullptr);
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /**
  * @brief Verifies an experimental masked circuit proof produced by `prove_experimental_circuit_zk_norm_arg`.
@@ -254,7 +345,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg(
     const ExperimentalCircuitZkNormArgProof& proof,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    ExperimentalCircuitCache* cache = nullptr);
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /**
  * @brief Produces an experimental masked circuit proof bound to explicit public commitment points.
@@ -270,7 +361,7 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
     std::span<const PointBytes> public_commitments,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    ExperimentalCircuitCache* cache = nullptr);
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /**
  * @brief Verifies an experimental masked circuit proof against explicit public commitment points.
@@ -284,7 +375,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
     std::span<const PointBytes> public_commitments,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    ExperimentalCircuitCache* cache = nullptr);
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /** @brief Purify witness bundle together with a Pedersen commitment to the output. */
 struct CommittedPurifyWitness {

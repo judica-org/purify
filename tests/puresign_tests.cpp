@@ -332,6 +332,56 @@ void test_puresign_topic_signing(TestContext& ctx) {
                  "prepare_topic_nonce rejects an empty topic");
 }
 
+void test_puresign_topic_proof_cache_clone_for_thread(TestContext& ctx) {
+    Result<SecretKey> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for PureSign cache cloning");
+    if (!secret.has_value()) {
+        return;
+    }
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
+    Bytes topic = purify::bytes_from_ascii("session-legacy-clone");
+    Result<purify::puresign::KeyPair> key_pair =
+        purify::puresign::KeyPair::from_secret(*secret, context.get());
+    expect_ok(ctx, key_pair, "PureSign KeyPair::from_secret succeeds for cache cloning");
+    Result<purify::puresign::TopicProofCache> proof_cache =
+        purify::puresign::TopicProofCache::build(topic);
+    expect_ok(ctx, proof_cache, "PureSign TopicProofCache::build succeeds for cache cloning");
+    if (!key_pair.has_value() || !proof_cache.has_value()) {
+        return;
+    }
+
+    Result<purify::puresign::PreparedNonceWithProof> warmed =
+        key_pair->prepare_topic_nonce_with_proof(*proof_cache, context.get());
+    expect_ok(ctx, warmed, "PureSign warms the embedded backend cache before cloning");
+    ctx.expect(proof_cache->backend_cache.size() > 0, "PureSign embedded backend cache contains warmed resources");
+    Result<purify::NativeBulletproofCircuit::PackedWithSlack> circuit =
+        proof_cache->circuit_template.instantiate_packed(key_pair->public_key().purify_pubkey);
+    expect_ok(ctx, circuit, "PureSign instantiates the cached circuit for line cloning");
+    if (!warmed.has_value() || !circuit.has_value()) {
+        return;
+    }
+
+    Result<purify::ExperimentalBulletproofBackendCache> cloned_cache =
+        proof_cache->backend_cache.clone_for_thread(circuit->n_gates());
+    expect_ok(ctx, cloned_cache, "PureSign backend cache clones for thread-local reuse");
+    if (!cloned_cache.has_value()) {
+        return;
+    }
+    ctx.expect(cloned_cache->size() == proof_cache->backend_cache.size(),
+               "PureSign cloned backend cache preserves warmed entry count");
+
+    Result<bool> cloned_ok =
+        key_pair->public_key().verify_topic_nonce_proof(*proof_cache, warmed->proof(), context.get(), &*cloned_cache);
+    expect_ok(ctx, cloned_ok, "PureSign verifies a topic proof with the cloned backend cache");
+    if (cloned_ok.has_value()) {
+        ctx.expect(*cloned_ok, "PureSign cloned backend cache accepts the topic proof");
+    }
+}
+
 void test_puresign_binding_checks(TestContext& ctx) {
     Result<SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for PureSign binding checks");
@@ -631,13 +681,85 @@ void test_puresign_plusplus_topic_proof_cache_reuse(TestContext& ctx) {
     }
 }
 
+void test_puresign_plusplus_topic_proof_cache_clone_for_thread(TestContext& ctx) {
+    Result<SecretKey> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for PureSign++ cache cloning");
+    if (!secret.has_value()) {
+        return;
+    }
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
+    Bytes topic = purify::bytes_from_ascii("session-pp-clone");
+    Result<purify::puresign_plusplus::KeyPair> key_pair =
+        purify::puresign_plusplus::KeyPair::from_secret(*secret, context.get());
+    expect_ok(ctx, key_pair, "PureSign++ KeyPair::from_secret succeeds for cache cloning");
+    Result<purify::puresign_plusplus::TopicProofCache> proof_cache =
+        purify::puresign_plusplus::TopicProofCache::build(topic);
+    expect_ok(ctx, proof_cache, "PureSign++ TopicProofCache::build succeeds for cache cloning");
+    if (!key_pair.has_value() || !proof_cache.has_value()) {
+        return;
+    }
+
+    purify::bppp::ExperimentalCircuitCache shared_cache;
+    Result<purify::puresign_plusplus::PreparedNonceWithProof> warmed =
+        key_pair->prepare_topic_nonce_with_proof(*proof_cache, context.get(), &shared_cache);
+    expect_ok(ctx, warmed, "PureSign++ warms the shared backend cache before cloning");
+    ctx.expect(shared_cache.size() > 0, "PureSign++ shared cache contains warmed entries");
+    Result<purify::NativeBulletproofCircuit> circuit =
+        proof_cache->circuit_template.instantiate(key_pair->public_key().purify_pubkey);
+    expect_ok(ctx, circuit, "PureSign++ instantiates the cached circuit for line cloning");
+    if (!warmed.has_value() || !circuit.has_value()) {
+        return;
+    }
+
+    std::size_t l_vec_len = 1;
+    while (l_vec_len < circuit->n_gates + 1) {
+        l_vec_len <<= 1;
+    }
+    const std::size_t generator_count = 4 * circuit->n_gates + l_vec_len;
+    Result<std::vector<purify::bppp::PointBytes>> generators =
+        purify::bppp::create_generators(generator_count, context.get());
+    expect_ok(ctx, generators, "PureSign++ reconstructs the cached generator line for cloning");
+    if (!generators.has_value()) {
+        return;
+    }
+
+    Result<purify::bppp::ExperimentalCircuitCacheLine> cloned_line =
+        shared_cache.clone_line_for_thread(*generators);
+    expect_ok(ctx, cloned_line, "PureSign++ cache clones for thread-local reuse");
+    if (!cloned_line.has_value()) {
+        return;
+    }
+    ctx.expect(!cloned_line->empty(),
+               "PureSign++ cloned cache line contains one warmed backend line");
+
+    Result<purify::puresign_plusplus::PreparedNonceWithProof> cloned_prepared =
+        key_pair->prepare_topic_nonce_with_proof(*proof_cache, context.get(), &*cloned_line);
+    expect_ok(ctx, cloned_prepared, "PureSign++ prepares a topic proof with the cloned cache");
+    if (!cloned_prepared.has_value()) {
+        return;
+    }
+
+    Result<bool> cloned_ok =
+        key_pair->public_key().verify_topic_nonce_proof(*proof_cache, cloned_prepared->proof(), context.get(), &*cloned_line);
+    expect_ok(ctx, cloned_ok, "PureSign++ verifies a topic proof with the cloned cache");
+    if (cloned_ok.has_value()) {
+        ctx.expect(*cloned_ok, "PureSign++ cloned cache accepts the topic proof");
+    }
+}
+
 }  // namespace
 
 void run_puresign_tests(purify_test::TestContext& ctx) {
     test_puresign_message_signing(ctx);
     test_puresign_topic_signing(ctx);
+    test_puresign_topic_proof_cache_clone_for_thread(ctx);
     test_puresign_binding_checks(ctx);
     test_puresign_plusplus_message_signing(ctx);
     test_puresign_plusplus_topic_signing(ctx);
     test_puresign_plusplus_topic_proof_cache_reuse(ctx);
+    test_puresign_plusplus_topic_proof_cache_clone_for_thread(ctx);
 }

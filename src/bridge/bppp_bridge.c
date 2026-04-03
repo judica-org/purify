@@ -148,6 +148,30 @@ static void* purify_calloc_array(size_t count, size_t elem_size) {
     return calloc(1, bytes);
 }
 
+static secp256k1_bppp_generators* purify_bppp_generators_clone(
+    const secp256k1_bppp_generators* generators) {
+    secp256k1_bppp_generators* clone;
+    size_t generator_bytes = 0;
+
+    if (generators == NULL || generators->gens == NULL || generators->n == 0 ||
+        !purify_bridge_checked_mul_size(generators->n, sizeof(*generators->gens), &generator_bytes)) {
+        return NULL;
+    }
+
+    clone = (secp256k1_bppp_generators*)calloc(1, sizeof(*clone));
+    if (clone == NULL) {
+        return NULL;
+    }
+    clone->n = generators->n;
+    clone->gens = (secp256k1_ge*)purify_malloc_array(generators->n, sizeof(*clone->gens));
+    if (clone->gens == NULL) {
+        free(clone);
+        return NULL;
+    }
+    memcpy(clone->gens, generators->gens, generator_bytes);
+    return clone;
+}
+
 /* BPPP proving folds the generator table in place, so cached resources keep one
    pristine parsed copy and one resettable scratch copy for prove calls. */
 static int purify_bppp_backend_resources_reset_scratch_gens(purify_bppp_backend_resources* resources) {
@@ -222,6 +246,36 @@ purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_creat
     return resources;
 }
 
+purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_clone(
+    const purify_bulletproof_backend_resources* resources) {
+    purify_bulletproof_backend_resources* clone;
+    size_t generator_count = 0;
+
+    if (resources == NULL || resources->ctx == NULL || resources->n_gates == 0 ||
+        !purify_bridge_checked_mul_size(2u, resources->n_gates, &generator_count)) {
+        return NULL;
+    }
+
+    clone = (purify_bulletproof_backend_resources*)calloc(1, sizeof(*clone));
+    if (clone == NULL) {
+        return NULL;
+    }
+    clone->ctx = resources->ctx;
+    clone->n_gates = resources->n_gates;
+    clone->scratch = secp256k1_scratch_space_create(clone->ctx, 1u << 24);
+    if (clone->scratch == NULL) {
+        purify_bulletproof_backend_resources_destroy(clone);
+        return NULL;
+    }
+    clone->gens = secp256k1_bulletproof_generators_create(
+        clone->ctx, secp256k1_generator_h, generator_count, 1);
+    if (clone->gens == NULL || clone->gens->n < generator_count) {
+        purify_bulletproof_backend_resources_destroy(clone);
+        return NULL;
+    }
+    return clone;
+}
+
 void purify_bulletproof_backend_resources_destroy(purify_bulletproof_backend_resources* resources) {
     if (resources == NULL) {
         return;
@@ -277,6 +331,44 @@ purify_bppp_backend_resources* purify_bppp_backend_resources_create(purify_secp_
 
     resources->generators_count = generators_count;
     return resources;
+}
+
+purify_bppp_backend_resources* purify_bppp_backend_resources_clone(
+    const purify_bppp_backend_resources* resources) {
+    purify_bppp_backend_resources* clone;
+    size_t generator_bytes = 0;
+
+    if (resources == NULL || resources->ctx == NULL || resources->generators_count == 0 ||
+        resources->gens == NULL || resources->gens->n != resources->generators_count ||
+        !purify_bridge_checked_mul_size(resources->generators_count, sizeof(*resources->gens->gens), &generator_bytes)) {
+        return NULL;
+    }
+
+    clone = (purify_bppp_backend_resources*)calloc(1, sizeof(*clone));
+    if (clone == NULL) {
+        return NULL;
+    }
+    clone->ctx = resources->ctx;
+    clone->generators_count = resources->generators_count;
+    clone->scratch = secp256k1_scratch_space_create(clone->ctx, 1u << 24);
+    if (clone->scratch == NULL) {
+        purify_bppp_backend_resources_destroy(clone);
+        return NULL;
+    }
+    clone->gens = purify_bppp_generators_clone(resources->gens);
+    if (clone->gens == NULL) {
+        purify_bppp_backend_resources_destroy(clone);
+        return NULL;
+    }
+    clone->gens_scratch.n = clone->generators_count;
+    clone->gens_scratch.gens =
+        (secp256k1_ge*)purify_malloc_array(clone->generators_count, sizeof(*clone->gens_scratch.gens));
+    if (clone->gens_scratch.gens == NULL) {
+        purify_bppp_backend_resources_destroy(clone);
+        return NULL;
+    }
+    memcpy(clone->gens_scratch.gens, clone->gens->gens, generator_bytes);
+    return clone;
 }
 
 void purify_bppp_backend_resources_destroy(purify_bppp_backend_resources* resources) {

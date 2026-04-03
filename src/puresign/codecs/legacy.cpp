@@ -115,6 +115,11 @@ Result<Signature> Signature::deserialize(std::span<const unsigned char> serializ
 }
 
 Result<Bytes> NonceProof::serialize(purify_secp_context* secp_context) const {
+    PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(*this, secp_context),
+                            "NonceProof::serialize:nonce_proof_matches_nonce");
+    if (!match) {
+        return unexpected_error(ErrorCode::BindingMismatch, "NonceProof::serialize:nonce_mismatch");
+    }
     PURIFY_ASSIGN_OR_RETURN(const auto& proof_bytes, proof.serialize(), "NonceProof::serialize:proof");
     if (proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return unexpected_error(ErrorCode::UnexpectedSize, "NonceProof::serialize:proof_size");

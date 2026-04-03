@@ -192,7 +192,7 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
                                                    std::span<const unsigned char> eval_input,
                                                    const NativeBulletproofCircuitTemplate& circuit_template,
                                                    purify_secp_context* secp_context,
-                                                   bppp::ExperimentalCircuitCache* circuit_cache) {
+                                                   bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(detail::copy_bytes(eval_input), secret),
                             "build_nonce_proof_from_template:prove_assignment_data");
     PURIFY_ASSIGN_OR_RETURN(auto partial_ok, circuit_template.partial_evaluate(witness.assignment),
@@ -238,7 +238,7 @@ Result<NonceProof> build_nonce_proof(const SecretKey& secret,
                                      std::span<const unsigned char> input,
                                      const Nonce& expected_nonce,
                                      purify_secp_context* secp_context,
-                                     bppp::ExperimentalCircuitCache* circuit_cache) {
+                                     bppp::ExperimentalCircuitBackend* circuit_cache) {
     const std::string_view nonce_tag = scope == Scope::Message ? kMessageNonceTag : kTopicNonceTag;
     PURIFY_ASSIGN_OR_RETURN(const auto& circuit_template, verifier_circuit_template(detail::tagged_eval_input(nonce_tag, input)),
                             "build_nonce_proof:verifier_circuit_template");
@@ -253,7 +253,7 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
                                              Scope scope,
                                              purify_secp_context* secp_context,
                                              const char* context,
-                                             bppp::ExperimentalCircuitCache* circuit_cache) {
+                                             bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_RETURN_IF_ERROR(validate_public_key_bundle(public_key, secp_context), context);
     PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit, context), context);
     PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(nonce_proof, secp_context), context);
@@ -450,7 +450,7 @@ Result<PreparedNonce> prepare_message_nonce(const SecretKey& secret, std::span<c
 Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey& secret,
                                                                 std::span<const unsigned char> message,
                                                                 purify_secp_context* secp_context,
-                                                                bppp::ExperimentalCircuitCache* circuit_cache) {
+                                                                bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, Scope::Message, message, secp_context),
                             "prepare_message_nonce_with_proof:prepare_nonce_data_impl");
     PreparedNonce prepared = PreparedNonce::from_parts(Scope::Message, nonce_data.scalar,
@@ -465,7 +465,7 @@ Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey&
 Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey& secret,
                                                                 const MessageProofCache& cache,
                                                                 purify_secp_context* secp_context,
-                                                                bppp::ExperimentalCircuitCache* circuit_cache) {
+                                                                bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_RETURN_IF_ERROR(validate_message_proof_cache(cache),
                            "prepare_message_nonce_with_proof:validate_message_proof_cache");
     PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, Scope::Message, cache.message, secp_context),
@@ -493,7 +493,7 @@ Result<PreparedNonce> prepare_topic_nonce(const SecretKey& secret, std::span<con
 Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& secret,
                                                               std::span<const unsigned char> topic,
                                                               purify_secp_context* secp_context,
-                                                              bppp::ExperimentalCircuitCache* circuit_cache) {
+                                                              bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, Scope::Topic, topic, secp_context),
                             "prepare_topic_nonce_with_proof:prepare_nonce_data_impl");
     PreparedNonce prepared = PreparedNonce::from_parts(Scope::Topic, nonce_data.scalar,
@@ -508,7 +508,7 @@ Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& s
 Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& secret,
                                                               const TopicProofCache& cache,
                                                               purify_secp_context* secp_context,
-                                                              bppp::ExperimentalCircuitCache* circuit_cache) {
+                                                              bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_RETURN_IF_ERROR(validate_topic_proof_cache(cache),
                            "prepare_topic_nonce_with_proof:validate_topic_proof_cache");
     PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, Scope::Topic, cache.topic, secp_context),
@@ -566,7 +566,7 @@ Result<ProvenSignature> sign_with_prepared_topic_proof(const SecretKey& secret,
 
 Result<ProvenSignature> sign_message_with_proof(const SecretKey& secret, std::span<const unsigned char> message,
                                                 purify_secp_context* secp_context,
-                                                bppp::ExperimentalCircuitCache* circuit_cache) {
+                                                bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce_with_proof(secret, message, secp_context, circuit_cache),
                             "sign_message_with_proof:prepare_message_nonce_with_proof");
     return sign_message_with_prepared_proof(secret, message, std::move(prepared), secp_context);
@@ -574,7 +574,7 @@ Result<ProvenSignature> sign_message_with_proof(const SecretKey& secret, std::sp
 
 Result<ProvenSignature> sign_message_with_proof(const SecretKey& secret, const MessageProofCache& cache,
                                                 purify_secp_context* secp_context,
-                                                bppp::ExperimentalCircuitCache* circuit_cache) {
+                                                bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce_with_proof(secret, cache, secp_context, circuit_cache),
                             "sign_message_with_proof:prepare_message_nonce_with_proof");
     return sign_message_with_prepared_proof(secret, cache.message, std::move(prepared), secp_context);
@@ -583,7 +583,7 @@ Result<ProvenSignature> sign_message_with_proof(const SecretKey& secret, const M
 Result<ProvenSignature> sign_with_topic_proof(const SecretKey& secret, std::span<const unsigned char> message,
                                               std::span<const unsigned char> topic,
                                               purify_secp_context* secp_context,
-                                              bppp::ExperimentalCircuitCache* circuit_cache) {
+                                              bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce_with_proof(secret, topic, secp_context, circuit_cache),
                             "sign_with_topic_proof:prepare_topic_nonce_with_proof");
     return sign_with_prepared_topic_proof(secret, message, std::move(prepared), secp_context);
@@ -592,7 +592,7 @@ Result<ProvenSignature> sign_with_topic_proof(const SecretKey& secret, std::span
 Result<ProvenSignature> sign_with_topic_proof(const SecretKey& secret, std::span<const unsigned char> message,
                                               const TopicProofCache& cache,
                                               purify_secp_context* secp_context,
-                                              bppp::ExperimentalCircuitCache* circuit_cache) {
+                                              bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce_with_proof(secret, cache, secp_context, circuit_cache),
                             "sign_with_topic_proof:prepare_topic_nonce_with_proof");
     return sign_with_prepared_topic_proof(secret, message, std::move(prepared), secp_context);
@@ -616,7 +616,7 @@ Result<bool> verify_signature(const PublicKey& public_key, std::span<const unsig
 Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> message,
                                         const NonceProof& nonce_proof,
                                         purify_secp_context* secp_context,
-                                        bppp::ExperimentalCircuitCache* circuit_cache) {
+                                        bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(const auto& circuit,
                             verifier_circuit(detail::tagged_eval_input(kMessageNonceTag, message), public_key.purify_pubkey),
                             "verify_message_nonce_proof:verifier_circuit");
@@ -628,7 +628,7 @@ Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<c
 Result<bool> verify_message_nonce_proof(const MessageProofCache& cache, const PublicKey& public_key,
                                         const NonceProof& nonce_proof,
                                         purify_secp_context* secp_context,
-                                        bppp::ExperimentalCircuitCache* circuit_cache) {
+                                        bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_RETURN_IF_ERROR(validate_message_proof_cache(cache), "verify_message_nonce_proof:validate_message_proof_cache");
     PURIFY_ASSIGN_OR_RETURN(const auto& circuit, cache.circuit_template.instantiate(public_key.purify_pubkey),
                             "verify_message_nonce_proof:instantiate");
@@ -640,7 +640,7 @@ Result<bool> verify_message_nonce_proof(const MessageProofCache& cache, const Pu
 Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> topic,
                                       const NonceProof& nonce_proof,
                                       purify_secp_context* secp_context,
-                                      bppp::ExperimentalCircuitCache* circuit_cache) {
+                                      bppp::ExperimentalCircuitBackend* circuit_cache) {
     if (topic.empty()) {
         return unexpected_error(ErrorCode::EmptyInput, "verify_topic_nonce_proof:empty_topic");
     }
@@ -655,7 +655,7 @@ Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<con
 Result<bool> verify_topic_nonce_proof(const TopicProofCache& cache, const PublicKey& public_key,
                                       const NonceProof& nonce_proof,
                                       purify_secp_context* secp_context,
-                                      bppp::ExperimentalCircuitCache* circuit_cache) {
+                                      bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_RETURN_IF_ERROR(validate_topic_proof_cache(cache), "verify_topic_nonce_proof:validate_topic_proof_cache");
     PURIFY_ASSIGN_OR_RETURN(const auto& circuit, cache.circuit_template.instantiate(public_key.purify_pubkey),
                             "verify_topic_nonce_proof:instantiate");
@@ -668,7 +668,7 @@ Result<bool> verify_message_signature_with_proof(const PublicKey& public_key,
                                                  std::span<const unsigned char> message,
                                                  const ProvenSignature& signature,
                                                  purify_secp_context* secp_context,
-                                                 bppp::ExperimentalCircuitCache* circuit_cache) {
+                                                 bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(auto sig_ok, verify_signature(public_key, message, signature.signature, secp_context),
                             "verify_message_signature_with_proof:verify_signature");
     if (!sig_ok) {
@@ -683,7 +683,7 @@ Result<bool> verify_message_signature_with_proof(const PublicKey& public_key,
 Result<bool> verify_message_signature_with_proof(const MessageProofCache& cache, const PublicKey& public_key,
                                                  const ProvenSignature& signature,
                                                  purify_secp_context* secp_context,
-                                                 bppp::ExperimentalCircuitCache* circuit_cache) {
+                                                 bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(auto sig_ok, verify_signature(public_key, cache.message, signature.signature, secp_context),
                             "verify_message_signature_with_proof:verify_signature");
     if (!sig_ok) {
@@ -700,7 +700,7 @@ Result<bool> verify_topic_signature_with_proof(const PublicKey& public_key,
                                                std::span<const unsigned char> topic,
                                                const ProvenSignature& signature,
                                                purify_secp_context* secp_context,
-                                               bppp::ExperimentalCircuitCache* circuit_cache) {
+                                               bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(auto sig_ok, verify_signature(public_key, message, signature.signature, secp_context),
                             "verify_topic_signature_with_proof:verify_signature");
     if (!sig_ok) {
@@ -716,7 +716,7 @@ Result<bool> verify_topic_signature_with_proof(const TopicProofCache& cache, con
                                                std::span<const unsigned char> message,
                                                const ProvenSignature& signature,
                                                purify_secp_context* secp_context,
-                                               bppp::ExperimentalCircuitCache* circuit_cache) {
+                                               bppp::ExperimentalCircuitBackend* circuit_cache) {
     PURIFY_ASSIGN_OR_RETURN(auto sig_ok, verify_signature(public_key, message, signature.signature, secp_context),
                             "verify_topic_signature_with_proof:verify_signature");
     if (!sig_ok) {
@@ -742,40 +742,40 @@ Result<bool> PublicKey::verify_signature(std::span<const unsigned char> message,
 Result<bool> PublicKey::verify_message_nonce_proof(std::span<const unsigned char> message,
                                                    const NonceProof& nonce_proof,
                                                    purify_secp_context* secp_context,
-                                                   bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                   bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::verify_message_nonce_proof(*this, message, nonce_proof, secp_context, circuit_cache);
 }
 
 Result<bool> PublicKey::verify_message_nonce_proof(const MessageProofCache& cache, const NonceProof& nonce_proof,
                                                    purify_secp_context* secp_context,
-                                                   bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                   bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::verify_message_nonce_proof(cache, *this, nonce_proof, secp_context, circuit_cache);
 }
 
 Result<bool> PublicKey::verify_topic_nonce_proof(std::span<const unsigned char> topic,
                                                  const NonceProof& nonce_proof,
                                                  purify_secp_context* secp_context,
-                                                 bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                 bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::verify_topic_nonce_proof(*this, topic, nonce_proof, secp_context, circuit_cache);
 }
 
 Result<bool> PublicKey::verify_topic_nonce_proof(const TopicProofCache& cache, const NonceProof& nonce_proof,
                                                  purify_secp_context* secp_context,
-                                                 bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                 bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::verify_topic_nonce_proof(cache, *this, nonce_proof, secp_context, circuit_cache);
 }
 
 Result<bool> PublicKey::verify_message_signature_with_proof(std::span<const unsigned char> message,
                                                             const ProvenSignature& signature,
                                                             purify_secp_context* secp_context,
-                                                            bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                            bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::verify_message_signature_with_proof(*this, message, signature, secp_context, circuit_cache);
 }
 
 Result<bool> PublicKey::verify_message_signature_with_proof(const MessageProofCache& cache,
                                                             const ProvenSignature& signature,
                                                             purify_secp_context* secp_context,
-                                                            bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                            bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::verify_message_signature_with_proof(cache, *this, signature, secp_context, circuit_cache);
 }
 
@@ -783,7 +783,7 @@ Result<bool> PublicKey::verify_topic_signature_with_proof(std::span<const unsign
                                                           std::span<const unsigned char> topic,
                                                           const ProvenSignature& signature,
                                                           purify_secp_context* secp_context,
-                                                          bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                          bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::verify_topic_signature_with_proof(*this, message, topic, signature, secp_context, circuit_cache);
 }
 
@@ -791,7 +791,7 @@ Result<bool> PublicKey::verify_topic_signature_with_proof(const TopicProofCache&
                                                           std::span<const unsigned char> message,
                                                           const ProvenSignature& signature,
                                                           purify_secp_context* secp_context,
-                                                          bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                          bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::verify_topic_signature_with_proof(cache, *this, message, signature, secp_context, circuit_cache);
 }
 
@@ -813,14 +813,14 @@ Result<PreparedNonce> KeyPair::prepare_message_nonce(std::span<const unsigned ch
 Result<PreparedNonceWithProof> KeyPair::prepare_message_nonce_with_proof(
     std::span<const unsigned char> message,
     purify_secp_context* secp_context,
-    bppp::ExperimentalCircuitCache* circuit_cache) const {
+    bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::prepare_message_nonce_with_proof(secret_, message, secp_context, circuit_cache);
 }
 
 Result<PreparedNonceWithProof> KeyPair::prepare_message_nonce_with_proof(
     const MessageProofCache& cache,
     purify_secp_context* secp_context,
-    bppp::ExperimentalCircuitCache* circuit_cache) const {
+    bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::prepare_message_nonce_with_proof(secret_, cache, secp_context, circuit_cache);
 }
 
@@ -832,14 +832,14 @@ Result<PreparedNonce> KeyPair::prepare_topic_nonce(std::span<const unsigned char
 Result<PreparedNonceWithProof> KeyPair::prepare_topic_nonce_with_proof(
     std::span<const unsigned char> topic,
     purify_secp_context* secp_context,
-    bppp::ExperimentalCircuitCache* circuit_cache) const {
+    bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::prepare_topic_nonce_with_proof(secret_, topic, secp_context, circuit_cache);
 }
 
 Result<PreparedNonceWithProof> KeyPair::prepare_topic_nonce_with_proof(
     const TopicProofCache& cache,
     purify_secp_context* secp_context,
-    bppp::ExperimentalCircuitCache* circuit_cache) const {
+    bppp::ExperimentalCircuitBackend* circuit_cache) const {
     return api_impl::prepare_topic_nonce_with_proof(secret_, cache, secp_context, circuit_cache);
 }
 
@@ -884,7 +884,7 @@ Result<ProvenSignature> KeyPair::sign_with_prepared_topic_proof(std::span<const 
 
 Result<ProvenSignature> KeyPair::sign_message_with_proof(std::span<const unsigned char> message,
                                                          purify_secp_context* secp_context,
-                                                         bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                         bppp::ExperimentalCircuitBackend* circuit_cache) const {
     PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce_with_proof(message, secp_context, circuit_cache),
                             "KeyPair::sign_message_with_proof:prepare_message_nonce_with_proof");
     return sign_message_with_prepared_proof(message, std::move(prepared), secp_context);
@@ -892,7 +892,7 @@ Result<ProvenSignature> KeyPair::sign_message_with_proof(std::span<const unsigne
 
 Result<ProvenSignature> KeyPair::sign_message_with_proof(const MessageProofCache& cache,
                                                          purify_secp_context* secp_context,
-                                                         bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                         bppp::ExperimentalCircuitBackend* circuit_cache) const {
     PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce_with_proof(cache, secp_context, circuit_cache),
                             "KeyPair::sign_message_with_proof:prepare_message_nonce_with_proof");
     return sign_message_with_prepared_proof(cache.message, std::move(prepared), secp_context);
@@ -901,7 +901,7 @@ Result<ProvenSignature> KeyPair::sign_message_with_proof(const MessageProofCache
 Result<ProvenSignature> KeyPair::sign_with_topic_proof(std::span<const unsigned char> message,
                                                        std::span<const unsigned char> topic,
                                                        purify_secp_context* secp_context,
-                                                       bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                       bppp::ExperimentalCircuitBackend* circuit_cache) const {
     PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce_with_proof(topic, secp_context, circuit_cache),
                             "KeyPair::sign_with_topic_proof:prepare_topic_nonce_with_proof");
     return sign_with_prepared_topic_proof(message, std::move(prepared), secp_context);
@@ -910,7 +910,7 @@ Result<ProvenSignature> KeyPair::sign_with_topic_proof(std::span<const unsigned 
 Result<ProvenSignature> KeyPair::sign_with_topic_proof(std::span<const unsigned char> message,
                                                        const TopicProofCache& cache,
                                                        purify_secp_context* secp_context,
-                                                       bppp::ExperimentalCircuitCache* circuit_cache) const {
+                                                       bppp::ExperimentalCircuitBackend* circuit_cache) const {
     PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce_with_proof(cache, secp_context, circuit_cache),
                             "KeyPair::sign_with_topic_proof:prepare_topic_nonce_with_proof");
     return sign_with_prepared_topic_proof(message, std::move(prepared), secp_context);

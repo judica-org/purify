@@ -57,6 +57,53 @@ struct GeneratorBackendCacheKeyHash {
 using CircuitNormArgPublicDataCacheKey = std::array<unsigned char, 32>;
 using CircuitNormArgPublicDataCacheKeyHash = GeneratorBackendCacheKeyHash;
 
+GeneratorBackendCacheKey generator_backend_cache_key(
+    std::span<const PointBytes> generators) {
+  GeneratorBackendCacheKey key{};
+  auto serialized_view = std::as_bytes(generators);
+  const unsigned char *serialized =
+      serialized_view.empty()
+          ? nullptr
+          : reinterpret_cast<const unsigned char *>(serialized_view.data());
+  purify_sha256(key.data(), serialized, serialized_view.size());
+  return key;
+}
+
+ExperimentalCircuitBackend::~ExperimentalCircuitBackend() = default;
+
+std::shared_ptr<const void>
+detail::ExperimentalCircuitBackendAccess::find_public_data(
+    const ExperimentalCircuitBackend *backend,
+    const std::array<unsigned char, 32> &key) {
+  return backend != nullptr ? backend->find_public_data_impl(key)
+                            : std::shared_ptr<const void>{};
+}
+
+void detail::ExperimentalCircuitBackendAccess::insert_public_data(
+    ExperimentalCircuitBackend *backend, std::array<unsigned char, 32> key,
+    std::shared_ptr<const void> value) {
+  if (backend != nullptr) {
+    backend->insert_public_data_impl(std::move(key), std::move(value));
+  }
+}
+
+purify_bppp_backend_resources *
+detail::ExperimentalCircuitBackendAccess::get_or_create_backend_resources(
+    ExperimentalCircuitBackend *backend,
+    std::span<const PointBytes> generators,
+    purify_secp_context *secp_context) {
+  return backend != nullptr
+             ? backend->get_or_create_backend_resources_impl(generators,
+                                                             secp_context)
+             : nullptr;
+}
+
+struct ExperimentalCircuitCacheLine::Impl {
+  GeneratorBackendCacheKey backend_key{};
+  bool has_backend_key = false;
+  OwnedBpppBackendResources backend_resources;
+};
+
 struct ExperimentalCircuitCache::Impl {
   std::unordered_map<CircuitNormArgPublicDataCacheKey,
                      std::shared_ptr<const void>,
@@ -66,6 +113,47 @@ struct ExperimentalCircuitCache::Impl {
                      GeneratorBackendCacheKeyHash>
       backend_resources;
 };
+
+ExperimentalCircuitCacheLine::ExperimentalCircuitCacheLine()
+    : impl_(std::make_unique<Impl>()) {}
+
+ExperimentalCircuitCacheLine::ExperimentalCircuitCacheLine(
+    ExperimentalCircuitCacheLine &&other) noexcept = default;
+
+ExperimentalCircuitCacheLine &ExperimentalCircuitCacheLine::operator=(
+    ExperimentalCircuitCacheLine &&other) noexcept = default;
+
+ExperimentalCircuitCacheLine::~ExperimentalCircuitCacheLine() = default;
+
+bool ExperimentalCircuitCacheLine::empty() const noexcept {
+  return impl_ == nullptr || impl_->backend_resources == nullptr;
+}
+
+std::shared_ptr<const void> ExperimentalCircuitCacheLine::find_public_data_impl(
+    const std::array<unsigned char, 32> &key) const {
+  (void)key;
+  return {};
+}
+
+void ExperimentalCircuitCacheLine::insert_public_data_impl(
+    std::array<unsigned char, 32> key, std::shared_ptr<const void> value) {
+  (void)key;
+  (void)value;
+}
+
+purify_bppp_backend_resources *
+ExperimentalCircuitCacheLine::get_or_create_backend_resources_impl(
+    std::span<const PointBytes> generators,
+    purify_secp_context *secp_context) {
+  (void)secp_context;
+  if (impl_ == nullptr || impl_->backend_resources == nullptr ||
+      generators.empty() || !impl_->has_backend_key) {
+    return nullptr;
+  }
+  return generator_backend_cache_key(generators) == impl_->backend_key
+             ? impl_->backend_resources.get()
+             : nullptr;
+}
 
 ExperimentalCircuitCache::ExperimentalCircuitCache()
     : impl_(std::make_unique<Impl>()) {}
@@ -91,7 +179,51 @@ std::size_t ExperimentalCircuitCache::size() const noexcept {
              : 0;
 }
 
+Result<ExperimentalCircuitCacheLine> ExperimentalCircuitCache::clone_line_for_thread(
+    std::span<const PointBytes> generators) const {
+  ExperimentalCircuitCacheLine clone;
+  if (impl_ == nullptr || generators.empty()) {
+    return clone;
+  }
+
+  const GeneratorBackendCacheKey key = generator_backend_cache_key(generators);
+  auto it = impl_->backend_resources.find(key);
+  if (it == impl_->backend_resources.end()) {
+    return clone;
+  }
+
+  purify_bppp_backend_resources* cloned =
+      purify_bppp_backend_resources_clone(it->second.get());
+  if (cloned == nullptr) {
+    return unexpected_error(
+        ErrorCode::BackendRejectedInput,
+        "ExperimentalCircuitCache::clone_line_for_thread:backend_resources");
+  }
+  clone.impl_->backend_key = key;
+  clone.impl_->has_backend_key = true;
+  clone.impl_->backend_resources.reset(cloned);
+  return clone;
+}
+
 std::shared_ptr<const void> ExperimentalCircuitCache::find_public_data(
+    const std::array<unsigned char, 32> &key) const {
+  return find_public_data_impl(key);
+}
+
+void ExperimentalCircuitCache::insert_public_data(
+    std::array<unsigned char, 32> key,
+    std::shared_ptr<const void> value) {
+  insert_public_data_impl(std::move(key), std::move(value));
+}
+
+purify_bppp_backend_resources *
+ExperimentalCircuitCache::get_or_create_backend_resources(
+    std::span<const PointBytes> generators,
+    purify_secp_context *secp_context) {
+  return get_or_create_backend_resources_impl(generators, secp_context);
+}
+
+std::shared_ptr<const void> ExperimentalCircuitCache::find_public_data_impl(
     const std::array<unsigned char, 32> &key) const {
   if (impl_ == nullptr) {
     return {};
@@ -103,7 +235,7 @@ std::shared_ptr<const void> ExperimentalCircuitCache::find_public_data(
   return it->second;
 }
 
-void ExperimentalCircuitCache::insert_public_data(
+void ExperimentalCircuitCache::insert_public_data_impl(
     std::array<unsigned char, 32> key,
     std::shared_ptr<const void> value) {
   if (impl_ == nullptr) {
@@ -113,7 +245,7 @@ void ExperimentalCircuitCache::insert_public_data(
 }
 
 purify_bppp_backend_resources *
-ExperimentalCircuitCache::get_or_create_backend_resources(
+ExperimentalCircuitCache::get_or_create_backend_resources_impl(
     std::span<const PointBytes> generators,
     purify_secp_context *secp_context) {
   if (impl_ == nullptr || secp_context == nullptr || generators.empty()) {
@@ -126,8 +258,7 @@ ExperimentalCircuitCache::get_or_create_backend_resources(
           ? nullptr
           : reinterpret_cast<const unsigned char *>(serialized_view.data());
 
-  GeneratorBackendCacheKey key{};
-  purify_sha256(key.data(), serialized, serialized_view.size());
+  GeneratorBackendCacheKey key = generator_backend_cache_key(generators);
 
   auto it = impl_->backend_resources.find(key);
   if (it != impl_->backend_resources.end()) {
@@ -215,7 +346,7 @@ struct ResolvedBpppGeneratorBackend {
 };
 
 ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
-    ExperimentalCircuitCache *cache,
+    ExperimentalCircuitBackend *cache,
     const std::vector<PointBytes> &serialized_generators,
     purify_secp_context *secp_context) {
   ResolvedBpppGeneratorBackend out;
@@ -226,7 +357,8 @@ ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
     return out;
   }
   out.backend_resources =
-      cache->get_or_create_backend_resources(serialized_generators, secp_context);
+      detail::ExperimentalCircuitBackendAccess::get_or_create_backend_resources(
+          cache, serialized_generators, secp_context);
   return out;
 }
 
@@ -360,7 +492,7 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
     std::span<const unsigned char> statement_binding,
     purify_secp_context *secp_context,
     bool externalize_commitments = false,
-    ExperimentalCircuitCache *cache = nullptr) {
+    ExperimentalCircuitBackend *cache = nullptr) {
   PURIFY_RETURN_IF_ERROR(
       require_secp_context(secp_context, "build_circuit_norm_arg_public_data:secp_context"),
       "build_circuit_norm_arg_public_data:secp_context");
@@ -386,8 +518,8 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
       circuit_norm_arg_public_data_cache_key(binding_digest,
                                              externalize_commitments);
   if (std::shared_ptr<const void> cached =
-          cache != nullptr ? cache->find_public_data(cache_key)
-                           : std::shared_ptr<const void>{}) {
+          detail::ExperimentalCircuitBackendAccess::find_public_data(cache,
+                                                                     cache_key)) {
     return std::static_pointer_cast<const CircuitNormArgPublicData>(cached);
   }
 
@@ -525,7 +657,9 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   out->generators = std::move(generators);
   CircuitNormArgPublicDataPtr shared = out;
   if (cache != nullptr) {
-    cache->insert_public_data(cache_key, shared);
+    detail::ExperimentalCircuitBackendAccess::insert_public_data(cache,
+                                                                 cache_key,
+                                                                 shared);
   }
   return shared;
 }
@@ -536,7 +670,7 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments = false,
-    ExperimentalCircuitCache *cache = nullptr) {
+    ExperimentalCircuitBackend *cache = nullptr) {
   if (assignment.left.size() != circuit.n_gates ||
       assignment.right.size() != circuit.n_gates ||
       assignment.output.size() != circuit.n_gates ||
@@ -603,7 +737,7 @@ NormArgInputs build_norm_arg_inputs(const CircuitNormArgReduction &reduction) {
 Result<PointBytes>
 commit_norm_arg_witness_only(const NormArgInputs &inputs,
                              purify_secp_context *secp_context,
-                             ExperimentalCircuitCache *cache = nullptr) {
+                             ExperimentalCircuitBackend *cache = nullptr) {
   PURIFY_RETURN_IF_ERROR(
       require_secp_context(secp_context, "commit_norm_arg_witness_only:secp_context"),
       "commit_norm_arg_witness_only:secp_context");
@@ -810,7 +944,7 @@ anchor_zk_a_commitment(const PointBytes &a_witness_commitment,
 Result<PointBytes>
 commit_explicit_norm_arg(const NormArgInputs &inputs, const FieldElement &value,
                          purify_secp_context *secp_context,
-                         ExperimentalCircuitCache *cache = nullptr) {
+                         ExperimentalCircuitBackend *cache = nullptr) {
   PURIFY_ASSIGN_OR_RETURN(
       const auto &witness_commitment, commit_norm_arg_witness_only(inputs, secp_context, cache),
       "commit_explicit_norm_arg:witness_commitment");
@@ -833,7 +967,7 @@ template <typename Inputs>
 Result<NormArgProof>
 prove_norm_arg_impl(Inputs &&inputs,
                     purify_secp_context *secp_context,
-                    ExperimentalCircuitCache *cache = nullptr) {
+                    ExperimentalCircuitBackend *cache = nullptr) {
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "prove_norm_arg:secp_context"),
                          "prove_norm_arg:secp_context");
   if (inputs.n_vec.empty() || inputs.l_vec.empty() || inputs.c_vec.empty()) {
@@ -972,7 +1106,7 @@ Result<std::vector<PointBytes>> create_generators(std::size_t count,
 Result<PointBytes>
 commit_norm_arg_with_cache(const NormArgInputs &inputs,
                            purify_secp_context *secp_context,
-                           ExperimentalCircuitCache *cache = nullptr) {
+                           ExperimentalCircuitBackend *cache = nullptr) {
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "commit_norm_arg:secp_context"),
                          "commit_norm_arg:secp_context");
   if (inputs.n_vec.empty() || inputs.l_vec.empty() || inputs.c_vec.empty()) {
@@ -1056,7 +1190,7 @@ Result<NormArgProof> prove_norm_arg(NormArgInputs &&inputs,
 Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
     const NormArgInputs &inputs, const PointBytes &commitment,
     purify_secp_context *secp_context,
-    ExperimentalCircuitCache *cache = nullptr) {
+    ExperimentalCircuitBackend *cache = nullptr) {
   PURIFY_RETURN_IF_ERROR(
       require_secp_context(secp_context, "prove_norm_arg_to_commitment:secp_context"),
       "prove_norm_arg_to_commitment:secp_context");
@@ -1124,7 +1258,7 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
 
 bool verify_norm_arg_with_cache(const NormArgProof &proof,
                                 purify_secp_context *secp_context,
-                                ExperimentalCircuitCache *cache = nullptr) {
+                                ExperimentalCircuitBackend *cache = nullptr) {
   if (secp_context == nullptr) {
     return false;
   }
@@ -1171,7 +1305,7 @@ Result<PointBytes> commit_experimental_circuit_witness(
     const BulletproofAssignmentData &assignment,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitCache *cache) {
+    ExperimentalCircuitBackend *cache) {
   PURIFY_ASSIGN_OR_RETURN(
       const auto &reduction,
       reduce_experimental_circuit_to_norm_arg(circuit, assignment, secp_context,
@@ -1187,7 +1321,7 @@ prove_experimental_circuit_norm_arg_to_commitment(
     const PointBytes &witness_commitment,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitCache *cache) {
+    ExperimentalCircuitBackend *cache) {
   if (!circuit.has_valid_shape()) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
@@ -1247,7 +1381,7 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
     const BulletproofAssignmentData &assignment,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitCache *cache) {
+    ExperimentalCircuitBackend *cache) {
   PURIFY_ASSIGN_OR_RETURN(
       const auto &witness_commitment,
       commit_experimental_circuit_witness(circuit, assignment, secp_context, statement_binding,
@@ -1262,7 +1396,7 @@ Result<bool> verify_experimental_circuit_norm_arg(
     const ExperimentalCircuitNormArgProof &proof,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitCache *cache) {
+    ExperimentalCircuitBackend *cache) {
   if (!circuit.has_valid_shape()) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
@@ -1309,7 +1443,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    bool externalize_commitments, ExperimentalCircuitCache *cache) {
+    bool externalize_commitments, ExperimentalCircuitBackend *cache) {
   if (!circuit.has_valid_shape()) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
@@ -1533,7 +1667,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    bool externalize_commitments, ExperimentalCircuitCache *cache) {
+    bool externalize_commitments, ExperimentalCircuitBackend *cache) {
   if (!circuit.has_valid_shape()) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
@@ -1605,7 +1739,7 @@ prove_experimental_circuit_zk_norm_arg(
     const BulletproofAssignmentData &assignment, const ScalarBytes &nonce,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitCache *cache) {
+    ExperimentalCircuitBackend *cache) {
   return prove_experimental_circuit_zk_norm_arg_impl(
       circuit, assignment, nonce, {}, secp_context, statement_binding, false, cache);
 }
@@ -1615,7 +1749,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg(
     const ExperimentalCircuitZkNormArgProof &proof,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitCache *cache) {
+    ExperimentalCircuitBackend *cache) {
   return verify_experimental_circuit_zk_norm_arg_impl(
       circuit, proof, {}, secp_context, statement_binding, false, cache);
 }
@@ -1627,7 +1761,7 @@ prove_experimental_circuit_zk_norm_arg_with_public_commitments(
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitCache *cache) {
+    ExperimentalCircuitBackend *cache) {
   return prove_experimental_circuit_zk_norm_arg_impl(
       circuit, assignment, nonce, public_commitments, secp_context, statement_binding, true,
       cache);
@@ -1639,7 +1773,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitCache *cache) {
+    ExperimentalCircuitBackend *cache) {
   return verify_experimental_circuit_zk_norm_arg_impl(
       circuit, proof, public_commitments, secp_context, statement_binding, true, cache);
 }

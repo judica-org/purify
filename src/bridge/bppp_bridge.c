@@ -94,7 +94,13 @@ struct purify_bppp_backend_resources {
     secp256k1_context* ctx;
     secp256k1_scratch_space* scratch;
     secp256k1_bppp_generators* gens;
+    secp256k1_bppp_generators gens_scratch;
+    int gens_scratch_in_use;
 };
+
+typedef struct purify_bppp_mutable_generators_guard {
+    purify_bppp_backend_resources* resources;
+} purify_bppp_mutable_generators_guard;
 
 static int purify_bridge_checked_mul_size(size_t lhs, size_t rhs, size_t* out) {
     if (out == NULL) {
@@ -142,6 +148,68 @@ static void* purify_calloc_array(size_t count, size_t elem_size) {
     return calloc(1, bytes);
 }
 
+static secp256k1_bppp_generators* purify_bppp_generators_clone(
+    const secp256k1_bppp_generators* generators) {
+    secp256k1_bppp_generators* clone;
+    size_t generator_bytes = 0;
+
+    if (generators == NULL || generators->gens == NULL || generators->n == 0 ||
+        !purify_bridge_checked_mul_size(generators->n, sizeof(*generators->gens), &generator_bytes)) {
+        return NULL;
+    }
+
+    clone = (secp256k1_bppp_generators*)calloc(1, sizeof(*clone));
+    if (clone == NULL) {
+        return NULL;
+    }
+    clone->n = generators->n;
+    clone->gens = (secp256k1_ge*)purify_malloc_array(generators->n, sizeof(*clone->gens));
+    if (clone->gens == NULL) {
+        free(clone);
+        return NULL;
+    }
+    memcpy(clone->gens, generators->gens, generator_bytes);
+    return clone;
+}
+
+/* BPPP proving folds the generator table in place, so cached resources keep one
+   pristine parsed copy and one resettable scratch copy for prove calls. */
+static int purify_bppp_backend_resources_reset_scratch_gens(purify_bppp_backend_resources* resources) {
+    size_t generator_bytes = 0;
+
+    if (resources == NULL || resources->gens == NULL || resources->gens->gens == NULL ||
+        resources->gens->n != resources->generators_count ||
+        resources->gens_scratch.gens == NULL || resources->gens_scratch.n != resources->generators_count ||
+        !purify_bridge_checked_mul_size(resources->generators_count, sizeof(*resources->gens->gens), &generator_bytes)) {
+        return 0;
+    }
+
+    memcpy(resources->gens_scratch.gens, resources->gens->gens, generator_bytes);
+    return 1;
+}
+
+static secp256k1_bppp_generators* purify_bppp_backend_resources_acquire_scratch_gens(
+    purify_bppp_backend_resources* resources,
+    purify_bppp_mutable_generators_guard* guard) {
+    if (guard == NULL || resources == NULL || resources->gens_scratch_in_use) {
+        return NULL;
+    }
+    if (!purify_bppp_backend_resources_reset_scratch_gens(resources)) {
+        return NULL;
+    }
+    resources->gens_scratch_in_use = 1;
+    guard->resources = resources;
+    return &resources->gens_scratch;
+}
+
+static void purify_bppp_backend_resources_release_scratch_gens(
+    purify_bppp_mutable_generators_guard* guard) {
+    if (guard != NULL && guard->resources != NULL) {
+        guard->resources->gens_scratch_in_use = 0;
+        guard->resources = NULL;
+    }
+}
+
 purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_create(purify_secp_context* context,
                                                                                   size_t n_gates) {
     purify_bulletproof_backend_resources* resources;
@@ -176,6 +244,36 @@ purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_creat
 
     resources->n_gates = n_gates;
     return resources;
+}
+
+purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_clone(
+    const purify_bulletproof_backend_resources* resources) {
+    purify_bulletproof_backend_resources* clone;
+    size_t generator_count = 0;
+
+    if (resources == NULL || resources->ctx == NULL || resources->n_gates == 0 ||
+        !purify_bridge_checked_mul_size(2u, resources->n_gates, &generator_count)) {
+        return NULL;
+    }
+
+    clone = (purify_bulletproof_backend_resources*)calloc(1, sizeof(*clone));
+    if (clone == NULL) {
+        return NULL;
+    }
+    clone->ctx = resources->ctx;
+    clone->n_gates = resources->n_gates;
+    clone->scratch = secp256k1_scratch_space_create(clone->ctx, 1u << 24);
+    if (clone->scratch == NULL) {
+        purify_bulletproof_backend_resources_destroy(clone);
+        return NULL;
+    }
+    clone->gens = secp256k1_bulletproof_generators_create(
+        clone->ctx, secp256k1_generator_h, generator_count, 1);
+    if (clone->gens == NULL || clone->gens->n < generator_count) {
+        purify_bulletproof_backend_resources_destroy(clone);
+        return NULL;
+    }
+    return clone;
 }
 
 void purify_bulletproof_backend_resources_destroy(purify_bulletproof_backend_resources* resources) {
@@ -223,9 +321,54 @@ purify_bppp_backend_resources* purify_bppp_backend_resources_create(purify_secp_
         purify_bppp_backend_resources_destroy(resources);
         return NULL;
     }
+    resources->gens_scratch.n = generators_count;
+    resources->gens_scratch.gens =
+        (secp256k1_ge*)purify_malloc_array(generators_count, sizeof(*resources->gens_scratch.gens));
+    if (resources->gens_scratch.gens == NULL) {
+        purify_bppp_backend_resources_destroy(resources);
+        return NULL;
+    }
 
     resources->generators_count = generators_count;
     return resources;
+}
+
+purify_bppp_backend_resources* purify_bppp_backend_resources_clone(
+    const purify_bppp_backend_resources* resources) {
+    purify_bppp_backend_resources* clone;
+    size_t generator_bytes = 0;
+
+    if (resources == NULL || resources->ctx == NULL || resources->generators_count == 0 ||
+        resources->gens == NULL || resources->gens->n != resources->generators_count ||
+        !purify_bridge_checked_mul_size(resources->generators_count, sizeof(*resources->gens->gens), &generator_bytes)) {
+        return NULL;
+    }
+
+    clone = (purify_bppp_backend_resources*)calloc(1, sizeof(*clone));
+    if (clone == NULL) {
+        return NULL;
+    }
+    clone->ctx = resources->ctx;
+    clone->generators_count = resources->generators_count;
+    clone->scratch = secp256k1_scratch_space_create(clone->ctx, 1u << 24);
+    if (clone->scratch == NULL) {
+        purify_bppp_backend_resources_destroy(clone);
+        return NULL;
+    }
+    clone->gens = purify_bppp_generators_clone(resources->gens);
+    if (clone->gens == NULL) {
+        purify_bppp_backend_resources_destroy(clone);
+        return NULL;
+    }
+    clone->gens_scratch.n = clone->generators_count;
+    clone->gens_scratch.gens =
+        (secp256k1_ge*)purify_malloc_array(clone->generators_count, sizeof(*clone->gens_scratch.gens));
+    if (clone->gens_scratch.gens == NULL) {
+        purify_bppp_backend_resources_destroy(clone);
+        return NULL;
+    }
+    memcpy(clone->gens_scratch.gens, clone->gens->gens, generator_bytes);
+    return clone;
 }
 
 void purify_bppp_backend_resources_destroy(purify_bppp_backend_resources* resources) {
@@ -234,6 +377,9 @@ void purify_bppp_backend_resources_destroy(purify_bppp_backend_resources* resour
     }
     if (resources->gens != NULL && resources->ctx != NULL) {
         secp256k1_bppp_generators_destroy(resources->ctx, resources->gens);
+    }
+    if (resources->gens_scratch.gens != NULL) {
+        free(resources->gens_scratch.gens);
     }
     if (resources->scratch != NULL && resources->ctx != NULL) {
         secp256k1_scratch_space_destroy(resources->ctx, resources->scratch);
@@ -1711,7 +1857,7 @@ static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
                                            size_t* proof_len) {
     secp256k1_context* ctx = resources != NULL ? resources->ctx : purify_context_handle(context);
     secp256k1_scratch_space* scratch = resources != NULL ? resources->scratch : NULL;
-    secp256k1_bppp_generators* gens = resources != NULL ? resources->gens : NULL;
+    secp256k1_bppp_generators* gens = NULL;
     secp256k1_scalar rho, mu;
     secp256k1_scalar *n_vec = NULL, *l_vec = NULL, *c_vec = NULL;
     secp256k1_ge commit;
@@ -1720,6 +1866,7 @@ static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
     size_t expected_generators = 0;
     size_t serialized_generators_len = 0;
     int ok = 0;
+    purify_bppp_mutable_generators_guard gens_guard = {0};
 
     if (ctx == NULL || rho32 == NULL || (resources == NULL && generators33 == NULL) || n_vec32 == NULL || l_vec32 == NULL || c_vec32 == NULL ||
         commitment_out33 == NULL || proof_out == NULL || proof_len == NULL) {
@@ -1744,7 +1891,12 @@ static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
     if (!purify_parse_scalar(rho32, &rho, 1)) {
         return 0;
     }
-    if (resources == NULL) {
+    if (resources != NULL) {
+        gens = purify_bppp_backend_resources_acquire_scratch_gens(resources, &gens_guard);
+        if (gens == NULL) {
+            return 0;
+        }
+    } else {
         scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
         gens = secp256k1_bppp_generators_parse(ctx, generators33, serialized_generators_len);
     }
@@ -1774,6 +1926,7 @@ cleanup:
     if (n_vec != NULL) free(n_vec);
     if (l_vec != NULL) free(l_vec);
     if (c_vec != NULL) free(c_vec);
+    purify_bppp_backend_resources_release_scratch_gens(&gens_guard);
     if (resources == NULL) {
         if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
         if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
@@ -1814,7 +1967,7 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
                                                          unsigned char* proof_out, size_t* proof_len) {
     secp256k1_context* ctx = resources != NULL ? resources->ctx : purify_context_handle(context);
     secp256k1_scratch_space* scratch = resources != NULL ? resources->scratch : NULL;
-    secp256k1_bppp_generators* gens = resources != NULL ? resources->gens : NULL;
+    secp256k1_bppp_generators* gens = NULL;
     secp256k1_scalar rho, mu;
     secp256k1_scalar *n_vec = NULL, *l_vec = NULL, *c_vec = NULL;
     secp256k1_ge expected_commit, commitment_ge;
@@ -1824,6 +1977,7 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
     size_t expected_generators = 0;
     size_t serialized_generators_len = 0;
     int ok = 0;
+    purify_bppp_mutable_generators_guard gens_guard = {0};
 
     memset(expected_commitment33, 0, sizeof(expected_commitment33));
     if (ctx == NULL || rho32 == NULL || (resources == NULL && generators33 == NULL) || n_vec32 == NULL || l_vec32 == NULL || c_vec32 == NULL ||
@@ -1849,7 +2003,12 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
     if (!purify_parse_scalar(rho32, &rho, 1) || !purify_parse_point_as_ge(commitment33, &commitment_ge)) {
         return 0;
     }
-    if (resources == NULL) {
+    if (resources != NULL) {
+        gens = purify_bppp_backend_resources_acquire_scratch_gens(resources, &gens_guard);
+        if (gens == NULL) {
+            return 0;
+        }
+    } else {
         scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
         gens = secp256k1_bppp_generators_parse(ctx, generators33, serialized_generators_len);
     }
@@ -1882,6 +2041,7 @@ cleanup:
     if (n_vec != NULL) free(n_vec);
     if (l_vec != NULL) free(l_vec);
     if (c_vec != NULL) free(c_vec);
+    purify_bppp_backend_resources_release_scratch_gens(&gens_guard);
     if (resources == NULL) {
         if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
         if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);

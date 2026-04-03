@@ -80,7 +80,7 @@ struct PublicKey {
         std::span<const unsigned char> message,
         const NonceProof& nonce_proof,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Verifies a message-bound BPPP nonce proof using a reusable message cache.
@@ -93,7 +93,7 @@ struct PublicKey {
         const MessageProofCache& cache,
         const NonceProof& nonce_proof,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Verifies a topic-bound BPPP nonce proof against this public key.
@@ -106,7 +106,7 @@ struct PublicKey {
         std::span<const unsigned char> topic,
         const NonceProof& nonce_proof,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Verifies a topic-bound BPPP nonce proof using a reusable topic cache.
@@ -119,7 +119,7 @@ struct PublicKey {
         const TopicProofCache& cache,
         const NonceProof& nonce_proof,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Verifies a message signature bundled with its BPPP nonce proof.
@@ -132,7 +132,7 @@ struct PublicKey {
         std::span<const unsigned char> message,
         const ProvenSignature& signature,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Verifies a message signature bundle using a reusable message proof cache.
@@ -145,7 +145,7 @@ struct PublicKey {
         const MessageProofCache& cache,
         const ProvenSignature& signature,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Verifies a topic-bound signature bundled with its BPPP nonce proof.
@@ -160,7 +160,7 @@ struct PublicKey {
         std::span<const unsigned char> topic,
         const ProvenSignature& signature,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Verifies a topic-bound signature bundle using a reusable topic proof cache.
@@ -175,7 +175,7 @@ struct PublicKey {
         std::span<const unsigned char> message,
         const ProvenSignature& signature,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 };
 
 /** @brief Public BIP340 nonce point in x-only form. */
@@ -476,7 +476,7 @@ public:
     [[nodiscard]] Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(
         std::span<const unsigned char> message,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Prepares a message-bound nonce proof using a reusable message cache.
@@ -487,7 +487,7 @@ public:
     [[nodiscard]] Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(
         const MessageProofCache& cache,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Deterministically prepares a topic-bound nonce.
@@ -506,7 +506,7 @@ public:
     [[nodiscard]] Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(
         std::span<const unsigned char> topic,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Prepares a topic-bound nonce proof using a reusable topic cache.
@@ -517,7 +517,7 @@ public:
     [[nodiscard]] Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(
         const TopicProofCache& cache,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Signs a message with a deterministically derived message-bound nonce.
@@ -587,7 +587,7 @@ public:
     [[nodiscard]] Result<ProvenSignature> sign_message_with_proof(
         std::span<const unsigned char> message,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Signs a message with proof using a reusable message cache.
@@ -598,7 +598,7 @@ public:
     [[nodiscard]] Result<ProvenSignature> sign_message_with_proof(
         const MessageProofCache& cache,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Signs a message with a topic-bound nonce proof.
@@ -611,7 +611,7 @@ public:
         std::span<const unsigned char> message,
         std::span<const unsigned char> topic,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
     /**
      * @brief Signs a message with a topic-bound nonce proof using a reusable topic cache.
@@ -624,7 +624,7 @@ public:
         std::span<const unsigned char> message,
         const TopicProofCache& cache,
         purify_secp_context* secp_context,
-        bppp::ExperimentalCircuitCache* circuit_cache = nullptr) const;
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
 
 private:
     KeyPair(SecretKey secret, PublicKey public_key)

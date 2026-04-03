@@ -322,6 +322,16 @@ public:
 
     void clear();
     [[nodiscard]] std::size_t size() const noexcept;
+    /**
+     * @brief Clones one warmed backend-resource entry for independent use on another thread.
+     *
+     * If an entry for `n_gates` exists, the returned cache receives its own scratch space and
+     * generator set for that one line. If the entry is absent, the returned cache is empty and can
+     * rebuild the line lazily on first use.
+     *
+     * @return A thread-local one-line clone, or a backend/internal error if duplication fails.
+     */
+    [[nodiscard]] Result<ExperimentalBulletproofBackendCache> clone_for_thread(std::size_t n_gates) const;
     /** @brief Returns cached backend resources for this gate count, creating them on first use. */
     [[nodiscard]] purify_bulletproof_backend_resources* get_or_create(std::size_t n_gates,
                                                                       purify_secp_context* secp_context);

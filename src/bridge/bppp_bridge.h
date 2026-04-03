@@ -43,6 +43,8 @@ int purify_bppp_create_generators(purify_secp_context* context, size_t count, un
 purify_bppp_backend_resources* purify_bppp_backend_resources_create(purify_secp_context* context,
                                                                     const unsigned char* generators33,
                                                                     size_t generators_count);
+purify_bppp_backend_resources* purify_bppp_backend_resources_clone(
+    const purify_bppp_backend_resources* resources);
 void purify_bppp_backend_resources_destroy(purify_bppp_backend_resources* resources);
 
 int purify_bppp_commit_norm_arg(purify_secp_context* context,
@@ -190,6 +192,8 @@ size_t purify_bulletproof_required_proof_size(size_t n_gates);
 
 purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_create(purify_secp_context* context,
                                                                                   size_t n_gates);
+purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_clone(
+    const purify_bulletproof_backend_resources* resources);
 void purify_bulletproof_backend_resources_destroy(purify_bulletproof_backend_resources* resources);
 
 int purify_bulletproof_prove_circuit(purify_secp_context* context,

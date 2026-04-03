@@ -22,6 +22,7 @@
 #include "purify/curve.hpp"
 #include "purify/expr.hpp"
 
+struct purify_secp_context;
 struct purify_bulletproof_backend_resources;
 
 namespace purify {

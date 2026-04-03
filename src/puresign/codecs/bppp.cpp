@@ -23,9 +23,14 @@ namespace purify::puresign_plusplus {
 namespace {
 
 Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof) {
+    SecpContextPtr context = make_secp_context();
     XOnly32 xonly{};
     int parity = 0;
-    if (purify_bip340_xonly_from_point(nonce_proof.commitment_point.data(), xonly.data(), &parity) == 0) {
+    if (context == nullptr) {
+        return unexpected_error(ErrorCode::InternalMismatch,
+                                "nonce_proof_matches_nonce:context");
+    }
+    if (purify_bip340_xonly_from_point(context.get(), nonce_proof.commitment_point.data(), xonly.data(), &parity) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput,
                                 "nonce_proof_matches_nonce:invalid_commitment_point");
     }
@@ -52,7 +57,12 @@ Result<PublicKey> PublicKey::deserialize(std::span<const unsigned char> serializ
     out.purify_pubkey = UInt512::from_bytes_be(serialized.data(), 64);
     PURIFY_RETURN_IF_ERROR(validate_public_key(out.purify_pubkey), "PublicKey::deserialize:validate_public_key");
     std::copy(serialized.begin() + 64, serialized.end(), out.bip340_pubkey.begin());
-    if (purify_bip340_validate_xonly_pubkey(out.bip340_pubkey.data()) == 0) {
+    SecpContextPtr context = make_secp_context();
+    if (context == nullptr) {
+        return unexpected_error(ErrorCode::InternalMismatch,
+                                "PublicKey::deserialize:context");
+    }
+    if (purify_bip340_validate_xonly_pubkey(context.get(), out.bip340_pubkey.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput,
                                 "PublicKey::deserialize:bip340_validate_xonly_pubkey");
     }
@@ -69,7 +79,12 @@ Result<Nonce> Nonce::deserialize(std::span<const unsigned char> serialized) {
     }
     Nonce out{};
     std::copy(serialized.begin(), serialized.end(), out.xonly.begin());
-    if (purify_bip340_validate_xonly_pubkey(out.xonly.data()) == 0) {
+    SecpContextPtr context = make_secp_context();
+    if (context == nullptr) {
+        return unexpected_error(ErrorCode::InternalMismatch,
+                                "Nonce::deserialize:context");
+    }
+    if (purify_bip340_validate_xonly_pubkey(context.get(), out.xonly.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "Nonce::deserialize:bip340_validate_xonly_pubkey");
     }
     return out;
@@ -97,7 +112,12 @@ Result<Signature> Signature::deserialize(std::span<const unsigned char> serializ
     }
     Signature out{};
     std::copy(serialized.begin(), serialized.end(), out.bytes.begin());
-    if (purify_bip340_validate_signature(out.bytes.data()) == 0) {
+    SecpContextPtr context = make_secp_context();
+    if (context == nullptr) {
+        return unexpected_error(ErrorCode::InternalMismatch,
+                                "Signature::deserialize:context");
+    }
+    if (purify_bip340_validate_signature(context.get(), out.bytes.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "Signature::deserialize:bip340_validate_signature");
     }
     return out;
@@ -142,7 +162,12 @@ Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serial
 
     NonceProof out{};
     std::copy_n(serialized.begin() + 5, 32, out.nonce.xonly.begin());
-    if (purify_bip340_validate_xonly_pubkey(out.nonce.xonly.data()) == 0) {
+    SecpContextPtr context = make_secp_context();
+    if (context == nullptr) {
+        return unexpected_error(ErrorCode::InternalMismatch,
+                                "NonceProof::deserialize:context");
+    }
+    if (purify_bip340_validate_xonly_pubkey(context.get(), out.nonce.xonly.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "NonceProof::deserialize:nonce");
     }
     std::copy_n(serialized.begin() + 37, 33, out.commitment_point.begin());

@@ -68,6 +68,14 @@ const unsigned char* nullable_data(std::span<const unsigned char> input) {
     return input.empty() ? nullptr : input.data();
 }
 
+Result<SecpContextPtr> create_bridge_context(const char* context) {
+    SecpContextPtr out = make_secp_context();
+    if (out == nullptr) {
+        return unexpected_error(ErrorCode::InternalMismatch, context);
+    }
+    return out;
+}
+
 XOnly32 binding_digest(const TaggedHash& tag, std::span<const unsigned char> input) {
     XOnly32 out{};
     out = tag.digest(input);
@@ -97,7 +105,11 @@ Scalar32 derive_proof_nonce_seed(const SecretKey& secret, Scope scope, std::span
 Status validate_public_key_bundle(const PublicKey& public_key) {
     PURIFY_RETURN_IF_ERROR(validate_public_key(public_key.purify_pubkey),
                            "puresign_plusplus:validate_public_key_bundle:purify_pubkey");
-    if (purify_bip340_validate_xonly_pubkey(public_key.bip340_pubkey.data()) == 0) {
+    PURIFY_ASSIGN_OR_RETURN(auto context,
+                            create_bridge_context("puresign_plusplus:validate_public_key_bundle:context"),
+                            "puresign_plusplus:validate_public_key_bundle:context");
+    if (purify_bip340_validate_xonly_pubkey(context.get(),
+                                            public_key.bip340_pubkey.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput,
                                 "puresign_plusplus:validate_public_key_bundle:bip340_pubkey");
     }
@@ -142,7 +154,9 @@ Result<DerivedNonceData> derive_nonce_data(const SecretKey& secret,
         return unexpected_error(ErrorCode::BackendRejectedInput, "derive_nonce_data:zero_nonce");
     }
 
-    if (purify_bip340_nonce_from_scalar(out.scalar.data(), out.nonce.xonly.data()) == 0) {
+    PURIFY_ASSIGN_OR_RETURN(auto context, create_bridge_context("derive_nonce_data:context"),
+                            "derive_nonce_data:context");
+    if (purify_bip340_nonce_from_scalar(context.get(), out.scalar.data(), out.nonce.xonly.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "derive_nonce_data:bip340_nonce_from_scalar");
     }
     return out;
@@ -167,7 +181,9 @@ Result<bppp::PointBytes> commitment_point_from_scalar(const FieldElement& scalar
 Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof) {
     XOnly32 xonly{};
     int parity = 0;
-    if (purify_bip340_xonly_from_point(nonce_proof.commitment_point.data(), xonly.data(), &parity) == 0) {
+    PURIFY_ASSIGN_OR_RETURN(auto context, create_bridge_context("nonce_proof_matches_nonce:context"),
+                            "nonce_proof_matches_nonce:context");
+    if (purify_bip340_xonly_from_point(context.get(), nonce_proof.commitment_point.data(), xonly.data(), &parity) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput,
                                 "nonce_proof_matches_nonce:invalid_commitment_point");
     }
@@ -334,14 +350,17 @@ Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
     }
 
     Signature out{};
-    if (purify_bip340_sign_with_fixed_nonce(out.bytes.data(), nullable_data(message), message.size(),
+    PURIFY_ASSIGN_OR_RETURN(auto context, create_bridge_context("PreparedNonce::sign_message:context"),
+                            "PreparedNonce::sign_message:context");
+    if (purify_bip340_sign_with_fixed_nonce(context.get(), out.bytes.data(), nullable_data(message), message.size(),
                                             signer.seckey.data(), scalar_.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "PreparedNonce::sign_message:sign_with_fixed_nonce");
     }
     if (out.nonce().xonly != nonce_.xonly) {
         return unexpected_error(ErrorCode::InternalMismatch, "PreparedNonce::sign_message:nonce_mismatch");
     }
-    if (purify_bip340_verify(out.bytes.data(), nullable_data(message), message.size(), signer.xonly_pubkey.data()) == 0) {
+    if (purify_bip340_verify(context.get(), out.bytes.data(), nullable_data(message), message.size(),
+                             signer.xonly_pubkey.data()) == 0) {
         return unexpected_error(ErrorCode::InternalMismatch, "PreparedNonce::sign_message:self_verify");
     }
     return out;
@@ -357,7 +376,9 @@ Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
     }
 
     Signature out{};
-    if (purify_bip340_sign_with_fixed_nonce(out.bytes.data(), nullable_data(message), message.size(),
+    PURIFY_ASSIGN_OR_RETURN(auto context, create_bridge_context("PreparedNonce::sign_topic_message:context"),
+                            "PreparedNonce::sign_topic_message:context");
+    if (purify_bip340_sign_with_fixed_nonce(context.get(), out.bytes.data(), nullable_data(message), message.size(),
                                             signer.seckey.data(), scalar_.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput,
                                 "PreparedNonce::sign_topic_message:sign_with_fixed_nonce");
@@ -365,7 +386,8 @@ Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
     if (out.nonce().xonly != nonce_.xonly) {
         return unexpected_error(ErrorCode::InternalMismatch, "PreparedNonce::sign_topic_message:nonce_mismatch");
     }
-    if (purify_bip340_verify(out.bytes.data(), nullable_data(message), message.size(), signer.xonly_pubkey.data()) == 0) {
+    if (purify_bip340_verify(context.get(), out.bytes.data(), nullable_data(message), message.size(),
+                             signer.xonly_pubkey.data()) == 0) {
         return unexpected_error(ErrorCode::InternalMismatch, "PreparedNonce::sign_topic_message:self_verify");
     }
     return out;
@@ -561,13 +583,15 @@ Result<ProvenSignature> sign_with_topic_proof(const SecretKey& secret, std::span
 Result<bool> verify_signature(const PublicKey& public_key, std::span<const unsigned char> message,
                               const Signature& signature) {
     PURIFY_RETURN_IF_ERROR(validate_public_key(public_key.purify_pubkey), "verify_signature:validate_public_key");
-    if (purify_bip340_validate_xonly_pubkey(public_key.bip340_pubkey.data()) == 0) {
+    PURIFY_ASSIGN_OR_RETURN(auto context, create_bridge_context("verify_signature:context"),
+                            "verify_signature:context");
+    if (purify_bip340_validate_xonly_pubkey(context.get(), public_key.bip340_pubkey.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "verify_signature:bip340_validate_xonly_pubkey");
     }
-    if (purify_bip340_validate_signature(signature.bytes.data()) == 0) {
+    if (purify_bip340_validate_signature(context.get(), signature.bytes.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "verify_signature:bip340_validate_signature");
     }
-    return purify_bip340_verify(signature.bytes.data(), nullable_data(message), message.size(),
+    return purify_bip340_verify(context.get(), signature.bytes.data(), nullable_data(message), message.size(),
                                 public_key.bip340_pubkey.data()) != 0;
 }
 

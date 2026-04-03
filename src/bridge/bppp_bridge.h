@@ -11,6 +11,8 @@
 
 #include <stddef.h>
 
+#include "purify/secp_bridge.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,9 +28,9 @@ typedef struct purify_bppp_backend_resources purify_bppp_backend_resources;
 size_t purify_bppp_required_proof_size(size_t n_vec_len, size_t c_vec_len);
 
 /** @brief Serializes the secp256k1 base generator into compressed form. */
-int purify_bppp_base_generator(unsigned char out33[33]);
+int purify_bppp_base_generator(purify_secp_context* context, unsigned char out33[33]);
 /** @brief Serializes the alternate value generator used by Pedersen commitments. */
-int purify_bppp_value_generator_h(unsigned char out33[33]);
+int purify_bppp_value_generator_h(purify_secp_context* context, unsigned char out33[33]);
 /**
  * @brief Expands the generator list required by the BPPP prover and verifier.
  * @param count Number of generators requested.
@@ -36,13 +38,15 @@ int purify_bppp_value_generator_h(unsigned char out33[33]);
  * @param out_len In/out serialized byte length.
  * @return Nonzero on success.
  */
-int purify_bppp_create_generators(size_t count, unsigned char* out, size_t* out_len);
+int purify_bppp_create_generators(purify_secp_context* context, size_t count, unsigned char* out, size_t* out_len);
 
-purify_bppp_backend_resources* purify_bppp_backend_resources_create(const unsigned char* generators33,
+purify_bppp_backend_resources* purify_bppp_backend_resources_create(purify_secp_context* context,
+                                                                    const unsigned char* generators33,
                                                                     size_t generators_count);
 void purify_bppp_backend_resources_destroy(purify_bppp_backend_resources* resources);
 
-int purify_bppp_commit_norm_arg(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
+int purify_bppp_commit_norm_arg(purify_secp_context* context,
+                                const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
                                 const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
                                 size_t l_vec_len, const unsigned char* c_vec32, size_t c_vec_len,
                                 unsigned char commitment_out33[33]);
@@ -53,7 +57,8 @@ int purify_bppp_commit_norm_arg_with_resources(purify_bppp_backend_resources* re
                                                const unsigned char* c_vec32, size_t c_vec_len,
                                                unsigned char commitment_out33[33]);
 
-int purify_bppp_commit_witness_only(const unsigned char* generators33, size_t generators_count,
+int purify_bppp_commit_witness_only(purify_secp_context* context,
+                                    const unsigned char* generators33, size_t generators_count,
                                     const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
                                     size_t l_vec_len, unsigned char commitment_out33[33]);
 int purify_bppp_commit_witness_only_with_resources(purify_bppp_backend_resources* resources,
@@ -61,13 +66,16 @@ int purify_bppp_commit_witness_only_with_resources(purify_bppp_backend_resources
                                                    const unsigned char* l_vec32, size_t l_vec_len,
                                                    unsigned char commitment_out33[33]);
 
-int purify_bppp_offset_commitment(const unsigned char commitment33[33], const unsigned char scalar32[32],
+int purify_bppp_offset_commitment(purify_secp_context* context,
+                                  const unsigned char commitment33[33], const unsigned char scalar32[32],
                                   unsigned char commitment_out33[33]);
 
-int purify_point_scale(const unsigned char point33[33], const unsigned char scalar32[32],
+int purify_point_scale(purify_secp_context* context,
+                       const unsigned char point33[33], const unsigned char scalar32[32],
                        unsigned char out33[33]);
 
-int purify_point_add(const unsigned char lhs33[33], const unsigned char rhs33[33],
+int purify_point_add(purify_secp_context* context,
+                     const unsigned char lhs33[33], const unsigned char rhs33[33],
                      unsigned char out33[33]);
 
 /**
@@ -79,7 +87,8 @@ int purify_point_add(const unsigned char lhs33[33], const unsigned char rhs33[33
  * @param commitment_out33 Serialized compressed commitment output.
  * @return Nonzero on success.
  */
-int purify_pedersen_commit_char(const unsigned char blind32[32], const unsigned char value32[32],
+int purify_pedersen_commit_char(purify_secp_context* context,
+                                const unsigned char blind32[32], const unsigned char value32[32],
                                 const unsigned char value_gen33[33], const unsigned char blind_gen33[33],
                                 unsigned char commitment_out33[33]);
 
@@ -99,7 +108,8 @@ int purify_pedersen_commit_char(const unsigned char blind32[32], const unsigned 
  * @param proof_len In/out proof buffer length.
  * @return Nonzero on success.
  */
-int purify_bppp_prove_norm_arg(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
+int purify_bppp_prove_norm_arg(purify_secp_context* context,
+                               const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
                                const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
                                size_t l_vec_len, const unsigned char* c_vec32, size_t c_vec_len,
                                unsigned char commitment_out33[33], unsigned char* proof_out, size_t* proof_len);
@@ -111,7 +121,8 @@ int purify_bppp_prove_norm_arg_with_resources(purify_bppp_backend_resources* res
                                               unsigned char commitment_out33[33], unsigned char* proof_out,
                                               size_t* proof_len);
 
-int purify_bppp_prove_norm_arg_to_commitment(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
+int purify_bppp_prove_norm_arg_to_commitment(purify_secp_context* context,
+                                             const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
                                              const unsigned char* n_vec32, size_t n_vec_len, const unsigned char* l_vec32,
                                              size_t l_vec_len, const unsigned char* c_vec32, size_t c_vec_len,
                                              const unsigned char commitment33[33], unsigned char* proof_out, size_t* proof_len);
@@ -136,7 +147,8 @@ int purify_bppp_prove_norm_arg_to_commitment_with_resources(purify_bppp_backend_
  * @param proof_len Proof length in bytes.
  * @return Nonzero on success.
  */
-int purify_bppp_verify_norm_arg(const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
+int purify_bppp_verify_norm_arg(purify_secp_context* context,
+                                const unsigned char rho32[32], const unsigned char* generators33, size_t generators_count,
                                 const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
                                 const unsigned char commitment33[33], const unsigned char* proof, size_t proof_len);
 int purify_bppp_verify_norm_arg_with_resources(purify_bppp_backend_resources* resources,
@@ -176,10 +188,12 @@ typedef struct purify_bulletproof_backend_resources purify_bulletproof_backend_r
 
 size_t purify_bulletproof_required_proof_size(size_t n_gates);
 
-purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_create(size_t n_gates);
+purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_create(purify_secp_context* context,
+                                                                                  size_t n_gates);
 void purify_bulletproof_backend_resources_destroy(purify_bulletproof_backend_resources* resources);
 
-int purify_bulletproof_prove_circuit(const purify_bulletproof_circuit_view* circuit,
+int purify_bulletproof_prove_circuit(purify_secp_context* context,
+                                     const purify_bulletproof_circuit_view* circuit,
                                      const purify_bulletproof_assignment_view* assignment,
                                      const unsigned char* blind32,
                                      const unsigned char value_gen33[33],
@@ -201,7 +215,8 @@ int purify_bulletproof_prove_circuit_with_resources(purify_bulletproof_backend_r
                                                     unsigned char* proof_out,
                                                     size_t* proof_len);
 
-int purify_bulletproof_prove_circuit_assume_valid(const purify_bulletproof_circuit_view* circuit,
+int purify_bulletproof_prove_circuit_assume_valid(purify_secp_context* context,
+                                                  const purify_bulletproof_circuit_view* circuit,
                                                   const purify_bulletproof_assignment_view* assignment,
                                                   const unsigned char* blind32,
                                                   const unsigned char value_gen33[33],
@@ -223,7 +238,8 @@ int purify_bulletproof_prove_circuit_assume_valid_with_resources(purify_bulletpr
                                                                  unsigned char* proof_out,
                                                                  size_t* proof_len);
 
-int purify_bulletproof_verify_circuit(const purify_bulletproof_circuit_view* circuit,
+int purify_bulletproof_verify_circuit(purify_secp_context* context,
+                                      const purify_bulletproof_circuit_view* circuit,
                                       const unsigned char commitment33[33],
                                       const unsigned char value_gen33[33],
                                       const unsigned char* extra_commit,

@@ -57,6 +57,7 @@ using CircuitNormArgPublicDataCacheKey = std::array<unsigned char, 32>;
 using CircuitNormArgPublicDataCacheKeyHash = GeneratorBackendCacheKeyHash;
 
 struct ExperimentalCircuitCache::Impl {
+  SecpContextPtr context = make_secp_context();
   std::unordered_map<CircuitNormArgPublicDataCacheKey,
                      std::shared_ptr<const void>,
                      CircuitNormArgPublicDataCacheKeyHash>
@@ -114,7 +115,7 @@ void ExperimentalCircuitCache::insert_public_data(
 purify_bppp_backend_resources *
 ExperimentalCircuitCache::get_or_create_backend_resources(
     std::span<const PointBytes> generators) {
-  if (impl_ == nullptr || generators.empty()) {
+  if (impl_ == nullptr || impl_->context == nullptr || generators.empty()) {
     return nullptr;
   }
 
@@ -133,7 +134,8 @@ ExperimentalCircuitCache::get_or_create_backend_resources(
   }
 
   purify_bppp_backend_resources *created =
-      purify_bppp_backend_resources_create(serialized, generators.size());
+      purify_bppp_backend_resources_create(impl_->context.get(), serialized,
+                                           generators.size());
   if (created == nullptr) {
     return nullptr;
   }
@@ -582,6 +584,14 @@ commit_norm_arg_witness_only(const NormArgInputs &inputs,
   std::span<const unsigned char> l_vec = byte_span(inputs.l_vec);
   ResolvedBpppGeneratorBackend resolved =
       resolve_bppp_generator_backend(cache, *generators);
+  SecpContextPtr context;
+  if (resolved.backend_resources == nullptr) {
+    context = make_secp_context();
+    if (context == nullptr) {
+      return unexpected_error(ErrorCode::InternalMismatch,
+                              "commit_norm_arg_witness_only:context");
+    }
+  }
   PointBytes commitment{};
   const int ok =
       resolved.backend_resources != nullptr
@@ -589,7 +599,8 @@ commit_norm_arg_witness_only(const NormArgInputs &inputs,
                 resolved.backend_resources, n_vec.data(), inputs.n_vec.size(),
                 l_vec.data(), inputs.l_vec.size(), commitment.data())
           : purify_bppp_commit_witness_only(
-                resolved.serialized_bytes.data(), resolved.generator_count,
+                context.get(), resolved.serialized_bytes.data(),
+                resolved.generator_count,
                 n_vec.data(), inputs.n_vec.size(), l_vec.data(),
                 inputs.l_vec.size(), commitment.data());
   if (!require_ok(ok)) {
@@ -603,7 +614,12 @@ Result<PointBytes> offset_commitment(const PointBytes &commitment,
                                      const FieldElement &scalar) {
   PointBytes out{};
   ScalarBytes scalar32 = scalar_bytes(scalar);
-  if (!require_ok(purify_bppp_offset_commitment(commitment.data(),
+  SecpContextPtr context = make_secp_context();
+  if (context == nullptr) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "offset_commitment:context");
+  }
+  if (!require_ok(purify_bppp_offset_commitment(context.get(), commitment.data(),
                                                 scalar32.data(), out.data()))) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
                             "offset_commitment:backend");
@@ -615,8 +631,13 @@ Result<PointBytes> point_scale(const PointBytes &point,
                                const FieldElement &scalar) {
   PointBytes out{};
   ScalarBytes scalar32 = scalar_bytes(scalar);
+  SecpContextPtr context = make_secp_context();
+  if (context == nullptr) {
+    return unexpected_error(ErrorCode::InternalMismatch, "point_scale:context");
+  }
   if (!require_ok(
-          purify_point_scale(point.data(), scalar32.data(), out.data()))) {
+          purify_point_scale(context.get(), point.data(), scalar32.data(),
+                             out.data()))) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
                             "point_scale:backend");
   }
@@ -625,7 +646,12 @@ Result<PointBytes> point_scale(const PointBytes &point,
 
 Result<PointBytes> point_add(const PointBytes &lhs, const PointBytes &rhs) {
   PointBytes out{};
-  if (!require_ok(purify_point_add(lhs.data(), rhs.data(), out.data()))) {
+  SecpContextPtr context = make_secp_context();
+  if (context == nullptr) {
+    return unexpected_error(ErrorCode::InternalMismatch, "point_add:context");
+  }
+  if (!require_ok(
+          purify_point_add(context.get(), lhs.data(), rhs.data(), out.data()))) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
                             "point_add:backend");
   }
@@ -763,6 +789,14 @@ prove_norm_arg_impl(Inputs &&inputs,
   std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
   ResolvedBpppGeneratorBackend resolved =
       resolve_bppp_generator_backend(cache, *generators);
+  SecpContextPtr context;
+  if (resolved.backend_resources == nullptr) {
+    context = make_secp_context();
+    if (context == nullptr) {
+      return unexpected_error(ErrorCode::InternalMismatch,
+                              "prove_norm_arg:context");
+    }
+  }
   std::size_t proof_len =
       purify_bppp_required_proof_size(inputs.n_vec.size(), inputs.c_vec.size());
   PointBytes commitment{};
@@ -780,7 +814,7 @@ prove_norm_arg_impl(Inputs &&inputs,
                 c_vec.data(), inputs.c_vec.size(), commitment.data(),
                 proof.data(), &proof_len)
           : purify_bppp_prove_norm_arg(
-                inputs.rho.data(), resolved.serialized_bytes.data(),
+                context.get(), inputs.rho.data(), resolved.serialized_bytes.data(),
                 resolved.generator_count, n_vec.data(), inputs.n_vec.size(),
                 l_vec.data(), inputs.l_vec.size(), c_vec.data(),
                 inputs.c_vec.size(), commitment.data(), proof.data(),
@@ -833,7 +867,9 @@ derive_zk_challenge(std::span<const unsigned char> binding_digest,
 
 GeneratorBytes base_generator() {
   GeneratorBytes out{};
-  bool ok = require_ok(purify_bppp_base_generator(out.data()));
+  SecpContextPtr context = make_secp_context();
+  bool ok = context != nullptr
+            && require_ok(purify_bppp_base_generator(context.get(), out.data()));
   assert(ok && "base_generator() requires a functioning backend");
   (void)ok;
   return out;
@@ -841,7 +877,10 @@ GeneratorBytes base_generator() {
 
 GeneratorBytes value_generator_h() {
   GeneratorBytes out{};
-  bool ok = require_ok(purify_bppp_value_generator_h(out.data()));
+  SecpContextPtr context = make_secp_context();
+  bool ok = context != nullptr
+            && require_ok(
+                purify_bppp_value_generator_h(context.get(), out.data()));
   assert(ok && "value_generator_h() requires a functioning backend");
   (void)ok;
   return out;
@@ -854,7 +893,13 @@ Result<std::vector<PointBytes>> create_generators(std::size_t count) {
   }
   std::span<unsigned char> serialized = writable_byte_span(out);
   std::size_t serialized_len = serialized.size();
-  if (!require_ok(purify_bppp_create_generators(count, serialized.data(),
+  SecpContextPtr context = make_secp_context();
+  if (context == nullptr) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "create_generators:context");
+  }
+  if (!require_ok(purify_bppp_create_generators(context.get(), count,
+                                                serialized.data(),
                                                 &serialized_len))) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
                             "create_generators:backend");
@@ -893,6 +938,14 @@ commit_norm_arg_with_cache(const NormArgInputs &inputs,
   std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
   ResolvedBpppGeneratorBackend resolved =
       resolve_bppp_generator_backend(cache, *generators);
+  SecpContextPtr context;
+  if (resolved.backend_resources == nullptr) {
+    context = make_secp_context();
+    if (context == nullptr) {
+      return unexpected_error(ErrorCode::InternalMismatch,
+                              "commit_norm_arg:context");
+    }
+  }
   PointBytes commitment{};
   const int ok =
       resolved.backend_resources != nullptr
@@ -901,7 +954,7 @@ commit_norm_arg_with_cache(const NormArgInputs &inputs,
                 inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
                 c_vec.data(), inputs.c_vec.size(), commitment.data())
           : purify_bppp_commit_norm_arg(
-                inputs.rho.data(), resolved.serialized_bytes.data(),
+                context.get(), inputs.rho.data(), resolved.serialized_bytes.data(),
                 resolved.generator_count, n_vec.data(), inputs.n_vec.size(),
                 l_vec.data(), inputs.l_vec.size(), c_vec.data(),
                 inputs.c_vec.size(), commitment.data());
@@ -917,8 +970,13 @@ Result<PointBytes> pedersen_commit_char(const ScalarBytes &blind,
                                         const GeneratorBytes &value_gen,
                                         const GeneratorBytes &blind_gen) {
   PointBytes commitment{};
+  SecpContextPtr context = make_secp_context();
+  if (context == nullptr) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "pedersen_commit_char:context");
+  }
   if (!require_ok(purify_pedersen_commit_char(
-          blind.data(), value.data(), value_gen.data(), blind_gen.data(),
+          context.get(), blind.data(), value.data(), value_gen.data(), blind_gen.data(),
           commitment.data()))) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
                             "pedersen_commit_char:backend");
@@ -961,6 +1019,14 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
   std::span<const unsigned char> c_vec = byte_span(inputs.c_vec);
   ResolvedBpppGeneratorBackend resolved =
       resolve_bppp_generator_backend(cache, *generators);
+  SecpContextPtr context;
+  if (resolved.backend_resources == nullptr) {
+    context = make_secp_context();
+    if (context == nullptr) {
+      return unexpected_error(ErrorCode::InternalMismatch,
+                              "prove_norm_arg_to_commitment:context");
+    }
+  }
   std::size_t proof_len =
       purify_bppp_required_proof_size(inputs.n_vec.size(), inputs.c_vec.size());
   Bytes proof(proof_len);
@@ -976,7 +1042,8 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
                 c_vec.data(), inputs.c_vec.size(), commitment.data(),
                 proof.data(), &proof_len)
           : purify_bppp_prove_norm_arg_to_commitment(
-                inputs.rho.data(), resolved.serialized_bytes.data(),
+                context.get(), inputs.rho.data(),
+                resolved.serialized_bytes.data(),
                 resolved.generator_count, n_vec.data(), inputs.n_vec.size(),
                 l_vec.data(), inputs.l_vec.size(), c_vec.data(),
                 inputs.c_vec.size(), commitment.data(), proof.data(),
@@ -1007,6 +1074,13 @@ bool verify_norm_arg_with_cache(const NormArgProof &proof,
   std::span<const unsigned char> c_vec = byte_span(proof.c_vec);
   ResolvedBpppGeneratorBackend resolved =
       resolve_bppp_generator_backend(cache, proof.generators);
+  SecpContextPtr context;
+  if (resolved.backend_resources == nullptr) {
+    context = make_secp_context();
+    if (context == nullptr) {
+      return false;
+    }
+  }
   const int ok =
       resolved.backend_resources != nullptr
           ? purify_bppp_verify_norm_arg_with_resources(
@@ -1014,7 +1088,7 @@ bool verify_norm_arg_with_cache(const NormArgProof &proof,
                 proof.c_vec.size(), proof.n_vec_len, proof.commitment.data(),
                 proof.proof.data(), proof.proof.size())
           : purify_bppp_verify_norm_arg(
-                proof.rho.data(), resolved.serialized_bytes.data(),
+                context.get(), proof.rho.data(), resolved.serialized_bytes.data(),
                 resolved.generator_count, c_vec.data(), proof.c_vec.size(),
                 proof.n_vec_len, proof.commitment.data(), proof.proof.data(),
                 proof.proof.size());

@@ -245,7 +245,12 @@ purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
 
     const std::array<unsigned char, PURIFY_BIP340_SECRET_KEY_BYTES> scalar_bytes = scalar->to_bytes_be();
     std::copy(scalar_bytes.begin(), scalar_bytes.end(), out->secret_key);
-    if (purify_bip340_key_from_seckey(out->secret_key, out->xonly_public_key) == 0) {
+    purify::SecpContextPtr context = purify::make_secp_context();
+    if (context == nullptr) {
+        purify::capi_detail::clear_bip340_key(out);
+        return PURIFY_ERROR_INTERNAL_MISMATCH;
+    }
+    if (purify_bip340_key_from_seckey(context.get(), out->secret_key, out->xonly_public_key) == 0) {
         purify::capi_detail::clear_bip340_key(out);
         return PURIFY_ERROR_BACKEND_REJECTED_INPUT;
     }

@@ -34,6 +34,7 @@ using BulletproofBackendResourcePtr =
     std::unique_ptr<purify_bulletproof_backend_resources, BulletproofBackendResourceDeleter>;
 
 struct ExperimentalBulletproofBackendCache::Impl {
+    SecpContextPtr context = make_secp_context();
     std::unordered_map<std::size_t, BulletproofBackendResourcePtr> resources;
 };
 
@@ -58,7 +59,7 @@ std::size_t ExperimentalBulletproofBackendCache::size() const noexcept {
 }
 
 purify_bulletproof_backend_resources* ExperimentalBulletproofBackendCache::get_or_create(std::size_t n_gates) {
-    if (impl_ == nullptr) {
+    if (impl_ == nullptr || impl_->context == nullptr) {
         return nullptr;
     }
 
@@ -67,7 +68,8 @@ purify_bulletproof_backend_resources* ExperimentalBulletproofBackendCache::get_o
         return it->second.get();
     }
 
-    purify_bulletproof_backend_resources* created = purify_bulletproof_backend_resources_create(n_gates);
+    purify_bulletproof_backend_resources* created =
+        purify_bulletproof_backend_resources_create(impl_->context.get(), n_gates);
     if (created == nullptr) {
         return nullptr;
     }
@@ -548,6 +550,7 @@ std::size_t circuit_n_commitments(const PackedCircuit& circuit) {
 
 struct ResolvedBulletproofBackendResources {
     purify_bulletproof_backend_resources* resources = nullptr;
+    purify::SecpContextPtr owned_context;
     purify::BulletproofBackendResourcePtr owned_resources;
 };
 
@@ -564,7 +567,12 @@ ResolvedBulletproofBackendResources resolve_bulletproof_backend_resources(
         return out;
     }
 
-    purify_bulletproof_backend_resources* created = purify_bulletproof_backend_resources_create(n_gates);
+    out.owned_context = purify::make_secp_context();
+    if (out.owned_context == nullptr) {
+        return out;
+    }
+    purify_bulletproof_backend_resources* created =
+        purify_bulletproof_backend_resources_create(out.owned_context.get(), n_gates);
     if (created == nullptr) {
         return out;
     }

@@ -184,17 +184,22 @@ void test_legacy_bridge_zero_constraint_roundtrip(TestContext& ctx) {
     for (std::size_t i = 0; i < nonce.size(); ++i) {
         nonce[i] = static_cast<unsigned char>(0x20 + i);
     }
+    purify::SecpContextPtr context = purify::make_secp_context();
+    ctx.expect(context != nullptr, "bridge context creation succeeds for direct legacy bridge tests");
+    if (context == nullptr) {
+        return;
+    }
 
     std::vector<unsigned char> proof(purify_bulletproof_required_proof_size(1));
     std::size_t proof_len = proof.size();
-    int proved = purify_bulletproof_prove_circuit(&circuit, &assignment, nullptr, purify::bppp::base_generator().data(),
+    int proved = purify_bulletproof_prove_circuit(context.get(), &circuit, &assignment, nullptr, purify::bppp::base_generator().data(),
                                                   nonce.data(), nullptr, 0, nullptr, proof.data(), &proof_len);
     ctx.expect(proved == 1, "legacy bridge proves zero-explicit-constraint circuits");
     if (proved != 1) {
         return;
     }
 
-    int verified = purify_bulletproof_verify_circuit(&circuit, nullptr, purify::bppp::base_generator().data(),
+    int verified = purify_bulletproof_verify_circuit(context.get(), &circuit, nullptr, purify::bppp::base_generator().data(),
                                                      nullptr, 0, proof.data(), proof_len);
     ctx.expect(verified == 1, "legacy bridge verifies zero-explicit-constraint circuits");
 }
@@ -206,9 +211,15 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
         (std::numeric_limits<std::size_t>::max() / 33u) + 1u;
     constexpr std::size_t kHugeRowSize =
         (std::numeric_limits<std::size_t>::max() / 2u) + 1u;
+    purify::SecpContextPtr context = purify::make_secp_context();
+
+    ctx.expect(context != nullptr, "bridge secp context creation succeeds for overflow regression tests");
+    if (context == nullptr) {
+        return;
+    }
 
     purify_bulletproof_backend_resources* bulletproof_resources =
-        purify_bulletproof_backend_resources_create(kOverflowGateCount);
+        purify_bulletproof_backend_resources_create(context.get(), kOverflowGateCount);
     ctx.expect(bulletproof_resources == nullptr,
                "legacy bulletproof backend rejects generator-table size overflow on large gate counts");
     if (bulletproof_resources != nullptr) {
@@ -217,7 +228,7 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
 
     const auto base_generator = purify::bppp::base_generator();
     purify_bppp_backend_resources* bppp_resources =
-        purify_bppp_backend_resources_create(base_generator.data(), kOverflowGeneratorCount);
+        purify_bppp_backend_resources_create(context.get(), base_generator.data(), kOverflowGeneratorCount);
     ctx.expect(bppp_resources == nullptr,
                "BPPP backend rejects serialized generator length overflow");
     if (bppp_resources != nullptr) {
@@ -225,7 +236,7 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
     }
 
     std::size_t serialized_len = 1;
-    int created = purify_bppp_create_generators(kOverflowGeneratorCount, nullptr, &serialized_len);
+    int created = purify_bppp_create_generators(context.get(), kOverflowGeneratorCount, nullptr, &serialized_len);
     ctx.expect(created == 0, "generator creation reports failure when the serialized length would overflow");
     ctx.expect(serialized_len == 0,
                "generator creation zeroes the reported output length when the serialized size cannot be represented");
@@ -248,7 +259,7 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
         nullptr,
         dummy_scalar.data(),
     };
-    int verified = purify_bulletproof_verify_circuit(&overflowing_circuit,
+    int verified = purify_bulletproof_verify_circuit(context.get(), &overflowing_circuit,
                                                      nullptr,
                                                      base_generator.data(),
                                                      nullptr,

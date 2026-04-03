@@ -483,7 +483,12 @@ void test_bip340_key_derivation(TestContext& ctx) {
 
     std::array<unsigned char, 32> canonical = key_a->seckey;
     std::array<unsigned char, 32> xonly = {};
-    ctx.expect(purify_bip340_key_from_seckey(canonical.data(), xonly.data()) == 1,
+    purify::SecpContextPtr context = purify::make_secp_context();
+    ctx.expect(context != nullptr, "bridge context creation succeeds for BIP340 derivation tests");
+    if (context == nullptr) {
+        return;
+    }
+    ctx.expect(purify_bip340_key_from_seckey(context.get(), canonical.data(), xonly.data()) == 1,
                "bridge accepts the derived canonical BIP340 secret key");
     ctx.expect(canonical == key_a->seckey,
                "derive_bip340_key returns an idempotently canonicalized even-Y secret key");

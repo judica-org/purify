@@ -22,6 +22,14 @@ namespace purify::puresign {
 
 namespace {
 
+bool checked_add_size(std::size_t lhs, std::size_t rhs, std::size_t& out) {
+    if (rhs > std::numeric_limits<std::size_t>::max() - lhs) {
+        return false;
+    }
+    out = lhs + rhs;
+    return true;
+}
+
 Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof, purify_secp_context* secp_context) {
     XOnly32 xonly{};
     int parity = 0;
@@ -124,9 +132,13 @@ Result<Bytes> NonceProof::serialize(purify_secp_context* secp_context) const {
     if (proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return unexpected_error(ErrorCode::UnexpectedSize, "NonceProof::serialize:proof_size");
     }
+    std::size_t serialized_size = 0;
+    if (!checked_add_size(37, proof_bytes.size(), serialized_size)) {
+        return unexpected_error(ErrorCode::Overflow, "NonceProof::serialize:reserve");
+    }
 
     Bytes out;
-    out.reserve(1 + 4 + 32 + proof_bytes.size());
+    out.reserve(serialized_size);
     out.push_back(static_cast<unsigned char>(2));
     detail::append_u32_le(out, static_cast<std::uint32_t>(proof_bytes.size()));
     out.insert(out.end(), nonce.xonly.begin(), nonce.xonly.end());
@@ -144,7 +156,7 @@ Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serial
     }
     std::optional<std::uint32_t> proof_size = detail::read_u32_le(serialized, 1);
     assert(proof_size.has_value() && "header length check should guarantee a u32 proof size");
-    if (37 + *proof_size != serialized.size()) {
+    if (*proof_size != serialized.size() - 37) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:proof_size");
     }
 
@@ -168,9 +180,13 @@ Result<Bytes> ProvenSignature::serialize(purify_secp_context* secp_context) cons
     if (nonce_proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return unexpected_error(ErrorCode::UnexpectedSize, "ProvenSignature::serialize:nonce_proof_size");
     }
+    std::size_t serialized_size = 0;
+    if (!checked_add_size(69, nonce_proof_bytes.size(), serialized_size)) {
+        return unexpected_error(ErrorCode::Overflow, "ProvenSignature::serialize:reserve");
+    }
 
     Bytes out;
-    out.reserve(1 + 4 + nonce_proof_bytes.size() + 64);
+    out.reserve(serialized_size);
     out.push_back(static_cast<unsigned char>(1));
     detail::append_u32_le(out, static_cast<std::uint32_t>(nonce_proof_bytes.size()));
     out.insert(out.end(), nonce_proof_bytes.begin(), nonce_proof_bytes.end());
@@ -188,7 +204,8 @@ Result<ProvenSignature> ProvenSignature::deserialize(std::span<const unsigned ch
     }
     std::optional<std::uint32_t> nonce_proof_size = detail::read_u32_le(serialized, 1);
     assert(nonce_proof_size.has_value() && "header length check should guarantee a u32 nonce proof size");
-    if (5 + *nonce_proof_size + 64 != serialized.size()) {
+    const std::size_t payload_size = serialized.size() - 5;
+    if (*nonce_proof_size > payload_size || payload_size - *nonce_proof_size != 64) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "ProvenSignature::deserialize:size");
     }
 

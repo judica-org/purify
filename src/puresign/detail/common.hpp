@@ -35,7 +35,7 @@ inline void append_u32_le(Bytes& out, std::uint32_t value) {
 inline std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes,
                                                 std::size_t offset) {
     std::uint32_t value = 0;
-    if (offset + 4 > bytes.size()) {
+    if (offset > bytes.size() || bytes.size() - offset < 4) {
         return std::nullopt;
     }
     for (int i = 0; i < 4; ++i) {

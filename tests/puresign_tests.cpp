@@ -3,6 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include <array>
+#include <cstdint>
 #include <string_view>
 #include <utility>
 
@@ -25,6 +26,12 @@ purify::SecpContextPtr make_test_secp_context(TestContext& ctx) {
     purify::SecpContextPtr context = purify::make_secp_context();
     ctx.expect(context != nullptr, "secp context creation succeeds");
     return context;
+}
+
+void overwrite_u32_le(Bytes& bytes, std::size_t offset, std::uint32_t value) {
+    for (std::size_t i = 0; i < 4; ++i) {
+        bytes[offset + i] = static_cast<unsigned char>((value >> (8 * i)) & 0xffU);
+    }
 }
 
 void test_puresign_message_signing(TestContext& ctx) {
@@ -123,6 +130,13 @@ void test_puresign_message_signing(TestContext& ctx) {
                 purify::puresign::NonceProof::deserialize(*nonce_proof_bytes, context.get());
             expect_ok(ctx, parsed_nonce_proof, "NonceProof round-trips");
 
+            Bytes length_tampered_nonce_proof = *nonce_proof_bytes;
+            overwrite_u32_le(length_tampered_nonce_proof, 1, 0xffffffffU);
+            expect_error(ctx,
+                         purify::puresign::NonceProof::deserialize(length_tampered_nonce_proof, context.get()),
+                         ErrorCode::InvalidFixedSize,
+                         "NonceProof rejects a huge declared proof length");
+
             Bytes legacy_nonce_proof = *nonce_proof_bytes;
             legacy_nonce_proof[0] = 1;
             expect_error(ctx, purify::puresign::NonceProof::deserialize(legacy_nonce_proof, context.get()),
@@ -144,6 +158,13 @@ void test_puresign_message_signing(TestContext& ctx) {
                     ctx.expect(*parsed_ok, "parsed message signature with proof is accepted");
                 }
             }
+
+            Bytes length_tampered_proven = *proven_bytes;
+            overwrite_u32_le(length_tampered_proven, 1, 0xffffffffU);
+            expect_error(ctx,
+                         purify::puresign::ProvenSignature::deserialize(length_tampered_proven, context.get()),
+                         ErrorCode::InvalidFixedSize,
+                         "ProvenSignature rejects a huge declared nonce-proof length");
         }
     }
     if (cached_proven.has_value()) {
@@ -446,6 +467,13 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
         Result<purify::puresign_plusplus::NonceProof> parsed_nonce_proof =
             purify::puresign_plusplus::NonceProof::deserialize(*nonce_proof_bytes, context.get());
         expect_ok(ctx, parsed_nonce_proof, "PureSign++ NonceProof round-trips");
+
+        Bytes length_tampered_nonce_proof = *nonce_proof_bytes;
+        overwrite_u32_le(length_tampered_nonce_proof, 1, 0xffffffffU);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(length_tampered_nonce_proof, context.get()),
+                     ErrorCode::InvalidFixedSize,
+                     "PureSign++ NonceProof rejects a huge declared proof length");
     }
 
     Result<Bytes> proven_bytes = proven->serialize(context.get());
@@ -462,6 +490,13 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
                 ctx.expect(*parsed_ok, "PureSign++ parsed message signature with proof is accepted");
             }
         }
+
+        Bytes length_tampered_proven = *proven_bytes;
+        overwrite_u32_le(length_tampered_proven, 1, 0xffffffffU);
+        expect_error(ctx,
+                     purify::puresign_plusplus::ProvenSignature::deserialize(length_tampered_proven, context.get()),
+                     ErrorCode::InvalidFixedSize,
+                     "PureSign++ ProvenSignature rejects a huge declared nonce-proof length");
     }
 }
 

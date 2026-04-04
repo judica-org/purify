@@ -22,12 +22,15 @@ typedef struct purify_scalar {
 } purify_scalar;
 
 /** @brief Caller-owned secp256k1 context handle reused across bridge operations. */
+#ifndef PURIFY_SECP_CONTEXT_API_DECLARED
+#define PURIFY_SECP_CONTEXT_API_DECLARED 1
 typedef struct purify_secp_context purify_secp_context;
 
 /** @brief Creates one reusable secp256k1 context for the bridge helpers below. */
 purify_secp_context* purify_secp_context_create(void);
 /** @brief Destroys a context returned by `purify_secp_context_create`. */
 void purify_secp_context_destroy(purify_secp_context* context);
+#endif
 
 /** @brief Initializes a scalar from an unsigned integer. */
 void purify_scalar_set_int(purify_scalar* out, unsigned int value);

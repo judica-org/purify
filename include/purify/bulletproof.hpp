@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <memory>
@@ -192,11 +193,8 @@ struct NativeBulletproofCircuit {
                                            std::size_t constraint_capacity, std::size_t& term_bytes_offset,
                                            std::size_t& constant_bytes_offset, std::size_t& storage_bytes) noexcept;
         static constexpr std::size_t kPackedStorageAlignment =
-            alignof(PackedRowHeader) > alignof(NativeBulletproofCircuitTerm)
-                ? (alignof(PackedRowHeader) > alignof(FieldElement) ? alignof(PackedRowHeader) : alignof(FieldElement))
-                : (alignof(NativeBulletproofCircuitTerm) > alignof(FieldElement)
-                       ? alignof(NativeBulletproofCircuitTerm)
-                       : alignof(FieldElement));
+            std::max(std::max(alignof(PackedRowHeader), alignof(NativeBulletproofCircuitTerm)),
+                     alignof(FieldElement));
         static std::byte* allocate_storage(std::size_t bytes);
         void reset_to_empty() noexcept;
         void start_storage_lifetimes() noexcept;

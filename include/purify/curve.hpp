@@ -198,9 +198,6 @@ std::optional<BigUInt<Words>> tagged_hash_to_int(std::span<const unsigned char> 
     return std::nullopt;
 }
 
-/** @brief Returns the Purify base-field modulus. */
-const UInt256& prime_p();
-
 /** @brief Returns the subgroup order for the first curve. */
 const UInt256& order_n1();
 

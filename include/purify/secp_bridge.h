@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "purify/secp_context.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -20,14 +22,6 @@ extern "C" {
 typedef struct purify_scalar {
     uint64_t words[4];
 } purify_scalar;
-
-/** @brief Caller-owned secp256k1 context handle reused across bridge operations. */
-typedef struct purify_secp_context purify_secp_context;
-
-/** @brief Creates one reusable secp256k1 context for the bridge helpers below. */
-purify_secp_context* purify_secp_context_create(void);
-/** @brief Destroys a context returned by `purify_secp_context_create`. */
-void purify_secp_context_destroy(purify_secp_context* context);
 
 /** @brief Initializes a scalar from an unsigned integer. */
 void purify_scalar_set_int(purify_scalar* out, unsigned int value);

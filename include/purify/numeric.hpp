@@ -803,11 +803,8 @@ using UInt512 = BigUInt<8>;
 
 class FieldElement;
 
+/** @brief Returns the Purify base-field modulus. */
 const UInt256& prime_p();
-/** @brief Squares a field element. */
-FieldElement square(const FieldElement& value);
-/** @brief Returns the Legendre symbol of a field element. */
-int legendre_symbol(const FieldElement& value);
 
 /**
  * @brief Field element modulo the backend scalar field used by this implementation.

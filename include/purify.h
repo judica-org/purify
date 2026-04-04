@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "purify/secp_context.h"
+
 #define PURIFY_SECRET_KEY_BYTES 64u
 #define PURIFY_PUBLIC_KEY_BYTES 64u
 #define PURIFY_FIELD_ELEMENT_BYTES 32u
@@ -21,14 +23,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/** @brief Caller-owned reusable secp256k1 context handle required by BIP340-backed C APIs. */
-typedef struct purify_secp_context purify_secp_context;
-
-/** @brief Creates one reusable secp256k1 context for the BIP340-backed C APIs below. */
-purify_secp_context* purify_secp_context_create(void);
-/** @brief Destroys a context returned by `purify_secp_context_create`. */
-void purify_secp_context_destroy(purify_secp_context* context);
 
 /** @brief Machine-readable status code returned by the Purify C core. */
 typedef enum purify_error_code {

@@ -139,6 +139,7 @@ using Status = Expected<void, Error>;
     case ErrorCode::TranscriptCheckFailed:
         return ErrorCategory::Internal;
     }
+    return ErrorCategory::Internal;
 }
 
 /** @brief Returns a stable programmatic name for an error category. */
@@ -151,6 +152,7 @@ using Status = Expected<void, Error>;
     case ErrorCategory::Internal:
         return "internal";
     }
+    return "unknown_category";
 }
 
 /** @brief Returns a stable programmatic name for an error code. */
@@ -215,6 +217,7 @@ using Status = Expected<void, Error>;
     case ErrorCode::TranscriptCheckFailed:
         return "transcript_check_failed";
     }
+    return "unknown_error";
 }
 
 /** @brief Returns the human-facing description for an error code. */
@@ -279,6 +282,7 @@ using Status = Expected<void, Error>;
     case ErrorCode::TranscriptCheckFailed:
         return "internally generated transcript failed validation";
     }
+    return "unknown error";
 }
 
 /**

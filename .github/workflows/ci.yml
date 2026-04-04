@@ -11,12 +11,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cxx-standard:
+        cxx_standard:
           - 20
           - 23
 
     runs-on: ubuntu-latest
-    name: ubuntu-latest / tagged / c++${{ matrix.cxx-standard }}
+    name: ubuntu-latest / tagged / c++${{ matrix.cxx_standard }}
     env:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
@@ -37,7 +37,7 @@ jobs:
       - name: Configure
         run: >
           cmake --preset tagged
-          -DPURIFY_CXX_STANDARD=${{ matrix.cxx-standard }}
+          -DPURIFY_CXX_STANDARD=${{ matrix.cxx_standard }}
           -DPURIFY_BUILD_CLI=OFF
           -DPURIFY_BUILD_REFERENCE_TESTS=OFF
           -DCMAKE_C_COMPILER_LAUNCHER=sccache

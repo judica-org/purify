@@ -45,16 +45,25 @@ GeneratorBytes value_generator_h(purify_secp_context* secp_context);
 Result<std::vector<PointBytes>> create_generators(std::size_t count, purify_secp_context* secp_context);
 
 /**
- * @brief Computes a Pedersen commitment to an arbitrary 32-byte scalar value.
+ * @brief Computes a Pedersen commitment to an arbitrary 32-byte scalar value using Purify's default generators.
  * @param blind Blinding factor.
  * @param value Committed scalar value.
- * @param value_gen Generator used for the value term.
- * @param blind_gen Generator used for the blind term.
+ * @param secp_context Active secp256k1 context.
  * @return Serialized compressed commitment point, or a backend rejection error.
  */
 Result<PointBytes> pedersen_commit_char(const ScalarBytes& blind,
                                         const ScalarBytes& value,
                                         purify_secp_context* secp_context);
+
+/**
+ * @brief Computes a Pedersen commitment to an arbitrary 32-byte scalar value with explicit generators.
+ * @param blind Blinding factor.
+ * @param value Committed scalar value.
+ * @param secp_context Active secp256k1 context.
+ * @param value_gen Generator used for the value term.
+ * @param blind_gen Generator used for the blind term.
+ * @return Serialized compressed commitment point, or a backend rejection error.
+ */
 Result<PointBytes> pedersen_commit_char(const ScalarBytes& blind,
                                         const ScalarBytes& value,
                                         purify_secp_context* secp_context,
@@ -386,17 +395,27 @@ struct CommittedPurifyWitness {
 };
 
 /**
- * @brief Evaluates Purify, derives its witness, and commits to the output.
+ * @brief Evaluates Purify, derives its witness, and commits to the output using Purify's default generators.
  * @param message Message to evaluate.
  * @param secret Owned Purify secret key.
  * @param blind Blinding factor for the output commitment.
- * @param value_gen Generator used for the value term.
- * @param blind_gen Generator used for the blind term.
+ * @param secp_context Active secp256k1 context.
  * @return Witness bundle extended with the serialized output commitment.
  */
 Result<CommittedPurifyWitness> commit_output_witness(const Bytes& message, const SecretKey& secret,
                                                      const ScalarBytes& blind,
                                                      purify_secp_context* secp_context);
+
+/**
+ * @brief Evaluates Purify, derives its witness, and commits to the output with explicit generators.
+ * @param message Message to evaluate.
+ * @param secret Owned Purify secret key.
+ * @param blind Blinding factor for the output commitment.
+ * @param secp_context Active secp256k1 context.
+ * @param value_gen Generator used for the value term.
+ * @param blind_gen Generator used for the blind term.
+ * @return Witness bundle extended with the serialized output commitment.
+ */
 Result<CommittedPurifyWitness> commit_output_witness(const Bytes& message,
                                                      const SecretKey& secret,
                                                      const ScalarBytes& blind,

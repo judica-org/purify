@@ -175,6 +175,30 @@ function(purify_enable_warnings target)
     endif()
 endfunction()
 
+function(purify_enable_header_hygiene_warnings)
+    foreach(source IN LISTS ARGN)
+        if(MSVC)
+            set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS /WX)
+        else()
+            set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS
+                -Werror
+                -Wredundant-decls
+                -Wreturn-type
+            )
+            if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+                set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS
+                    -Wdocumentation
+                )
+            endif()
+            if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+                set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS
+                    -Wduplicated-branches
+                )
+            endif()
+        endif()
+    endforeach()
+endfunction()
+
 function(purify_enable_sanitizers target)
     if(NOT PURIFY_ENABLE_SANITIZERS)
         return()
@@ -455,12 +479,18 @@ if(PURIFY_BUILD_VALGRIND_TESTS)
 endif()
 
 if(PURIFY_BUILD_TESTS)
+    set(PURIFY_HEADER_HYGIENE_SOURCES
+        tests/public_header_hygiene_c_then_cpp.cpp
+        tests/public_header_hygiene_cpp_then_c.cpp
+    )
+
     add_executable(purify_tests
         tests/purify_tests_main.cpp
         tests/purify_tests.cpp
         tests/puresign_tests.cpp
         tests/legacy_bulletproof_tests.cpp
         tests/expected_tests.cpp
+        ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 
     target_link_libraries(purify_tests
@@ -470,6 +500,7 @@ if(PURIFY_BUILD_TESTS)
 
     purify_enable_warnings(purify_tests)
     purify_enable_sanitizers(purify_tests)
+    purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
 
     function(purify_add_cpp_suite_test suite_name)
         add_test(NAME "purify.tests.${suite_name}" COMMAND purify_tests --suite "${suite_name}")

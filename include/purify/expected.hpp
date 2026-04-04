@@ -4,7 +4,7 @@
 
 /**
  * @file expected.hpp
- * @brief Public aliases for the C++23 expected vocabulary used by Purify.
+ * @brief Stable public expected-style types used by Purify.
  */
 
 #pragma once
@@ -15,32 +15,10 @@
 #include <type_traits>
 #include <utility>
 
-#if defined(__has_include)
-#if __has_include(<expected>)
-#include <expected>
-#endif
-#endif
-
-#if !defined(__cpp_lib_expected) || __cpp_lib_expected < 202202L
-#include <variant>
-#endif
-
 namespace purify {
 
-#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
-/** @brief Purify result carrier that either holds a value or an error. */
-template <typename T, typename E>
-using Expected = std::expected<T, E>;
-
-/** @brief Purify wrapper for constructing the error side of an Expected value. */
-template <typename E>
-using Unexpected = std::unexpected<E>;
-
-using std::bad_expected_access;
-using std::unexpect_t;
-
-inline constexpr unexpect_t unexpect = std::unexpect;
-#else
+// Public API types must keep one ABI across translation units, even when
+// consumers and the library are built with different C++ standard modes.
 struct unexpect_t {
     explicit constexpr unexpect_t() noexcept = default;
 };
@@ -399,6 +377,5 @@ private:
     bool has_value_ = true;
     E error_{};
 };
-#endif
 
 }  // namespace purify

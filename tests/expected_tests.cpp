@@ -3,14 +3,19 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
+
+#if defined(__has_include)
+#if __has_include(<expected>)
+#include <expected>
+#endif
+#endif
 
 #include "test_harness.hpp"
 #include "purify/expected.hpp"
 
 namespace {
-
-#if !defined(__cpp_lib_expected) || __cpp_lib_expected < 202202L
 
 struct ThrowOnMove {
     static bool g_throw_on_move;
@@ -67,15 +72,20 @@ void test_expected_assignment_preserves_error_state(purify_test::TestContext& ct
     }
 }
 
+void test_expected_stays_on_purify_abi(purify_test::TestContext& ctx)
+{
+#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
+    ctx.expect(!std::is_same_v<purify::Expected<int, int>, std::expected<int, int>>,
+               "Public Expected remains Purify's fallback type even when std::expected is available");
+#else
+    ctx.expect(true, "std::expected is unavailable; Public Expected uses Purify's fallback type");
 #endif
+}
 
 } // namespace
 
 void run_expected_tests(purify_test::TestContext& ctx)
 {
-#if !defined(__cpp_lib_expected) || __cpp_lib_expected < 202202L
+    test_expected_stays_on_purify_abi(ctx);
     test_expected_assignment_preserves_error_state(ctx);
-#else
-    ctx.expect(true, "std::expected is available; fallback Expected regression is not active");
-#endif
 }

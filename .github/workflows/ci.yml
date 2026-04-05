@@ -304,14 +304,23 @@ jobs:
 
       - name: Install i686 toolchain and Valgrind
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y llvm clang g++-multilib libc6-dev-i386 valgrind
+          sudo apt-get install -y \
+            llvm \
+            clang \
+            g++-multilib \
+            libc6-dev-i386 \
+            libc6-dbg \
+            libc6-dbg:i386 \
+            valgrind
 
       - name: Show compiler versions
         run: |
           clang --version | head -n 1
           clang++ --version | head -n 1
           valgrind --version
+          dpkg -l libc6-dbg libc6-dbg:i386 | tail -n +6
 
       - name: Initialize required submodules
         run: git submodule update --init --depth 1 third_party/secp256k1-zkp

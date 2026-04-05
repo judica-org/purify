@@ -18,6 +18,8 @@
 #include "purify/secp_bridge.h"
 
 #include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -41,6 +43,29 @@ static void purify_bridge_secure_clear(void* data, size_t size);
 
 static secp256k1_context* purify_context_handle(const purify_secp_context* context) {
     return context != NULL ? context->ctx : NULL;
+}
+
+static int purify_bppp_trace_enabled(void) {
+    static int enabled = -1;
+    if (enabled == -1) {
+        const char* value = getenv("PURIFY_BPPP_TRACE");
+        enabled = value != NULL && value[0] != '\0' && value[0] != '0';
+    }
+    return enabled;
+}
+
+static void purify_bppp_trace(const char* fmt, ...) {
+    va_list args;
+
+    if (!purify_bppp_trace_enabled()) {
+        return;
+    }
+    va_start(args, fmt);
+    fputs("[purify:bppp-bridge] ", stderr);
+    vfprintf(stderr, fmt, args);
+    fputc('\n', stderr);
+    fflush(stderr);
+    va_end(args);
 }
 
 purify_secp_context* purify_secp_context_create(void) {
@@ -1979,6 +2004,9 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
     int ok = 0;
     purify_bppp_mutable_generators_guard gens_guard = {0};
 
+    purify_bppp_trace("prove_to_commitment enter resources=%p ctx=%p n=%zu l=%zu c=%zu gens=%zu proof_out=%p proof_len_ptr=%p proof_len=%zu",
+                      (void*)resources, (void*)ctx, n_vec_len, l_vec_len, c_vec_len, generators_count, (void*)proof_out,
+                      (void*)proof_len, proof_len != NULL ? *proof_len : 0u);
     memset(expected_commitment33, 0, sizeof(expected_commitment33));
     if (ctx == NULL || rho32 == NULL || (resources == NULL && generators33 == NULL) || n_vec32 == NULL || l_vec32 == NULL || c_vec32 == NULL ||
         commitment33 == NULL || proof_out == NULL || proof_len == NULL) {
@@ -2012,9 +2040,11 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
         scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
         gens = secp256k1_bppp_generators_parse(ctx, generators33, serialized_generators_len);
     }
+    purify_bppp_trace("prove_to_commitment allocated scratch=%p gens=%p required=%zu", (void*)scratch, (void*)gens, required);
     n_vec = (secp256k1_scalar*)purify_malloc_array(n_vec_len, sizeof(*n_vec));
     l_vec = (secp256k1_scalar*)purify_malloc_array(l_vec_len, sizeof(*l_vec));
     c_vec = (secp256k1_scalar*)purify_malloc_array(c_vec_len, sizeof(*c_vec));
+    purify_bppp_trace("prove_to_commitment vectors n_vec=%p l_vec=%p c_vec=%p", (void*)n_vec, (void*)l_vec, (void*)c_vec);
     if (scratch == NULL || gens == NULL || n_vec == NULL || l_vec == NULL || c_vec == NULL) {
         goto cleanup;
     }
@@ -2034,17 +2064,36 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
         goto cleanup;
     }
     purify_norm_arg_commit_initial_data(&transcript, &rho, gens, n_vec_len, c_vec, c_vec_len, &commitment_ge);
+    purify_bppp_trace("prove_to_commitment prove_call proof_len_in=%zu gens_n=%zu", *proof_len, gens->n);
     ok = purify_bppp_rangeproof_norm_product_prove_const(ctx, scratch, proof_out, proof_len, &transcript, &rho,
                                                          gens->gens, gens->n, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len);
+    purify_bppp_trace("prove_to_commitment prove_result ok=%d proof_len_out=%zu", ok, *proof_len);
 
 cleanup:
-    if (n_vec != NULL) free(n_vec);
-    if (l_vec != NULL) free(l_vec);
-    if (c_vec != NULL) free(c_vec);
+    purify_bppp_trace("prove_to_commitment cleanup ok=%d n_vec=%p l_vec=%p c_vec=%p scratch=%p gens=%p resources=%p",
+                      ok, (void*)n_vec, (void*)l_vec, (void*)c_vec, (void*)scratch, (void*)gens, (void*)resources);
+    if (n_vec != NULL) {
+        purify_bppp_trace("prove_to_commitment cleanup free n_vec=%p", (void*)n_vec);
+        free(n_vec);
+    }
+    if (l_vec != NULL) {
+        purify_bppp_trace("prove_to_commitment cleanup free l_vec=%p", (void*)l_vec);
+        free(l_vec);
+    }
+    if (c_vec != NULL) {
+        purify_bppp_trace("prove_to_commitment cleanup free c_vec=%p", (void*)c_vec);
+        free(c_vec);
+    }
     purify_bppp_backend_resources_release_scratch_gens(&gens_guard);
     if (resources == NULL) {
-        if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
-        if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
+        if (gens != NULL) {
+            purify_bppp_trace("prove_to_commitment cleanup destroy gens=%p", (void*)gens);
+            secp256k1_bppp_generators_destroy(ctx, gens);
+        }
+        if (scratch != NULL) {
+            purify_bppp_trace("prove_to_commitment cleanup destroy scratch=%p", (void*)scratch);
+            secp256k1_scratch_space_destroy(ctx, scratch);
+        }
     }
     return ok;
 }
@@ -2088,6 +2137,8 @@ static int purify_bppp_verify_norm_arg_impl(purify_secp_context* context,
     size_t serialized_generators_len = 0;
     int ok = 0;
 
+    purify_bppp_trace("verify enter resources=%p ctx=%p n=%zu c=%zu gens=%zu proof=%p proof_len=%zu",
+                      (void*)resources, (void*)ctx, n_vec_len, c_vec_len, generators_count, (const void*)proof, proof_len);
     if (ctx == NULL || rho32 == NULL || (resources == NULL && generators33 == NULL) || c_vec32 == NULL || commitment33 == NULL || proof == NULL) {
         return 0;
     }
@@ -2110,7 +2161,9 @@ static int purify_bppp_verify_norm_arg_impl(purify_secp_context* context,
         scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
         gens = secp256k1_bppp_generators_parse(ctx, generators33, serialized_generators_len);
     }
+    purify_bppp_trace("verify allocated scratch=%p gens=%p", (void*)scratch, (void*)gens);
     c_vec = (secp256k1_scalar*)purify_malloc_array(c_vec_len, sizeof(*c_vec));
+    purify_bppp_trace("verify vector c_vec=%p", (void*)c_vec);
     if (scratch == NULL || gens == NULL || c_vec == NULL) {
         goto cleanup;
     }
@@ -2118,14 +2171,27 @@ static int purify_bppp_verify_norm_arg_impl(purify_secp_context* context,
         goto cleanup;
     }
     purify_norm_arg_commit_initial_data(&transcript, &rho, gens, n_vec_len, c_vec, c_vec_len, &commit);
+    purify_bppp_trace("verify verify_call gens=%p scratch=%p", (void*)gens, (void*)scratch);
     ok = secp256k1_bppp_rangeproof_norm_product_verify(ctx, scratch, proof, proof_len, &transcript, &rho,
                                                        gens, n_vec_len, c_vec, c_vec_len, &commit);
+    purify_bppp_trace("verify verify_result ok=%d", ok);
 
 cleanup:
-    if (c_vec != NULL) free(c_vec);
+    purify_bppp_trace("verify cleanup ok=%d c_vec=%p scratch=%p gens=%p resources=%p",
+                      ok, (void*)c_vec, (void*)scratch, (void*)gens, (void*)resources);
+    if (c_vec != NULL) {
+        purify_bppp_trace("verify cleanup free c_vec=%p", (void*)c_vec);
+        free(c_vec);
+    }
     if (resources == NULL) {
-        if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
-        if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
+        if (gens != NULL) {
+            purify_bppp_trace("verify cleanup destroy gens=%p", (void*)gens);
+            secp256k1_bppp_generators_destroy(ctx, gens);
+        }
+        if (scratch != NULL) {
+            purify_bppp_trace("verify cleanup destroy scratch=%p", (void*)scratch);
+            secp256k1_scratch_space_destroy(ctx, scratch);
+        }
     }
     return ok;
 }

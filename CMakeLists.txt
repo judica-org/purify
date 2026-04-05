@@ -86,7 +86,7 @@ option(PURIFY_BUILD_FUZZ "Build the deterministic fuzz/stress harness." ${PURIFY
 option(PURIFY_BUILD_REFERENCE_TESTS "Enable Python reference regression tests from reference/purify." OFF)
 option(PURIFY_USE_LEGACY_FIELD_HASHES "Use the legacy HKDF-based field-hash path for hash_to_curve and BIP340 key derivation." OFF)
 option(PURIFY_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer on supported compilers." OFF)
-set(PURIFY_CXX_STANDARD "23" CACHE STRING
+set(PURIFY_CXX_STANDARD "20" CACHE STRING
     "C++ standard used to compile Purify targets. Supported values: 20, 23."
 )
 set_property(CACHE PURIFY_CXX_STANDARD PROPERTY STRINGS 20 23)

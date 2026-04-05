@@ -219,6 +219,52 @@ jobs:
       - name: Test
         run: ctest --preset bitcoin-i686-debug
 
+  bitcoin-i686-downstream-proof-repro:
+    runs-on: ubuntu-24.04
+    name: ubuntu-24.04 / clang-i686-downstream-proof-repro
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install Bitcoin-like 32-bit toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm clang g++-multilib libc6-dev-i386
+
+      - name: Show compiler versions
+        run: |
+          clang --version | head -n 1
+          clang++ --version | head -n 1
+
+      - name: Initialize required submodules
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp
+
+      - name: Configure
+        run: >
+          cmake --preset bitcoin-i686-debug
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DPURIFY_BUILD_BENCH=OFF
+
+      - name: Build
+        run: cmake --build --preset bitcoin-i686-debug --parallel --target purify_tests
+
+      - name: Show sccache stats
+        run: sccache --show-stats
+
+      - name: Run downstream proof-path repro
+        run: |
+          ./build-bitcoin-i686-debug/purify_tests --suite puresign || {
+            echo "Re-running PureSign suite with PURIFY_BPPP_TRACE=1 after failure"
+            PURIFY_BPPP_TRACE=1 ./build-bitcoin-i686-debug/purify_tests --suite puresign
+          }
+
   bitcoin-i686-smallstack:
     runs-on: ubuntu-24.04
     name: ubuntu-24.04 / clang-i686-bitcoin-smallstack

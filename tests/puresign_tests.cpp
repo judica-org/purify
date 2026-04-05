@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -612,6 +613,46 @@ void test_puresign_plusplus_topic_signing(TestContext& ctx) {
     }
 }
 
+void test_puresign_plusplus_topic_signing_repeated_uncached(TestContext& ctx) {
+    Result<SecretKey> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for repeated uncached PureSign++ topic proof generation");
+    if (!secret.has_value()) {
+        return;
+    }
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (context == nullptr) {
+        return;
+    }
+
+    Bytes topic = purify::bytes_from_ascii("session-pp-uncached-repeated");
+    Result<purify::puresign_plusplus::KeyPair> key_pair =
+        purify::puresign_plusplus::KeyPair::from_secret(*secret, context.get());
+    expect_ok(ctx, key_pair, "PureSign++ KeyPair::from_secret succeeds for repeated uncached topic proof generation");
+    if (!key_pair.has_value()) {
+        return;
+    }
+
+    const purify::puresign_plusplus::PublicKey& public_key = key_pair->public_key();
+    for (std::size_t iteration = 0; iteration < 16; ++iteration) {
+        const std::string suffix = " iteration " + std::to_string(iteration + 1);
+
+        Result<purify::puresign_plusplus::PreparedNonceWithProof> prepared =
+            key_pair->prepare_topic_nonce_with_proof(topic, context.get());
+        expect_ok(ctx, prepared, std::string("PureSign++ uncached topic proof generation succeeds on") + suffix);
+        if (!prepared.has_value()) {
+            return;
+        }
+
+        Result<bool> verified = public_key.verify_topic_nonce_proof(topic, prepared->proof(), context.get());
+        expect_ok(ctx, verified, std::string("PureSign++ uncached topic proof verification succeeds on") + suffix);
+        if (!verified.has_value()) {
+            return;
+        }
+
+        ctx.expect(*verified, std::string("PureSign++ uncached topic proof verifies on") + suffix);
+    }
+}
+
 void test_puresign_plusplus_topic_proof_cache_reuse(TestContext& ctx) {
     Result<SecretKey> secret = sample_secret();
     expect_ok(ctx, secret, "sample secret parses for PureSign++ repeated topic proof generation");
@@ -760,6 +801,7 @@ void run_puresign_tests(purify_test::TestContext& ctx) {
     test_puresign_binding_checks(ctx);
     test_puresign_plusplus_message_signing(ctx);
     test_puresign_plusplus_topic_signing(ctx);
+    test_puresign_plusplus_topic_signing_repeated_uncached(ctx);
     test_puresign_plusplus_topic_proof_cache_reuse(ctx);
     test_puresign_plusplus_topic_proof_cache_clone_for_thread(ctx);
 }

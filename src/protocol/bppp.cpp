@@ -10,8 +10,11 @@
 #include "purify/bppp.hpp"
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <span>
@@ -38,6 +41,89 @@ using OwnedBpppBackendResources =
     std::unique_ptr<purify_bppp_backend_resources, BpppBackendResourcesDeleter>;
 
 using GeneratorBackendCacheKey = std::array<unsigned char, 32>;
+
+namespace {
+
+bool bppp_trace_enabled() {
+  static const bool enabled = [] {
+    const char *value = std::getenv("PURIFY_BPPP_TRACE");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return enabled;
+}
+
+void bppp_trace(const char *fmt, ...) {
+  if (!bppp_trace_enabled()) {
+    return;
+  }
+  va_list args;
+  va_start(args, fmt);
+  std::fputs("[purify:bppp] ", stderr);
+  std::vfprintf(stderr, fmt, args);
+  std::fputc('\n', stderr);
+  std::fflush(stderr);
+  va_end(args);
+}
+
+constexpr std::size_t kProofGuardBytes = 32;
+constexpr unsigned char kProofGuardPattern = 0xA5;
+
+struct GuardedProofBuffer {
+  Bytes storage;
+  unsigned char *proof_data = nullptr;
+  std::size_t proof_capacity = 0;
+  bool guarded = false;
+};
+
+GuardedProofBuffer allocate_guarded_proof_buffer(std::size_t proof_capacity) {
+  GuardedProofBuffer out;
+  out.proof_capacity = proof_capacity;
+  std::size_t total_size = 0;
+  if (checked_add_size(proof_capacity, 2 * kProofGuardBytes, total_size)) {
+    out.storage.assign(total_size, kProofGuardPattern);
+    out.proof_data = out.storage.data() + kProofGuardBytes;
+    std::fill_n(out.proof_data, proof_capacity, 0);
+    out.guarded = true;
+    return out;
+  }
+  out.storage.assign(proof_capacity, 0);
+  out.proof_data = out.storage.data();
+  return out;
+}
+
+bool proof_buffer_guard_intact(const GuardedProofBuffer &buffer,
+                               const char *context) {
+  if (!buffer.guarded) {
+    return true;
+  }
+  const unsigned char *prefix = buffer.storage.data();
+  const unsigned char *suffix = buffer.proof_data + buffer.proof_capacity;
+  const bool prefix_ok =
+      std::all_of(prefix, prefix + kProofGuardBytes, [](unsigned char value) {
+        return value == kProofGuardPattern;
+      });
+  const bool suffix_ok =
+      std::all_of(suffix, suffix + kProofGuardBytes, [](unsigned char value) {
+        return value == kProofGuardPattern;
+      });
+  if (!prefix_ok || !suffix_ok) {
+    bppp_trace(
+        "%s proof_guard_clobbered prefix_ok=%d suffix_ok=%d capacity=%zu",
+        context, prefix_ok ? 1 : 0, suffix_ok ? 1 : 0, buffer.proof_capacity);
+    return false;
+  }
+  return true;
+}
+
+Bytes extract_proof_bytes(GuardedProofBuffer &&buffer, std::size_t proof_len) {
+  if (!buffer.guarded) {
+    buffer.storage.resize(proof_len);
+    return std::move(buffer.storage);
+  }
+  return Bytes(buffer.proof_data, buffer.proof_data + proof_len);
+}
+
+} // namespace
 
 template <typename Digest>
 std::size_t digest_prefix_hash(const Digest &digest) noexcept {
@@ -1191,6 +1277,11 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
     const NormArgInputs &inputs, const PointBytes &commitment,
     purify_secp_context *secp_context,
     ExperimentalCircuitBackend *cache = nullptr) {
+  bppp_trace(
+      "prove_norm_arg_to_commitment enter cache=%p n=%zu l=%zu c=%zu "
+      "input_generators=%zu",
+      static_cast<void *>(cache), inputs.n_vec.size(), inputs.l_vec.size(),
+      inputs.c_vec.size(), inputs.generators.size());
   PURIFY_RETURN_IF_ERROR(
       require_secp_context(secp_context, "prove_norm_arg_to_commitment:secp_context"),
       "prove_norm_arg_to_commitment:secp_context");
@@ -1220,30 +1311,51 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
       resolve_bppp_generator_backend(cache, *generators, secp_context);
   std::size_t proof_len =
       purify_bppp_required_proof_size(inputs.n_vec.size(), inputs.c_vec.size());
-  Bytes proof(proof_len);
   if (proof_len == 0) {
     return unexpected_error(ErrorCode::InvalidDimensions,
                             "prove_norm_arg_to_commitment:proof_len_zero");
   }
+  GuardedProofBuffer proof_buffer = allocate_guarded_proof_buffer(proof_len);
+  bppp_trace(
+      "prove_norm_arg_to_commitment backend resources=%p generator_count=%zu "
+      "proof_capacity=%zu proof_data=%p",
+      static_cast<void *>(resolved.backend_resources), resolved.generator_count,
+      proof_len, static_cast<void *>(proof_buffer.proof_data));
   const int ok =
       resolved.backend_resources != nullptr
           ? purify_bppp_prove_norm_arg_to_commitment_with_resources(
                 resolved.backend_resources, inputs.rho.data(), n_vec.data(),
                 inputs.n_vec.size(), l_vec.data(), inputs.l_vec.size(),
                 c_vec.data(), inputs.c_vec.size(), commitment.data(),
-                proof.data(), &proof_len)
+                proof_buffer.proof_data, &proof_len)
           : purify_bppp_prove_norm_arg_to_commitment(
                 secp_context, inputs.rho.data(),
                 resolved.serialized_bytes.data(),
                 resolved.generator_count, n_vec.data(), inputs.n_vec.size(),
                 l_vec.data(), inputs.l_vec.size(), c_vec.data(),
-                inputs.c_vec.size(), commitment.data(), proof.data(),
+                inputs.c_vec.size(), commitment.data(), proof_buffer.proof_data,
                 &proof_len);
+  bppp_trace("prove_norm_arg_to_commitment backend ok=%d proof_len=%zu", ok,
+             proof_len);
+  if (proof_len > proof_buffer.proof_capacity) {
+    bppp_trace(
+        "prove_norm_arg_to_commitment proof_len_exceeded capacity=%zu "
+        "returned=%zu",
+        proof_buffer.proof_capacity, proof_len);
+    return unexpected_error(
+        ErrorCode::UnexpectedSize,
+        "prove_norm_arg_to_commitment:proof_len_exceeded_capacity");
+  }
+  if (!proof_buffer_guard_intact(proof_buffer,
+                                 "prove_norm_arg_to_commitment")) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "prove_norm_arg_to_commitment:proof_guard");
+  }
   if (!require_ok(ok)) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
                             "prove_norm_arg_to_commitment:backend");
   }
-  proof.resize(proof_len);
+  Bytes proof = extract_proof_bytes(std::move(proof_buffer), proof_len);
 
   std::vector<PointBytes> proof_generators;
   if (!generated_generators.empty()) {
@@ -1259,6 +1371,10 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
 bool verify_norm_arg_with_cache(const NormArgProof &proof,
                                 purify_secp_context *secp_context,
                                 ExperimentalCircuitBackend *cache = nullptr) {
+  bppp_trace(
+      "verify_norm_arg enter cache=%p n=%zu c=%zu generators=%zu proof_len=%zu",
+      static_cast<void *>(cache), proof.n_vec_len, proof.c_vec.size(),
+      proof.generators.size(), proof.proof.size());
   if (secp_context == nullptr) {
     return false;
   }
@@ -1280,6 +1396,8 @@ bool verify_norm_arg_with_cache(const NormArgProof &proof,
                 resolved.generator_count, c_vec.data(), proof.c_vec.size(),
                 proof.n_vec_len, proof.commitment.data(), proof.proof.data(),
                 proof.proof.size());
+  bppp_trace("verify_norm_arg exit ok=%d resources=%p", ok,
+             static_cast<void *>(resolved.backend_resources));
   return ok != 0;
 }
 
@@ -1444,6 +1562,12 @@ prove_experimental_circuit_zk_norm_arg_impl(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments, ExperimentalCircuitBackend *cache) {
+  bppp_trace(
+      "prove_zk enter cache=%p externalize=%d gates=%zu commitments=%zu "
+      "public_commitments=%zu statement_binding=%zu",
+      static_cast<void *>(cache), externalize_commitments ? 1 : 0,
+      circuit.n_gates, circuit.n_commitments, public_commitments.size(),
+      statement_binding.size());
   if (!circuit.has_valid_shape()) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
@@ -1509,6 +1633,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
   std::optional<Error> masked_failure;
 
   for (std::uint64_t attempt = 0; attempt < 32; ++attempt) {
+    bppp_trace("prove_zk attempt=%llu", static_cast<unsigned long long>(attempt));
     CircuitNormArgReduction hidden = base_reduction;
     for (std::size_t i = used_l; i < hidden.l_vec.size(); ++i) {
       PURIFY_ASSIGN_OR_RETURN(
@@ -1646,6 +1771,8 @@ prove_experimental_circuit_zk_norm_arg_impl(
       }
       continue;
     }
+    bppp_trace("prove_zk success attempt=%llu proof_len=%zu",
+               static_cast<unsigned long long>(attempt), proof->proof.size());
     return ExperimentalCircuitZkNormArgProof{*a_witness_commitment,
                                              *s_commitment, scalar_bytes(t2),
                                              std::move(proof->proof)};
@@ -1668,6 +1795,12 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments, ExperimentalCircuitBackend *cache) {
+  bppp_trace(
+      "verify_zk enter cache=%p externalize=%d gates=%zu commitments=%zu "
+      "public_commitments=%zu proof_len=%zu statement_binding=%zu",
+      static_cast<void *>(cache), externalize_commitments ? 1 : 0,
+      circuit.n_gates, circuit.n_commitments, public_commitments.size(),
+      proof.proof.size(), statement_binding.size());
   if (!circuit.has_valid_shape()) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
@@ -1730,6 +1863,9 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
   }
   bundle.commitment = commitment;
   bundle.proof = proof.proof;
+  bppp_trace("verify_zk bundle n=%zu c=%zu generators=%zu proof_len=%zu",
+             bundle.n_vec_len, bundle.c_vec.size(), bundle.generators.size(),
+             bundle.proof.size());
   return verify_norm_arg_with_cache(bundle, secp_context, cache);
 }
 

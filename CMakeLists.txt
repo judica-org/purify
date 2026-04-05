@@ -86,7 +86,7 @@ option(PURIFY_BUILD_FUZZ "Build the deterministic fuzz/stress harness." ${PURIFY
 option(PURIFY_BUILD_REFERENCE_TESTS "Enable Python reference regression tests from reference/purify." OFF)
 option(PURIFY_USE_LEGACY_FIELD_HASHES "Use the legacy HKDF-based field-hash path for hash_to_curve and BIP340 key derivation." OFF)
 option(PURIFY_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer on supported compilers." OFF)
-set(PURIFY_CXX_STANDARD "23" CACHE STRING
+set(PURIFY_CXX_STANDARD "20" CACHE STRING
     "C++ standard used to compile Purify targets. Supported values: 20, 23."
 )
 set_property(CACHE PURIFY_CXX_STANDARD PROPERTY STRINGS 20 23)
@@ -552,6 +552,21 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_sanitizers(purify_c_tests)
 
     add_test(NAME purify.c_api COMMAND purify_c_tests)
+
+    add_executable(purify_puresign_topic_proof_repro
+        tests/puresign_topic_proof_repro.cpp
+    )
+
+    target_link_libraries(purify_puresign_topic_proof_repro
+        PRIVATE
+            purify::purify
+    )
+
+    purify_enable_warnings(purify_puresign_topic_proof_repro)
+    purify_enable_sanitizers(purify_puresign_topic_proof_repro)
+
+    add_test(NAME purify.repro.puresign_topic_proof
+             COMMAND purify_puresign_topic_proof_repro)
 
     if(PURIFY_BUILD_VALGRIND_TESTS)
         target_compile_definitions(purify PRIVATE PURIFY_VALGRIND_TESTING=1)

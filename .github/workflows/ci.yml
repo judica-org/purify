@@ -221,7 +221,19 @@ jobs:
 
   bitcoin-i686-downstream-proof-repro:
     runs-on: ubuntu-24.04
-    name: ubuntu-24.04 / clang-i686-downstream-proof-repro
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: bitcoin-i686-debug
+            binary_dir: build-bitcoin-i686-debug
+            stack_limit_kb: 8192
+            lane_name: debug
+          - preset: bitcoin-i686-smallstack
+            binary_dir: build-bitcoin-i686-smallstack
+            stack_limit_kb: 512
+            lane_name: smallstack
+    name: ubuntu-24.04 / clang-i686-downstream-proof-repro / ${{ matrix.lane_name }}
     env:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
@@ -248,14 +260,14 @@ jobs:
 
       - name: Configure
         run: >
-          cmake --preset bitcoin-i686-debug
+          cmake --preset ${{ matrix.preset }}
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           -DPURIFY_BUILD_BENCH=OFF
 
       - name: Build
         run: >
-          cmake --build --preset bitcoin-i686-debug --parallel
+          cmake --build --preset ${{ matrix.preset }} --parallel
           --target purify_tests purify_puresign_topic_proof_repro
 
       - name: Show sccache stats
@@ -264,14 +276,76 @@ jobs:
       - name: Run downstream proof-path repro
         run: |
           for perturb in 41 85 137 213; do
-            echo "Running uncached topic-proof repro with MALLOC_PERTURB_=${perturb}"
-            MALLOC_PERTURB_="${perturb}" ./build-bitcoin-i686-debug/purify_puresign_topic_proof_repro 1024 || {
-              echo "Re-running repro with PURIFY_BPPP_TRACE=1 after failure"
-              MALLOC_PERTURB_="${perturb}" PURIFY_BPPP_TRACE=1 \
-                ./build-bitcoin-i686-debug/purify_puresign_topic_proof_repro 4
+            for round in $(seq 1 32); do
+              echo "Running uncached topic-proof repro preset=${{ matrix.preset }} round=${round} MALLOC_PERTURB_=${perturb}"
+              ulimit -s ${{ matrix.stack_limit_kb }}
+              MALLOC_PERTURB_="${perturb}" ./${{ matrix.binary_dir }}/purify_puresign_topic_proof_repro 16 || {
+                echo "Re-running repro with PURIFY_BPPP_TRACE=1 after failure"
+                ulimit -s ${{ matrix.stack_limit_kb }}
+                MALLOC_PERTURB_="${perturb}" PURIFY_BPPP_TRACE=1 \
+                  ./${{ matrix.binary_dir }}/purify_puresign_topic_proof_repro 4
+                exit 1
+              }
+            done
+          done
+
+  bitcoin-i686-downstream-proof-valgrind:
+    runs-on: ubuntu-24.04
+    name: ubuntu-24.04 / clang-i686-downstream-proof-valgrind
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install i686 toolchain and Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm clang g++-multilib libc6-dev-i386 valgrind
+
+      - name: Show compiler versions
+        run: |
+          clang --version | head -n 1
+          clang++ --version | head -n 1
+          valgrind --version
+
+      - name: Initialize required submodules
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp
+
+      - name: Configure
+        run: >
+          cmake --preset bitcoin-i686-debug
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DPURIFY_BUILD_BENCH=OFF
+
+      - name: Build
+        run: >
+          cmake --build --preset bitcoin-i686-debug --parallel
+          --target purify_puresign_topic_proof_repro
+
+      - name: Show sccache stats
+        run: sccache --show-stats
+
+      - name: Run downstream proof-path repro under Valgrind
+        run: |
+          valgrind \
+            --tool=memcheck \
+            --error-exitcode=1 \
+            --leak-check=full \
+            --show-leak-kinds=all \
+            --errors-for-leak-kinds=all \
+            --track-origins=yes \
+            --num-callers=40 \
+            ./build-bitcoin-i686-debug/purify_puresign_topic_proof_repro 32 || {
+              echo "Re-running repro with PURIFY_BPPP_TRACE=1 after Valgrind failure"
+              PURIFY_BPPP_TRACE=1 ./build-bitcoin-i686-debug/purify_puresign_topic_proof_repro 4
               exit 1
             }
-          done
 
   bitcoin-i686-smallstack:
     runs-on: ubuntu-24.04

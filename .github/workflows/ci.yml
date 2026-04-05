@@ -225,6 +225,7 @@ jobs:
     env:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+      MALLOC_CHECK_: "3"
 
     steps:
       - uses: actions/checkout@v4
@@ -253,17 +254,24 @@ jobs:
           -DPURIFY_BUILD_BENCH=OFF
 
       - name: Build
-        run: cmake --build --preset bitcoin-i686-debug --parallel --target purify_tests
+        run: >
+          cmake --build --preset bitcoin-i686-debug --parallel
+          --target purify_tests purify_puresign_topic_proof_repro
 
       - name: Show sccache stats
         run: sccache --show-stats
 
       - name: Run downstream proof-path repro
         run: |
-          ./build-bitcoin-i686-debug/purify_tests --suite puresign || {
-            echo "Re-running PureSign suite with PURIFY_BPPP_TRACE=1 after failure"
-            PURIFY_BPPP_TRACE=1 ./build-bitcoin-i686-debug/purify_tests --suite puresign
-          }
+          for perturb in 41 85 137 213; do
+            echo "Running uncached topic-proof repro with MALLOC_PERTURB_=${perturb}"
+            MALLOC_PERTURB_="${perturb}" ./build-bitcoin-i686-debug/purify_puresign_topic_proof_repro 1024 || {
+              echo "Re-running repro with PURIFY_BPPP_TRACE=1 after failure"
+              MALLOC_PERTURB_="${perturb}" PURIFY_BPPP_TRACE=1 \
+                ./build-bitcoin-i686-debug/purify_puresign_topic_proof_repro 4
+              exit 1
+            }
+          done
 
   bitcoin-i686-smallstack:
     runs-on: ubuntu-24.04

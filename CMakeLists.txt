@@ -553,6 +553,21 @@ if(PURIFY_BUILD_TESTS)
 
     add_test(NAME purify.c_api COMMAND purify_c_tests)
 
+    add_executable(purify_puresign_topic_proof_repro
+        tests/puresign_topic_proof_repro.cpp
+    )
+
+    target_link_libraries(purify_puresign_topic_proof_repro
+        PRIVATE
+            purify::purify
+    )
+
+    purify_enable_warnings(purify_puresign_topic_proof_repro)
+    purify_enable_sanitizers(purify_puresign_topic_proof_repro)
+
+    add_test(NAME purify.repro.puresign_topic_proof
+             COMMAND purify_puresign_topic_proof_repro)
+
     if(PURIFY_BUILD_VALGRIND_TESTS)
         target_compile_definitions(purify PRIVATE PURIFY_VALGRIND_TESTING=1)
 

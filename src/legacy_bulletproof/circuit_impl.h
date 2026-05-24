@@ -303,6 +303,7 @@ static int secp256k1_bulletproof_relation66_prove_impl(const secp256k1_ecmult_co
 
 typedef struct  {
     secp256k1_scalar x;
+    secp256k1_scalar x2;
     secp256k1_scalar y;
     secp256k1_scalar yinv;
     secp256k1_scalar z;
@@ -364,13 +365,12 @@ static int secp256k1_bulletproof_circuit_vfy_callback(secp256k1_scalar *sc, secp
             break;
         /* A_O^(x^2) (83) */
         case 2:
-            secp256k1_scalar_sqr(sc, &ctx->x);
+            *sc = ctx->x2;
             *pt = ctx->age[1];
             break;
         /* S^(x^3) (83) */
         case 3:
-            secp256k1_scalar_sqr(sc, &ctx->x); /* TODO cache previous squaring */
-            secp256k1_scalar_mul(sc, sc, &ctx->x);
+            secp256k1_scalar_mul(sc, &ctx->x2, &ctx->x);
             *pt = ctx->age[2];
             break;
         /* T_1^x (82) */
@@ -508,6 +508,7 @@ static int secp256k1_bulletproof_relation66_verify_impl(const secp256k1_ecmult_c
             secp256k1_scratch_deallocate_frame(scratch);
             return 0;
         }
+        secp256k1_scalar_sqr(&ecmult_data[i].x2, &ecmult_data[i].x);
 
         ecmult_data[i].comp_circ = secp256k1_bulletproof_vfy_compress_circuit(scratch, circ[i], &ecmult_data[i].x, &ecmult_data[i].y, &ecmult_data[i].yinv, &ecmult_data[i].z);
 

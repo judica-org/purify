@@ -11,6 +11,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <span>
 #include <string_view>
 
@@ -38,6 +41,27 @@ constexpr std::string_view kMessageProofTag = "PureSign/BPPP/Proof/Message/V1";
 constexpr std::string_view kTopicProofTag = "PureSign/BPPP/Proof/Topic/V1";
 
 using Scope = PreparedNonce::Scope;
+
+bool puresign_bppp_trace_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("PURIFY_BPPP_TRACE");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
+void puresign_bppp_trace(const char* fmt, ...) {
+    if (!puresign_bppp_trace_enabled()) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    std::fputs("[purify:puresign-bppp] ", stderr);
+    std::vfprintf(stderr, fmt, args);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+    va_end(args);
+}
 
 const TaggedHash& binding_tagged_hash(Scope scope) {
     static const TaggedHash kMessageBindingTaggedHash(kMessageBindingTag);
@@ -193,6 +217,9 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
                                                    const NativeBulletproofCircuitTemplate& circuit_template,
                                                    purify_secp_context* secp_context,
                                                    bppp::ExperimentalCircuitBackend* circuit_cache) {
+    puresign_bppp_trace("build_nonce_proof scope=%s eval_input=%zu cache=%p",
+                        scope == Scope::Message ? "message" : "topic", eval_input.size(),
+                        static_cast<void*>(circuit_cache));
     PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(detail::copy_bytes(eval_input), secret),
                             "build_nonce_proof_from_template:prove_assignment_data");
     PURIFY_ASSIGN_OR_RETURN(auto partial_ok, circuit_template.partial_evaluate(witness.assignment),
@@ -220,6 +247,8 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
         bppp::prove_experimental_circuit_zk_norm_arg_with_public_commitments(
             circuit, witness.assignment, proof_nonce, public_commitments, secp_context, statement_binding, circuit_cache),
         "build_nonce_proof_from_template:prove_experimental_circuit_zk_norm_arg_with_public_commitments");
+    puresign_bppp_trace("build_nonce_proof built proof_len=%zu commitment0=%02x", proof.proof.size(),
+                        static_cast<unsigned int>(commitment_point.front()));
 
     NonceProof out{};
     out.nonce = expected_nonce;
@@ -254,6 +283,9 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
                                              purify_secp_context* secp_context,
                                              const char* context,
                                              bppp::ExperimentalCircuitBackend* circuit_cache) {
+    puresign_bppp_trace("verify_nonce_proof context=%s scope=%s proof_len=%zu cache=%p",
+                        context, scope == Scope::Message ? "message" : "topic", nonce_proof.proof.proof.size(),
+                        static_cast<void*>(circuit_cache));
     PURIFY_RETURN_IF_ERROR(validate_public_key_bundle(public_key, secp_context), context);
     PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit, context), context);
     PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(nonce_proof, secp_context), context);
@@ -262,8 +294,11 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
     }
     Bytes statement_binding = proof_statement_binding(scope);
     std::array<bppp::PointBytes, 1> public_commitments{nonce_proof.commitment_point};
-    return bppp::verify_experimental_circuit_zk_norm_arg_with_public_commitments(
+    auto verified = bppp::verify_experimental_circuit_zk_norm_arg_with_public_commitments(
         circuit, nonce_proof.proof, public_commitments, secp_context, statement_binding, circuit_cache);
+    puresign_bppp_trace("verify_nonce_proof result_has_value=%d result=%d", verified.has_value() ? 1 : 0,
+                        verified.has_value() && *verified ? 1 : 0);
+    return verified;
 }
 
 }  // namespace

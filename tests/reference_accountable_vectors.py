@@ -91,6 +91,10 @@ def vectors():
             "challenge": scalar_bytes(challenge).hex(),
             "sigma": scalar_bytes(sigma).hex(),
         })
+    a, b = out["statements"]
+    recovered = ((int(a["sigma"], 16) - int(b["sigma"], 16))
+                 * pow(int(a["challenge"], 16) - int(b["challenge"], 16), -1, N)) % N
+    assert recovered == q and mul(recovered) == key
     return out
 
 

@@ -74,4 +74,23 @@ private:
     const ConflictContext& context, std::span<const unsigned char> canonical_body,
     const ScalarSignature& signature, purify_secp_context* secp_context);
 
+/**
+ * @brief Recover the exact signing scalar exposed by two same-slot responses.
+ *
+ * Both responses are interpreted under the one supplied Q/U/T context. Rejects
+ * equal challenges, a recovered scalar whose full public point differs from
+ * the even-Y signing key, and a common nonce at infinity. The result is derived
+ * entirely from public input, so it is returned as ordinary scalar bytes.
+ *
+ * This is NOT certificate or conflict verification. Before using the result
+ * for enforcement, the caller must validate both nonce proofs, authenticate
+ * each endorsement's context, and establish the application conflict/liability
+ * rules. Successful recovery alone does not authorize a penalty.
+ */
+[[nodiscard]] Result<std::array<unsigned char, 32>> recover_same_slot_key(
+    const ConflictContext& context,
+    std::span<const unsigned char> first_body, const ScalarSignature& first_signature,
+    std::span<const unsigned char> second_body, const ScalarSignature& second_signature,
+    purify_secp_context* secp_context);
+
 } // namespace purify::accountable

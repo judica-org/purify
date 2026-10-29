@@ -1,9 +1,10 @@
 # Scalar-only accountable signature transcript
 
-This experimental contract implements the public transcript and response codec
-for [Purify issue #20](https://github.com/judica-org/purify/issues/20). It does
-not implement a production signer, a nonce-proof verifier, MuSig aggregation,
-or a security proof. In particular,
+This experimental contract implements the public transcript, response codec,
+and algebraic key recovery for
+[Purify issue #20](https://github.com/judica-org/purify/issues/20). It does not
+implement a production signer, a nonce-proof verifier, MuSig aggregation, or a
+security proof. In particular,
 `accountable::reconstruct_nonce` returns an algebraic point, never a successful
 signature-verification result. Live use awaits the reviewed leaf relation,
 signature/proof composition, private multiparty protocol, and durable signing
@@ -119,11 +120,26 @@ and a proven common raw nonce, and distinct challenges:
 q = (sigma - sigma') * inverse(e - e') mod n
 ```
 
-The extractor must check `qG = Q` and enforce the application conflict relation.
-Equal challenges cannot be divided. Arbitrary future slots do not generally
-share `r_T`; a matching signing key alone is insufficient. The public codec and
-reconstruction helpers intentionally expose no extraction API that could be
-mistaken for validation of those preconditions.
+`recover_same_slot_key` implements the algebraic part of this operation under
+one supplied `Q/U/T` context. It rejects equal challenges before inversion and
+compares the full recovered public point against the even-Y lift of `Q`. It
+never normalizes a recovered `-q` into an accepted result. Exact `qG = Q` implies
+that the two reconstructed nonce points are equal; checking
+`sigma - e*q != 0` then excludes a common nonce at infinity without repeating
+the point reconstructions. A zero response remains permitted when that common
+nonce is finite. The returned 32 bytes are derived entirely from public inputs.
+
+Recovery success establishes the exposed scalar, not certificate acceptance,
+semantic conflict, or liability. Before using it for a penalty, the caller must
+authenticate both endorsements' contexts, verify their nonce proofs, and apply
+the conflict and liability rules. Arbitrary future slots do not generally share
+`r_T`; a matching signing key alone is insufficient. Interpreting both responses
+under the caller's context does not authenticate that context for either one.
+
+The helper propagates context/challenge errors. Equal challenges return
+`BindingMismatch`; a zero or wrong recovered key returns `EquationMismatch`;
+a common nonce at infinity returns `RangeViolation`. It does not accept proof
+bytes or claim to enforce the unresolved nonce relation.
 
 No-framing for one honest member, malicious enrollment, concurrent sessions,
 abort, and adaptive proof/transcript choices remains to be established for the
@@ -146,7 +162,7 @@ semantics belong to the later signer integration.
 vectors embedded in `accountable_signature_tests.cpp`. It uses the public toy
 key `q = 3` and raw nonce `r = 6`; the nonce has odd Y. It checks both reconstruction
 equations, and the C++ tests compare exact transcript hashes, scalar bytes and
-full nonce points before checking the cancellation identity.
+full nonce points before checking exact key recovery in both response orders.
 
 These are algebraic and encoding fixtures, not accepted cryptographic
 certificates or evidence of proof soundness. They require no private deployment

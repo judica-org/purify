@@ -14,6 +14,7 @@ using purify::accountable::ConflictContext;
 using purify::accountable::ScalarSignature;
 using purify::accountable::nonce_evaluation_input;
 using purify::accountable::reconstruct_nonce;
+using purify::accountable::recover_same_slot_key;
 using purify::accountable::signature_challenge;
 
 auto bytes32(std::string_view hex) {
@@ -73,11 +74,39 @@ void run_accountable_signature_tests(TestContext& ctx) {
     ctx.expect(*nonce_a == expected_nonce && *nonce_b == expected_nonce,
                "both scalar responses preserve the identical odd-Y raw nonce");
 
-    const auto scalar_a = purify::FieldElement::from_bytes32(encoded_a);
-    const auto scalar_b = purify::FieldElement::from_bytes32(encoded_b);
-    const auto recovered = (scalar_a - scalar_b) * (*challenge_a - *challenge_b).inverse();
-    ctx.expect(recovered == purify::FieldElement::from_u64(3),
-               "independent same-slot response vectors cancel their nonce");
+    const auto test_key = purify::FieldElement::from_u64(3);
+    auto recovered = recover_same_slot_key(context, body_a, *signature_a, body_b, *signature_b, secp.get());
+    expect_ok(ctx, recovered, "independent same-slot responses recover a key");
+    if (recovered) ctx.expect(*recovered == test_key.to_bytes_be(), "recovery returns the exact registered scalar");
+    auto reversed = recover_same_slot_key(context, body_b, *signature_b, body_a, *signature_a, secp.get());
+    expect_ok(ctx, reversed, "response order does not affect recovery");
+    if (reversed && recovered) ctx.expect(*reversed == *recovered, "reverse recovery matches");
+    expect_error(ctx, recover_same_slot_key(context, body_a, *signature_a, body_a, *signature_b, secp.get()),
+                 purify::ErrorCode::BindingMismatch, "equal challenges reject before inversion");
+    expect_error(ctx, recover_same_slot_key(context, body_a, *signature_a, body_b, *signature_a, secp.get()),
+                 purify::ErrorCode::EquationMismatch, "a zero recovered scalar cannot match the key");
+
+    const auto altered_bytes = (purify::FieldElement::from_bytes32(encoded_b)
+                               + purify::FieldElement::one()).to_bytes_be();
+    auto altered_signature = ScalarSignature::deserialize(altered_bytes);
+    expect_ok(ctx, altered_signature, "altered scalar remains a canonical encoding");
+    if (altered_signature) {
+        expect_error(ctx, recover_same_slot_key(context, body_a, *signature_a, body_b, *altered_signature, secp.get()),
+                     purify::ErrorCode::EquationMismatch, "different reconstructed nonces cannot recover the registered key");
+    }
+    const auto body_c = purify::bytes_from_ascii("accept:root-c");
+    expect_error(ctx, recover_same_slot_key(context, body_a, *signature_a, body_c, *signature_b, secp.get()),
+                 purify::ErrorCode::EquationMismatch, "changed body cannot recover the registered key");
+
+    const auto raw_nonce = purify::FieldElement::from_u64(6);
+    auto negative_a = ScalarSignature::deserialize((raw_nonce - *challenge_a * test_key).to_bytes_be());
+    auto negative_b = ScalarSignature::deserialize((raw_nonce - *challenge_b * test_key).to_bytes_be());
+    expect_ok(ctx, negative_a, "negative-key first response parses");
+    expect_ok(ctx, negative_b, "negative-key second response parses");
+    if (negative_a && negative_b) {
+        expect_error(ctx, recover_same_slot_key(context, body_a, *negative_a, body_b, *negative_b, secp.get()),
+                     purify::ErrorCode::EquationMismatch, "recovered minus q is rejected without parity normalization");
+    }
 
     // Reconstruction alone makes no validity claim; the nonce proof must check
     // the reconstructed point, which changes with an unauthenticated statement.
@@ -93,6 +122,18 @@ void run_accountable_signature_tests(TestContext& ctx) {
     expect_ok(ctx, changed_challenge, "alternate registered hosts have a challenge");
     if (changed_input) ctx.expect(*changed_input != *input, "host commitment binds the nonce input");
     if (changed_challenge) ctx.expect(*changed_challenge != *challenge_a, "host commitment binds the challenge");
+    expect_error(ctx, recover_same_slot_key(changed, body_a, *signature_a, body_b, *signature_b, secp.get()),
+                 purify::ErrorCode::EquationMismatch, "responses cannot be reinterpreted under changed hosts");
+
+    const auto other_slot = purify::bytes_from_ascii("domain=7;epoch=14;slot=2");
+    changed = context;
+    changed.slot = other_slot;
+    expect_error(ctx, recover_same_slot_key(changed, body_a, *signature_a, body_b, *signature_b, secp.get()),
+                 purify::ErrorCode::EquationMismatch, "responses cannot be reinterpreted under a different slot");
+    changed = context;
+    changed.signing_key = bytes32("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+    expect_error(ctx, recover_same_slot_key(changed, body_a, *signature_a, body_b, *signature_b, secp.get()),
+                 purify::ErrorCode::EquationMismatch, "responses cannot recover a different registered key");
 
     const auto short_slot = purify::bytes_from_ascii("a");
     const auto long_slot = purify::bytes_from_ascii("ab");
@@ -134,6 +175,13 @@ void run_accountable_signature_tests(TestContext& ctx) {
     if (zero_signature) {
         expect_ok(ctx, reconstruct_nonce(context, body_a, *zero_signature, secp.get()),
                   "zero response reconstructs minus e times Q");
+        auto paired = ScalarSignature::deserialize(((*challenge_b - *challenge_a) * test_key).to_bytes_be());
+        expect_ok(ctx, paired, "second response sharing zero response's nonce parses");
+        if (paired) {
+            auto zero_recovered = recover_same_slot_key(context, body_a, *zero_signature, body_b, *paired, secp.get());
+            expect_ok(ctx, zero_recovered, "a zero response with a finite nonce supports recovery");
+            if (zero_recovered) ctx.expect(*zero_recovered == test_key.to_bytes_be(), "zero-response recovery returns exact q");
+        }
     }
     const auto infinity_response = (*challenge_a * purify::FieldElement::from_u64(3)).to_bytes_be();
     auto infinity_signature = ScalarSignature::deserialize(infinity_response);
@@ -141,5 +189,11 @@ void run_accountable_signature_tests(TestContext& ctx) {
     if (infinity_signature) {
         expect_error(ctx, reconstruct_nonce(context, body_a, *infinity_signature, secp.get()),
                      purify::ErrorCode::RangeViolation, "a reconstructed nonce at infinity rejects");
+        auto infinity_second = ScalarSignature::deserialize((*challenge_b * test_key).to_bytes_be());
+        expect_ok(ctx, infinity_second, "second infinity-case response parses");
+        if (infinity_second) {
+            expect_error(ctx, recover_same_slot_key(context, body_a, *infinity_signature, body_b, *infinity_second, secp.get()),
+                         purify::ErrorCode::RangeViolation, "recovery rejects a common nonce at infinity");
+        }
     }
 }

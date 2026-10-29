@@ -102,4 +102,47 @@ Result<std::array<unsigned char, 33>> reconstruct_nonce(
     return nonce;
 }
 
+Result<std::array<unsigned char, 32>> recover_same_slot_key(
+    const ConflictContext& context,
+    std::span<const unsigned char> first_body, const ScalarSignature& first_signature,
+    std::span<const unsigned char> second_body, const ScalarSignature& second_signature,
+    purify_secp_context* secp_context) {
+    PURIFY_ASSIGN_OR_RETURN(auto first_challenge, signature_challenge(context, first_body, secp_context),
+                            "accountable:recover_first_challenge");
+    PURIFY_ASSIGN_OR_RETURN(auto second_challenge, signature_challenge(context, second_body, secp_context),
+                            "accountable:recover_second_challenge");
+    const auto difference = first_challenge - second_challenge;
+    if (difference.is_zero()) {
+        return unexpected_error(ErrorCode::BindingMismatch, "accountable:equal_challenges");
+    }
+
+    const auto first_scalar = FieldElement::from_bytes32(first_signature.serialize());
+    const auto second_scalar = FieldElement::from_bytes32(second_signature.serialize());
+    const auto recovered = (first_scalar - second_scalar) * difference.inverse();
+    if (recovered.is_zero()) {
+        return unexpected_error(ErrorCode::EquationMismatch, "accountable:recovered_zero");
+    }
+    const auto scalar = recovered.to_bytes_be();
+    static constexpr std::array<unsigned char, 33> generator{
+        0x02, 0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0,
+        0x62, 0x95, 0xce, 0x87, 0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d,
+        0xce, 0x28, 0xd9, 0x59, 0xf2, 0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98,
+    };
+    std::array<unsigned char, 33> point{};
+    if (purify_point_scale(secp_context, generator.data(), scalar.data(), point.data()) == 0) {
+        return unexpected_error(ErrorCode::InternalMismatch, "accountable:recovered_point");
+    }
+    // Compare the full point: normalizing a recovered -q would accept a pair
+    // whose reconstructed nonces differ under this context's even-Y Q.
+    if (point[0] != 0x02 || !std::equal(context.signing_key.begin(), context.signing_key.end(), point.begin() + 1)) {
+        return unexpected_error(ErrorCode::EquationMismatch, "accountable:recovered_key");
+    }
+    // Exact qG=Q already implies R_first=R_second. Check the common raw nonce
+    // is nonzero without repeating either challenge hash or point operation.
+    if ((first_scalar - first_challenge * recovered).is_zero()) {
+        return unexpected_error(ErrorCode::RangeViolation, "accountable:common_nonce_at_infinity");
+    }
+    return scalar;
+}
+
 } // namespace purify::accountable

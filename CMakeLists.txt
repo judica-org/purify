@@ -320,6 +320,7 @@ add_library(purify
     src/puresign/bppp.cpp
     src/puresign/codecs/bppp.cpp
     src/puresign/accountable.cpp
+    src/puresign/accountable_roster.cpp
     src/protocol/bppp.cpp
     src/bridge/bppp_bridge.c
 )
@@ -408,6 +409,7 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/bppp.cpp
         src/puresign/codecs/bppp.cpp
         src/puresign/accountable.cpp
+        src/puresign/accountable_roster.cpp
         src/protocol/bppp.cpp
         src/bridge/bppp_bridge.c
     )
@@ -494,6 +496,7 @@ if(PURIFY_BUILD_TESTS)
         tests/expected_tests.cpp
         tests/norm_protocol_tests.cpp
         tests/accountable_signature_tests.cpp
+        tests/accountable_roster_tests.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 
@@ -516,6 +519,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(expected)
     purify_add_cpp_suite_test(norm_protocol)
     purify_add_cpp_suite_test(accountable_signature)
+    purify_add_cpp_suite_test(accountable_roster)
 
     add_executable(purify_property_tests
         tests/purify_property_tests.cpp

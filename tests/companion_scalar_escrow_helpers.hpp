@@ -52,6 +52,10 @@ Bytes binding(const UInt512& recipient, const UInt512& payload, const Ciphertext
 Result<purify::bppp::PointBytes> secp_point(const FieldElement& scalar, purify_secp_context* secp);
 Result<bool> verify(const UInt512& recipient, const UInt512& payload, const Ciphertext& ciphertext,
     const Bytes& context, const purify::bppp::ExperimentalCircuitZkNormArgProof& proof, purify_secp_context* secp);
+// Validate the exact recovered payload after the caller has authenticated the
+// public statement. This helper does not establish proof or receipt acceptance.
+Result<purify::GeneratedKey> decrypt_payload(const purify::SecretKey& recipient_secret,
+    const UInt512& recipient, const UInt512& payload, const Ciphertext& ciphertext);
 Result<purify::GeneratedKey> decrypt_checked(const purify::SecretKey& recipient_secret, const UInt512& recipient,
     const UInt512& payload, const Ciphertext& ciphertext, const Bytes& context,
     const purify::bppp::ExperimentalCircuitZkNormArgProof& proof, purify_secp_context* secp);

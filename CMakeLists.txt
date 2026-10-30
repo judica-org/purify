@@ -504,6 +504,8 @@ if(PURIFY_BUILD_TESTS)
         tests/canonical_recovery_root_helpers.cpp
         tests/companion_scalar_escrow_tests.cpp
         tests/companion_scalar_escrow_helpers.cpp
+        tests/construction_receipt_helpers.cpp
+        tests/construction_receipt_tests.cpp
         tests/receipt_sha256_tests.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
@@ -531,6 +533,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_response)
     purify_add_cpp_suite_test(canonical_recovery_root)
     purify_add_cpp_suite_test(companion_scalar_escrow)
+    purify_add_cpp_suite_test(construction_receipt)
     purify_add_cpp_suite_test(receipt_sha256)
 
     add_executable(purify_property_tests

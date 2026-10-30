@@ -260,6 +260,11 @@ Result<purify::GeneratedKey> decrypt_checked(const purify::SecretKey& recipient_
                                             purify_secp_context* secp) {
     PURIFY_ASSIGN_OR_RETURN(const auto& accepted, verify(recipient, payload, ciphertext, context, proof, secp), "scalar_escrow:verify");
     if (!accepted) return purify::unexpected_error(purify::ErrorCode::BindingMismatch, "scalar_escrow:invalid_proof");
+    return decrypt_payload(recipient_secret, recipient, payload, ciphertext);
+}
+
+Result<purify::GeneratedKey> decrypt_payload(const purify::SecretKey& recipient_secret, const UInt512& recipient,
+                                            const UInt512& payload, const Ciphertext& ciphertext) {
     PURIFY_ASSIGN_OR_RETURN(const auto& receiver, purify::derive_key(recipient_secret), "scalar_escrow:recipient_secret");
     if (receiver.public_key != recipient) {
         return purify::unexpected_error(purify::ErrorCode::BindingMismatch, "scalar_escrow:wrong_recipient");

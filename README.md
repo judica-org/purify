@@ -239,6 +239,11 @@ Example:
 
 ## Benchmarking
 
+The [aggregate nonce baseline](docs/aggregate-nonce.md) adds a separate
+`bench_aggregate_nonce --members N` tool for one summed-nonce proof over up
+to 100 independent hosts. It is centralized and uses the imported arithmetic
+backend; it does not implement MPC or use the experimental BP++ wrapper.
+
 `bench_purify` measures:
 
 - native circuit construction time

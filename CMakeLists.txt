@@ -450,6 +450,11 @@ if(PURIFY_BUILD_BENCH)
     purify_enable_warnings(bench_purify)
     purify_enable_sanitizers(bench_purify)
     purify_enable_release_optimizations(bench_purify)
+
+    add_executable(bench_aggregate_nonce bench/bench_aggregate_nonce.cpp)
+    target_link_libraries(bench_aggregate_nonce PRIVATE purify::purify)
+    purify_enable_warnings(bench_aggregate_nonce)
+    purify_enable_sanitizers(bench_aggregate_nonce)
 endif()
 
 if(PURIFY_BUILD_TESTS OR PURIFY_BUILD_CBMC)
@@ -490,6 +495,7 @@ if(PURIFY_BUILD_TESTS)
         tests/puresign_tests.cpp
         tests/legacy_bulletproof_tests.cpp
         tests/expected_tests.cpp
+        tests/aggregate_nonce_tests.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 
@@ -510,6 +516,8 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(puresign)
     purify_add_cpp_suite_test(legacy_bulletproof)
     purify_add_cpp_suite_test(expected)
+    purify_add_cpp_suite_test(aggregate_nonce)
+    purify_add_cpp_suite_test(aggregate_nonce_100)
 
     add_executable(purify_property_tests
         tests/purify_property_tests.cpp

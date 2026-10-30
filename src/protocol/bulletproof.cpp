@@ -463,6 +463,74 @@ void append_constraint_to_circuit(CircuitLike& circuit, const Expr& lhs, const E
     }
 }
 
+Result<std::size_t> sum_circuit_gate_count(const PackedCircuit& base,
+                                          std::span<const purify::UInt512> public_keys) {
+    if (public_keys.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput, "sum_circuit_gate_count:empty_roster");
+    }
+    if (!base.has_valid_shape() || !is_power_of_two_size(base.n_gates())
+        || base.n_commitments() != 1 || !base.commitment_row(0).entries_view().empty()) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "sum_circuit_gate_count:template_shape");
+    }
+    std::size_t used_gates = 0;
+    if (!checked_mul_size(base.n_gates(), public_keys.size(), used_gates)) {
+        return unexpected_error(ErrorCode::Overflow, "sum_circuit_gate_count:used_gates");
+    }
+    std::size_t padded_gates = 1;
+    while (padded_gates < used_gates) {
+        if (!checked_mul_size(padded_gates, 2, padded_gates)) {
+            return unexpected_error(ErrorCode::Overflow, "sum_circuit_gate_count:padded_gates");
+        }
+    }
+    std::vector<purify::UInt512> sorted_keys(public_keys.begin(), public_keys.end());
+    std::sort(sorted_keys.begin(), sorted_keys.end());
+    if (std::adjacent_find(sorted_keys.begin(), sorted_keys.end()) != sorted_keys.end()) {
+        return unexpected_error(ErrorCode::BindingMismatch, "sum_circuit_gate_count:duplicate_host");
+    }
+    for (const auto& public_key : public_keys) {
+        PURIFY_RETURN_IF_ERROR(purify::unpack_public(public_key), "sum_circuit_gate_count:public_key");
+    }
+    return padded_gates;
+}
+
+Status validate_sum_expression(const Expr& expr, std::size_t member_gates) {
+    for (const auto& [symbol, scalar] : expr.linear()) {
+        (void)scalar;
+        if (symbol.kind == SymbolKind::Commitment || symbol.kind == SymbolKind::Witness) {
+            return unexpected_error(ErrorCode::UnsupportedSymbol, "validate_sum_expression:symbol_kind");
+        }
+        if (symbol.index >= member_gates) {
+            return unexpected_error(ErrorCode::IndexOutOfRange, "validate_sum_expression:gate_index");
+        }
+    }
+    return {};
+}
+
+Status append_sum_expression(purify::NativeBulletproofCircuit& circuit, const Expr& expr,
+                             std::size_t gate_offset, std::size_t member_gates,
+                             std::size_t constraint_index) {
+    PURIFY_RETURN_IF_ERROR(validate_sum_expression(expr, member_gates), "append_sum_expression:shape");
+    for (const auto& [symbol, scalar] : expr.linear()) {
+        const std::size_t gate_index = gate_offset + symbol.index;
+        switch (symbol.kind) {
+        case SymbolKind::Left:
+            circuit.add_left_term(gate_index, constraint_index, scalar);
+            break;
+        case SymbolKind::Right:
+            circuit.add_right_term(gate_index, constraint_index, scalar);
+            break;
+        case SymbolKind::Output:
+            circuit.add_output_term(gate_index, constraint_index, scalar);
+            break;
+        case SymbolKind::Commitment:
+        case SymbolKind::Witness:
+        default:
+            return unexpected_error(ErrorCode::UnsupportedSymbol, "append_sum_expression:symbol_kind");
+        }
+    }
+    return {};
+}
+
 struct FlattenedRowFamily {
     std::vector<purify_bulletproof_row_view> views;
     std::vector<std::size_t> indices;
@@ -2018,6 +2086,120 @@ Result<NativeBulletproofCircuit> NativeBulletproofCircuitTemplate::instantiate(c
         return unexpected_error(packed.error(), "NativeBulletproofCircuitTemplate::instantiate:instantiate_packed");
     }
     return packed->unpack();
+}
+
+Result<NativeBulletproofCircuit> NativeBulletproofCircuitTemplate::instantiate_sum(
+    std::span<const UInt512> public_keys) const {
+    PURIFY_ASSIGN_OR_RETURN(const auto& gates, sum_circuit_gate_count(base_packed_, public_keys),
+                            "NativeBulletproofCircuitTemplate::instantiate_sum:gate_count");
+    std::size_t member_constraints = 0;
+    std::size_t total_constraints = 0;
+    if (!checked_add_size(base_packed_.constraint_count(), 2, member_constraints)
+        || !checked_mul_size(member_constraints, public_keys.size(), total_constraints)
+        || !checked_add_size(total_constraints, 1, total_constraints)) {
+        return unexpected_error(ErrorCode::Overflow, "NativeBulletproofCircuitTemplate::instantiate_sum:constraints");
+    }
+
+    // Each member's bit equations are already explicit. They no longer form the
+    // global gate prefix required by the legacy implicit-bit optimization.
+    NativeBulletproofCircuit circuit(gates, 1, 0);
+    circuit.c.reserve(total_constraints);
+    const std::size_t member_gates = base_packed_.n_gates();
+    auto append_row = [&](NativeBulletproofCircuitRow& destination,
+                          NativeBulletproofCircuitRow::PackedWithSlack source,
+                          std::size_t constraint_offset) -> Status {
+        destination.entries.reserve(source.size);
+        for (const auto& entry : source.entries_view()) {
+            if (entry.idx >= base_packed_.constraint_count()) {
+                return unexpected_error(ErrorCode::IndexOutOfRange,
+                                        "NativeBulletproofCircuitTemplate::instantiate_sum:constraint_index");
+            }
+            destination.add(constraint_offset + entry.idx, entry.scalar);
+        }
+        return {};
+    };
+
+    for (std::size_t member = 0; member < public_keys.size(); ++member) {
+        const std::size_t gate_offset = member * member_gates;
+        const std::size_t constraint_offset = circuit.c.size();
+        const auto constants = base_packed_.constants();
+        circuit.c.insert(circuit.c.end(), constants.begin(), constants.end());
+        for (std::size_t gate = 0; gate < member_gates; ++gate) {
+            PURIFY_RETURN_IF_ERROR(append_row(circuit.wl[gate_offset + gate], base_packed_.left_row(gate), constraint_offset),
+                                   "NativeBulletproofCircuitTemplate::instantiate_sum:left_row");
+            PURIFY_RETURN_IF_ERROR(append_row(circuit.wr[gate_offset + gate], base_packed_.right_row(gate), constraint_offset),
+                                   "NativeBulletproofCircuitTemplate::instantiate_sum:right_row");
+            PURIFY_RETURN_IF_ERROR(append_row(circuit.wo[gate_offset + gate], base_packed_.output_row(gate), constraint_offset),
+                                   "NativeBulletproofCircuitTemplate::instantiate_sum:output_row");
+        }
+        PURIFY_ASSIGN_OR_RETURN(const auto& unpacked, unpack_public(public_keys[member]),
+                                "NativeBulletproofCircuitTemplate::instantiate_sum:unpack_public");
+        auto append_host_coordinate = [&](const UInt256& coordinate, const Expr& expr) -> Status {
+            PURIFY_ASSIGN_OR_RETURN(const auto& value, FieldElement::try_from_uint256(coordinate),
+                                    "NativeBulletproofCircuitTemplate::instantiate_sum:coordinate");
+            const std::size_t constraint = circuit.add_constraint(value - expr.constant());
+            return append_sum_expression(circuit, expr, gate_offset, member_gates, constraint);
+        };
+        PURIFY_RETURN_IF_ERROR(append_host_coordinate(unpacked.first, p1x_),
+                               "NativeBulletproofCircuitTemplate::instantiate_sum:p1x");
+        PURIFY_RETURN_IF_ERROR(append_host_coordinate(unpacked.second, p2x_),
+                               "NativeBulletproofCircuitTemplate::instantiate_sum:p2x");
+    }
+
+    const std::size_t sum_constraint = circuit.add_constraint();
+    for (std::size_t member = 0; member < public_keys.size(); ++member) {
+        circuit.c[sum_constraint] = circuit.c[sum_constraint] - out_.constant();
+        PURIFY_RETURN_IF_ERROR(append_sum_expression(circuit, out_, member * member_gates,
+                                                     member_gates, sum_constraint),
+                               "NativeBulletproofCircuitTemplate::instantiate_sum:output_sum");
+    }
+    circuit.add_commitment_term(0, sum_constraint, FieldElement::one().negate());
+    return circuit;
+}
+
+Result<BulletproofAssignmentData> NativeBulletproofCircuitTemplate::sum_assignments(
+    std::span<const UInt512> public_keys,
+    std::span<const BulletproofAssignmentData> assignments) const {
+    if (assignments.size() != public_keys.size()) {
+        return unexpected_error(ErrorCode::SizeMismatch, "NativeBulletproofCircuitTemplate::sum_assignments:roster_size");
+    }
+    PURIFY_ASSIGN_OR_RETURN(const auto& gates, sum_circuit_gate_count(base_packed_, public_keys),
+                            "NativeBulletproofCircuitTemplate::sum_assignments:gate_count");
+    for (const Expr* expr : {&p1x_, &p2x_, &out_}) {
+        PURIFY_RETURN_IF_ERROR(validate_sum_expression(*expr, base_packed_.n_gates()),
+                               "NativeBulletproofCircuitTemplate::sum_assignments:expression_shape");
+    }
+    for (std::size_t member = 0; member < assignments.size(); ++member) {
+        PURIFY_ASSIGN_OR_RETURN(const auto& partial_ok, partial_evaluate(assignments[member]),
+                                "NativeBulletproofCircuitTemplate::sum_assignments:partial_evaluate");
+        if (!partial_ok) {
+            return unexpected_error(ErrorCode::EquationMismatch,
+                                    "NativeBulletproofCircuitTemplate::sum_assignments:invalid_assignment");
+        }
+        PURIFY_ASSIGN_OR_RETURN(const auto& final_ok, final_evaluate(assignments[member], public_keys[member]),
+                                "NativeBulletproofCircuitTemplate::sum_assignments:final_evaluate");
+        if (!final_ok) {
+            return unexpected_error(ErrorCode::BindingMismatch,
+                                    "NativeBulletproofCircuitTemplate::sum_assignments:host_or_output");
+        }
+    }
+
+    BulletproofAssignmentData sum;
+    sum.left.reserve(gates);
+    sum.right.reserve(gates);
+    sum.output.reserve(gates);
+    FieldElement output_sum = FieldElement::zero();
+    for (const auto& assignment : assignments) {
+        sum.left.insert(sum.left.end(), assignment.left.begin(), assignment.left.end());
+        sum.right.insert(sum.right.end(), assignment.right.begin(), assignment.right.end());
+        sum.output.insert(sum.output.end(), assignment.output.begin(), assignment.output.end());
+        output_sum = output_sum + assignment.commitments.front();
+    }
+    sum.left.resize(gates, FieldElement::zero());
+    sum.right.resize(gates, FieldElement::zero());
+    sum.output.resize(gates, FieldElement::zero());
+    sum.commitments.push_back(output_sum);
+    return sum;
 }
 
 Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data(const WitnessAssignments& vars) const {

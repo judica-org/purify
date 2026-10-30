@@ -546,7 +546,11 @@ if(PURIFY_BUILD_TESTS)
 
     function(purify_add_property_suite_test suite_name)
         add_test(NAME "purify.property.${suite_name}" COMMAND purify_property_tests --suite "${suite_name}")
-        set_tests_properties("purify.property.${suite_name}" PROPERTIES TIMEOUT 300)
+        if(PURIFY_ENABLE_SANITIZERS)
+            set_tests_properties("purify.property.${suite_name}" PROPERTIES TIMEOUT 900)
+        else()
+            set_tests_properties("purify.property.${suite_name}" PROPERTIES TIMEOUT 300)
+        endif()
     endfunction()
 
     purify_add_property_suite_test(key_and_circuit)
@@ -606,7 +610,7 @@ if(PURIFY_BUILD_TESTS)
 
     if(PURIFY_BUILD_BENCH)
         add_test(NAME purify.bench COMMAND bench_purify --epochs 1 --min-epoch-ms 1)
-        set_tests_properties(purify.bench PROPERTIES TIMEOUT 300)
+        set_tests_properties(purify.bench PROPERTIES TIMEOUT 900)
     endif()
 
     if(PURIFY_BUILD_FUZZ)

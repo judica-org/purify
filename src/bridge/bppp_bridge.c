@@ -90,6 +90,10 @@ struct purify_bulletproof_backend_resources {
     secp256k1_bulletproof_generators* gens;
 };
 
+size_t purify_bulletproof_backend_resources_scratch_capacity(const purify_bulletproof_backend_resources* resources) {
+    return resources != NULL && resources->scratch != NULL ? resources->scratch->max_size : 0;
+}
+
 struct purify_bppp_backend_resources {
     size_t generators_count;
     secp256k1_context* ctx;

@@ -195,6 +195,7 @@ purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_creat
 purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_clone(
     const purify_bulletproof_backend_resources* resources);
 void purify_bulletproof_backend_resources_destroy(purify_bulletproof_backend_resources* resources);
+size_t purify_bulletproof_backend_resources_scratch_capacity(const purify_bulletproof_backend_resources* resources);
 
 /* Commitment buffers contain circuit->n_commits packed 33-byte points. A non-null
  * blinds32 buffer contains circuit->n_commits packed 32-byte scalars; NULL uses

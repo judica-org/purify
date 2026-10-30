@@ -209,6 +209,42 @@ void test_experimental_bulletproof_multiple_outputs(TestContext& ctx) {
                "trailing proof bytes are rejected");
 }
 
+void test_experimental_bulletproof_output_transcript_boundary(TestContext& ctx) {
+    auto context = make_test_secp_context(ctx);
+    if (context == nullptr) return;
+    const auto generator = purify::bppp::base_generator(context.get());
+    const auto binding = purify::bytes_from_ascii("output-transcript-boundary");
+    purify::BulletproofScalarBytes nonce{};
+    nonce.fill(0x64);
+
+    for (std::size_t count : {7u, 8u, 9u}) {
+        NativeBulletproofCircuit circuit(1, count, 0);
+        const auto row = circuit.add_constraint(FieldElement::from_int(12));
+        circuit.add_output_term(0, row, FieldElement::one());
+        // No constraint uses a commitment. Thus its sign is bound only by the
+        // transcript and not independently by a commitment equation term.
+        BulletproofAssignmentData assignment;
+        assignment.left = {FieldElement::from_int(3)};
+        assignment.right = {FieldElement::from_int(4)};
+        assignment.output = {FieldElement::from_int(12)};
+        assignment.commitments.assign(count, FieldElement::one());
+        auto proof = purify::prove_experimental_circuit(
+            circuit, assignment, nonce, generator, context.get(), binding);
+        expect_ok(ctx, proof, "proof accepts output transcript boundary count");
+        if (!proof.has_value()) continue;
+        auto verified = purify::verify_experimental_circuit(
+            circuit, *proof, generator, context.get(), binding);
+        ctx.expect(verified.has_value() && *verified, "boundary proof verifies");
+
+        auto changed = *proof;
+        changed.commitments.back()[0] ^= 1; // Negate the compressed point.
+        auto rejected = purify::verify_experimental_circuit(
+            circuit, changed, generator, context.get(), binding);
+        ctx.expect(rejected.has_value() && !*rejected,
+                   "transcript binds the last output point's sign");
+    }
+}
+
 void test_legacy_scratch_tracks_constraint_count(TestContext& ctx) {
     auto context = make_test_secp_context(ctx);
     if (context == nullptr) return;
@@ -243,6 +279,12 @@ void test_legacy_scratch_tracks_constraint_count(TestContext& ctx) {
     auto cloned = prover_cache.clone_for_thread(circuit.n_gates);
     expect_ok(ctx, cloned, "grown prover resources clone successfully");
     if (!cloned.has_value()) return;
+    const auto* original_resources = prover_cache.get_or_create(circuit.n_gates, context.get());
+    const auto* cloned_resources = cloned->get_or_create(circuit.n_gates, context.get());
+    const std::size_t original_capacity = purify_bulletproof_backend_resources_scratch_capacity(original_resources);
+    const std::size_t cloned_capacity = purify_bulletproof_backend_resources_scratch_capacity(cloned_resources);
+    ctx.expect(original_capacity > (std::size_t{1} << 24), "prover scratch grew beyond the initial allocation");
+    ctx.expect(cloned_capacity == original_capacity, "clone preserves grown scratch capacity");
     auto cloned_verified = purify::verify_experimental_circuit(
         circuit, *proof, generator, context.get(), binding, &*cloned);
     expect_ok(ctx, cloned_verified, "cloned resources verify the same circuit");
@@ -422,6 +464,7 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
 void run_legacy_bulletproof_tests(TestContext& ctx) {
     test_experimental_bulletproof_roundtrip(ctx);
     test_experimental_bulletproof_multiple_outputs(ctx);
+    test_experimental_bulletproof_output_transcript_boundary(ctx);
     test_legacy_scratch_tracks_constraint_count(ctx);
     test_experimental_bulletproof_rejects_malformed_inner_product_point(ctx);
     test_legacy_bridge_zero_constraint_roundtrip(ctx);

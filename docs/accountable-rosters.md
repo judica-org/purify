@@ -86,7 +86,8 @@ it does not establish the complete signature construction's no-framing or
 extraction claims. Tests do not engineer hash preimages for zero coefficients
 or cancellation of adversarially selected weighted keys.
 
-The reviewed nonce relation, partial verification/signing, aggregation,
-same-slot extraction, role separation, malicious enrollment argument, and
-durable authorization/release boundaries remain separate work. Key coefficients
-alone do not establish those properties.
+The [public response helpers](accountable-responses.md) check partial equations
+and aggregate scalars using this roster. The reviewed nonce relation, secret
+signing, certificate acceptance and conflict extraction, role separation,
+malicious enrollment argument, and durable authorization/release boundaries
+remain separate work. Key coefficients alone do not establish those properties.

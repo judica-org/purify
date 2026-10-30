@@ -3,12 +3,17 @@
 This experimental contract implements the public transcript, response codec,
 and algebraic key recovery for
 [Purify issue #20](https://github.com/judica-org/purify/issues/20). It does not
-implement a production signer, a nonce-proof verifier, MuSig aggregation, or a
+implement a production signer, a nonce-proof verifier, MuSig2 signing, or a
 security proof. In particular,
 `accountable::reconstruct_nonce` returns an algebraic point, never a successful
 signature-verification result. Live use awaits the reviewed leaf relation,
 signature/proof composition, private multiparty protocol, and durable signing
 rules.
+
+The [ordered roster](accountable-rosters.md) and
+[partial-response helpers](accountable-responses.md) implement public key
+aggregation and response equations for this transcript. Those algebraic checks
+do not discharge the nonce-proof or signature-composition requirements below.
 
 ## Public context and exact encoding
 

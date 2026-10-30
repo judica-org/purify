@@ -84,6 +84,7 @@ static void purify_bridge_secure_clear(void* data, size_t size) {
 
 struct purify_bulletproof_backend_resources {
     size_t n_gates;
+    size_t scratch_capacity;
     secp256k1_context* ctx;
     secp256k1_scratch_space* scratch;
     secp256k1_bulletproof_generators* gens;
@@ -121,6 +122,94 @@ static int purify_bridge_checked_add_size(size_t lhs, size_t rhs, size_t* out) {
         return 0;
     }
     *out = lhs + rhs;
+    return 1;
+}
+
+/* Reserve this much work space for the batched multiscalar multiplication
+ * after the imported circuit and inner-product frames have been allocated.
+ */
+static const size_t purify_bulletproof_msm_scratch_size = (size_t)1u << 24;
+
+static int purify_bulletproof_add_scratch_frame(size_t* total, size_t bytes, size_t objects) {
+    size_t padding;
+    return purify_bridge_checked_mul_size(objects, ALIGNMENT - 1, &padding)
+        && purify_bridge_checked_add_size(bytes, padding, &bytes)
+        && purify_bridge_checked_add_size(*total, bytes, total);
+}
+
+static int purify_bulletproof_circuit_scratch_size(
+    const secp256k1_bulletproof_circuit* circuit, size_t* out) {
+    size_t scalars;
+    size_t bytes;
+    size_t points;
+    size_t prover = 0;
+    size_t verifier = 0;
+    size_t allocation_size;
+
+    /* The prover's compressed circuit stays live throughout the nested
+     * inner-product proof. Match both frames in the imported implementation.
+     */
+    if (!purify_bridge_checked_mul_size(5, circuit->n_gates, &scalars)
+        || !purify_bridge_checked_add_size(scalars, circuit->n_constraints, &scalars)
+        || !purify_bridge_checked_add_size(scalars, circuit->n_commits, &scalars)
+        || !purify_bridge_checked_mul_size(scalars, sizeof(secp256k1_scalar), &bytes)
+        || !purify_bridge_checked_add_size(bytes, sizeof(secp256k1_bulletproof_pf_compressed_circuit), &bytes)
+        || !purify_bulletproof_add_scratch_frame(&prover, bytes, 2)) {
+        return 0;
+    }
+    if (circuit->n_gates > 2) {
+        if (!purify_bridge_checked_mul_size(2, circuit->n_gates, &scalars)
+            || !purify_bridge_checked_mul_size(scalars, sizeof(secp256k1_scalar) + sizeof(secp256k1_ge), &bytes)
+            || !purify_bridge_checked_mul_size(2, secp256k1_floor_lg(circuit->n_gates), &points)
+            || !purify_bridge_checked_mul_size(points, sizeof(secp256k1_ge), &points)
+            || !purify_bridge_checked_add_size(bytes, points, &bytes)
+            || !purify_bulletproof_add_scratch_frame(&prover, bytes, 5)) {
+            return 0;
+        }
+    }
+
+    /* The bridge verifies one proof: outer verifier, compressed circuit, and
+     * inner-product verifier frames are simultaneously live during the MSM.
+     */
+    if (!purify_bridge_checked_add_size(sizeof(secp256k1_bulletproof_circuit_vfy_ecmult_context),
+                                        sizeof(secp256k1_bulletproof_innerproduct_context), &bytes)
+        || !purify_bulletproof_add_scratch_frame(&verifier, bytes, 2)
+        || !purify_bridge_checked_mul_size(2, circuit->n_gates, &scalars)
+        || !purify_bridge_checked_add_size(scalars, circuit->n_constraints, &scalars)
+        || !purify_bridge_checked_add_size(scalars, circuit->n_commits, &scalars)
+        || !purify_bridge_checked_mul_size(scalars, sizeof(secp256k1_scalar), &bytes)
+        || !purify_bridge_checked_add_size(bytes, sizeof(secp256k1_bulletproof_vfy_compressed_circuit), &bytes)
+        || !purify_bulletproof_add_scratch_frame(&verifier, bytes, 2)
+        || !purify_bridge_checked_add_size(sizeof(secp256k1_scalar),
+                                          sizeof(secp256k1_bulletproof_innerproduct_vfy_data), &bytes)
+        || !purify_bulletproof_add_scratch_frame(&verifier, bytes, 2)
+        || !purify_bridge_checked_add_size(prover > verifier ? prover : verifier,
+                                          purify_bulletproof_msm_scratch_size, out)
+        || !purify_bridge_checked_add_size(*out, ROUND_TO_ALIGN(sizeof(secp256k1_scratch)), &allocation_size)) {
+        return 0;
+    }
+    return 1;
+}
+
+static int purify_bulletproof_reserve_circuit_scratch(
+    purify_bulletproof_backend_resources* resources,
+    const secp256k1_bulletproof_circuit* circuit) {
+    size_t required;
+    secp256k1_scratch_space* replacement;
+
+    if (!purify_bulletproof_circuit_scratch_size(circuit, &required)) {
+        return 0;
+    }
+    if (required <= resources->scratch_capacity) {
+        return 1;
+    }
+    replacement = secp256k1_scratch_space_create(resources->ctx, required);
+    if (replacement == NULL) {
+        return 0;
+    }
+    secp256k1_scratch_space_destroy(resources->ctx, resources->scratch);
+    resources->scratch = replacement;
+    resources->scratch_capacity = required;
     return 1;
 }
 
@@ -230,7 +319,8 @@ purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_creat
 
     resources->ctx = ctx;
 
-    resources->scratch = secp256k1_scratch_space_create(resources->ctx, 1u << 24);
+    resources->scratch_capacity = purify_bulletproof_msm_scratch_size;
+    resources->scratch = secp256k1_scratch_space_create(resources->ctx, resources->scratch_capacity);
     if (resources->scratch == NULL) {
         purify_bulletproof_backend_resources_destroy(resources);
         return NULL;
@@ -262,7 +352,8 @@ purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_clone
     }
     clone->ctx = resources->ctx;
     clone->n_gates = resources->n_gates;
-    clone->scratch = secp256k1_scratch_space_create(clone->ctx, 1u << 24);
+    clone->scratch_capacity = resources->scratch_capacity;
+    clone->scratch = secp256k1_scratch_space_create(clone->ctx, clone->scratch_capacity);
     if (clone->scratch == NULL) {
         purify_bulletproof_backend_resources_destroy(clone);
         return NULL;
@@ -1165,6 +1256,9 @@ static int purify_bulletproof_prove_circuit_impl(const purify_bulletproof_circui
     if (resources->n_gates < bp_circuit.n_gates || resources->ctx == NULL || resources->scratch == NULL || resources->gens == NULL) {
         goto done;
     }
+    if (!purify_bulletproof_reserve_circuit_scratch(resources, &bp_circuit)) {
+        goto done;
+    }
     ctx = resources->ctx;
     scratch = resources->scratch;
     gens = resources->gens;
@@ -1354,6 +1448,9 @@ static int purify_bulletproof_verify_circuit_impl(purify_secp_context* context,
         owns_resources = 1;
     }
     if (resources->n_gates < bp_circuit.n_gates || resources->ctx == NULL || resources->scratch == NULL || resources->gens == NULL) {
+        goto done;
+    }
+    if (!purify_bulletproof_reserve_circuit_scratch(resources, &bp_circuit)) {
         goto done;
     }
     ctx = resources->ctx;

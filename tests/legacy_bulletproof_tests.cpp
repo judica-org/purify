@@ -122,6 +122,46 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
     }
 }
 
+void test_legacy_scratch_tracks_constraint_count(TestContext& ctx) {
+    auto context = make_test_secp_context(ctx);
+    if (context == nullptr) return;
+
+    NativeBulletproofCircuit circuit(1, 1, 0);
+    // Constraint compression alone exceeds the old 16 MiB scratch allocation,
+    // independently of the gate count used to key cached backend resources.
+    circuit.c.resize((std::size_t{1} << 19) + 1, FieldElement::zero());
+    circuit.add_output_term(0, 0, FieldElement::one());
+    circuit.add_commitment_term(0, 0, FieldElement::from_int(-1));
+    BulletproofAssignmentData assignment;
+    assignment.left = {FieldElement::from_int(3)};
+    assignment.right = {FieldElement::from_int(4)};
+    assignment.output = {FieldElement::from_int(12)};
+    assignment.commitments = {FieldElement::from_int(12)};
+    std::array<unsigned char, 32> nonce{};
+    nonce.fill(0x71);
+    const auto generator = purify::bppp::base_generator(context.get());
+    const Bytes binding = purify::bytes_from_ascii("constraint-scratch-regression");
+    purify::ExperimentalBulletproofBackendCache prover_cache;
+    auto proof = purify::prove_experimental_circuit(
+        circuit, assignment, nonce, generator, context.get(), binding,
+        std::nullopt, &prover_cache);
+    expect_ok(ctx, proof, "proof scratch grows with constraints despite a small gate count");
+    if (!proof.has_value()) return;
+
+    purify::ExperimentalBulletproofBackendCache verifier_cache;
+    auto verified = purify::verify_experimental_circuit(
+        circuit, *proof, generator, context.get(), binding, &verifier_cache);
+    expect_ok(ctx, verified, "cold verifier reserves enough constraint scratch");
+    if (verified.has_value()) ctx.expect(*verified, "large-constraint proof verifies");
+    auto cloned = prover_cache.clone_for_thread(circuit.n_gates);
+    expect_ok(ctx, cloned, "grown prover resources clone successfully");
+    if (!cloned.has_value()) return;
+    auto cloned_verified = purify::verify_experimental_circuit(
+        circuit, *proof, generator, context.get(), binding, &*cloned);
+    expect_ok(ctx, cloned_verified, "cloned resources verify the same circuit");
+    if (cloned_verified.has_value()) ctx.expect(*cloned_verified, "proof verifies with cloned scratch");
+}
+
 /* Regression for the "hash one thing, verify another" bug: corrupt the first
  * serialized inner-product point so verification must reject the proof.
  */
@@ -294,6 +334,7 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
 
 void run_legacy_bulletproof_tests(TestContext& ctx) {
     test_experimental_bulletproof_roundtrip(ctx);
+    test_legacy_scratch_tracks_constraint_count(ctx);
     test_experimental_bulletproof_rejects_malformed_inner_product_point(ctx);
     test_legacy_bridge_zero_constraint_roundtrip(ctx);
     test_legacy_bridge_rejects_overflowed_sizes(ctx);

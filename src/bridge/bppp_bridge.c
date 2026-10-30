@@ -1535,40 +1535,60 @@ int purify_bulletproof_verify_circuit_with_resources(purify_bulletproof_backend_
                                                   extra_commit, extra_commit_len, proof, proof_len);
 }
 
+static int purify_norm_arg_public_digest(unsigned char digest[32], const secp256k1_scalar* rho,
+                                          const secp256k1_bppp_generators* gens_vec, size_t g_len,
+                                          const secp256k1_scalar* c_vec, size_t c_vec_len) {
+    static const unsigned char tag[] = "Purify/BPPP/NormArg/PublicDataV1";
+    unsigned char ser_point[33], ser_scalar[32], ser_le64[8];
+    secp256k1_sha256 public_data;
+    size_t i;
+
+    secp256k1_sha256_initialize_tagged(&public_data, tag, sizeof(tag) - 1);
+    secp256k1_scalar_get_b32(ser_scalar, rho);
+    secp256k1_sha256_write(&public_data, ser_scalar, sizeof(ser_scalar));
+    secp256k1_bppp_le64(ser_le64, g_len);
+    secp256k1_sha256_write(&public_data, ser_le64, sizeof(ser_le64));
+    secp256k1_bppp_le64(ser_le64, gens_vec->n);
+    secp256k1_sha256_write(&public_data, ser_le64, sizeof(ser_le64));
+    for (i = 0; i < gens_vec->n; ++i) {
+        secp256k1_ge gen = gens_vec->gens[i];
+        if (!purify_serialize_point(ser_point, &gen)) {
+            secp256k1_sha256_clear(&public_data);
+            return 0;
+        }
+        secp256k1_sha256_write(&public_data, ser_point, sizeof(ser_point));
+    }
+    secp256k1_bppp_le64(ser_le64, c_vec_len);
+    secp256k1_sha256_write(&public_data, ser_le64, sizeof(ser_le64));
+    for (i = 0; i < c_vec_len; ++i) {
+        secp256k1_scalar_get_b32(ser_scalar, &c_vec[i]);
+        secp256k1_sha256_write(&public_data, ser_scalar, sizeof(ser_scalar));
+    }
+    secp256k1_sha256_finalize(&public_data, digest);
+    secp256k1_sha256_clear(&public_data);
+    return 1;
+}
+
 static int purify_norm_arg_commit_initial_data(secp256k1_sha256* transcript, const secp256k1_scalar* rho,
                                                 const secp256k1_bppp_generators* gens_vec, size_t g_len,
                                                 const secp256k1_scalar* c_vec, size_t c_vec_len,
                                                 const secp256k1_ge* commit) {
-    unsigned char ser_commit[33], ser_scalar[32], ser_le64[8];
-    size_t i;
+    static const unsigned char tag[] = "Purify/BPPP/NormArg/TranscriptV1";
+    unsigned char public_digest[32], ser_commit[33];
     secp256k1_ge comm = *commit;
 
-    secp256k1_bppp_sha256_tagged_commitment_init(transcript);
-    /* The bridge's norm statement uses finite compressed points. Reject a
-     * representation the transcript cannot serialize before hashing it. */
-    if (!purify_serialize_point(ser_commit, &comm)) {
+    /* Recompute the digest from the checked public statement; never accept a
+     * caller-supplied digest as a replacement. A future parent verifier can
+     * compute this public work outside its circuit and bind the digest inside.
+     * Distinct tags separate this transcript from the old direct serialization.
+     */
+    if (!purify_serialize_point(ser_commit, &comm)
+        || !purify_norm_arg_public_digest(public_digest, rho, gens_vec, g_len, c_vec, c_vec_len)) {
         return 0;
     }
+    secp256k1_sha256_initialize_tagged(transcript, tag, sizeof(tag) - 1);
+    secp256k1_sha256_write(transcript, public_digest, sizeof(public_digest));
     secp256k1_sha256_write(transcript, ser_commit, sizeof(ser_commit));
-    secp256k1_scalar_get_b32(ser_scalar, rho);
-    secp256k1_sha256_write(transcript, ser_scalar, sizeof(ser_scalar));
-    secp256k1_bppp_le64(ser_le64, g_len);
-    secp256k1_sha256_write(transcript, ser_le64, sizeof(ser_le64));
-    secp256k1_bppp_le64(ser_le64, gens_vec->n);
-    secp256k1_sha256_write(transcript, ser_le64, sizeof(ser_le64));
-    for (i = 0; i < gens_vec->n; ++i) {
-        secp256k1_ge gen = gens_vec->gens[i];
-        if (!purify_serialize_point(ser_commit, &gen)) {
-            return 0;
-        }
-        secp256k1_sha256_write(transcript, ser_commit, sizeof(ser_commit));
-    }
-    secp256k1_bppp_le64(ser_le64, c_vec_len);
-    secp256k1_sha256_write(transcript, ser_le64, sizeof(ser_le64));
-    for (i = 0; i < c_vec_len; ++i) {
-        secp256k1_scalar_get_b32(ser_scalar, &c_vec[i]);
-        secp256k1_sha256_write(transcript, ser_scalar, sizeof(ser_scalar));
-    }
     return 1;
 }
 

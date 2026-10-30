@@ -19,6 +19,7 @@ void run_accountable_signature_tests(TestContext& ctx);
 void run_accountable_roster_tests(TestContext& ctx);
 void run_accountable_response_tests(TestContext& ctx);
 void run_canonical_recovery_root_tests(TestContext& ctx);
+void run_companion_scalar_escrow_tests(TestContext& ctx);
 
 namespace {
 
@@ -29,7 +30,7 @@ struct SuiteSpec {
     SuiteFn run;
 };
 
-constexpr std::array<SuiteSpec, 9> kSuites{{
+constexpr std::array<SuiteSpec, 10> kSuites{{
     {"core", &run_purify_tests},
     {"puresign", &run_puresign_tests},
     {"legacy_bulletproof", &run_legacy_bulletproof_tests},
@@ -39,6 +40,7 @@ constexpr std::array<SuiteSpec, 9> kSuites{{
     {"accountable_roster", &run_accountable_roster_tests},
     {"accountable_response", &run_accountable_response_tests},
     {"canonical_recovery_root", &run_canonical_recovery_root_tests},
+    {"companion_scalar_escrow", &run_companion_scalar_escrow_tests},
 }};
 
 const SuiteSpec* find_suite(std::string_view name) {

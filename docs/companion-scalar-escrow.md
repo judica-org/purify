@@ -222,7 +222,11 @@ recoding, both scalar signs, upper-bound companion normalization, a public
 setup proof, and toy accountable extraction followed by root/leaf recovery.
 `companion_scalar_escrow_tests.cpp` checks an old root chosen before its
 recipient, exact decryption, changed public inputs and canonical plaintext
-boundaries, including packed-zero `(1,1)`.
+boundaries, including packed-zero `(1,1)`. It also extracts a recipient from
+toy accountable responses, decrypts the old root, and matches two independent
+owners' punishment scalars from owner-side, old-root and recovered-root
+computations. Nonce evidence and setup authentication remain external
+prerequisites; those toy responses are not accepted decision certificates.
 
 Run the registered suites with:
 

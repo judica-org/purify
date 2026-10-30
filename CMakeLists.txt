@@ -501,7 +501,9 @@ if(PURIFY_BUILD_TESTS)
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
         tests/canonical_recovery_root_tests.cpp
+        tests/canonical_recovery_root_helpers.cpp
         tests/companion_scalar_escrow_tests.cpp
+        tests/companion_scalar_escrow_helpers.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 

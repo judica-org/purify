@@ -137,6 +137,29 @@ static int purify_bulletproof_add_scratch_frame(size_t* total, size_t bytes, siz
         && purify_bridge_checked_add_size(*total, bytes, total);
 }
 
+static secp256k1_scratch_space* purify_bppp_create_scratch(
+    const secp256k1_context* ctx, size_t generators_count) {
+    size_t frame;
+    size_t capacity = purify_bulletproof_msm_scratch_size;
+    size_t allocation_size;
+
+    /* The norm prover keeps copies of n, l, c and all generators alive during
+     * its MSMs. With g = |n| and h = |l| = |c|, g + 2h <= 2(g + h).
+     * The verifier's four scalar arrays also fit this bound: their total is
+     * g + h + 2log2(g) <= 2(g + h) for the supported g >= h >= 1.
+     * Reserve the live frame separately from the existing MSM work space.
+     */
+    if (generators_count == 0
+        || !purify_bridge_checked_mul_size(generators_count,
+            sizeof(secp256k1_ge) + 2 * sizeof(secp256k1_scalar), &frame)
+        || !purify_bulletproof_add_scratch_frame(&capacity, frame, 4)
+        || !purify_bridge_checked_add_size(capacity,
+            ROUND_TO_ALIGN(sizeof(secp256k1_scratch)), &allocation_size)) {
+        return NULL;
+    }
+    return secp256k1_scratch_space_create(ctx, capacity);
+}
+
 static int purify_bulletproof_circuit_scratch_size(
     const secp256k1_bulletproof_circuit* circuit, size_t* out) {
     size_t scalars;
@@ -401,7 +424,7 @@ purify_bppp_backend_resources* purify_bppp_backend_resources_create(purify_secp_
 
     resources->ctx = ctx;
 
-    resources->scratch = secp256k1_scratch_space_create(resources->ctx, 1u << 24);
+    resources->scratch = purify_bppp_create_scratch(resources->ctx, generators_count);
     if (resources->scratch == NULL) {
         purify_bppp_backend_resources_destroy(resources);
         return NULL;
@@ -441,7 +464,7 @@ purify_bppp_backend_resources* purify_bppp_backend_resources_clone(
     }
     clone->ctx = resources->ctx;
     clone->generators_count = resources->generators_count;
-    clone->scratch = secp256k1_scratch_space_create(clone->ctx, 1u << 24);
+    clone->scratch = purify_bppp_create_scratch(clone->ctx, clone->generators_count);
     if (clone->scratch == NULL) {
         purify_bppp_backend_resources_destroy(clone);
         return NULL;
@@ -1735,7 +1758,7 @@ static int purify_bppp_commit_norm_arg_impl(purify_secp_context* context,
         return 0;
     }
     if (resources == NULL) {
-        scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
+        scratch = purify_bppp_create_scratch(ctx, generators_count);
         gens = secp256k1_bppp_generators_parse(ctx, generators33, serialized_generators_len);
     }
     n_vec = (secp256k1_scalar*)purify_malloc_array(n_vec_len, sizeof(*n_vec));
@@ -1819,7 +1842,7 @@ static int purify_bppp_commit_witness_only_impl(purify_secp_context* context,
     }
 
     if (resources == NULL) {
-        scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
+        scratch = purify_bppp_create_scratch(ctx, generators_count);
         gens = secp256k1_bppp_generators_parse(ctx, generators33, serialized_generators_len);
     }
     n_vec = (secp256k1_scalar*)purify_malloc_array(n_vec_len, sizeof(*n_vec));
@@ -2002,7 +2025,7 @@ static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
             return 0;
         }
     } else {
-        scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
+        scratch = purify_bppp_create_scratch(ctx, generators_count);
         gens = secp256k1_bppp_generators_parse(ctx, generators33, serialized_generators_len);
     }
     n_vec = (secp256k1_scalar*)purify_malloc_array(n_vec_len, sizeof(*n_vec));
@@ -2117,7 +2140,7 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
             return 0;
         }
     } else {
-        scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
+        scratch = purify_bppp_create_scratch(ctx, generators_count);
         gens = secp256k1_bppp_generators_parse(ctx, generators33, serialized_generators_len);
     }
     n_vec = (secp256k1_scalar*)purify_malloc_array(n_vec_len, sizeof(*n_vec));
@@ -2219,7 +2242,7 @@ static int purify_bppp_verify_norm_arg_impl(purify_secp_context* context,
         return 0;
     }
     if (resources == NULL) {
-        scratch = secp256k1_scratch_space_create(ctx, 1u << 24);
+        scratch = purify_bppp_create_scratch(ctx, generators_count);
         gens = secp256k1_bppp_generators_parse(ctx, generators33, serialized_generators_len);
     }
     c_vec = (secp256k1_scalar*)purify_malloc_array(c_vec_len, sizeof(*c_vec));

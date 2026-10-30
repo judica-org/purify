@@ -1,0 +1,63 @@
+--- purify.py
++++ purify.py
+@@ -3,6 +3,7 @@
+ import sys
+ import hmac
+ import hashlib
++import os
+ import secrets
+ import copy
+ import struct
+@@ -511,6 +512,10 @@ class BulletproofTranscript:
+ def hmac_sha256(key, data):
+     return hmac.new(key, data, hashlib.sha256).digest()
+ 
++def tagged_hash(tag, data):
++    tag_hash = hashlib.sha256(tag).digest()
++    return hashlib.sha256(tag_hash + tag_hash + data).digest()
++
+ def hkdf(length, ikm, salt=b"", info=b""):
+     """Implement HKDF using HMAC-SHA256."""
+ 
+@@ -531,11 +536,39 @@ def hash_to_int(data, rang, info=b""):
+         if v < rang:
+             return v
+ 
++def tagged_hash_to_int(data, rang, tag, info=b""):
++    """Implement a uniform hash-to-int using repeated tagged hashes."""
++    bits = rang.bit_length()
++    bytes_needed = (bits + 7) // 8
++    mask = 2 ** bits - 1
++    for attempt in range(256):
++        derived = b""
++        block = 0
++        while len(derived) < bytes_needed:
++            derived += tagged_hash(
++                tag,
++                data
++                + info
++                + attempt.to_bytes(8, byteorder='big')
++                + block.to_bytes(8, byteorder='big'),
++            )
++            block += 1
++        v = int.from_bytes(derived[:bytes_needed], 'big') & mask
++        if v < rang:
++            return v
++
++FIELD_HASH_MODE = os.environ.get("PURIFY_REFERENCE_FIELD_HASH_MODE", "tagged")
++if FIELD_HASH_MODE not in ("legacy", "tagged"):
++    raise RuntimeError("PURIFY_REFERENCE_FIELD_HASH_MODE must be 'legacy' or 'tagged'")
++
+ def hash_to_curve(data, curve):
+-    """Implement a uniform hash-to-curve using HKDF."""
++    """Implement a uniform hash-to-curve using the selected field-hash mode."""
+     rang = 2 * curve.p
+     for i in range(256):
+-        v = hash_to_int(data, rang, bytes([i]))
++        if FIELD_HASH_MODE == "legacy":
++            v = hash_to_int(data, rang, bytes([i]))
++        else:
++            v = tagged_hash_to_int(data, rang, b"Purify/HashToCurve", bytes([i]))
+         if curve.is_x_coord(v // 2):
+             p = curve.lift_x(v // 2)
+             if v & 1:

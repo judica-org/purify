@@ -215,7 +215,7 @@ std::optional<PurifyBenchCase> make_case() {
                                            purify::bppp::base_generator(out.secp_context.get()),
                                            out.secp_context.get(),
                                            purify::bytes_from_ascii("bench-experimental-proof"),
-                                           std::nullopt, &out.experimental_bulletproof_cache);
+                                           {}, &out.experimental_bulletproof_cache);
     if (!experimental_proof.has_value()) {
         std::cerr << experimental_proof.error().message() << "\n";
         return std::nullopt;
@@ -466,7 +466,7 @@ int main(int argc, char** argv) {
                                                experimental_nonce,
                                                purify::bppp::base_generator(bench_case->secp_context.get()),
                                                bench_case->secp_context.get(),
-                                               experimental_binding, std::nullopt,
+                                               experimental_binding, {},
                                                &bench_case->experimental_bulletproof_cache);
         assert(proof.has_value() && "benchmark experimental circuit proof should succeed");
         ankerl::nanobench::doNotOptimizeAway(proof->proof.data());

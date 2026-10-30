@@ -121,7 +121,7 @@ int benchmark(std::size_t members) {
     stage = Clock::now();
     auto proof = purify::prove_experimental_circuit(
         *circuit, *assignment, nonce.bytes, value_generator, context.get(),
-        binding, std::nullopt, &prover_cache);
+        binding, {}, &prover_cache);
     if (!succeeded(proof, "aggregate proof generation")) return 1;
     const double prove_ms = elapsed_ms(stage);
     prover_cache.clear();
@@ -157,7 +157,7 @@ int benchmark(std::size_t members) {
               << "  \"constraints\": " << circuit->c.size() << ",\n"
               << "  \"public_commitments\": " << circuit->n_commitments << ",\n"
               << "  \"raw_proof_bytes\": " << proof->proof.size() << ",\n"
-              << "  \"commitment_bytes\": " << proof->commitment.size() << ",\n"
+              << "  \"commitment_bytes\": " << (proof->commitments.size() * 33) << ",\n"
               << "  \"framed_proof_bytes\": " << serialized->size() << ",\n"
               << "  \"template_ms\": " << template_ms << ",\n"
               << "  \"keygen_ms\": " << keygen_ms << ",\n"

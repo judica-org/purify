@@ -169,7 +169,7 @@ void test_sum_proof(TestContext& ctx) {
         purify::bppp::value_generator_h(context.get()));
     expect_ok(ctx, expected_nonce, "independent summed nonce point constructs");
     if (expected_nonce.has_value()) {
-        ctx.expect(proof->commitment == *expected_nonce, "proof commits exactly to sum(r_i) times G");
+        ctx.expect(proof->commitments.front() == *expected_nonce, "proof commits exactly to sum(r_i) times G");
     }
     auto encoded = proof->serialize();
     expect_ok(ctx, encoded, "aggregate proof serializes");
@@ -204,7 +204,7 @@ void test_sum_proof(TestContext& ctx) {
     expect_ok(ctx, other_point, "different valid nonce point constructs");
     if (other_point.has_value()) {
         auto changed_nonce = *proof;
-        changed_nonce.commitment = *other_point;
+        changed_nonce.commitments.front() = *other_point;
         auto wrong_nonce = purify::verify_experimental_circuit(
             *circuit, changed_nonce, generator, context.get(), binding);
         ctx.expect(!wrong_nonce.has_value() || !*wrong_nonce, "proof rejects a changed aggregate nonce point");

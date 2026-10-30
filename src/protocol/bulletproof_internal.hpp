@@ -23,7 +23,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit_assume_valid(
     const BulletproofGeneratorBytes& value_generator,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    std::optional<BulletproofScalarBytes> blind = std::nullopt,
+    std::span<const BulletproofScalarBytes> blinds = {},
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 
 }  // namespace purify

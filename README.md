@@ -244,6 +244,12 @@ The [aggregate nonce baseline](docs/aggregate-nonce.md) adds a separate
 to 100 independent hosts. It is centralized and uses the imported arithmetic
 backend; it does not implement MPC or use the experimental BP++ wrapper.
 
+`bench_nonce_batch --coalitions N --members M --topics P --domains K`
+creates one multi-topic proof per coalition, then verifies the completed proofs
+using only public inputs. It reports proof payload and separate preparation,
+proving, and verification timings. This public stage retains the coalition
+proofs; it does not perform succinct post-coalition compression.
+
 `bench_purify` measures:
 
 - native circuit construction time

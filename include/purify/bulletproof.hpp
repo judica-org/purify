@@ -293,15 +293,15 @@ private:
 /**
  * @brief Experimental single-proof wrapper over the imported legacy Bulletproof circuit backend.
  *
- * This artifact is wire-ready: when the circuit exposes one committed scalar it carries the exact
- * compressed public point alongside the proof bytes. The proof transcript is always bound to a
+ * This artifact carries the circuit's ordered compressed output points alongside the proof bytes.
+ * The proof transcript is always bound to a
  * canonical digest of the native circuit and optional statement-binding bytes supplied to the
  * prove/verify helpers below.
  */
 struct ExperimentalBulletproofProof {
-    static constexpr unsigned char kSerializationVersion = 2;
+    static constexpr unsigned char kSerializationVersion = 3;
 
-    BulletproofPointBytes commitment{};
+    std::vector<BulletproofPointBytes> commitments;
     Bytes proof;
 
     Result<Bytes> serialize() const;
@@ -398,9 +398,9 @@ private:
 /**
  * @brief Proves a native circuit with the experimental imported Bulletproof circuit backend.
  *
- * This wrapper only supports circuits with exactly one committed scalar. Providing `blind =
- * std::nullopt` yields the exact public point commitment `assignment.commitments[0] *
- * value_generator`, which is the form needed for `R = rG` style statements.
+ * Circuits must have at least one committed scalar. An empty `blinds` span uses zero
+ * blinding for every output, yielding `assignment.commitments[i] * value_generator`.
+ * Otherwise supply exactly one blind per committed scalar, in circuit order.
  */
 Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
@@ -409,7 +409,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofGeneratorBytes& value_generator,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    std::optional<BulletproofScalarBytes> blind = std::nullopt,
+    std::span<const BulletproofScalarBytes> blinds = {},
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const NativeBulletproofCircuit::PackedWithSlack& circuit,
@@ -418,10 +418,10 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofGeneratorBytes& value_generator,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    std::optional<BulletproofScalarBytes> blind = std::nullopt,
+    std::span<const BulletproofScalarBytes> blinds = {},
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 
-/** @brief Verifies a proof produced by `prove_experimental_circuit` against the same one-commitment native circuit. */
+/** @brief Verifies a proof produced by `prove_experimental_circuit` against the same native circuit and ordered output commitments. */
 Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalBulletproofProof& proof,

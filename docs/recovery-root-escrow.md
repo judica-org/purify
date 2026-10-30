@@ -139,6 +139,20 @@ must account for both secrets and their different orders. No participant
 should learn the complete root during setup if the stated threat model
 requires every affected owner's participation before exposure.
 
+A future alternative could derive both companion roots from the exact
+canonical coalition scalar: `D1 = qG1`, `D2 = qG2`, with a setup proof binding
+them to `Q = qG` and **the integer range `1 <= q < n`**. A witness `q+n`
+would preserve `Q` but generally change the companion roots, so equality
+only modulo `n` is insufficient. Recovery would normalize `q mod li` into
+each companion half-order range, rejecting zero. This could remove initial
+encryption and let future bridges carry the old secp scalar, but it is not
+implemented by the current codecs or circuit. Adding signing shares in
+each group separately does not account for the different modular carries.
+Distributed generation, disclosure of a component revealing `q` up to a
+few checkable candidates, and privacy with correlated cross-group public
+keys require separate review. Independent leaf randomizers alone do not
+establish that privacy argument.
+
 ## Bridge correctness must tolerate a malicious recipient
 
 Require validity even when the bridge prover knows `q` and the root secrets:

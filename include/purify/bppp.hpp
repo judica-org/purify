@@ -93,7 +93,11 @@ inline std::vector<ScalarBytes> scalar_bytes(const std::vector<FieldElement>& va
     return out;
 }
 
-/** @brief Inputs required to produce a standalone BPPP norm argument. */
+/**
+ * @brief Inputs for norm commitment computation and standalone BPPP proofs.
+ * Proving requires power-of-two vector lengths with n_vec.size() >= l_vec.size().
+ * Commitment computation alone does not establish the proof relation.
+ */
 struct NormArgInputs {
     ScalarBytes rho{};
     std::vector<PointBytes> generators;
@@ -111,6 +115,7 @@ struct NormArgProof {
     std::vector<PointBytes> generators;
     std::vector<ScalarBytes> c_vec;
     std::size_t n_vec_len = 0;
+    /** @brief Finite compressed initial point; infinity is not accepted. */
     PointBytes commitment{};
     Bytes proof;
 };
@@ -242,6 +247,7 @@ Result<NormArgProof> prove_norm_arg_to_commitment(const NormArgInputs& inputs,
                                                   purify_secp_context* secp_context);
 /**
  * @brief Verifies a standalone BPPP norm argument.
+ * @details Requires a finite initial commitment and n_vec_len >= c_vec.size().
  * @param proof Proof bundle returned by prove_norm_arg.
  * @return True when the proof verifies.
  */

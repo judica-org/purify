@@ -14,6 +14,7 @@ void run_purify_tests(TestContext& ctx);
 void run_puresign_tests(TestContext& ctx);
 void run_legacy_bulletproof_tests(TestContext& ctx);
 void run_expected_tests(TestContext& ctx);
+void run_norm_protocol_tests(TestContext& ctx);
 
 namespace {
 
@@ -24,11 +25,12 @@ struct SuiteSpec {
     SuiteFn run;
 };
 
-constexpr std::array<SuiteSpec, 4> kSuites{{
+constexpr std::array<SuiteSpec, 5> kSuites{{
     {"core", &run_purify_tests},
     {"puresign", &run_puresign_tests},
     {"legacy_bulletproof", &run_legacy_bulletproof_tests},
     {"expected", &run_expected_tests},
+    {"norm_protocol", &run_norm_protocol_tests},
 }};
 
 const SuiteSpec* find_suite(std::string_view name) {

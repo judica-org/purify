@@ -500,6 +500,7 @@ if(PURIFY_BUILD_TESTS)
         tests/accountable_signature_tests.cpp
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
+        tests/canonical_recovery_root_tests.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 
@@ -524,6 +525,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_signature)
     purify_add_cpp_suite_test(accountable_roster)
     purify_add_cpp_suite_test(accountable_response)
+    purify_add_cpp_suite_test(canonical_recovery_root)
 
     add_executable(purify_property_tests
         tests/purify_property_tests.cpp

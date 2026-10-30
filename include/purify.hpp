@@ -12,3 +12,4 @@
 #include "purify/api.hpp"
 #include "purify/puresign/legacy.hpp"
 #include "purify/puresign/bppp.hpp"
+#include "purify/puresign/accountable.hpp"

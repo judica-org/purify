@@ -1,8 +1,10 @@
 # Public construction receipts for coalition escrow
 
-This is the next experiment after [companion scalar escrow](companion-scalar-escrow.md).
-It fixes the intended statement and public-data flow. It does not implement a
-compressed receipt, enable enrollment, or establish the proof systems' security.
+This is the next experiment after
+[companion scalar escrow](companion-scalar-escrow.md). It fixes the intended
+statement and public-data flow. The individual V3 setup and anchor-escrow
+proofs are implemented, but the compressed parent receipt is not. Enrollment
+also remains disabled pending independent review and application integration.
 
 Transparent setup is a hard requirement for the completed library: public
 parameters must not depend on a trusted ceremony or retained trapdoor. This
@@ -73,19 +75,20 @@ it; a prover-supplied precomputed result is not trusted.
 
 Use a reviewed composition argument, including its knowledge/extraction and
 random-oracle requirements. A parent cannot repair an unsound child relation.
-The current experimental circuit wrapper has identified structural soundness
-defects: its constraint-folding challenges precede a commitment to the original
-witness, and acceptance of the reduced norm equation does not establish that
-its coordinates belong to the original circuit reduction's image. These are
-not merely missing documentation or an outstanding general audit. Running this
-acceptance predicate does not establish a sound verifiable-encryption proof.
+The V3 circuit wrapper repairs the two concrete defects found in the earlier
+wrapper: it commits the raw circuit coordinates before deriving the folding
+challenges, and it maps the reduced opening back to those committed coordinates
+with exact reciprocal generator scaling. Independent batched DLog proofs bind
+every advertised public point to the scalar used by the circuit.
 
-The native relations and honest round trips remain reference experiments. A
-sound replacement must also establish exact secp output binding and the claimed
-privacy properties. Recursively proving acceptance of the current defective
-wrapper would preserve its defects. Removing ZK from a parent whose witnesses
-are public does not remove these obligations. No production receipt, nonce
-certificate or enrollment may rely on the current wrapper.
+The executable attack fixture now rejects the previously accepted adaptive
+folding forgery, and the setup and anchor relations bind their exact public
+outputs. Those checks are evidence for the intended relation, not a substitute
+for an independent proof of V3 knowledge soundness or zero knowledge. A parent
+must replay the complete V3 transcript and preserve its random-oracle and
+algebraic-group assumptions. Removing ZK from a parent whose witnesses are
+public does not remove those obligations. No production receipt or enrollment
+may rely on the reference assembler alone.
 
 Conditional recovery remains:
 
@@ -101,12 +104,12 @@ Published escrow cannot be revoked cryptographically by leaving a coalition.
 
 ## Size target
 
-The current experimental wrapper serializes an honest setup transcript in
-1,007 bytes, alongside a 64-byte public recipient. Each bridge has a
-1,137-byte honest transcript and 192-byte ciphertext. These are measurements of
-the defective wrapper, not sizes of an established sound argument. If a sound
-final proof replaces the setup and bridge transcripts while retaining this
-ciphertext format, incremental data with an explicit recipient would be:
+The current V3 setup record is 1,007 bytes, alongside a 64-byte public
+recipient, for 1,071 bytes when the coalition point is already registered.
+Each fixed anchor-escrow record is 1,265 bytes: one version byte, a 192-byte
+ciphertext and a 1,072-byte proof payload. If a final parent proof replaces the
+setup and escrow proofs while retaining the ciphertext format, incremental data
+with an explicit recipient would be approximately:
 
 ```
 64 + 192*N + size(final_proof)
@@ -118,20 +121,19 @@ are additional. The reference statement includes full public roots instead of
 assuming an unimplemented on-chain index; its serialized size is therefore
 larger than this incremental formula.
 
-The final proof has not been implemented or measured. A 1-2 KB proof is a target,
-not a result. Repairing or replacing the child argument can change its proof
-sizes, verifier workload and transcript dependencies. Direct proofs of combined
-native relations and public proofs of already completed proofs also have
-different prover costs. Combining all native witnesses centrally would not
-satisfy the required public assembler interface.
+The final proof has not been implemented or measured. A 1-2 KB proof is a
+target, not a result. Direct proofs of combined native relations and public
+proofs of already completed proofs also have different prover costs. Combining
+all native witnesses centrally would not satisfy the required public assembler
+interface.
 
-## Public prehashing measured in the current wrapper
+## Historical V2 public-prehashing experiment
 
-The revised experimental transcript separates statement-only preprocessing
-from proof-dependent hashing. In the current defective outer reduction, `rho`,
-the ordered generators and the coefficient vector depend only on the circuit
-and public statement. They do not depend on the child's `A`, `S`, `t2` or folding
-messages. The implemented digest is:
+The earlier V2 transcript separated statement-only preprocessing from
+proof-dependent hashing. In that obsolete reduction, `rho`, the ordered
+generators and the coefficient vector depended only on the circuit and public
+statement. They did not depend on the child's `A`, `S`, `t2` or folding
+messages. Its digest was:
 
 ```
 D = TaggedHash("Purify/BPPP/NormArg/PublicDataV1",
@@ -144,27 +146,14 @@ Points use canonical compressed SEC1 encodings; scalars use canonical big-endian
 `Purify/BPPP/NormArg/TranscriptV1`, followed by `D || commitment33`. Existing
 ordered round messages and challenge extraction then continue normally.
 
-The native verifier recomputes `D`; there is no API accepting an unchecked
-assembler-supplied digest. For this current data flow, a parent verifier could
-likewise recompute it from the authenticated public statement and bind it to
-the constrained child transcript. Proof-dependent commitment/round hashing
-would remain inside the parent circuit.
+The native V2 verifier recomputed `D`; it did not accept an unchecked
+assembler-supplied digest. That split was not a soundness repair. V3 fixes the
+raw witness before sampling its folding challenges, so its dependencies differ
+from the profiler below. Static generators and genuinely statement-fixed data
+can still be prehashed where a final verifier authenticates them, but the V2
+counts must not be used as a V3 recursive-verifier estimate.
 
-That split is not a security repair. Fixing the original witness before random
-constraint folding can make challenges and reduction coefficients depend on
-child-proof messages. Such data cannot then be treated as statement-only public
-preprocessing merely because the current wrapper does so. Static generators
-and genuinely statement-fixed data can still be prehashed where the final
-verifier authenticates them. A sound replacement must specify its actual
-dependencies before any recursive workload estimate is accepted.
-
-This is a new experimental transcript, not an alternate verifier for old
-proofs. PureSign++ nonce-proof encoding advances to version 2 and rejects
-version 1. The outer signature container layout is unchanged. Domain separation
-and canonical public-data binding distinguish these transcript bytes; they do
-not fix the witness-ordering or reduction-image defects.
-
-Source-derived SHA-256 compression counts for this experimental wrapper,
+Source-derived SHA-256 compression counts for that obsolete wrapper,
 including challenge forks and the first outer challenge attempt, are:
 
 | Child | Padded gates | Public bytes hashed outside | Previous layout | Factored layout |
@@ -172,14 +161,14 @@ including challenge forks and the first outer challenge attempt, are:
 | Recipient setup | 2,048 | 536,632 | 8,414 | 30 |
 | One root encryption | 8,192 | 2,146,360 | 33,570 | 34 |
 
-For this wrapper, one setup plus two encryption children goes from 75,554 to
+For that wrapper, one setup plus two encryption children went from 75,554 to
 98 proof-dependent blocks; 100 encryption children go from 3,365,414 to 3,430.
-Those counts are not a claim that a sound recursive receipt needs only 98 or
-3,430 blocks. They rely on the current statement-only reduction coefficients
-and must be recomputed for the sound replacement. Public hashing has moved,
-not disappeared, and remains part of full verifier cost. Tagged midstates are
-treated as constants. These are source-derived experimental workloads, not
-measured parent gates or a final proof-size estimate.
+Those counts are not a claim that a V3 recursive receipt needs only 98 or
+3,430 blocks. They rely on the obsolete statement-only reduction coefficients
+and must be recomputed for V3. Public hashing moved; it did not disappear, and
+it remains part of full verifier cost. Tagged midstates were treated as
+constants. These are historical source-derived workloads, not measured parent
+gates or a final proof-size estimate.
 
 The previous layout placed the variable commitment before the public arrays,
 so those arrays could not be prehashed as an independent SHA-256 prefix. The
@@ -202,10 +191,10 @@ The companion-curve gadgets cannot be substituted for secp256k1 point arithmetic
 Canonical non-native arithmetic and complete handling of group edge cases are
 additional work; SHA-256 alone is not a recursive verifier.
 
-The current inner checks still have 12,288 setup and 49,152 encryption
+The historical inner checks had 12,288 setup and 49,152 encryption
 fixed-generator terms before any separately reviewed batch optimization. A
-replacement parent backend must satisfy the transparent-setup requirement; its
-feasibility does not follow from the small experimental child transcripts.
+parent backend must satisfy the transparent-setup requirement; its feasibility
+does not follow from the small child transcripts.
 
 ### Full verifier circuits and accumulation are different designs
 
@@ -229,12 +218,12 @@ completed BP++ circuit proofs. Adapting the accumulation route requires an exact
 reduction/accumulator relation, transcript, final decision procedure and security
 argument for that relation. The native
 [norm accumulator](norm-accumulation.md) now implements partial norm
-verification, public coefficient openings for varying `c`, accumulation
-transitions and a mandatory final decision. Its API requires all child
-statements and transition transcripts. It does not implement their recursive
-authentication or repair the outer-circuit wrapper, and the concrete protocol
-still requires cryptographic review. The workload profiler does not model
-those recursive transitions. Neither native accumulation nor batch verification
+verification, public coefficient openings for varying `c`, V3 raw-basis
+mapping, accumulation transitions and a mandatory final decision. Its API
+requires all child statements and transition transcripts. It does not implement
+their recursive authentication, and the concrete protocol still requires
+cryptographic review. The historical workload profiler does not model those
+recursive transitions. Neither native accumulation nor batch verification
 alone is a compressed construction receipt.
 
 Before selecting a replacement backend on cost grounds, evaluate this route
@@ -243,7 +232,7 @@ circuit, final verifier, public accumulator bytes and authenticated manifest.
 Curve cycles and a suitable transcript can reduce recursive arithmetic costs;
 the existing scalar-field circuit and SHA-256 choices do not define the only
 possible transparent implementation. An accumulator still needs sound child
-proofs and cannot repair the current outer-circuit wrapper.
+proofs and a parent which authenticates every V3 transition.
 
 Anchor punishment-key derivation is also a design variable in this pre-release
 protocol. Public descriptors and hash-to-curve bases may be derived outside the
@@ -273,30 +262,31 @@ public recovery, custody and privacy guarantees before replacing it.
 
 ## Implementation milestones
 
-1. Share the existing reference setup and encryption verifiers without changing
-   their relations, then exercise assembly using only public child packets.
-2. Measure the actual verifier workload and implement a constrained SHA-256
-   experiment with independently checked outputs and an honest transcript.
-3. Repair or replace the child argument with a sound transparent construction,
-   then choose an affordable, reviewed parent relation/backend. Implement
-   canonical child parsing, transcript replay and constrained secp verification;
-   benchmark one setup plus two encryption children before scaling to 100.
-4. Establish composition security and the remaining privacy/output-binding
-   guarantees, implement the selected setup and signing protocols, and integrate
-   accepted certificate recovery with the registry and punishment path before
-   enabling enrollment.
+1. Completed: share the setup and encryption verifiers and exercise assembly
+   using only public child packets.
+2. Completed as a historical cost study: profile verifier hashing and implement
+   a constrained SHA-256 experiment with independently checked outputs.
+3. Completed for the individual leaves: replace the defective outer reduction
+   with V3 raw precommitment, random polynomial folding, exact output binding
+   and a typed raw-basis accumulation adapter.
+4. Remaining: choose and review the parent relation/backend. Implement canonical
+   child parsing, transcript replay and constrained curve verification; benchmark
+   one setup plus two encryption children before scaling to 100.
+5. Remaining: establish composition and correlated-key privacy security,
+   implement distributed setup/proving, and integrate accepted certificate
+   recovery with the registry and Bitcoin punishment path before enrollment.
 
-The first two milestones are preparation for the third. No receipt should be
-accepted merely because its public inputs passed the reference assembler.
-Daybreak work remains deferred.
+No receipt should be accepted merely because its public inputs passed the
+reference assembler.
 
 ## Running the experiments
 
 The construction fixture shares the exact existing child verifiers through
-test-only helpers. It runs their experimental acceptance predicates; it does
-not establish sound proof acceptance. Its assembler accepts the externally
-supplied ordered roots and public packets; its signature accepts no secret,
-witness assignment or callback to a participant. The tested mutations reject
+test-only helpers. It runs their V3 acceptance predicates; it is not the
+missing parent proof or an independent security argument. Its assembler accepts
+the externally supplied ordered roots and public packets; its signature
+accepts no secret, witness assignment or callback to a participant. The tested
+mutations reject
 incomplete coverage, duplicate roots, crossed child proofs, and changed
 recipients, coalitions, contexts or ciphertexts.
 After preparation, recovery uses only the statement and extracted toy scalar;
@@ -309,20 +299,18 @@ Its recipient and ciphertext portion is 448 bytes. No final proof is included
 in those statement measurements because the parent is not implemented.
 
 The SHA-256 fixture constrains symbolic input bits and bounded 32-bit additions,
-checks padding boundaries against the independent C hash, and produces an
-honest transcript for that locally checked relation. It does not establish a
-sound proof of a hash preimage through the current wrapper. A recursive verifier
-must also connect those input bits to the exact child transcript; the standalone
-hash relation is insufficient.
+checks padding boundaries against the independent C hash, and produces a V3
+proof for that standalone relation. A recursive verifier must also connect
+those input bits to the exact child transcript; the standalone hash relation is
+insufficient.
 
-An AppleClang 16 / arm64 C++20 Release run measured the `abc` relation at 32,768
-padded gates and a 1,267-byte experimental transcript, with about 13.76 seconds
+An earlier AppleClang 16 / arm64 C++20 Release run measured the `abc` relation
+at 32,768 padded gates and a 1,267-byte V2 transcript, with about 13.76 seconds
 generating it and 5.40 seconds running its acceptance predicate. Those timings
-exclude circuit/witness construction. Message
+exclude circuit/witness construction and must not be attributed to V3. Message
 lengths 0, 3 and 55 use 32,768 padded gates; lengths 56 and 64 require two SHA-256
-blocks and 65,536 gates. These are standalone hash-relation measurements using
-the defective wrapper, not an extrapolated size or runtime for a sound complete
-receipt.
+blocks and 65,536 gates. These are historical standalone hash-relation
+measurements, not an extrapolated size or runtime for a complete receipt.
 
 The larger honest circuit exposed a fixed 16 MiB BP++ scratch allocation that
 could not hold its live vector copies. The accompanying resource fix reserves

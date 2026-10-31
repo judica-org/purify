@@ -216,10 +216,70 @@ void check_norm_length_boundary(TestContext& ctx) {
         "cached verification applies the same norm length boundary");
 }
 
+void check_pending_norm_equation(TestContext& ctx) {
+    using namespace purify::bppp;
+    auto secp = purify::make_secp_context();
+    ctx.expect(secp != nullptr, "pending norm context creates");
+    if (!secp) return;
+    auto generators = create_generators(8, secp.get());
+    expect_ok(ctx, generators, "pending norm generators create");
+    if (!generators) return;
+    const auto scalar = [](int value) { return FieldElement::from_int(value).to_bytes_be(); };
+    NormArgInputs inputs{scalar(3), {generators->begin(), generators->begin() + 6},
+        {scalar(2), scalar(3), scalar(4), scalar(5)},
+        {scalar(7), scalar(11)}, {scalar(13), scalar(17)}};
+    auto proof = prove_norm_arg(inputs, secp.get());
+    expect_ok(ctx, proof, "pending norm fixture proves");
+    if (!proof) return;
+    ctx.expect(verify_norm_arg(*proof, secp.get()), "ordinary verifier accepts pending fixture");
+    std::array<ScalarBytes, 2> gammas{};
+    ScalarBytes n{}, l{};
+    PointBytes residual{};
+    const auto* gs = reinterpret_cast<const unsigned char*>(generators->data());
+    const auto* cs = reinterpret_cast<const unsigned char*>(inputs.c_vec.data());
+    ctx.expect(purify_bppp_prepare_norm_arg_claim(secp.get(), inputs.rho.data(), gs, 6,
+        cs, 2, 4, proof->commitment.data(), proof->proof.data(), proof->proof.size(),
+        n.data(), l.data(), reinterpret_cast<unsigned char*>(gammas.data()), 2,
+        residual.data()) != 0, "norm transcript prepares a pending equation");
+    const auto rho = FieldElement::from_int(3);
+    const auto gamma0 = FieldElement::from_bytes32(gammas[0]);
+    const auto gamma1 = FieldElement::from_bytes32(gammas[1]);
+    const auto terminal_n = FieldElement::from_bytes32(n);
+    const auto terminal_l = FieldElement::from_bytes32(l);
+    // Enumerate the four G and two H coefficients directly, independently
+    // of the later compact-polynomial accumulator's expansion routine.
+    const std::array<ScalarBytes, 8> coefficients{
+        (terminal_n * rho * rho * rho).to_bytes_be(),
+        (terminal_n * rho * rho * gamma0).to_bytes_be(),
+        (terminal_n * rho * gamma1).to_bytes_be(),
+        (terminal_n * gamma0 * gamma1).to_bytes_be(),
+        terminal_l.to_bytes_be(), (terminal_l * gamma0).to_bytes_be(), scalar(0), scalar(0)};
+    std::array<PointBytes, 8> basis{};
+    ctx.expect(purify_bppp_shift_norm_basis(secp.get(), gs, 8, cs, 2, 4,
+        reinterpret_cast<unsigned char*>(basis.data())) != 0, "shifted norm basis creates");
+    PointBytes expected{};
+    ctx.expect(purify_bppp_public_msm(secp.get(),
+        reinterpret_cast<const unsigned char*>(basis.data()),
+        reinterpret_cast<const unsigned char*>(coefficients.data()), 8, expected.data()) != 0
+        && expected == residual, "pending equation agrees with direct native MSM");
+
+    const PointBytes infinity{};
+    auto one = scalar(1);
+    ctx.expect(purify_bppp_public_msm(secp.get(), nullptr, nullptr, 0, expected.data()) != 0
+        && expected == infinity, "empty public MSM is canonical infinity");
+    ctx.expect(purify_bppp_public_msm(secp.get(), infinity.data(), one.data(), 1,
+        expected.data()) != 0 && expected == infinity, "public MSM accepts canonical infinity");
+    auto malformed = basis[0];
+    malformed[0] = 0;
+    ctx.expect(purify_bppp_public_msm(secp.get(), malformed.data(), one.data(), 1,
+        expected.data()) == 0, "public MSM rejects noncanonical infinity");
+}
+
 } // namespace
 
 void run_norm_protocol_tests(TestContext& ctx) {
     check_public_digest_transcript(ctx);
     check_initial_point_boundary(ctx);
     check_norm_length_boundary(ctx);
+    check_pending_norm_equation(ctx);
 }

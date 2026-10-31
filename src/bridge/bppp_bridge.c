@@ -2304,3 +2304,204 @@ int purify_bppp_verify_norm_arg_with_resources(purify_bppp_backend_resources* re
                                             resources != NULL ? resources->generators_count : 0,
                                             c_vec32, c_vec_len, n_vec_len, commitment33, proof, proof_len);
 }
+
+int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
+                                     const unsigned char rho32[32],
+                                     const unsigned char* generators33, size_t generators_count,
+                                     const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
+                                     const unsigned char commitment33[33],
+                                     const unsigned char* proof, size_t proof_len,
+                                     unsigned char terminal_n32[32], unsigned char terminal_l32[32],
+                                     unsigned char* gammas32, size_t gamma_count,
+                                     unsigned char residual33[33]) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_scratch_space* scratch = NULL;
+    secp256k1_bppp_generators* gens = NULL;
+    secp256k1_scalar rho, n, l, norm, *c_vec = NULL, *gammas = NULL;
+    secp256k1_ge commit, residual;
+    secp256k1_gej residual_j;
+    secp256k1_sha256 transcript;
+    ec_mult_verify_cb_data1 equation;
+    size_t expected_generators, generator_bytes, rounds, i;
+    int ok = 0;
+
+    if (ctx == NULL || rho32 == NULL || generators33 == NULL || c_vec32 == NULL ||
+        commitment33 == NULL || proof == NULL || terminal_n32 == NULL || terminal_l32 == NULL ||
+        residual33 == NULL || (gamma_count != 0 && gammas32 == NULL)) {
+        return 0;
+    }
+    /* Preserve the standalone norm verifier's supported relation exactly. */
+    if (!secp256k1_is_power_of_two(n_vec_len) || !secp256k1_is_power_of_two(c_vec_len) ||
+        n_vec_len < c_vec_len ||
+        !purify_bridge_checked_add_size(n_vec_len, c_vec_len, &expected_generators) ||
+        generators_count != expected_generators ||
+        !purify_bridge_checked_mul_size(generators_count, 33u, &generator_bytes)) {
+        return 0;
+    }
+    rounds = secp256k1_bppp_log2(n_vec_len);
+    if (gamma_count != rounds || proof_len != 65u * rounds + 64u ||
+        !purify_parse_scalar(rho32, &rho, 1) ||
+        !purify_parse_scalar(proof + 65u * rounds, &n, 0) ||
+        !purify_parse_scalar(proof + 65u * rounds + 32u, &l, 0) ||
+        !purify_parse_point_as_ge(commitment33, &commit)) {
+        return 0;
+    }
+    scratch = purify_bppp_create_scratch(ctx, generators_count);
+    gens = secp256k1_bppp_generators_parse(ctx, generators33, generator_bytes);
+    c_vec = (secp256k1_scalar*)purify_malloc_array(c_vec_len, sizeof(*c_vec));
+    if (rounds != 0) {
+        gammas = (secp256k1_scalar*)purify_malloc_array(rounds, sizeof(*gammas));
+    }
+    if (scratch == NULL || gens == NULL || c_vec == NULL || (rounds != 0 && gammas == NULL) ||
+        !purify_parse_scalar_array(c_vec32, c_vec_len, c_vec) ||
+        !purify_norm_arg_commit_initial_data(&transcript, &rho, gens, n_vec_len,
+                                           c_vec, c_vec_len, &commit)) {
+        goto cleanup;
+    }
+    for (i = 0; i < rounds; ++i) {
+        secp256k1_sha256_write(&transcript, proof + 65u * i, 65u);
+        secp256k1_bppp_challenge_scalar(&gammas[i], &transcript, 0);
+    }
+    secp256k1_sha256_clear(&transcript);
+
+    /* Absorb <c, s_h> into the public basis H'_i = H_i + c_i*G.
+     * The remaining base-generator coefficient is n^2 * rho^(2*g).
+     * This computes only the short side of the verification equation:
+     * T = C + sum(gamma*X + (gamma^2-1)*R) - n^2*rho^(2*g)*G.
+     * Equality to the claimed polynomial commitment remains deferred.
+     */
+    norm = rho;
+    for (i = 0; i <= rounds; ++i) {
+        secp256k1_scalar_sqr(&norm, &norm);
+    }
+    secp256k1_scalar_mul(&norm, &norm, &n);
+    secp256k1_scalar_mul(&norm, &norm, &n);
+    secp256k1_scalar_negate(&norm, &norm);
+    equation.proof = proof;
+    equation.commit = &commit;
+    equation.gammas = gammas;
+    if (!secp256k1_ecmult_multi_var(&ctx->error_callback, scratch, &residual_j, &norm,
+                                  ec_mult_verify_cb1, &equation, 2u * rounds + 1u)) {
+        goto cleanup;
+    }
+    secp256k1_ge_set_gej_var(&residual, &residual_j);
+    secp256k1_ge_serialize_ext(residual33, &residual);
+    secp256k1_scalar_get_b32(terminal_n32, &n);
+    secp256k1_scalar_get_b32(terminal_l32, &l);
+    for (i = 0; i < rounds; ++i) {
+        secp256k1_scalar_get_b32(gammas32 + 32u * i, &gammas[i]);
+    }
+    ok = 1;
+
+cleanup:
+    free(gammas);
+    free(c_vec);
+    if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
+    if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
+    return ok;
+}
+
+int purify_bppp_shift_norm_basis(purify_secp_context* context,
+                               const unsigned char* generators33, size_t generators_count,
+                               const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
+                               unsigned char* points_out33) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_scalar one;
+    size_t used, bytes, i;
+
+    if (ctx == NULL || generators33 == NULL || c_vec32 == NULL || points_out33 == NULL ||
+        !secp256k1_is_power_of_two(n_vec_len) || !secp256k1_is_power_of_two(c_vec_len) ||
+        n_vec_len < c_vec_len ||
+        !purify_bridge_checked_add_size(n_vec_len, c_vec_len, &used) ||
+        generators_count < used ||
+        !purify_bridge_checked_mul_size(generators_count, 33u, &bytes)) {
+        return 0;
+    }
+    secp256k1_scalar_set_int(&one, 1);
+    for (i = 0; i < generators_count; ++i) {
+        secp256k1_ge point;
+        if (!purify_parse_generator_as_ge(ctx, generators33 + 33u * i, &point)) {
+            return 0;
+        }
+        if (i >= n_vec_len && i < used) {
+            secp256k1_scalar coefficient;
+            secp256k1_gej point_j;
+            if (!purify_parse_scalar(c_vec32 + 32u * (i - n_vec_len), &coefficient, 0)) {
+                return 0;
+            }
+            secp256k1_gej_set_ge(&point_j, &point);
+            secp256k1_ecmult(&point_j, &point_j, &one, &coefficient);
+            secp256k1_ge_set_gej_var(&point, &point_j);
+        }
+        /* A polynomial commitment basis must contain finite generators. */
+        if (secp256k1_ge_is_infinity(&point)) return 0;
+        secp256k1_ge_serialize_ext(points_out33 + 33u * i, &point);
+    }
+    return 1;
+}
+
+typedef struct purify_bppp_public_msm_data {
+    const unsigned char* points33;
+    const unsigned char* scalars32;
+} purify_bppp_public_msm_data;
+
+static int purify_bppp_public_msm_cb(secp256k1_scalar* scalar, secp256k1_ge* point,
+                                   size_t index, void* data_ptr) {
+    const purify_bppp_public_msm_data* data = (const purify_bppp_public_msm_data*)data_ptr;
+    return purify_parse_scalar(data->scalars32 + 32u * index, scalar, 0)
+        && secp256k1_ge_parse_ext(point, data->points33 + 33u * index);
+}
+
+int purify_bppp_public_msm(purify_secp_context* context,
+                         const unsigned char* points33, const unsigned char* scalars32,
+                         size_t count, unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_scratch_space* scratch;
+    secp256k1_gej result_j;
+    secp256k1_ge result;
+    purify_bppp_public_msm_data data;
+    size_t point_bytes, scalar_bytes;
+    int ok;
+
+    if (ctx == NULL || out33 == NULL || (count != 0 && (points33 == NULL || scalars32 == NULL)) ||
+        !purify_bridge_checked_mul_size(count, 33u, &point_bytes) ||
+        !purify_bridge_checked_mul_size(count, 32u, &scalar_bytes)) {
+        return 0;
+    }
+    if (count == 0) {
+        memset(out33, 0, 33);
+        return 1;
+    }
+    scratch = secp256k1_scratch_space_create(ctx, purify_bulletproof_msm_scratch_size);
+    if (scratch == NULL) return 0;
+    data.points33 = points33;
+    data.scalars32 = scalars32;
+    ok = secp256k1_ecmult_multi_var(&ctx->error_callback, scratch, &result_j, NULL,
+                                  purify_bppp_public_msm_cb, &data, count);
+    if (ok) {
+        secp256k1_ge_set_gej_var(&result, &result_j);
+        secp256k1_ge_serialize_ext(out33, &result);
+    }
+    secp256k1_scratch_space_destroy(ctx, scratch);
+    return ok;
+}
+
+int purify_bppp_public_hash_to_point(purify_secp_context* context,
+                                   const unsigned char* input, size_t input_len,
+                                   unsigned char out33[33]) {
+    static const unsigned char tag[] = "Purify/BPPP/PublicHashToPointV1";
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_sha256 transcript;
+    secp256k1_generator generator;
+    secp256k1_ge point;
+    unsigned char seed[32];
+
+    if (ctx == NULL || out33 == NULL || (input_len != 0 && input == NULL)) return 0;
+    secp256k1_sha256_initialize_tagged(&transcript, tag, sizeof(tag) - 1);
+    if (input_len != 0) secp256k1_sha256_write(&transcript, input, input_len);
+    secp256k1_sha256_finalize(&transcript, seed);
+    secp256k1_sha256_clear(&transcript);
+    if (!secp256k1_generator_generate(ctx, &generator, seed)) return 0;
+    secp256k1_generator_load(&point, &generator);
+    return purify_serialize_point(out33, &point);
+}

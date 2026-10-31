@@ -154,6 +154,17 @@ The previous layout placed the variable commitment before the public arrays,
 so those arrays could not be prehashed as an independent SHA-256 prefix. The
 profiler retains that historical layout only for comparison, not compatibility.
 
+Purify's key/nonce relation avoids hashing secret material by combining public
+hash-to-curve preprocessing with constrained secret scalar multiplication. It
+does not remove the proof system's Fiat-Shamir hash. An off-chain child proof
+becomes a witness to its parent, so the child's proof-dependent challenges
+still require constrained derivation. The SHA-256 experiment measures that
+part of the existing verifier; it does not select SHA-256 for the final parent.
+A reviewed circuit-friendly transcript hash could remove the SHA-256-specific
+gadget, but requires an explicit suite, parameters and security argument.
+Purify's PRF security alone does not justify substituting Purify for this
+random-oracle role.
+
 The verifier also performs secp256k1 group operations. Its coordinate field is
 different from the scalar field used by the existing Purify arithmetic circuit.
 The companion-curve gadgets cannot be substituted for secp256k1 point arithmetic.

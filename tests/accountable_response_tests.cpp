@@ -76,7 +76,7 @@ void run_accountable_response_tests(TestContext& ctx) {
         auto roster = SigningRoster::aggregate(std::span(keys).first(count), secp.get());
         expect_ok(ctx, roster, "response roster aggregates");
         if (!roster) return;
-        ConflictContext context{roster->signing_key(), {}, slot};
+        ConflictContext context{roster->signing_key(), {}, {}, slot};
         context.host_commitment[0] = 0x42;
         auto challenge = signature_challenge(context, body, secp.get());
         expect_ok(ctx, challenge, "response challenge derives");

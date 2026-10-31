@@ -34,6 +34,7 @@ void run_accountable_signature_tests(TestContext& ctx) {
     ConflictContext context{
         bytes32("f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
         bytes32("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"),
+        bytes32("202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"),
         slot,
     };
     const auto body_a = purify::bytes_from_ascii("accept:root-a");
@@ -45,17 +46,17 @@ void run_accountable_signature_tests(TestContext& ctx) {
     expect_ok(ctx, challenge_a, "first statement has a challenge");
     expect_ok(ctx, challenge_b, "second statement has a challenge");
     if (!input || !challenge_a || !challenge_b) return;
-    ctx.expect(*input == bytes32("258bae0387bd127d74086f64296e65369efb5f5a3f13536f999355d0ab59b6fb"),
+    ctx.expect(*input == bytes32("e13bd221a8ad53a2d26678b6fc547f2735505f4f2c5f58d8ee27ed0d638a0b0b"),
                "nonce input matches independent tagged-hash vector");
     ctx.expect(challenge_a->to_bytes_be()
-                   == bytes32("80457868aaf037437aad6d868692b67cee17b9159fc0c06364b151527aa16305"),
+                   == bytes32("61d96d6b882f932af424ece8c9830fd32a157be23c059365dec3fb667a15f65a"),
                "first challenge matches independent tagged-hash vector");
     ctx.expect(challenge_b->to_bytes_be()
-                   == bytes32("f7c579404420e83db97c4a47974c66420644fd1bbb7e689c00c0b8a0ce241458"),
+                   == bytes32("b2ecbde6194005947ebd3360ae3e9fc68207d513e2a532e9da2f7e46cecd1671"),
                "second challenge matches independent tagged-hash vector");
 
-    const auto encoded_a = bytes32("80d0693a00d0a5ca7008489393b823780f984e5a2ff9a0ee6e41956a9fade7d4");
-    const auto encoded_b = bytes32("e7506bc0cc62b8b92c74ded6c5e532c89d713d85d3e9f95c829d6cc8c9ffba8c");
+    const auto encoded_a = bytes32("258c4842988eb980dc6ec6ba5c892f7ac39196c004c819f5dc7993a69e0ba1d3");
+    const auto encoded_b = bytes32("18c639b24bc010bd7c379a220abbdf5610b9c56e495e58460ee9bdbacbfac0d7");
     auto signature_a = ScalarSignature::deserialize(encoded_a);
     auto signature_b = ScalarSignature::deserialize(encoded_b);
     expect_ok(ctx, signature_a, "first scalar trace entry decodes");
@@ -124,6 +125,26 @@ void run_accountable_signature_tests(TestContext& ctx) {
     if (changed_challenge) ctx.expect(*changed_challenge != *challenge_a, "host commitment binds the challenge");
     expect_error(ctx, recover_same_slot_key(changed, body_a, *signature_a, body_b, *signature_b, secp.get()),
                  purify::ErrorCode::EquationMismatch, "responses cannot be reinterpreted under changed hosts");
+    changed = context;
+    changed.coalition_core_digest[0] ^= 1;
+    changed_input = nonce_evaluation_input(changed, secp.get());
+    changed_challenge = signature_challenge(changed, body_a, secp.get());
+    expect_ok(ctx, changed_input, "another coalition core has a nonce input");
+    expect_ok(ctx, changed_challenge,
+              "another coalition core has a challenge");
+    if (changed_input) {
+        ctx.expect(*changed_input != *input,
+                   "coalition core binds the nonce input");
+    }
+    if (changed_challenge) {
+        ctx.expect(*changed_challenge != *challenge_a,
+                   "coalition core binds the challenge");
+    }
+    expect_error(ctx,
+                 recover_same_slot_key(changed, body_a, *signature_a,
+                                       body_b, *signature_b, secp.get()),
+                 purify::ErrorCode::EquationMismatch,
+                 "responses cannot be reinterpreted under another core");
 
     const auto other_slot = purify::bytes_from_ascii("domain=7;epoch=14;slot=2");
     changed = context;

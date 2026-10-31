@@ -19,6 +19,89 @@ using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
 
+void check_secret_msm_zero_terms(TestContext& ctx) {
+    using namespace purify::bppp;
+    auto secp = purify::make_secp_context();
+    ctx.expect(secp != nullptr, "secret MSM boundary context creates");
+    if (!secp) return;
+
+    const ScalarBytes zero{};
+    const auto one = FieldElement::one().to_bytes_be();
+    const ScalarBytes negative_one{
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+        0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3c,
+        0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x40};
+    const auto base = base_generator(secp.get());
+    PointBytes base_point{};
+    ctx.expect(purify_bppp_generators_to_points(
+                   secp.get(), base.data(), 1, base_point.data()) != 0,
+               "base generator converts to a point");
+
+    PointBytes result{};
+    ctx.expect(purify_point_scale(
+                   secp.get(), base_point.data(), one.data(), result.data()) != 0
+                   && result == base_point,
+               "secret point scaling preserves a unit term");
+    ctx.expect(purify_point_scale(
+                   secp.get(), base_point.data(), zero.data(), result.data()) == 0,
+               "secret point scaling rejects the identity result");
+    ctx.expect(purify_bppp_offset_commitment(
+                   secp.get(), base_point.data(), zero.data(), result.data()) != 0
+                   && result == base_point,
+               "secret commitment offset skips a zero term");
+    ctx.expect(purify_bppp_offset_commitment(
+                   secp.get(), base_point.data(), negative_one.data(),
+                   result.data()) == 0,
+               "secret commitment offset rejects cancellation to identity");
+
+    ctx.expect(purify_pedersen_commit_char(
+                   secp.get(), zero.data(), one.data(), base.data(),
+                   base.data(), result.data()) != 0
+                   && result == base_point,
+               "Pedersen commitment skips a zero blind term");
+    ctx.expect(purify_pedersen_commit_char(
+                   secp.get(), one.data(), zero.data(), base.data(),
+                   base.data(), result.data()) != 0
+                   && result == base_point,
+               "Pedersen commitment skips a zero value term");
+    ctx.expect(purify_pedersen_commit_char(
+                   secp.get(), zero.data(), zero.data(), base.data(),
+                   base.data(), result.data()) == 0,
+               "Pedersen commitment rejects two zero terms");
+
+    auto generators = create_generators(2, secp.get());
+    expect_ok(ctx, generators, "secret MSM boundary generators create");
+    if (!generators) return;
+    std::array<PointBytes, 2> generator_points{};
+    ctx.expect(purify_bppp_generators_to_points(
+                   secp.get(),
+                   reinterpret_cast<const unsigned char*>(generators->data()),
+                   generators->size(),
+                   reinterpret_cast<unsigned char*>(generator_points.data())) != 0,
+               "secret MSM generators convert to points");
+    ctx.expect(purify_bppp_commit_witness_only(
+                   secp.get(),
+                   reinterpret_cast<const unsigned char*>(generators->data()),
+                   generators->size(), zero.data(), 1, one.data(), 1,
+                   result.data()) != 0
+                   && result == generator_points[1],
+               "secret MSM skips a zero norm coordinate");
+    ctx.expect(purify_bppp_commit_witness_only(
+                   secp.get(),
+                   reinterpret_cast<const unsigned char*>(generators->data()),
+                   generators->size(), one.data(), 1, zero.data(), 1,
+                   result.data()) != 0
+                   && result == generator_points[0],
+               "secret MSM skips a zero linear coordinate");
+    ctx.expect(purify_bppp_commit_witness_only(
+                   secp.get(),
+                   reinterpret_cast<const unsigned char*>(generators->data()),
+                   generators->size(), zero.data(), 1, zero.data(), 1,
+                   result.data()) == 0,
+               "secret MSM rejects an identity commitment");
+}
+
 void check_public_digest_transcript(TestContext& ctx) {
     auto secp = purify::make_secp_context();
     ctx.expect(secp != nullptr, "factored norm transcript context creates");
@@ -304,6 +387,7 @@ void check_pending_norm_equation(TestContext& ctx) {
 } // namespace
 
 void run_norm_protocol_tests(TestContext& ctx) {
+    check_secret_msm_zero_terms(ctx);
     check_public_digest_transcript(ctx);
     check_initial_point_boundary(ctx);
     check_norm_length_boundary(ctx);

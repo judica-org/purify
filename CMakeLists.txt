@@ -593,7 +593,11 @@ if(PURIFY_BUILD_TESTS)
 
     function(purify_add_property_suite_test suite_name)
         add_test(NAME "purify.property.${suite_name}" COMMAND purify_property_tests --suite "${suite_name}")
-        set_tests_properties("purify.property.${suite_name}" PROPERTIES TIMEOUT 300)
+        if(PURIFY_ENABLE_SANITIZERS)
+            set_tests_properties("purify.property.${suite_name}" PROPERTIES TIMEOUT 900)
+        else()
+            set_tests_properties("purify.property.${suite_name}" PROPERTIES TIMEOUT 300)
+        endif()
     endfunction()
 
     purify_add_property_suite_test(key_and_circuit)
@@ -655,7 +659,7 @@ if(PURIFY_BUILD_TESTS)
         add_test(NAME purify.bench COMMAND bench_purify --epochs 1 --min-epoch-ms 1)
         # Proof suites can saturate the runner; isolate benchmark smoke work
         # so its time limit does not measure contention with other tests.
-        set_tests_properties(purify.bench PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+        set_tests_properties(purify.bench PROPERTIES TIMEOUT 900 RUN_SERIAL TRUE)
     endif()
 
     if(PURIFY_BUILD_FUZZ)

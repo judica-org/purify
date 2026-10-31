@@ -1564,9 +1564,13 @@ static void test_curve_core(void) {
     purify_u256_set_zero(z1);
     expect(purify_curve_mul_secret_affine(&secret_affine, &curve1, &generator1, z1) == 0,
            "purify_curve_mul_secret_affine rejects the point at infinity result for scalar zero");
+    expect(all_zero((const unsigned char*)&secret_affine, sizeof(secret_affine)),
+           "purify_curve_mul_secret_affine clears output after scalar rejection");
     purify_u256_set_u64(z1, 1u);
     expect(purify_curve_mul_secret_affine(&secret_affine, &curve1, &infinity, z1) == 0,
            "purify_curve_mul_secret_affine rejects an infinity input point");
+    expect(all_zero((const unsigned char*)&secret_affine, sizeof(secret_affine)),
+           "purify_curve_mul_secret_affine clears output after point rejection");
 
     purify_curve_affine(&affine1, &curve1, &generator1);
     purify_curve_add_mixed(&sum, &curve1, &generator1, &affine1);

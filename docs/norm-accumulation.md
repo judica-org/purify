@@ -259,6 +259,43 @@ retains them alongside the original child proofs; a final 1,122-byte step
 does not replace that history. Recursive authentication is the remaining
 mechanism needed to discard it in an on-chain construction receipt.
 
+## Measured varying-coefficient accumulation
+
+Single local runs at commit `691b219` on macOS arm64, AppleClang
+16.0.0.16000026, C++20 Release `-O3`, used `g=32768,h=16384,D=65536`.
+Every owner published a different canonical `c` vector. The original private
+norm witnesses were erased before public preparation. Both final steps were
+1,122 bytes; each coefficient opening was 1,022 bytes.
+[Raw results](../bench/results/norm-accumulation-varying-c-arm64.json) include
+all measured stages and public-input byte accounting. Peak memory was not
+measured.
+
+| Stage | 2 inputs | 100 inputs |
+| --- | ---: | ---: |
+| Shared raw basis creation | 1.747 s | 2.078 s |
+| Independent leaf publication, sequential | 2.464 s | 133.444 s |
+| Norm preparation and coefficient authentication | 0.364 s | 16.934 s |
+| Public coefficient-opening proving | 2.767 s | 105.594 s |
+| Short coefficient-opening verification | 1.001 ms | 41.435 ms |
+| Public accumulation proving | 5.153 s | 4.784 s |
+| Short accumulation verification | 0.461 ms | 1.761 ms |
+| Mandatory final decision | 342.429 ms | 284.103 ms |
+
+The 100-input run retained 52,428,800 bytes of explicit public coefficients,
+103,900 bytes of child norm proofs, and 102,200 bytes of coefficient-opening
+proofs. The full leaf records, including coefficients, rho and commitments,
+occupied 52,539,200 bytes. Basis points are shared; coefficient commitments
+are derived during preparation. These are retained public-data sizes, not
+peak memory or a proposed on-chain encoding.
+
+Coefficient authentication and opening generation still scale with the
+number of children and their linear dimension. Native verification must
+reconstruct authenticated prepared statements and verify every opening and
+accumulation transition. The final short step alone is insufficient. The
+small timing difference between the two shared-step prover runs does not
+establish a speedup with more inputs. These synthetic norm measurements do
+not measure a sound encryption circuit or its final recursive receipt.
+
 ## Historical shared-coefficient measurements
 
 These measurements describe the previous shifted-basis implementation at

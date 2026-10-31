@@ -96,8 +96,16 @@ void test_puresign_message_signing(TestContext& ctx) {
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
                "message-bound public nonces are deterministic");
-    ctx.expect(prepared_a->scalar() == prepared_b->scalar(),
-               "message-bound secret nonce scalars are deterministic");
+    auto prepared_a_scalar = prepared_a->scalar();
+    auto prepared_b_scalar = prepared_b->scalar();
+    expect_ok(ctx, prepared_a_scalar,
+              "first message-bound secret nonce scalar exports");
+    expect_ok(ctx, prepared_b_scalar,
+              "second message-bound secret nonce scalar exports");
+    if (prepared_a_scalar && prepared_b_scalar) {
+        ctx.expect(*prepared_a_scalar == *prepared_b_scalar,
+                   "message-bound secret nonce scalars are deterministic");
+    }
 
     Result<purify::puresign::Signature> direct = key_pair->sign_message(message, context.get());
     expect_ok(ctx, direct, "KeyPair::sign_message succeeds");
@@ -289,8 +297,16 @@ void test_puresign_topic_signing(TestContext& ctx) {
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
                "topic-bound public nonces are deterministic");
-    ctx.expect(prepared_a->scalar() == prepared_b->scalar(),
-               "topic-bound secret nonce scalars are deterministic");
+    auto prepared_a_scalar = prepared_a->scalar();
+    auto prepared_b_scalar = prepared_b->scalar();
+    expect_ok(ctx, prepared_a_scalar,
+              "first topic-bound secret nonce scalar exports");
+    expect_ok(ctx, prepared_b_scalar,
+              "second topic-bound secret nonce scalar exports");
+    if (prepared_a_scalar && prepared_b_scalar) {
+        ctx.expect(*prepared_a_scalar == *prepared_b_scalar,
+                   "topic-bound secret nonce scalars are deterministic");
+    }
 
     Result<purify::puresign::Signature> direct = key_pair->sign_with_topic(message, topic, context.get());
     expect_ok(ctx, direct, "KeyPair::sign_with_topic succeeds");
@@ -304,6 +320,16 @@ void test_puresign_topic_signing(TestContext& ctx) {
     Result<purify::puresign::ProvenSignature> proven =
         key_pair->sign_with_prepared_topic_proof(message, std::move(*prepared_with_proof), context.get());
     expect_ok(ctx, proven, "KeyPair::sign_with_prepared_topic_proof succeeds");
+    ctx.expect(!prepared_with_proof->available(),
+               "successful proof signing consumes the wrapped nonce");
+    expect_error(ctx, prepared_with_proof->scalar(),
+                 ErrorCode::UninitializedState,
+                 "a consumed proof bundle cannot export its scalar");
+    expect_error(ctx,
+                 key_pair->sign_with_prepared_topic_proof(
+                     message, std::move(*prepared_with_proof), context.get()),
+                 ErrorCode::UninitializedState,
+                 "a consumed proof bundle cannot sign a second time");
     Result<purify::puresign::ProvenSignature> cached_proven =
         key_pair->sign_with_topic_proof(message, *proof_cache, context.get());
     expect_ok(ctx, cached_proven, "KeyPair::sign_with_topic_proof succeeds with a cached template");
@@ -409,6 +435,13 @@ void test_puresign_binding_checks(TestContext& ctx) {
         expect_error(ctx, key_pair->sign_message_with_prepared(wrong_message, std::move(*message_nonce), context.get()),
                      ErrorCode::BindingMismatch,
                      "message-bound prepared nonces reject signing a different message");
+        ctx.expect(!message_nonce->available(),
+                   "a binding failure consumes the prepared nonce");
+        expect_error(ctx,
+                     key_pair->sign_message_with_prepared(
+                         message, std::move(*message_nonce), context.get()),
+                     ErrorCode::UninitializedState,
+                     "a binding-failed nonce cannot later sign");
     }
 
     Result<purify::puresign::PreparedNonce> topic_nonce = key_pair->prepare_topic_nonce(topic, context.get());
@@ -417,6 +450,107 @@ void test_puresign_binding_checks(TestContext& ctx) {
         expect_error(ctx, key_pair->sign_message_with_prepared(message, std::move(*topic_nonce), context.get()),
                      ErrorCode::BindingMismatch,
                      "topic-bound prepared nonces reject the message-bound signing API");
+        ctx.expect(!topic_nonce->available(),
+                   "a scope failure consumes the prepared nonce");
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*topic_nonce), context.get()),
+                     ErrorCode::UninitializedState,
+                     "a scope-failed nonce cannot later sign");
+    }
+
+    auto missing_context_nonce =
+        key_pair->prepare_topic_nonce(topic, context.get());
+    expect_ok(ctx, missing_context_nonce,
+              "topic nonce prepares for context-failure consumption");
+    if (missing_context_nonce) {
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*missing_context_nonce), nullptr),
+                     ErrorCode::MissingValue,
+                     "a missing signing context rejects before signing");
+        ctx.expect(!missing_context_nonce->available(),
+                   "a context failure still consumes the prepared nonce");
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*missing_context_nonce),
+                         context.get()),
+                     ErrorCode::UninitializedState,
+                     "a context-failed nonce cannot later sign");
+    }
+}
+
+void test_puresign_plusplus_prepared_nonce_consumption(TestContext& ctx) {
+    auto secret = sample_secret();
+    expect_ok(ctx, secret,
+              "sample secret parses for PureSign++ nonce consumption");
+    if (!secret) return;
+    auto context = make_test_secp_context(ctx);
+    if (!context) return;
+
+    const auto message = sample_message();
+    const auto wrong_message = purify::bytes_from_ascii("wrong-message");
+    const auto topic = purify::bytes_from_ascii("one-shot-topic");
+    auto key_pair = purify::puresign_plusplus::KeyPair::from_secret(
+        *secret, context.get());
+    expect_ok(ctx, key_pair,
+              "PureSign++ key pair derives for nonce consumption");
+    if (!key_pair) return;
+
+    auto successful = key_pair->prepare_topic_nonce(topic, context.get());
+    expect_ok(ctx, successful, "PureSign++ topic nonce prepares");
+    if (successful) {
+        auto signature = key_pair->sign_with_prepared_topic(
+            message, std::move(*successful), context.get());
+        expect_ok(ctx, signature,
+                  "PureSign++ prepared topic nonce signs once");
+        ctx.expect(!successful->available(),
+                   "successful PureSign++ signing consumes its nonce");
+        expect_error(ctx, successful->scalar(), ErrorCode::UninitializedState,
+                     "consumed PureSign++ nonce cannot export its scalar");
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         wrong_message, std::move(*successful), context.get()),
+                     ErrorCode::UninitializedState,
+                     "PureSign++ nonce reuse rejects a second message");
+    }
+
+    auto binding_failure =
+        key_pair->prepare_message_nonce(message, context.get());
+    expect_ok(ctx, binding_failure,
+              "PureSign++ message nonce prepares for binding failure");
+    if (binding_failure) {
+        expect_error(ctx,
+                     key_pair->sign_message_with_prepared(
+                         wrong_message, std::move(*binding_failure),
+                         context.get()),
+                     ErrorCode::BindingMismatch,
+                     "PureSign++ rejects the wrong message binding");
+        ctx.expect(!binding_failure->available(),
+                   "PureSign++ binding failure consumes its nonce");
+        expect_error(ctx,
+                     key_pair->sign_message_with_prepared(
+                         message, std::move(*binding_failure), context.get()),
+                     ErrorCode::UninitializedState,
+                     "PureSign++ binding-failed nonce cannot later sign");
+    }
+
+    auto context_failure = key_pair->prepare_topic_nonce(topic, context.get());
+    expect_ok(ctx, context_failure,
+              "PureSign++ topic nonce prepares for context failure");
+    if (context_failure) {
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*context_failure), nullptr),
+                     ErrorCode::MissingValue,
+                     "PureSign++ rejects a missing signing context");
+        ctx.expect(!context_failure->available(),
+                   "PureSign++ context failure consumes its nonce");
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*context_failure), context.get()),
+                     ErrorCode::UninitializedState,
+                     "PureSign++ context-failed nonce cannot later sign");
     }
 }
 
@@ -598,6 +732,16 @@ void test_puresign_plusplus_topic_signing(TestContext& ctx) {
     Result<purify::puresign_plusplus::ProvenSignature> proven =
         key_pair->sign_with_prepared_topic_proof(message, std::move(*prepared_with_proof), context.get());
     expect_ok(ctx, proven, "PureSign++ KeyPair::sign_with_prepared_topic_proof succeeds");
+    ctx.expect(!prepared_with_proof->available(),
+               "PureSign++ proof signing consumes the wrapped nonce");
+    expect_error(ctx, prepared_with_proof->scalar(),
+                 ErrorCode::UninitializedState,
+                 "consumed PureSign++ proof cannot export its scalar");
+    expect_error(ctx,
+                 key_pair->sign_with_prepared_topic_proof(
+                     message, std::move(*prepared_with_proof), context.get()),
+                 ErrorCode::UninitializedState,
+                 "PureSign++ consumed proof bundle cannot sign twice");
     Result<purify::puresign_plusplus::ProvenSignature> cached_proven =
         key_pair->sign_with_topic_proof(message, *proof_cache, context.get());
     expect_ok(ctx, cached_proven, "PureSign++ KeyPair::sign_with_topic_proof succeeds with a cached template");
@@ -765,6 +909,7 @@ void run_puresign_tests(purify_test::TestContext& ctx) {
     test_puresign_topic_signing(ctx);
     test_puresign_topic_proof_cache_clone_for_thread(ctx);
     test_puresign_binding_checks(ctx);
+    test_puresign_plusplus_prepared_nonce_consumption(ctx);
     test_puresign_plusplus_message_signing(ctx);
     test_puresign_plusplus_topic_signing(ctx);
     test_puresign_plusplus_topic_proof_cache_reuse(ctx);

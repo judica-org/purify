@@ -30,6 +30,21 @@ Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<co
 
 namespace {
 
+class BurnScalarOnDestruction {
+public:
+    explicit BurnScalarOnDestruction(Scalar32& scalar) noexcept
+        : scalar_(&scalar) {}
+    BurnScalarOnDestruction(const BurnScalarOnDestruction&) = delete;
+    BurnScalarOnDestruction& operator=(
+        const BurnScalarOnDestruction&) = delete;
+    ~BurnScalarOnDestruction() {
+        detail::secure_clear_bytes(scalar_->data(), scalar_->size());
+    }
+
+private:
+    Scalar32* scalar_;
+};
+
 constexpr std::string_view kMessageNonceTag = "PureSign/Nonce/Message/";
 constexpr std::string_view kTopicNonceTag = "PureSign/Nonce/Topic/";
 constexpr std::string_view kMessageBindingTag = "PureSign/Binding/Message";
@@ -266,7 +281,9 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
 
 PreparedNonce::PreparedNonce(Scope scope, const Scalar32& scalar, const Nonce& nonce,
                              const XOnly32& signer_pubkey, const XOnly32& binding_digest)
-    : scope_(scope), scalar_(scalar), nonce_(nonce), signer_pubkey_(signer_pubkey), binding_digest_(binding_digest) {}
+    : scope_(scope), scalar_(scalar), nonce_(nonce),
+      signer_pubkey_(signer_pubkey), binding_digest_(binding_digest),
+      available_(true) {}
 
 PreparedNonce PreparedNonce::from_parts(Scope scope, const Scalar32& scalar, const Nonce& nonce,
                                         const XOnly32& signer_pubkey, const XOnly32& binding_digest) {
@@ -275,7 +292,8 @@ PreparedNonce PreparedNonce::from_parts(Scope scope, const Scalar32& scalar, con
 
 PreparedNonce::PreparedNonce(PreparedNonce&& other) noexcept
     : scope_(other.scope_), scalar_(other.scalar_), nonce_(other.nonce_),
-      signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_) {
+      signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_),
+      available_(other.available_) {
     other.clear();
 }
 
@@ -287,6 +305,7 @@ PreparedNonce& PreparedNonce::operator=(PreparedNonce&& other) noexcept {
         nonce_ = other.nonce_;
         signer_pubkey_ = other.signer_pubkey_;
         binding_digest_ = other.binding_digest_;
+        available_ = other.available_;
         other.clear();
     }
     return *this;
@@ -297,12 +316,19 @@ PreparedNonce::~PreparedNonce() {
 }
 
 void PreparedNonce::clear() noexcept {
-    std::fill(scalar_.begin(), scalar_.end(), static_cast<unsigned char>(0));
+    detail::secure_clear_bytes(scalar_.data(), scalar_.size());
+    available_ = false;
 }
 
 Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
                                               std::span<const unsigned char> message,
                                               purify_secp_context* secp_context) && {
+    if (!available_) {
+        return unexpected_error(ErrorCode::UninitializedState,
+                                "PreparedNonce::sign_message:consumed");
+    }
+    available_ = false;
+    BurnScalarOnDestruction burn(scalar_);
     if (scope_ != Scope::Message) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_message:scope");
     }
@@ -333,6 +359,12 @@ Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
 Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
                                                     std::span<const unsigned char> message,
                                                     purify_secp_context* secp_context) && {
+    if (!available_) {
+        return unexpected_error(ErrorCode::UninitializedState,
+                                "PreparedNonce::sign_topic_message:consumed");
+    }
+    available_ = false;
+    BurnScalarOnDestruction burn(scalar_);
     if (scope_ != Scope::Topic) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_topic_message:scope");
     }

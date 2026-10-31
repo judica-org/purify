@@ -321,6 +321,82 @@ void test_curve_mul_small_scalar_consistency(TestContext& ctx) {
                "curve1 add(double(generator), generator) matches mul(generator, 3)");
 }
 
+void test_circuit_ec_full_point_multiplication(TestContext& ctx) {
+    const auto max_magnitude = purify::prime_p().shifted_right(1);
+    const std::array magnitudes{
+        UInt256::one(), UInt256::from_u64(8), max_magnitude};
+
+    const auto check = [&](const purify::EllipticCurve& curve,
+                           const purify::JacobianPoint& base,
+                           const UInt256& magnitude, bool negate) {
+        auto encoded = purify::key_to_bits(magnitude, max_magnitude);
+        expect_ok(ctx, encoded,
+                  "full-point fixture has a canonical signed-window encoding");
+        if (!encoded) return;
+
+        Transcript transcript;
+        std::vector<Expr> bits;
+        bits.reserve(encoded->size());
+        for (int bit : *encoded) {
+            bits.push_back(transcript.boolean(transcript.secret(
+                FieldElement::from_int(bit))));
+        }
+        auto symbolic = purify::circuit_ec_multiply_point(
+            curve, transcript, base, bits);
+        if (negate) {
+            const auto sign = transcript.boolean(transcript.secret(
+                FieldElement::one()));
+            symbolic = purify::circuit_optionally_negate_ec(
+                symbolic, transcript, sign);
+        }
+
+        auto expected_point = curve.mul(base, magnitude);
+        if (negate) expected_point = curve.negate(expected_point);
+        const auto expected = curve.affine(expected_point);
+        const auto actual_x = transcript.evaluate(symbolic.first);
+        const auto actual_y = transcript.evaluate(symbolic.second);
+        ctx.expect(actual_x && actual_y && !expected.infinity &&
+                       *actual_x == expected.x && *actual_y == expected.y,
+                   "full-point circuit multiplication matches both native coordinates");
+    };
+
+    for (const auto& magnitude : magnitudes) {
+        for (bool negate : {false, true}) {
+            check(purify::curve1(), purify::generator1(), magnitude, negate);
+            check(purify::curve2(), purify::generator2(), magnitude, negate);
+        }
+    }
+
+    const auto encoded = purify::key_to_bits(
+        UInt256::from_u64(8), max_magnitude);
+    expect_ok(ctx, encoded,
+              "x-only stability fixture has a signed-window encoding");
+    if (!encoded) return;
+    const auto build_bits = [&](Transcript& transcript) {
+        std::vector<Expr> bits;
+        bits.reserve(encoded->size());
+        for (int bit : *encoded) {
+            bits.push_back(transcript.boolean(transcript.secret(
+                FieldElement::from_int(bit))));
+        }
+        return bits;
+    };
+    Transcript x_transcript;
+    const auto x_bits = build_bits(x_transcript);
+    const auto x_only = purify::circuit_ec_multiply_x(
+        purify::curve1(), x_transcript, purify::generator1(), x_bits);
+    Transcript point_transcript;
+    const auto point_bits = build_bits(point_transcript);
+    const auto full = purify::circuit_ec_multiply_point(
+        purify::curve1(), point_transcript, purify::generator1(), point_bits);
+    ctx.expect(x_transcript.evaluate(x_only) ==
+                   point_transcript.evaluate(full.first),
+               "x-only and full-point schedules produce the same x coordinate");
+    ctx.expect(point_transcript.muls().size() ==
+                   x_transcript.muls().size() + 1,
+               "x-only schedule omits exactly the unused final y gate");
+}
+
 void test_key_space_derivation(TestContext& ctx) {
     UInt512 twice_half_n1 = purify::widen<8>(purify::half_n1());
     twice_half_n1.add_assign(purify::widen<8>(purify::half_n1()));
@@ -1090,6 +1166,7 @@ void run_purify_tests(TestContext& ctx) {
     test_known_sample(ctx);
     test_secret_hardening_path(ctx);
     test_curve_mul_small_scalar_consistency(ctx);
+    test_circuit_ec_full_point_multiplication(ctx);
     test_key_space_derivation(ctx);
     test_field_sqrt_zero(ctx);
     test_library_key_generation(ctx);

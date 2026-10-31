@@ -2453,8 +2453,16 @@ Expr circuit_ec_add_x(Transcript& transcript, const ExprPoint& p1, const ExprPoi
         .build();
 }
 
-Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
-                           const JacobianPoint& point, const std::vector<Expr>& bits) {
+namespace {
+
+enum class CircuitEcMultiplyOutput {
+    XOnly,
+    FullPoint,
+};
+
+ExprPoint circuit_ec_multiply_impl(const EllipticCurve& curve, Transcript& transcript,
+                                   const JacobianPoint& point, const std::vector<Expr>& bits,
+                                   CircuitEcMultiplyOutput output) {
     std::vector<JacobianPoint> powers;
     powers.reserve(bits.size());
     powers.push_back(point);
@@ -2501,7 +2509,28 @@ Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
     for (std::size_t i = 1; i + 1 < lookups.size(); ++i) {
         out = circuit_ec_add(transcript, out, lookups[i]);
     }
-    return circuit_ec_add_x(transcript, out, lookups.back());
+    if (output == CircuitEcMultiplyOutput::FullPoint) {
+        return circuit_ec_add(transcript, out, lookups.back());
+    }
+    // Keep the historical x-only circuit byte-for-byte stable. Computing an
+    // unused final y-coordinate would append one multiplication gate and
+    // change every existing circuit transcript and proof vector.
+    return {circuit_ec_add_x(transcript, out, lookups.back()), Expr(0)};
+}
+
+}  // namespace
+
+ExprPoint circuit_ec_multiply_point(const EllipticCurve& curve, Transcript& transcript,
+                                    const JacobianPoint& point, const std::vector<Expr>& bits) {
+    return circuit_ec_multiply_impl(curve, transcript, point, bits,
+                                    CircuitEcMultiplyOutput::FullPoint);
+}
+
+Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
+                           const JacobianPoint& point, const std::vector<Expr>& bits) {
+    return circuit_ec_multiply_impl(curve, transcript, point, bits,
+                                    CircuitEcMultiplyOutput::XOnly)
+        .first;
 }
 
 Expr circuit_combine(Transcript& transcript, const Expr& x1, const Expr& x2) {

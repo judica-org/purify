@@ -429,6 +429,43 @@ PreparedNonceWithProof PreparedNonceWithProof::from_parts(PreparedNonce prepared
     return PreparedNonceWithProof(std::move(prepared), std::move(proof));
 }
 
+Result<Scalar32> PreparedNonceWithProof::raw_scalar() const {
+    if (!prepared_.available()) {
+        return unexpected_error(ErrorCode::UninitializedState,
+                                "PreparedNonceWithProof::raw_scalar:consumed");
+    }
+    if (proof_.commitment_point[0] != 0x02 &&
+        proof_.commitment_point[0] != 0x03) {
+        return unexpected_error(ErrorCode::RangeViolation,
+                                "PreparedNonceWithProof::raw_scalar:point");
+    }
+    if (!std::equal(proof_.commitment_point.begin() + 1,
+                    proof_.commitment_point.end(),
+                    prepared_.public_nonce().xonly.begin())) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "PreparedNonceWithProof::raw_scalar:nonce_mismatch");
+    }
+    PURIFY_ASSIGN_OR_RETURN(auto out, prepared_.scalar(),
+                            "PreparedNonceWithProof::raw_scalar:scalar");
+    if (proof_.commitment_point[0] == 0x03) {
+        purify_scalar scalar{};
+        int overflow = 0;
+        purify_scalar_set_b32(&scalar, out.data(), &overflow);
+        if (overflow != 0 || purify_scalar_is_zero(&scalar) != 0) {
+            detail::secure_clear_bytes(&scalar, sizeof(scalar));
+            detail::secure_clear_bytes(out.data(), out.size());
+            return unexpected_error(
+                ErrorCode::InternalMismatch,
+                "PreparedNonceWithProof::raw_scalar:normalized_scalar");
+        }
+        purify_scalar_negate(&scalar, &scalar);
+        purify_scalar_get_b32(out.data(), &scalar);
+        detail::secure_clear_bytes(&scalar, sizeof(scalar));
+    }
+    return out;
+}
+
 Result<ProvenSignature> PreparedNonceWithProof::sign_message(const SecretKey& secret,
                                                              std::span<const unsigned char> message,
                                                              purify_secp_context* secp_context) && {

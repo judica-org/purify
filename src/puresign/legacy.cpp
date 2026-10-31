@@ -22,9 +22,9 @@ namespace purify::puresign {
 namespace api_impl {
 
 Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
-                                             PreparedNonce&& prepared, purify_secp_context* secp_context);
+                                             PreparedNonce prepared, purify_secp_context* secp_context);
 Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
-                                           PreparedNonce&& prepared, purify_secp_context* secp_context);
+                                           PreparedNonce prepared, purify_secp_context* secp_context);
 
 }  // namespace api_impl
 
@@ -516,7 +516,7 @@ Result<Signature> sign_message(const SecretKey& secret, std::span<const unsigned
 }
 
 Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
-                                             PreparedNonce&& prepared, purify_secp_context* secp_context) {
+                                             PreparedNonce prepared, purify_secp_context* secp_context) {
     PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret, secp_context), "sign_message_with_prepared:derive_bip340_key");
     return std::move(prepared).sign_message(signer, message, secp_context);
 }
@@ -535,7 +535,7 @@ Result<Signature> sign_with_topic(const SecretKey& secret, std::span<const unsig
 }
 
 Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
-                                           PreparedNonce&& prepared, purify_secp_context* secp_context) {
+                                           PreparedNonce prepared, purify_secp_context* secp_context) {
     PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret, secp_context), "sign_with_prepared_topic:derive_bip340_key");
     return std::move(prepared).sign_topic_message(signer, message, secp_context);
 }
@@ -828,8 +828,8 @@ Result<Signature> KeyPair::sign_message(std::span<const unsigned char> message,
 Result<Signature> KeyPair::sign_message_with_prepared(std::span<const unsigned char> message,
                                                       PreparedNonce&& prepared,
                                                       purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret_, secp_context), "KeyPair::sign_message_with_prepared:derive_bip340_key");
-    return std::move(prepared).sign_message(signer, message, secp_context);
+    return api_impl::sign_message_with_prepared(
+        secret_, message, std::move(prepared), secp_context);
 }
 
 Result<ProvenSignature> KeyPair::sign_message_with_prepared_proof(std::span<const unsigned char> message,
@@ -848,8 +848,8 @@ Result<Signature> KeyPair::sign_with_topic(std::span<const unsigned char> messag
 Result<Signature> KeyPair::sign_with_prepared_topic(std::span<const unsigned char> message,
                                                     PreparedNonce&& prepared,
                                                     purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret_, secp_context), "KeyPair::sign_with_prepared_topic:derive_bip340_key");
-    return std::move(prepared).sign_topic_message(signer, message, secp_context);
+    return api_impl::sign_with_prepared_topic(
+        secret_, message, std::move(prepared), secp_context);
 }
 
 Result<ProvenSignature> KeyPair::sign_with_prepared_topic_proof(std::span<const unsigned char> message,

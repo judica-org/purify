@@ -323,6 +323,7 @@ add_library(purify
     src/puresign/accountable_roster.cpp
     src/puresign/accountable_responses.cpp
     src/protocol/bppp.cpp
+    src/protocol/accumulation.cpp
     src/bridge/bppp_bridge.c
 )
 
@@ -413,6 +414,7 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/accountable_roster.cpp
         src/puresign/accountable_responses.cpp
         src/protocol/bppp.cpp
+        src/protocol/accumulation.cpp
         src/bridge/bppp_bridge.c
     )
 
@@ -456,6 +458,12 @@ if(PURIFY_BUILD_BENCH)
     purify_enable_warnings(bench_purify)
     purify_enable_sanitizers(bench_purify)
     purify_enable_release_optimizations(bench_purify)
+
+    add_executable(bench_norm_accumulation bench/bench_norm_accumulation.cpp)
+    target_link_libraries(bench_norm_accumulation PRIVATE purify_bench_support)
+    purify_enable_warnings(bench_norm_accumulation)
+    purify_enable_sanitizers(bench_norm_accumulation)
+    purify_enable_release_optimizations(bench_norm_accumulation)
 endif()
 
 if(PURIFY_BUILD_TESTS OR PURIFY_BUILD_CBMC)
@@ -497,6 +505,7 @@ if(PURIFY_BUILD_TESTS)
         tests/legacy_bulletproof_tests.cpp
         tests/expected_tests.cpp
         tests/norm_protocol_tests.cpp
+        tests/norm_accumulation_tests.cpp
         tests/accountable_signature_tests.cpp
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
@@ -528,6 +537,14 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(legacy_bulletproof)
     purify_add_cpp_suite_test(expected)
     purify_add_cpp_suite_test(norm_protocol)
+    purify_add_cpp_suite_test(norm_accumulation)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME purify.tests.norm_accumulation_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_norm_accumulation.py")
+        set_tests_properties(purify.tests.norm_accumulation_reference PROPERTIES TIMEOUT 30)
+    endif()
     purify_add_cpp_suite_test(accountable_signature)
     purify_add_cpp_suite_test(accountable_roster)
     purify_add_cpp_suite_test(accountable_response)

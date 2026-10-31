@@ -159,6 +159,53 @@ int purify_bppp_verify_norm_arg_with_resources(purify_bppp_backend_resources* re
                                                const unsigned char commitment33[33], const unsigned char* proof,
                                                size_t proof_len);
 
+/**
+ * Prepares a pending polynomial-commitment claim from a public norm proof.
+ *
+ * Success checks encodings and computes the exact transcript and short group
+ * equation. It does NOT verify the proof: the returned residual must still be
+ * checked against the folded generators by an accumulator's final decider.
+ * gamma_count must equal log2(n_vec_len); gammas32 may be NULL only when zero.
+ * The residual uses canonical compressed SEC1, or 33 zero bytes for infinity.
+ */
+int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
+                                     const unsigned char rho32[32],
+                                     const unsigned char* generators33, size_t generators_count,
+                                     const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
+                                     const unsigned char commitment33[33],
+                                     const unsigned char* proof, size_t proof_len,
+                                     unsigned char terminal_n32[32], unsigned char terminal_l32[32],
+                                     unsigned char* gammas32, size_t gamma_count,
+                                     unsigned char residual33[33]);
+
+/**
+ * Converts a norm generator stream to the pending claim's SEC1 basis.
+ * The first n_vec_len points are unchanged. The next c_vec_len points become
+ * H_i + c_i*G. Remaining points are unchanged independent padding generators.
+ * The caller authenticates the deterministic stream and common coefficients.
+ */
+int purify_bppp_shift_norm_basis(purify_secp_context* context,
+                               const unsigned char* generators33, size_t generators_count,
+                               const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
+                               unsigned char* points_out33);
+
+/**
+ * Variable-time arithmetic for public accumulator data only.
+ * Points use canonical SEC1 or all-zero33 for infinity; scalars are canonical.
+ * An empty MSM returns infinity and permits NULL points/scalars.
+ */
+int purify_bppp_public_msm(purify_secp_context* context,
+                         const unsigned char* points33, const unsigned char* scalars32,
+                         size_t count, unsigned char out33[33]);
+
+/**
+ * Hashes framed public input to a finite point using the vendored generator map.
+ * Callers must bind their protocol domain and complete challenge transcript.
+ */
+int purify_bppp_public_hash_to_point(purify_secp_context* context,
+                                   const unsigned char* input, size_t input_len,
+                                   unsigned char out33[33]);
+
 typedef struct purify_bulletproof_row_view {
     size_t size;
     const size_t* indices;

@@ -244,3 +244,9 @@ binding, composed privacy/validity, distributed generation, resource bounds,
 and the actual punishment/redemption contracts. Recovery of a scalar is not
 by itself a proof of forced economic loss under Bitcoin's spend rules.
 Enrollment remains disabled, and Daybreak work remains deferred.
+
+The next [construction receipt experiment](construction-receipt.md) treats
+these setup and encryption proofs as out-of-band inputs to a public assembler.
+The intended on-chain receipt retains the ciphertexts and replaces the child
+proofs with one parent proof. That parent is not yet implemented or measured;
+the individual proof sizes above are not an estimate of its size or prover cost.

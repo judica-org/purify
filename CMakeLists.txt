@@ -501,7 +501,12 @@ if(PURIFY_BUILD_TESTS)
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
         tests/canonical_recovery_root_tests.cpp
+        tests/canonical_recovery_root_helpers.cpp
         tests/companion_scalar_escrow_tests.cpp
+        tests/companion_scalar_escrow_helpers.cpp
+        tests/construction_receipt_helpers.cpp
+        tests/construction_receipt_tests.cpp
+        tests/receipt_sha256_tests.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 
@@ -528,6 +533,16 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_response)
     purify_add_cpp_suite_test(canonical_recovery_root)
     purify_add_cpp_suite_test(companion_scalar_escrow)
+    purify_add_cpp_suite_test(construction_receipt)
+    purify_add_cpp_suite_test(receipt_sha256)
+
+    # These proof experiments saturate sanitizer runners. Keep their work
+    # out of the property suites' bounded execution time.
+    set_tests_properties(
+        purify.tests.construction_receipt
+        purify.tests.receipt_sha256
+        PROPERTIES RUN_SERIAL TRUE
+    )
 
     add_executable(purify_property_tests
         tests/purify_property_tests.cpp
@@ -603,7 +618,9 @@ if(PURIFY_BUILD_TESTS)
 
     if(PURIFY_BUILD_BENCH)
         add_test(NAME purify.bench COMMAND bench_purify --epochs 1 --min-epoch-ms 1)
-        set_tests_properties(purify.bench PROPERTIES TIMEOUT 300)
+        # Proof suites can saturate the runner; isolate benchmark smoke work
+        # so its time limit does not measure contention with other tests.
+        set_tests_properties(purify.bench PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
     endif()
 
     if(PURIFY_BUILD_FUZZ)

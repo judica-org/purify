@@ -253,7 +253,8 @@ struct TopicProofCache {
 };
 
 struct NonceProof {
-    static constexpr unsigned char kSerializationVersion = 1;
+    // Version 2 binds the factored public-data BP++ norm transcript.
+    static constexpr unsigned char kSerializationVersion = 2;
 
     Nonce nonce;
     bppp::PointBytes commitment_point{};

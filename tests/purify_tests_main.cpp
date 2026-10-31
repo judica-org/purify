@@ -20,6 +20,8 @@ void run_accountable_roster_tests(TestContext& ctx);
 void run_accountable_response_tests(TestContext& ctx);
 void run_canonical_recovery_root_tests(TestContext& ctx);
 void run_companion_scalar_escrow_tests(TestContext& ctx);
+void run_construction_receipt_tests(TestContext& ctx);
+void run_receipt_sha256_tests(TestContext& ctx);
 
 namespace {
 
@@ -30,7 +32,7 @@ struct SuiteSpec {
     SuiteFn run;
 };
 
-constexpr std::array<SuiteSpec, 10> kSuites{{
+constexpr std::array<SuiteSpec, 12> kSuites{{
     {"core", &run_purify_tests},
     {"puresign", &run_puresign_tests},
     {"legacy_bulletproof", &run_legacy_bulletproof_tests},
@@ -41,6 +43,8 @@ constexpr std::array<SuiteSpec, 10> kSuites{{
     {"accountable_response", &run_accountable_response_tests},
     {"canonical_recovery_root", &run_canonical_recovery_root_tests},
     {"companion_scalar_escrow", &run_companion_scalar_escrow_tests},
+    {"construction_receipt", &run_construction_receipt_tests},
+    {"receipt_sha256", &run_receipt_sha256_tests},
 }};
 
 const SuiteSpec* find_suite(std::string_view name) {

@@ -514,6 +514,13 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
     Result<Bytes> nonce_proof_bytes = proven->nonce_proof.serialize(context.get());
     expect_ok(ctx, nonce_proof_bytes, "PureSign++ NonceProof serializes");
     if (nonce_proof_bytes.has_value()) {
+        ctx.expect((*nonce_proof_bytes)[0] == 2,
+                   "PureSign++ NonceProof identifies the factored norm transcript");
+        auto old_transcript_frame = *nonce_proof_bytes;
+        old_transcript_frame[0] = 1;
+        expect_error(ctx, purify::puresign_plusplus::NonceProof::deserialize(old_transcript_frame, context.get()),
+                     purify::ErrorCode::BackendRejectedInput,
+                     "PureSign++ NonceProof rejects the previous transcript version");
         Result<purify::puresign_plusplus::NonceProof> parsed_nonce_proof =
             purify::puresign_plusplus::NonceProof::deserialize(*nonce_proof_bytes, context.get());
         expect_ok(ctx, parsed_nonce_proof, "PureSign++ NonceProof round-trips");

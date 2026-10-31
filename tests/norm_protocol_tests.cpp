@@ -3,6 +3,8 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -16,6 +18,101 @@ using purify::FieldElement;
 using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
+
+void check_public_digest_transcript(TestContext& ctx) {
+    auto secp = purify::make_secp_context();
+    ctx.expect(secp != nullptr, "factored norm transcript context creates");
+    if (!secp) return;
+    // Public toy generators G, 2G and 3G. The bridge accepts generator
+    // encodings, but the transcript hashes their canonical SEC1 encodings.
+    const std::array<const char*, 3> x_coordinates{
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"};
+    std::vector<purify::bppp::PointBytes> generators;
+    for (std::size_t i = 0; i < x_coordinates.size(); ++i) {
+        purify::bppp::PointBytes encoded{};
+        encoded[0] = i == 2 ? 0x0b : 0x0a;
+        const auto x = purify::UInt256::from_hex(x_coordinates[i]).to_bytes_be();
+        std::copy(x.begin(), x.end(), encoded.begin() + 1);
+        generators.push_back(encoded);
+    }
+    const auto scalar = [](int value) { return FieldElement::from_int(value).to_bytes_be(); };
+    purify::bppp::NormArgInputs inputs{scalar(3), generators,
+        {scalar(5), scalar(7)}, {scalar(11)}, {scalar(13)}};
+    auto proof = purify::bppp::prove_norm_arg(inputs, secp.get());
+    expect_ok(ctx, proof, "honest one-round norm proof produces");
+    if (!proof) return;
+    ctx.expect(proof->proof.size() == 129, "one-round norm proof has two terminal scalars");
+    if (proof->proof.size() != 129) return;
+    ctx.expect(purify::bppp::verify_norm_arg(*proof, secp.get()), "factored norm proof verifies");
+
+    const auto append_size = [](purify::Bytes& bytes, std::uint64_t value) {
+        for (std::size_t i = 0; i < 8; ++i) bytes.push_back(static_cast<unsigned char>(value >> (8 * i)));
+    };
+    purify::Bytes public_data(inputs.rho.begin(), inputs.rho.end());
+    append_size(public_data, 2);
+    append_size(public_data, 3);
+    for (auto point : generators) {
+        point[0] = 0x02;
+        public_data.insert(public_data.end(), point.begin(), point.end());
+    }
+    append_size(public_data, 1);
+    public_data.insert(public_data.end(), inputs.c_vec[0].begin(), inputs.c_vec[0].end());
+    const auto digest = purify::TaggedHash("Purify/BPPP/NormArg/PublicDataV1").digest(public_data);
+    // Independently generated with Python hashlib over the 187-byte canonical
+    // message above and SHA256(tag) || SHA256(tag). No bridge digest API is used.
+    ctx.expect(digest == purify::UInt256::from_hex(
+        "18ca38e5b6feca046f399f961d6012b3693a10a44a61c87dec769164d4eb9205").to_bytes_be(),
+        "public prehash matches independent canonical transcript vector");
+    purify::Bytes challenge_input(digest.begin(), digest.end());
+    challenge_input.insert(challenge_input.end(), proof->commitment.begin(), proof->commitment.end());
+    challenge_input.insert(challenge_input.end(), proof->proof.begin(), proof->proof.begin() + 65);
+    append_size(challenge_input, 0);
+    const auto gamma = FieldElement::from_bytes32(
+        purify::TaggedHash("Purify/BPPP/NormArg/TranscriptV1").digest(challenge_input));
+    purify::bppp::ScalarBytes terminal_n{};
+    std::copy_n(proof->proof.begin() + 65, terminal_n.size(), terminal_n.begin());
+    const auto expected_n = FieldElement::from_int(5) * FieldElement::from_int(3).inverse()
+        + gamma * FieldElement::from_int(7);
+    ctx.expect(terminal_n == expected_n.to_bytes_be(),
+               "native prover uses the independently reconstructed factored challenge");
+
+    purify::Bytes generator_bytes, n_bytes;
+    for (const auto& point : generators) generator_bytes.insert(generator_bytes.end(), point.begin(), point.end());
+    for (const auto& value : inputs.n_vec) n_bytes.insert(n_bytes.end(), value.begin(), value.end());
+    using Resources = std::unique_ptr<purify_bppp_backend_resources,
+        decltype(&purify_bppp_backend_resources_destroy)>;
+    Resources resources(purify_bppp_backend_resources_create(
+        secp.get(), generator_bytes.data(), generators.size()), purify_bppp_backend_resources_destroy);
+    ctx.expect(resources != nullptr, "factored norm cached resources create");
+    if (!resources) return;
+    purify::Bytes cached(proof->proof.size());
+    auto cached_size = cached.size();
+    ctx.expect(purify_bppp_prove_norm_arg_to_commitment_with_resources(
+        resources.get(), inputs.rho.data(), n_bytes.data(), 2, inputs.l_vec[0].data(), 1,
+        inputs.c_vec[0].data(), 1, proof->commitment.data(), cached.data(), &cached_size) != 0,
+        "cached anchored norm prover uses the factored transcript");
+    ctx.expect(cached_size == proof->proof.size() && cached == proof->proof,
+               "cached and uncached factored norm proofs are identical");
+    ctx.expect(purify_bppp_verify_norm_arg_with_resources(resources.get(), proof->rho.data(),
+        proof->c_vec[0].data(), 1, 2, proof->commitment.data(), cached.data(), cached_size) != 0,
+        "cached factored norm proof verifies");
+
+    auto changed = *proof;
+    changed.rho = scalar(4);
+    ctx.expect(!purify::bppp::verify_norm_arg(changed, secp.get()), "unchanged norm proof rejects a different rho");
+    changed = *proof;
+    changed.c_vec[0] = scalar(14);
+    ctx.expect(!purify::bppp::verify_norm_arg(changed, secp.get()), "unchanged norm proof rejects a different public coefficient");
+    changed = *proof;
+    std::swap(changed.generators[0], changed.generators[1]);
+    ctx.expect(!purify::bppp::verify_norm_arg(changed, secp.get()), "unchanged norm proof rejects reordered generators");
+    changed = *proof;
+    changed.commitment = generators[1];
+    changed.commitment[0] = 0x02;
+    ctx.expect(!purify::bppp::verify_norm_arg(changed, secp.get()), "unchanged norm proof rejects a different finite commitment");
+}
 
 void check_initial_point_boundary(TestContext& ctx) {
     auto secp = purify::make_secp_context();
@@ -122,6 +219,7 @@ void check_norm_length_boundary(TestContext& ctx) {
 } // namespace
 
 void run_norm_protocol_tests(TestContext& ctx) {
+    check_public_digest_transcript(ctx);
     check_initial_point_boundary(ctx);
     check_norm_length_boundary(ctx);
 }

@@ -21,6 +21,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(PURIFY_VALGRIND_TESTING)
+#include <valgrind/memcheck.h>
+/* Proof points and terminal scalars are public from these protocol lines on. */
+#define PURIFY_BRIDGE_DECLASSIFY(data, size) \
+    VALGRIND_MAKE_MEM_DEFINED((data), (size))
+#else
+#define PURIFY_BRIDGE_DECLASSIFY(data, size) ((void)(data), (void)(size))
+#endif
+
 #include "third_party/secp256k1-zkp/include/secp256k1_extrakeys.h"
 #include "third_party/secp256k1-zkp/include/secp256k1_schnorrsig.h"
 #include "third_party/secp256k1-zkp/src/secp256k1.c"
@@ -1857,6 +1866,7 @@ static int purify_bppp_commit_secret(const secp256k1_context* ctx,
         n_vec_len + l_vec_len);
     if (ok) {
         secp256k1_ge_set_gej(commit, &commitj);
+        PURIFY_BRIDGE_DECLASSIFY(commit, sizeof(*commit));
     }
 
     secp256k1_scalar_clear(&v);
@@ -1975,6 +1985,8 @@ static int purify_bppp_rangeproof_norm_product_prove_secret(
         secp256k1_fe_normalize(&x_ge.y);
         secp256k1_fe_normalize(&r_ge.x);
         secp256k1_fe_normalize(&r_ge.y);
+        PURIFY_BRIDGE_DECLASSIFY(&x_ge, sizeof(x_ge));
+        PURIFY_BRIDGE_DECLASSIFY(&r_ge, sizeof(r_ge));
         secp256k1_bppp_serialize_points(
             &proof[proof_idx], &x_ge, &r_ge);
         proof_idx += 65;
@@ -2073,6 +2085,7 @@ round_failure:
 
     secp256k1_scalar_get_b32(&proof[proof_idx], &n_vec[0]);
     secp256k1_scalar_get_b32(&proof[proof_idx + 32], &l_vec[0]);
+    PURIFY_BRIDGE_DECLASSIFY(&proof[proof_idx], 64);
     proof_idx += 64;
     *proof_len = proof_idx;
     secp256k1_scalar_clear(&mu_f);
@@ -2203,6 +2216,7 @@ int purify_pedersen_commit_char(purify_secp_context* context,
     purify_gej_add_secret_scalar_term(&total, &blind_ge, &blind_scalar);
     purify_gej_add_secret_scalar_term(&total, &value_ge, &value_scalar);
     secp256k1_ge_set_gej(&commit_ge, &total);
+    PURIFY_BRIDGE_DECLASSIFY(&commit_ge, sizeof(commit_ge));
     if (!commit_ge.infinity) {
         ok = purify_serialize_point(commitment_out33, &commit_ge);
     }
@@ -2376,10 +2390,13 @@ static int purify_bppp_commit_witness_only_impl(purify_secp_context* context,
                                     expected_generators)) {
         goto cleanup;
     }
+    PURIFY_BRIDGE_DECLASSIFY(&commitj.infinity,
+                             sizeof(commitj.infinity));
     if (secp256k1_gej_is_infinity(&commitj)) {
         goto cleanup;
     }
     secp256k1_ge_set_gej(&commit, &commitj);
+    PURIFY_BRIDGE_DECLASSIFY(&commit, sizeof(commit));
     ok = purify_serialize_point(commitment_out33, &commit);
 
 cleanup:
@@ -2438,6 +2455,7 @@ int purify_bppp_offset_commitment(purify_secp_context* context,
     purify_gej_add_secret_scalar_term(
         &result_j, &secp256k1_ge_const_g, &scalar);
     secp256k1_ge_set_gej(&result_ge, &result_j);
+    PURIFY_BRIDGE_DECLASSIFY(&result_ge, sizeof(result_ge));
     if (!result_ge.infinity) {
         ok = purify_serialize_point(commitment_out33, &result_ge);
     }
@@ -2470,6 +2488,7 @@ int purify_point_scale(purify_secp_context* context,
 
     secp256k1_ecmult_const(&result_j, &point_ge, &scalar);
     secp256k1_ge_set_gej(&result_ge, &result_j);
+    PURIFY_BRIDGE_DECLASSIFY(&result_ge, sizeof(result_ge));
     if (!result_ge.infinity) {
         ok = purify_serialize_point(out33, &result_ge);
     }

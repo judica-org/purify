@@ -20,6 +20,7 @@
 #include "../src/core/curve.h"
 #include "../src/core/core.h"
 #include "../src/core/field.h"
+#include "../src/bridge/bppp_bridge.h"
 
 void purify_curve_mul_secret_ladder_only(purify_complete_projective_point* out, const purify_curve* curve,
                                          const purify_jacobian_point* point, const uint64_t scalar[4]);
@@ -306,6 +307,174 @@ static void test_secret_comparison_consttime(void) {
            "secret-key validation does not branch on trailing secret bytes");
 }
 
+static void set_bppp_secret_scalar(unsigned char out[32],
+                                   unsigned char high_byte,
+                                   unsigned char tail_seed) {
+    size_t i;
+
+    memset(out, 0, 32);
+    /* Canonicality and nonzeroness stay public; only value bits are tainted. */
+    out[24] = high_byte;
+    for (i = 25; i < 32; ++i) {
+        out[i] = (unsigned char)(tail_seed + i);
+    }
+}
+
+static void mark_bppp_scalar_tails_undefined(unsigned char* scalars,
+                                              size_t count) {
+    size_t i;
+    for (i = 0; i < count; ++i) {
+        VALGRIND_MAKE_MEM_UNDEFINED(scalars + 32 * i + 25, 7);
+    }
+}
+
+static void test_bppp_secret_point_paths_consttime(void) {
+    purify_secp_context* context = purify_secp_context_create();
+    unsigned char base_generator[33];
+    unsigned char value_generator[33];
+    unsigned char base_point[33];
+    unsigned char scalar_a[32];
+    unsigned char scalar_b[32];
+    unsigned char output[33];
+    int ok;
+
+    expect(context != NULL, "BPPP secret point context creates");
+    if (context == NULL) {
+        return;
+    }
+    expect(purify_bppp_base_generator(context, base_generator) != 0,
+           "BPPP base generator serializes");
+    expect(purify_bppp_value_generator_h(context, value_generator) != 0,
+           "BPPP value generator serializes");
+    expect(purify_bppp_generators_to_points(
+               context, base_generator, 1, base_point) != 0,
+           "BPPP base generator converts to a point");
+
+    set_bppp_secret_scalar(scalar_a, 1, 0x21);
+    set_bppp_secret_scalar(scalar_b, 2, 0x43);
+    mark_bppp_scalar_tails_undefined(scalar_a, 1);
+    mark_bppp_scalar_tails_undefined(scalar_b, 1);
+    ok = purify_pedersen_commit_char(
+        context, scalar_a, scalar_b, value_generator, base_generator, output);
+    VALGRIND_MAKE_MEM_DEFINED(scalar_a, sizeof(scalar_a));
+    VALGRIND_MAKE_MEM_DEFINED(scalar_b, sizeof(scalar_b));
+    VALGRIND_MAKE_MEM_DEFINED(output, sizeof(output));
+    VALGRIND_MAKE_MEM_DEFINED(&ok, sizeof(ok));
+    expect(ok != 0, "BPPP Pedersen commitment accepts secret scalars");
+
+    mark_bppp_scalar_tails_undefined(scalar_a, 1);
+    ok = purify_bppp_offset_commitment(
+        context, base_point, scalar_a, output);
+    VALGRIND_MAKE_MEM_DEFINED(scalar_a, sizeof(scalar_a));
+    VALGRIND_MAKE_MEM_DEFINED(output, sizeof(output));
+    VALGRIND_MAKE_MEM_DEFINED(&ok, sizeof(ok));
+    expect(ok != 0, "BPPP commitment offset accepts a secret scalar");
+
+    mark_bppp_scalar_tails_undefined(scalar_b, 1);
+    ok = purify_point_scale(context, base_point, scalar_b, output);
+    VALGRIND_MAKE_MEM_DEFINED(scalar_b, sizeof(scalar_b));
+    VALGRIND_MAKE_MEM_DEFINED(output, sizeof(output));
+    VALGRIND_MAKE_MEM_DEFINED(&ok, sizeof(ok));
+    expect(ok != 0, "BPPP point scaling accepts a secret scalar");
+
+    purify_secp_context_destroy(context);
+}
+
+static void test_bppp_secret_norm_prover_consttime(void) {
+    enum {
+        N_VEC_LEN = 2,
+        L_VEC_LEN = 2,
+        GENERATOR_COUNT = N_VEC_LEN + L_VEC_LEN,
+        MAX_PROOF_SIZE = 256
+    };
+    purify_secp_context* context = purify_secp_context_create();
+    unsigned char generators[GENERATOR_COUNT * 33];
+    unsigned char n_vec[N_VEC_LEN * 32];
+    unsigned char l_vec[L_VEC_LEN * 32];
+    unsigned char c_vec[L_VEC_LEN * 32];
+    unsigned char rho[32] = {0};
+    unsigned char commitment[33];
+    unsigned char proof[MAX_PROOF_SIZE];
+    size_t generators_len = sizeof(generators);
+    size_t proof_len = sizeof(proof);
+    size_t required_proof_size;
+    size_t i;
+    int ok;
+
+    expect(context != NULL, "BPPP secret norm context creates");
+    if (context == NULL) {
+        return;
+    }
+    expect(purify_bppp_create_generators(
+               context, GENERATOR_COUNT, generators,
+               &generators_len) != 0 &&
+               generators_len == sizeof(generators),
+           "BPPP secret norm generators create");
+    for (i = 0; i < N_VEC_LEN; ++i) {
+        set_bppp_secret_scalar(n_vec + 32 * i,
+                               (unsigned char)(i + 1),
+                               (unsigned char)(0x11 + 13 * i));
+    }
+    for (i = 0; i < L_VEC_LEN; ++i) {
+        set_bppp_secret_scalar(l_vec + 32 * i,
+                               (unsigned char)(i + 3),
+                               (unsigned char)(0x37 + 17 * i));
+        memset(c_vec + 32 * i, 0, 32);
+        c_vec[32 * i + 31] = (unsigned char)(i + 5);
+    }
+    rho[31] = 3;
+
+    mark_bppp_scalar_tails_undefined(n_vec, N_VEC_LEN);
+    mark_bppp_scalar_tails_undefined(l_vec, L_VEC_LEN);
+    ok = purify_bppp_commit_witness_only(
+        context, generators, GENERATOR_COUNT,
+        n_vec, N_VEC_LEN, l_vec, L_VEC_LEN, commitment);
+    VALGRIND_MAKE_MEM_DEFINED(n_vec, sizeof(n_vec));
+    VALGRIND_MAKE_MEM_DEFINED(l_vec, sizeof(l_vec));
+    VALGRIND_MAKE_MEM_DEFINED(commitment, sizeof(commitment));
+    VALGRIND_MAKE_MEM_DEFINED(&ok, sizeof(ok));
+    expect(ok != 0, "BPPP witness commitment accepts secret vectors");
+
+    required_proof_size =
+        purify_bppp_required_proof_size(N_VEC_LEN, L_VEC_LEN);
+    expect(required_proof_size != 0 &&
+               required_proof_size <= sizeof(proof),
+           "BPPP secret norm proof buffer is sufficient");
+    if (required_proof_size == 0 || required_proof_size > sizeof(proof)) {
+        purify_secp_context_destroy(context);
+        return;
+    }
+    proof_len = required_proof_size;
+    mark_bppp_scalar_tails_undefined(n_vec, N_VEC_LEN);
+    mark_bppp_scalar_tails_undefined(l_vec, L_VEC_LEN);
+    ok = purify_bppp_prove_norm_arg(
+        context, rho, generators, GENERATOR_COUNT,
+        n_vec, N_VEC_LEN, l_vec, L_VEC_LEN,
+        c_vec, L_VEC_LEN, commitment, proof, &proof_len);
+    VALGRIND_MAKE_MEM_DEFINED(n_vec, sizeof(n_vec));
+    VALGRIND_MAKE_MEM_DEFINED(l_vec, sizeof(l_vec));
+    VALGRIND_MAKE_MEM_DEFINED(commitment, sizeof(commitment));
+    VALGRIND_MAKE_MEM_DEFINED(proof, sizeof(proof));
+    VALGRIND_MAKE_MEM_DEFINED(&proof_len, sizeof(proof_len));
+    VALGRIND_MAKE_MEM_DEFINED(&ok, sizeof(ok));
+    expect(ok != 0 && proof_len == required_proof_size,
+           "BPPP norm prover accepts secret vectors");
+    if (ok != 0) {
+        expect(purify_bppp_verify_norm_arg(
+                   context, rho, generators, GENERATOR_COUNT,
+                   c_vec, L_VEC_LEN, N_VEC_LEN,
+                   commitment, proof, proof_len) != 0,
+               "BPPP secret norm proof verifies after declassification");
+    }
+
+    purify_secp_context_destroy(context);
+}
+
+static void run_bppp_tests(void) {
+    test_bppp_secret_point_paths_consttime();
+    test_bppp_secret_norm_prover_consttime();
+}
+
 static void run_divmod_tests(void) {
     test_divmod_secret_numerator_consttime();
 }
@@ -347,6 +516,7 @@ int main(int argc, char** argv) {
         run_inverse_tests();
         run_packed_secret_tests(&curve1, &curve2);
         run_uint_tests();
+        run_bppp_tests();
     } else if (strcmp(argv[1], "divmod") == 0) {
         run_divmod_tests();
     } else if (strcmp(argv[1], "ladder") == 0) {
@@ -359,6 +529,8 @@ int main(int argc, char** argv) {
         run_packed_secret_tests(&curve1, &curve2);
     } else if (strcmp(argv[1], "uint") == 0) {
         run_uint_tests();
+    } else if (strcmp(argv[1], "bppp") == 0) {
+        run_bppp_tests();
     } else {
         expect(0, "unknown valgrind test selector");
     }

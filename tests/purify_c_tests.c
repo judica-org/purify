@@ -1021,10 +1021,16 @@ static void test_public_c_api(void) {
 
     expect(purify_derive_public_key(NULL, first.secret_key) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_public_key rejects a null output pointer");
+    memset(derived_public_key, 0xa5, sizeof(derived_public_key));
     expect(purify_derive_public_key(derived_public_key, NULL) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_public_key rejects a null secret pointer");
+    expect(all_zero(derived_public_key, sizeof(derived_public_key)),
+           "purify_derive_public_key clears output after a null secret");
+    memset(derived_public_key, 0xa5, sizeof(derived_public_key));
     expect(purify_derive_public_key(derived_public_key, invalid_secret) == PURIFY_ERROR_RANGE_VIOLATION,
            "purify_derive_public_key rejects out-of-range packed secrets");
+    expect(all_zero(derived_public_key, sizeof(derived_public_key)),
+           "purify_derive_public_key clears output after an invalid secret");
     expect(purify_derive_public_key(derived_public_key, first.secret_key) == PURIFY_ERROR_OK,
            "purify_derive_public_key succeeds");
     expect(memcmp(derived_public_key, first.public_key, sizeof(derived_public_key)) == 0,
@@ -1040,10 +1046,21 @@ static void test_public_c_api(void) {
 
     expect(purify_derive_bip340_key(NULL, first.secret_key, context) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_bip340_key rejects a null output pointer");
+    memset(&bip340, 0xa5, sizeof(bip340));
     expect(purify_derive_bip340_key(&bip340, NULL, context) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_bip340_key rejects a null secret pointer");
+    expect(all_zero((const unsigned char*)&bip340, sizeof(bip340)),
+           "purify_derive_bip340_key clears output after a null secret");
+    memset(&bip340, 0xa5, sizeof(bip340));
     expect(purify_derive_bip340_key(&bip340, invalid_secret, context) == PURIFY_ERROR_RANGE_VIOLATION,
            "purify_derive_bip340_key rejects out-of-range packed secrets");
+    expect(all_zero((const unsigned char*)&bip340, sizeof(bip340)),
+           "purify_derive_bip340_key clears output after an invalid secret");
+    memset(&bip340, 0xa5, sizeof(bip340));
+    expect(purify_derive_bip340_key(&bip340, first.secret_key, NULL) == PURIFY_ERROR_MISSING_VALUE,
+           "purify_derive_bip340_key rejects a null secp context");
+    expect(all_zero((const unsigned char*)&bip340, sizeof(bip340)),
+           "purify_derive_bip340_key clears output after a null context");
     expect(purify_derive_bip340_key(&bip340, first.secret_key, context) == PURIFY_ERROR_OK,
            "purify_derive_bip340_key succeeds");
     expect(!all_zero(bip340.secret_key, sizeof(bip340.secret_key)),
@@ -1071,12 +1088,21 @@ static void test_public_c_api(void) {
 
     expect(purify_eval(NULL, first.secret_key, message, sizeof(message) - 1u) == PURIFY_ERROR_MISSING_VALUE,
            "purify_eval rejects a null output pointer");
+    memset(eval_a, 0xa5, sizeof(eval_a));
     expect(purify_eval(eval_a, NULL, message, sizeof(message) - 1u) == PURIFY_ERROR_MISSING_VALUE,
            "purify_eval rejects a null secret pointer");
+    expect(all_zero(eval_a, sizeof(eval_a)),
+           "purify_eval clears output after a null secret");
+    memset(eval_a, 0xa5, sizeof(eval_a));
     expect(purify_eval(eval_a, first.secret_key, NULL, 1u) == PURIFY_ERROR_MISSING_VALUE,
            "purify_eval rejects a null non-empty message pointer");
+    expect(all_zero(eval_a, sizeof(eval_a)),
+           "purify_eval clears output after a null message");
+    memset(eval_a, 0xa5, sizeof(eval_a));
     expect(purify_eval(eval_a, invalid_secret, message, sizeof(message) - 1u) == PURIFY_ERROR_RANGE_VIOLATION,
            "purify_eval rejects out-of-range packed secrets");
+    expect(all_zero(eval_a, sizeof(eval_a)),
+           "purify_eval clears output after an invalid secret");
     expect(purify_eval(eval_a, first.secret_key, message, sizeof(message) - 1u) == PURIFY_ERROR_OK,
            "purify_eval succeeds");
     expect(purify_eval(eval_b, first.secret_key, message, sizeof(message) - 1u) == PURIFY_ERROR_OK,

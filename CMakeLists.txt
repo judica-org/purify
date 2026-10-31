@@ -529,6 +529,7 @@ if(PURIFY_BUILD_TESTS)
         tests/slash_adaptor_tests.cpp
         tests/canonical_recovery_root_tests.cpp
         tests/canonical_recovery_root_helpers.cpp
+        tests/anchor_escrow_tests.cpp
         tests/companion_scalar_escrow_tests.cpp
         tests/companion_scalar_escrow_helpers.cpp
         tests/construction_receipt_helpers.cpp
@@ -573,6 +574,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_response)
     purify_add_cpp_suite_test(slash_adaptor)
     purify_add_cpp_suite_test(canonical_recovery_root)
+    purify_add_cpp_suite_test(anchor_escrow)
     purify_add_cpp_suite_test(companion_scalar_escrow)
     purify_add_cpp_suite_test(construction_receipt)
     purify_add_cpp_suite_test(receipt_sha256)

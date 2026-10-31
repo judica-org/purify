@@ -15,6 +15,7 @@
 namespace {
 
 using purify::FieldElement;
+using purify::NativeBulletproofCircuit;
 using purify::bppp::NormArgProof;
 using purify::bppp::PointBytes;
 using purify::bppp::ScalarBytes;
@@ -23,6 +24,53 @@ using purify_test::expect_ok;
 namespace accum = purify::bppp::accumulation;
 
 enum class ZeroFamily { Neither, Norm, Linear };
+
+purify::Result<PointBytes> scalar_point(const FieldElement& scalar,
+                                        purify_secp_context* secp) {
+    const ScalarBytes zero{};
+    return purify::bppp::pedersen_commit_char(
+        zero, scalar.to_bytes_be(), secp,
+        purify::bppp::base_generator(secp),
+        purify::bppp::base_generator(secp));
+}
+
+struct PublishedCircuitNorm {
+    purify::bppp::ExperimentalCircuitZkNormArgProof proof;
+    PointBytes public_commitment{};
+    purify::Bytes statement_binding;
+};
+
+purify::Result<PublishedCircuitNorm> publish_circuit_norm(
+    const NativeBulletproofCircuit& circuit, int owner,
+    purify_secp_context* secp) {
+    purify::BulletproofAssignmentData assignment;
+    for (std::size_t i = 0; i < circuit.n_gates; ++i) {
+        assignment.left.push_back(
+            FieldElement::from_int(2 + owner + static_cast<int>(i)));
+        assignment.right.push_back(
+            FieldElement::from_int(4 + static_cast<int>(i)));
+        assignment.output.push_back(
+            assignment.left.back() * assignment.right.back());
+    }
+    assignment.commitments = {FieldElement::from_int(7 + owner)};
+    PURIFY_ASSIGN_OR_RETURN(
+        auto output, scalar_point(assignment.commitments[0], secp),
+        "test:circuit_output");
+    const std::array<PointBytes, 1> outputs{output};
+    ScalarBytes secret_prover_seed{};
+    secret_prover_seed.fill(static_cast<unsigned char>(0x81 + owner));
+    auto binding = purify::bytes_from_ascii("test/v3-circuit-owner/");
+    binding.push_back(static_cast<unsigned char>(owner));
+    PURIFY_ASSIGN_OR_RETURN(
+        auto proof,
+        purify::bppp::
+            prove_experimental_circuit_zk_norm_arg_with_public_commitments(
+                circuit, assignment, secret_prover_seed, outputs, secp,
+                binding),
+        "test:circuit_proof");
+    return PublishedCircuitNorm{std::move(proof), output,
+                                std::move(binding)};
+}
 
 std::vector<ScalarBytes> coefficients(std::size_t count, int owner) {
     std::vector<ScalarBytes> out;
@@ -422,6 +470,155 @@ void check_bindings_and_encodings(TestContext& ctx, purify_secp_context* secp) {
                "basis requires an explicit semantic domain");
 }
 
+void check_v3_circuit_adapter(TestContext& ctx,
+                              purify_secp_context* secp) {
+    NativeBulletproofCircuit circuit(4, 1, 0);
+    auto basis = accum::Basis::create(8, 8,
+                                      "test/v3-circuit-accumulation/v1",
+                                      secp);
+    expect_ok(ctx, basis, "V3 circuit raw accumulation basis creates");
+    if (!basis) return;
+
+    std::vector<PublishedCircuitNorm> published;
+    std::vector<accum::PendingClaim> claims;
+    for (int owner : {1, 2}) {
+        auto item = publish_circuit_norm(circuit, owner, secp);
+        expect_ok(ctx, item, "independent V3 circuit proof publishes");
+        if (!item) return;
+        const std::array<PointBytes, 1> outputs{item->public_commitment};
+        auto standalone = purify::bppp::
+            verify_experimental_circuit_zk_norm_arg_with_public_commitments(
+                circuit, item->proof, outputs, secp,
+                item->statement_binding);
+        ctx.expect(standalone && *standalone,
+                   "independent V3 circuit proof verifies standalone");
+        auto prepared = accum::
+            prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+                *basis, circuit, item->proof, outputs, secp,
+                item->statement_binding);
+        expect_ok(ctx, prepared,
+                  "V3 circuit proof maps to the stable raw basis");
+        if (!prepared) return;
+        auto reduction = accum::prove_norm_reduction(*basis, *prepared, secp);
+        expect_ok(ctx, reduction,
+                  "V3 circuit coefficient opening proves");
+        if (!reduction) return;
+        auto claim = accum::verify_norm_reduction(
+            *basis, *prepared, *reduction, secp);
+        expect_ok(ctx, claim,
+                  "V3 circuit norm reduction returns a pending claim");
+        if (!claim) return;
+        expect_ok(ctx, accum::decide(*basis, *claim, secp),
+                  "V3 circuit norm obligation decides on the raw basis");
+        claims.push_back(std::move(*claim));
+        published.push_back(std::move(*item));
+    }
+
+    auto step = accum::prove_step(*basis, claims, secp);
+    expect_ok(ctx, step,
+              "independent V3 circuit claims accumulate together");
+    if (!step) return;
+    auto combined = accum::verify_step(*basis, claims, *step, secp);
+    expect_ok(ctx, combined,
+              "V3 circuit accumulation step preserves both obligations");
+    if (!combined) return;
+    expect_ok(ctx, accum::decide(*basis, *combined, secp),
+              "combined V3 circuit obligation decides once");
+
+    const auto& first = published.front();
+    const std::array<PointBytes, 1> first_output{first.public_commitment};
+    auto changed_dlog = first.proof;
+    auto response = FieldElement::try_from_bytes32(
+        changed_dlog.public_commitment_dlog_response);
+    expect_ok(ctx, response, "V3 DLog response is canonical");
+    if (!response) return;
+    changed_dlog.public_commitment_dlog_response =
+        (*response + FieldElement::one()).to_bytes_be();
+    ctx.expect(
+        !accum::
+            prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+                *basis, circuit, changed_dlog, first_output, secp,
+                first.statement_binding),
+        "V3 accumulation preparation rejects a changed DLog response");
+
+    auto changed_inner = first.proof;
+    const auto terminal_offset = changed_inner.proof.size() - 64;
+    ScalarBytes terminal_n{};
+    std::copy_n(changed_inner.proof.begin() +
+                    static_cast<std::ptrdiff_t>(terminal_offset),
+                terminal_n.size(), terminal_n.begin());
+    auto parsed_terminal = FieldElement::try_from_bytes32(terminal_n);
+    expect_ok(ctx, parsed_terminal, "V3 terminal norm scalar is canonical");
+    if (!parsed_terminal) return;
+    const auto changed_terminal =
+        (*parsed_terminal + FieldElement::one()).to_bytes_be();
+    std::copy(changed_terminal.begin(), changed_terminal.end(),
+              changed_inner.proof.begin() +
+                  static_cast<std::ptrdiff_t>(terminal_offset));
+    auto pending_inner = accum::
+        prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+            *basis, circuit, changed_inner, first_output, secp,
+            first.statement_binding);
+    expect_ok(ctx, pending_inner,
+              "V3 preparation keeps a parseable false inner proof pending");
+    if (!pending_inner) return;
+    auto pending_reduction =
+        accum::prove_norm_reduction(*basis, *pending_inner, secp);
+    expect_ok(ctx, pending_reduction,
+              "public reduction can be formed for a pending false inner proof");
+    if (!pending_reduction) return;
+    auto false_claim = accum::verify_norm_reduction(
+        *basis, *pending_inner, *pending_reduction, secp);
+    expect_ok(ctx, false_claim,
+              "parseable false V3 inner proof remains an obligation");
+    if (!false_claim) return;
+    ctx.expect(!accum::decide(*basis, *false_claim, secp),
+               "final decision rejects the changed V3 inner proof");
+
+    auto wrong_output = scalar_point(FieldElement::from_int(99), secp);
+    expect_ok(ctx, wrong_output, "changed V3 public output encodes");
+    if (!wrong_output) return;
+    const std::array<PointBytes, 1> changed_outputs{*wrong_output};
+    ctx.expect(
+        !accum::
+            prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+                *basis, circuit, first.proof, changed_outputs, secp,
+                first.statement_binding),
+        "V3 accumulation preparation rejects a substituted public output");
+
+    auto changed_binding = first.statement_binding;
+    changed_binding.push_back(0);
+    ctx.expect(
+        !accum::
+            prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+                *basis, circuit, first.proof, first_output, secp,
+                changed_binding),
+        "V3 accumulation preparation rejects another statement binding");
+
+    auto changed_circuit = circuit;
+    const auto changed_constraint = changed_circuit.add_constraint(
+        FieldElement::one());
+    changed_circuit.add_left_term(
+        0, changed_constraint, FieldElement::one());
+    ctx.expect(
+        !accum::
+            prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+                *basis, changed_circuit, first.proof, first_output, secp,
+                first.statement_binding),
+        "V3 accumulation preparation rejects another same-shaped circuit");
+
+    auto wrong_shape = accum::Basis::create(
+        16, 8, "test/v3-circuit-accumulation/v1", secp);
+    expect_ok(ctx, wrong_shape, "alternative V3 circuit basis creates");
+    if (!wrong_shape) return;
+    ctx.expect(
+        !accum::
+            prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+                *wrong_shape, circuit, first.proof, first_output, secp,
+                first.statement_binding),
+        "V3 circuit proof cannot enter another raw-basis shape");
+}
+
 void check_zero_families(TestContext& ctx, purify_secp_context* secp) {
     auto basis = accum::Basis::create(4, 4,
                                       "test/zero-family/v1", secp);
@@ -532,6 +729,7 @@ void run_norm_accumulation_tests(TestContext& ctx) {
     if (!secp) return;
     check_honest_batches(ctx, secp.get());
     check_bindings_and_encodings(ctx, secp.get());
+    check_v3_circuit_adapter(ctx, secp.get());
     check_zero_families(ctx, secp.get());
     check_reference_vector(ctx, secp.get());
 }

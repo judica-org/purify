@@ -3,6 +3,8 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include "purify/puresign/accountable_roster.hpp"
+#include "purify/puresign/bppp.hpp"
+#include "purify/puresign/recovery_root.hpp"
 #include "purify_test_helpers.hpp"
 
 namespace {
@@ -10,6 +12,9 @@ namespace {
 using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
+using purify::FieldElement;
+using purify::accountable::CoalitionCoreDigest;
+using purify::accountable::NonceHostBoundSigningRoster;
 using purify::accountable::SigningRoster;
 
 auto bytes32(std::string_view hex) {
@@ -30,6 +35,43 @@ struct RosterVector {
     bool negated;
     std::string_view signing_key;
 };
+
+purify::Result<FieldElement> aggregate_secret(
+    const SigningRoster& roster, std::span<const FieldElement> secrets) {
+    if (secrets.size() != roster.members().size()) {
+        return purify::unexpected_error(purify::ErrorCode::SizeMismatch,
+                                        "roster_test:recovery_binding_secrets");
+    }
+    auto out = FieldElement::zero();
+    for (std::size_t i = 0; i < secrets.size(); ++i) {
+        out = out + roster.members()[i].coefficient * secrets[i];
+    }
+    return out;
+}
+
+purify::Result<std::vector<purify::puresign_plusplus::PublicKey>>
+nonce_hosts(std::span<const std::array<unsigned char, 33>> member_keys,
+            unsigned char marker, purify_secp_context* secp_context) {
+    std::vector<purify::puresign_plusplus::PublicKey> out;
+    out.reserve(member_keys.size());
+    for (std::size_t i = 0; i < member_keys.size(); ++i) {
+        std::array<unsigned char, 32> seed{};
+        seed[0] = marker;
+        seed[1] = static_cast<unsigned char>(i);
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto& generated, purify::generate_key(seed),
+            "roster_test:nonce_host_secret");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto host,
+            purify::puresign_plusplus::PublicKey::from_secret(
+                generated.secret, secp_context),
+            "roster_test:nonce_host");
+        std::copy(member_keys[i].begin() + 1, member_keys[i].end(),
+                  host.bip340_pubkey.begin());
+        out.push_back(std::move(host));
+    }
+    return out;
+}
 
 } // namespace
 
@@ -125,4 +167,168 @@ void run_accountable_roster_tests(TestContext& ctx) {
         ctx.expect(signed_roster->members()[0].public_key != signed_roster->members()[1].public_key,
                    "individual parity is preserved rather than normalized away");
     }
+
+    std::array secrets{
+        FieldElement::from_u64(3), FieldElement::from_u64(6),
+        FieldElement::from_u64(8)};
+    auto recovery_keys = keys;
+    for (std::size_t i = 0; i < recovery_keys.size(); ++i) {
+        if (recovery_keys[i][0] == 0x03) {
+            recovery_keys[i][0] = 0x02;
+            secrets[i] = secrets[i].negate();
+        }
+    }
+    auto raw_roster = SigningRoster::aggregate(recovery_keys, secp.get());
+    expect_ok(ctx, raw_roster, "recovery-binding fixture roster aggregates");
+    if (!raw_roster) return;
+    CoalitionCoreDigest coalition_core_digest{};
+    coalition_core_digest.fill(0xa5);
+    auto hosts = nonce_hosts(recovery_keys, 0x81, secp.get());
+    expect_ok(ctx, hosts, "recovery-binding nonce hosts derive");
+    if (!hosts) return;
+    auto nonce_bound = purify::accountable::bind_nonce_hosts(
+        *raw_roster, coalition_core_digest, *hosts, secp.get());
+    expect_ok(ctx, nonce_bound,
+              "recovery-binding roster validates its nonce hosts");
+    if (!nonce_bound) return;
+    auto signing_scalar = aggregate_secret(
+        *raw_roster, secrets);
+    expect_ok(ctx, signing_scalar,
+              "fixture derives the parity-adjusted aggregate scalar");
+    if (!signing_scalar) return;
+    auto recovery_root = purify::accountable::derive_recovery_root(
+        *signing_scalar);
+    expect_ok(ctx, recovery_root,
+              "aggregate signing scalar derives a recovery root");
+    if (!recovery_root) return;
+    auto setup_proof = purify::accountable::prove_recovery_root_setup(
+        *nonce_bound, recovery_root->public_key, *signing_scalar,
+        secp.get());
+    expect_ok(ctx, setup_proof,
+              "aggregate signing scalar proves its recovery root");
+    if (!setup_proof) return;
+    auto recovery_bound = purify::accountable::verify_recovery_root_setup(
+        *nonce_bound, recovery_root->public_key, *setup_proof, secp.get());
+    expect_ok(ctx, recovery_bound,
+              "recovery-root proof binds the aggregate signing roster");
+    if (!recovery_bound) return;
+    ctx.expect(recovery_bound->signing_key() == raw_roster->signing_key(),
+               "recovery-bound roster preserves the aggregate signing key");
+    ctx.expect(recovery_bound->coalition_core_digest() == coalition_core_digest,
+               "recovery-bound roster retains the exact core digest");
+    ctx.expect(recovery_bound->recovery_root() == recovery_root->public_key,
+               "recovery-bound roster retains the proven recovery root");
+
+    auto altered_digest = coalition_core_digest;
+    altered_digest[0] ^= 1;
+    auto altered_core_roster = purify::accountable::bind_nonce_hosts(
+        *raw_roster, altered_digest, *hosts, secp.get());
+    expect_ok(ctx, altered_core_roster,
+              "alternate core can bind the same valid hosts");
+    if (!altered_core_roster) return;
+    expect_error(ctx,
+                 purify::accountable::verify_recovery_root_setup(
+                     *altered_core_roster, recovery_root->public_key,
+                     *setup_proof, secp.get()),
+                 purify::ErrorCode::EquationMismatch,
+                 "setup proof cannot move to another coalition core");
+    auto alternate_hosts = nonce_hosts(recovery_keys, 0x82, secp.get());
+    expect_ok(ctx, alternate_hosts, "alternate nonce hosts derive");
+    if (!alternate_hosts) return;
+    auto altered_host_roster = purify::accountable::bind_nonce_hosts(
+        *raw_roster, coalition_core_digest, *alternate_hosts, secp.get());
+    expect_ok(ctx, altered_host_roster,
+              "alternate nonce hosts bind to the same roster");
+    if (!altered_host_roster) return;
+    expect_error(ctx,
+                 purify::accountable::verify_recovery_root_setup(
+                     *altered_host_roster, recovery_root->public_key,
+                     *setup_proof, secp.get()),
+                 purify::ErrorCode::EquationMismatch,
+                 "setup proof cannot move to another nonce host set");
+    auto changed_setup_encoding = setup_proof->serialize(secp.get());
+    expect_ok(ctx, changed_setup_encoding,
+              "setup proof serializes before tampering");
+    if (!changed_setup_encoding) return;
+    (*changed_setup_encoding)[163] ^= 1;
+    auto changed_setup_proof =
+        purify::accountable::RecoveryRootSetupProof::deserialize(
+            *changed_setup_encoding, secp.get());
+    expect_ok(ctx, changed_setup_proof,
+              "changed inner argument remains structurally canonical");
+    if (!changed_setup_proof) return;
+    expect_error(ctx,
+                 purify::accountable::verify_recovery_root_setup(
+                     *nonce_bound, recovery_root->public_key,
+                     *changed_setup_proof,
+                     secp.get()),
+                 purify::ErrorCode::EquationMismatch,
+                 "changed recovery-root setup proof rejects");
+    expect_error(ctx,
+                 purify::accountable::verify_recovery_root_setup(
+                     *nonce_bound, recovery_root->public_key,
+                     *setup_proof, nullptr),
+                 purify::ErrorCode::MissingValue,
+                 "setup verification without a secp context rejects");
+
+    auto parity_changed_keys = recovery_keys;
+    parity_changed_keys[0][0] ^= 1;
+    auto parity_changed_roster = SigningRoster::aggregate(
+        parity_changed_keys, secp.get());
+    expect_ok(ctx, parity_changed_roster,
+              "parity-changed full-key roster remains algebraically valid");
+    if (parity_changed_roster) {
+        expect_error(ctx,
+                     purify::accountable::bind_nonce_hosts(
+                         *parity_changed_roster, coalition_core_digest,
+                         *hosts, secp.get()),
+                     purify::ErrorCode::BindingMismatch,
+                     "nonce-host binding rejects an odd member point");
+    }
+
+    const std::array reordered_keys{
+        recovery_keys[1], recovery_keys[0], recovery_keys[2]};
+    auto reordered_roster = SigningRoster::aggregate(reordered_keys, secp.get());
+    expect_ok(ctx, reordered_roster,
+              "reordered raw roster remains algebraically valid");
+    if (reordered_roster) {
+        const std::array reordered_hosts{
+            (*hosts)[1], (*hosts)[0], (*hosts)[2]};
+        auto reordered_bound = purify::accountable::bind_nonce_hosts(
+            *reordered_roster, coalition_core_digest, reordered_hosts,
+            secp.get());
+        expect_ok(ctx, reordered_bound,
+                  "reordered roster binds matching reordered hosts");
+        if (!reordered_bound) return;
+        expect_error(ctx,
+                     purify::accountable::verify_recovery_root_setup(
+                         *reordered_bound, recovery_root->public_key,
+                         *setup_proof, secp.get()),
+                     purify::ErrorCode::EquationMismatch,
+                     "setup proof binds exact roster ordering");
+    }
+
+    auto moved_from_roster = *nonce_bound;
+    auto retained_roster = std::move(moved_from_roster);
+    expect_error(ctx,
+                 purify::accountable::verify_recovery_root_setup(
+                     std::move(moved_from_roster), recovery_root->public_key,
+                     *setup_proof, secp.get()),
+                 purify::ErrorCode::EmptyInput,
+                 "moved-from roster cannot verify a setup proof");
+    expect_ok(ctx,
+              purify::accountable::verify_recovery_root_setup(
+                  std::move(retained_roster), recovery_root->public_key,
+                  *setup_proof, secp.get()),
+              "moved roster retains its recovery binding");
+
+    auto recovered = purify::accountable::recover_registered_root(
+        *recovery_bound, *signing_scalar, secp.get());
+    expect_ok(ctx, recovered,
+              "exposed aggregate scalar recovers the registered root");
+    expect_error(ctx,
+                 purify::accountable::recover_registered_root(
+                     *recovery_bound, signing_scalar->negate(), secp.get()),
+                 purify::ErrorCode::BindingMismatch,
+                 "wrong aggregate scalar sign cannot recover the root");
 }

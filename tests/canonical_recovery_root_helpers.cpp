@@ -4,8 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
-#include <iostream>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -56,22 +54,7 @@ Result<PointPair> decode_root(const UInt512& encoded) {
 }
 
 Result<purify::GeneratedKey> root_from_scalar(const FieldElement& scalar) {
-    if (scalar.is_zero()) {
-        return purify::unexpected_error(purify::ErrorCode::RangeViolation, "root_setup:zero");
-    }
-    auto first = magnitude(scalar);
-    auto second = first;
-    if (purify::half_n2() < second) {
-        second = purify::order_n2();
-        second.sub_assign(first);
-    }
-    // first <= half(secp order) < half_n1; second is normalized for x-only D2.
-    first.sub_assign(UInt256::one());
-    second.sub_assign(UInt256::one());
-    auto packed = purify::multiply(purify::half_n1(), second);
-    packed.add_assign(purify::widen<8>(first));
-    PURIFY_ASSIGN_OR_RETURN(auto secret, purify::SecretKey::from_packed(packed), "root_setup:secret");
-    return purify::derive_key(std::move(secret));
+    return purify::accountable::derive_recovery_root(scalar);
 }
 
 std::vector<Expr> ordinary_bits(purify::Transcript& transcript, const std::optional<UInt256>& value) {

@@ -16,3 +16,4 @@
 #include "purify/puresign/accountable_roster.hpp"
 #include "purify/puresign/accountable_responses.hpp"
 #include "purify/puresign/slash_adaptor.hpp"
+#include "purify/puresign/recovery_root.hpp"

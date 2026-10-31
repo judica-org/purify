@@ -1758,8 +1758,8 @@ static int purify_ecmult_multi_secret(const secp256k1_context* ctx,
         secp256k1_gej_set_infinity(result);
     }
     for (i = 0; i < point_count; ++i) {
-        secp256k1_scalar scalar;
-        secp256k1_ge point;
+        secp256k1_scalar scalar = {0};
+        secp256k1_ge point = {0};
         int callback_ok = callback(&scalar, &point, i, callback_data);
         if (!callback_ok) {
             secp256k1_scalar_clear(&scalar);
@@ -1772,6 +1772,53 @@ static int purify_ecmult_multi_secret(const secp256k1_context* ctx,
         purify_bridge_secure_clear(&point, sizeof(point));
     }
     return 1;
+}
+
+static void purify_scalar_inner_product_secret(
+    secp256k1_scalar* result,
+    const secp256k1_scalar* lhs,
+    size_t lhs_offset,
+    const secp256k1_scalar* rhs,
+    size_t rhs_offset,
+    size_t step,
+    size_t length) {
+    size_t i;
+
+    secp256k1_scalar_set_int(result, 0);
+    for (i = 0; i < length; ++i) {
+        secp256k1_scalar term;
+        secp256k1_scalar_mul(
+            &term, &lhs[lhs_offset + step * i],
+            &rhs[rhs_offset + step * i]);
+        secp256k1_scalar_add(result, result, &term);
+        secp256k1_scalar_clear(&term);
+    }
+}
+
+static void purify_weighted_scalar_inner_product_secret(
+    secp256k1_scalar* result,
+    const secp256k1_scalar* lhs,
+    size_t lhs_offset,
+    const secp256k1_scalar* rhs,
+    size_t rhs_offset,
+    size_t step,
+    size_t length,
+    const secp256k1_scalar* weight) {
+    secp256k1_scalar weight_power = *weight;
+    size_t i;
+
+    secp256k1_scalar_set_int(result, 0);
+    for (i = 0; i < length; ++i) {
+        secp256k1_scalar term;
+        secp256k1_scalar_mul(
+            &term, &lhs[lhs_offset + step * i],
+            &rhs[rhs_offset + step * i]);
+        secp256k1_scalar_mul(&term, &term, &weight_power);
+        secp256k1_scalar_mul(&weight_power, &weight_power, weight);
+        secp256k1_scalar_add(result, result, &term);
+        secp256k1_scalar_clear(&term);
+    }
+    secp256k1_scalar_clear(&weight_power);
 }
 
 static int purify_bppp_commit_secret(const secp256k1_context* ctx,
@@ -1795,9 +1842,9 @@ static int purify_bppp_commit_secret(const secp256k1_context* ctx,
     VERIFY_CHECK(secp256k1_is_power_of_two(n_vec_len));
     VERIFY_CHECK(secp256k1_is_power_of_two(c_vec_len));
 
-    secp256k1_weighted_scalar_inner_product(
+    purify_weighted_scalar_inner_product_secret(
         &v, n_vec, 0, n_vec, 0, 1, n_vec_len, mu);
-    secp256k1_scalar_inner_product(
+    purify_scalar_inner_product_secret(
         &l_c, l_vec, 0, c_vec, 0, 1, l_vec_len);
     secp256k1_scalar_add(&v, &v, &l_c);
 
@@ -1886,11 +1933,11 @@ static int purify_bppp_rangeproof_norm_product_prove_secret(
         /* rho_f is transcript-derived public data. */
         secp256k1_scalar_inverse_var(&rho_inv, &rho_f);
         secp256k1_scalar_sqr(&mu_sq, &mu_f);
-        secp256k1_scalar_inner_product(
+        purify_scalar_inner_product_secret(
             &c0_l1, c_vec, 0, l_vec, 1, 2, h_len / 2);
-        secp256k1_scalar_inner_product(
+        purify_scalar_inner_product_secret(
             &c1_l0, c_vec, 1, l_vec, 0, 2, h_len / 2);
-        secp256k1_weighted_scalar_inner_product(
+        purify_weighted_scalar_inner_product_secret(
             &x_v, n_vec, 0, n_vec, 1, 2, g_len / 2, &mu_sq);
         secp256k1_scalar_mul(&x_v, &x_v, &rho_inv);
         secp256k1_scalar_add(&x_v, &x_v, &x_v);
@@ -1907,9 +1954,9 @@ static int purify_bppp_rangeproof_norm_product_prove_secret(
             goto round_failure;
         }
 
-        secp256k1_weighted_scalar_inner_product(
+        purify_weighted_scalar_inner_product_secret(
             &r_v, n_vec, 1, n_vec, 1, 2, g_len / 2, &mu_sq);
-        secp256k1_scalar_inner_product(
+        purify_scalar_inner_product_secret(
             &c1_l1, c_vec, 1, l_vec, 1, 2, h_len / 2);
         secp256k1_scalar_add(&r_v, &r_v, &c1_l1);
 
@@ -2143,6 +2190,7 @@ int purify_pedersen_commit_char(purify_secp_context* context,
     if (ctx == NULL || blind32 == NULL || value32 == NULL || value_gen33 == NULL || blind_gen33 == NULL || commitment_out33 == NULL) {
         return 0;
     }
+    purify_bridge_secure_clear(commitment_out33, 33);
     if (!purify_parse_scalar(blind32, &blind_scalar, 0) || !purify_parse_scalar(value32, &value_scalar, 0)) {
         goto cleanup;
     }
@@ -2380,6 +2428,7 @@ int purify_bppp_offset_commitment(purify_secp_context* context,
     if (ctx == NULL || commitment33 == NULL || scalar32 == NULL || commitment_out33 == NULL) {
         return 0;
     }
+    purify_bridge_secure_clear(commitment_out33, 33);
     if (!purify_parse_point_as_ge(commitment33, &commitment_ge) ||
         !purify_parse_scalar(scalar32, &scalar, 0)) {
         goto cleanup;
@@ -2413,6 +2462,7 @@ int purify_point_scale(purify_secp_context* context,
     if (ctx == NULL || point33 == NULL || scalar32 == NULL || out33 == NULL) {
         return 0;
     }
+    purify_bridge_secure_clear(out33, 33);
     if (!purify_parse_point_as_ge(point33, &point_ge) ||
         !purify_parse_scalar(scalar32, &scalar, 0)) {
         goto cleanup;

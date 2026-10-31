@@ -458,6 +458,12 @@ if(PURIFY_BUILD_BENCH)
     purify_enable_warnings(bench_purify)
     purify_enable_sanitizers(bench_purify)
     purify_enable_release_optimizations(bench_purify)
+
+    add_executable(bench_norm_accumulation bench/bench_norm_accumulation.cpp)
+    target_link_libraries(bench_norm_accumulation PRIVATE purify_bench_support)
+    purify_enable_warnings(bench_norm_accumulation)
+    purify_enable_sanitizers(bench_norm_accumulation)
+    purify_enable_release_optimizations(bench_norm_accumulation)
 endif()
 
 if(PURIFY_BUILD_TESTS OR PURIFY_BUILD_CBMC)

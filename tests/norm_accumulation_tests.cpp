@@ -24,10 +24,10 @@ namespace accum = purify::bppp::accumulation;
 
 enum class ZeroFamily { Neither, Norm, Linear };
 
-std::vector<ScalarBytes> coefficients(std::size_t count) {
+std::vector<ScalarBytes> coefficients(std::size_t count, int owner) {
     std::vector<ScalarBytes> out;
     for (std::size_t i = 0; i < count; ++i) {
-        out.push_back(FieldElement::from_int(static_cast<int>(17 + i)).to_bytes_be());
+        out.push_back(FieldElement::from_int(17 + owner + static_cast<int>(i)).to_bytes_be());
     }
     return out;
 }
@@ -40,12 +40,13 @@ purify::Result<NormArgProof> publish_norm(const accum::Basis& basis, int owner,
     purify::bppp::NormArgInputs inputs;
     inputs.rho = FieldElement::from_int(3 + owner).to_bytes_be();
     inputs.generators = basis.norm_generators();
-    inputs.c_vec = basis.c_vec();
+    inputs.c_vec = zero == ZeroFamily::Neither ? coefficients(basis.l_vec_len(), owner)
+                                              : std::vector<ScalarBytes>(basis.l_vec_len());
     for (std::size_t i = 0; i < basis.n_vec_len(); ++i) {
         const auto value = zero == ZeroFamily::Norm ? 0 : 5 + owner + static_cast<int>(i);
         inputs.n_vec.push_back(FieldElement::from_int(value).to_bytes_be());
     }
-    for (std::size_t i = 0; i < basis.c_vec().size(); ++i) {
+    for (std::size_t i = 0; i < basis.l_vec_len(); ++i) {
         const auto value = zero == ZeroFamily::Linear ? 0 : 11 + owner + static_cast<int>(i);
         inputs.l_vec.push_back(FieldElement::from_int(value).to_bytes_be());
     }
@@ -59,10 +60,14 @@ purify::Result<std::vector<accum::PendingClaim>> public_claims(
     for (const auto& proof : proofs) {
         ctx.expect(purify::bppp::verify_norm_arg(proof, secp),
                    "independently published standalone norm proof verifies");
-        PURIFY_ASSIGN_OR_RETURN(auto claim, accum::prepare_norm(basis, proof, secp),
+        PURIFY_ASSIGN_OR_RETURN(auto prepared, accum::prepare_norm(basis, proof, secp),
                                 "test:prepare_public_norm");
+        PURIFY_ASSIGN_OR_RETURN(auto reduction, accum::prove_norm_reduction(basis, prepared, secp),
+                                "test:prove_public_reduction");
+        PURIFY_ASSIGN_OR_RETURN(auto claim, accum::verify_norm_reduction(basis, prepared, reduction, secp),
+                                "test:verify_public_reduction");
         expect_ok(ctx, accum::decide(basis, claim, secp),
-                  "prepared norm obligation agrees with standalone verification");
+                  "authenticated norm reduction agrees with standalone verification");
         claims.push_back(std::move(claim));
     }
     return claims;
@@ -71,7 +76,7 @@ purify::Result<std::vector<accum::PendingClaim>> public_claims(
 void check_honest_batches(TestContext& ctx, purify_secp_context* secp) {
     struct Shape { std::size_t norm; std::size_t linear; };
     for (const auto shape : {Shape{1, 1}, Shape{4, 4}, Shape{8, 2}}) {
-        auto basis = accum::Basis::create(shape.norm, coefficients(shape.linear),
+        auto basis = accum::Basis::create(shape.norm, shape.linear,
                                           "test/nonce-norm/v1", secp);
         expect_ok(ctx, basis, "homogeneous norm basis creates");
         if (!basis) return;
@@ -83,6 +88,8 @@ void check_honest_batches(TestContext& ctx, purify_secp_context* secp) {
             if (!proof) return;
             proofs.push_back(std::move(*proof));
         }
+        ctx.expect(proofs.front().c_vec != proofs.back().c_vec,
+                   "independent owners use different public coefficients on one basis");
         auto claims = public_claims(ctx, *basis, proofs, secp);
         expect_ok(ctx, claims, "all public norm bundles prepare");
         if (!claims) return;
@@ -127,21 +134,87 @@ void check_honest_batches(TestContext& ctx, purify_secp_context* secp) {
 }
 
 void check_changed_norm(TestContext& ctx, const accum::Basis& basis,
-                        const NormArgProof& changed, purify_secp_context* secp) {
+                        const NormArgProof& changed, const accum::NormReductionProof& original,
+                        purify_secp_context* secp) {
     ctx.expect(!purify::bppp::verify_norm_arg(changed, secp),
                "unchanged standalone proof rejects an altered public statement");
-    auto pending = accum::prepare_norm(basis, changed, secp);
+    auto prepared = accum::prepare_norm(basis, changed, secp);
     // Preparation parses and replays the transcript. It does not accept the
     // norm relation, so a parseable altered statement may remain pending.
-    if (pending) {
+    if (prepared) {
+        auto pending = accum::verify_norm_reduction(basis, *prepared, original, secp);
+        if (!pending) return;
         ctx.expect(!accum::decide(basis, *pending, secp),
                    "final decision rejects the altered norm obligation");
     }
 }
 
+void check_reduction_encoding(TestContext& ctx, const accum::Basis& basis,
+                              const accum::PreparedNorm& prepared,
+                              const accum::NormReductionProof& reduction,
+                              purify_secp_context* secp) {
+    auto encoded = accum::serialize_norm_reduction(basis, reduction, secp);
+    expect_ok(ctx, encoded, "honest coefficient opening serializes");
+    if (!encoded) return;
+    auto parsed = accum::parse_norm_reduction(basis, *encoded, secp);
+    expect_ok(ctx, parsed, "honest coefficient opening parses");
+    if (!parsed) return;
+    auto claim = accum::verify_norm_reduction(basis, prepared, *parsed, secp);
+    expect_ok(ctx, claim, "serialized coefficient opening authenticates the norm reduction");
+    if (!claim) return;
+    expect_ok(ctx, accum::decide(basis, *claim, secp), "serialized norm reduction decides");
+    auto reencoded = accum::serialize_norm_reduction(basis, *parsed, secp);
+    ctx.expect(reencoded && *reencoded == *encoded, "coefficient opening encoding is canonical");
+
+    auto evaluation = FieldElement::try_from_bytes32(reduction.coefficient_evaluation);
+    expect_ok(ctx, evaluation, "honest coefficient evaluation is canonical");
+    if (!evaluation) return;
+    auto changed = reduction;
+    changed.coefficient_evaluation = (*evaluation + FieldElement::one()).to_bytes_be();
+    ctx.expect(!accum::verify_norm_reduction(basis, prepared, changed, secp),
+               "fixed coefficient opening rejects a changed claimed evaluation");
+    changed = reduction;
+    changed.coefficient_opening.left[0] = basis.points()[0];
+    ctx.expect(!accum::verify_norm_reduction(basis, prepared, changed, secp),
+               "fixed coefficient opening rejects a changed finite round point");
+    changed = reduction;
+    changed.coefficient_opening.folded_generator = basis.points()[1];
+    ctx.expect(!accum::verify_norm_reduction(basis, prepared, changed, secp),
+               "fixed coefficient opening rejects a changed folded generator");
+    changed = reduction;
+    changed.coefficient_opening.right.pop_back();
+    ctx.expect(!accum::verify_norm_reduction(basis, prepared, changed, secp),
+               "coefficient opening rejects the wrong round count");
+
+    auto bytes = *encoded;
+    bytes[0] = 2;
+    ctx.expect(!accum::parse_norm_reduction(basis, bytes, secp),
+               "unsupported coefficient opening version is rejected");
+    bytes = *encoded;
+    bytes.pop_back();
+    ctx.expect(!accum::parse_norm_reduction(basis, bytes, secp),
+               "truncated coefficient opening is rejected");
+    bytes = *encoded;
+    bytes.push_back(0);
+    ctx.expect(!accum::parse_norm_reduction(basis, bytes, secp),
+               "trailing coefficient opening bytes are rejected");
+    bytes = *encoded;
+    std::fill_n(bytes.begin() + 1, 32, 0xff);
+    ctx.expect(!accum::parse_norm_reduction(basis, bytes, secp),
+               "noncanonical coefficient evaluation is rejected");
+    bytes = *encoded;
+    std::fill(bytes.end() - 65, bytes.end() - 33, 0xff);
+    ctx.expect(!accum::parse_norm_reduction(basis, bytes, secp),
+               "noncanonical coefficient opening terminal scalar is rejected");
+    bytes = *encoded;
+    std::fill(bytes.end() - 33, bytes.end(), 0);
+    bytes.back() = 1;
+    ctx.expect(!accum::parse_norm_reduction(basis, bytes, secp),
+               "noncanonical coefficient opening identity is rejected");
+}
+
 void check_bindings_and_encodings(TestContext& ctx, purify_secp_context* secp) {
-    const auto c = coefficients(2);
-    auto basis = accum::Basis::create(4, c, "test/escrow-norm/v1", secp);
+    auto basis = accum::Basis::create(4, 2, "test/escrow-norm/v1", secp);
     expect_ok(ctx, basis, "binding-test basis creates");
     if (!basis) return;
     auto first = publish_norm(*basis, 1, secp);
@@ -149,6 +222,13 @@ void check_bindings_and_encodings(TestContext& ctx, purify_secp_context* secp) {
     expect_ok(ctx, first, "first binding fixture publishes");
     expect_ok(ctx, second, "second binding fixture publishes");
     if (!first || !second) return;
+    auto prepared = accum::prepare_norm(*basis, *first, secp);
+    expect_ok(ctx, prepared, "first norm statement authenticates its coefficients");
+    if (!prepared) return;
+    auto reduction = accum::prove_norm_reduction(*basis, *prepared, secp);
+    expect_ok(ctx, reduction, "honest norm reduction proves from public inputs");
+    if (!reduction) return;
+    check_reduction_encoding(ctx, *basis, *prepared, *reduction, secp);
     const std::array proofs{*first, *second};
     auto claims = public_claims(ctx, *basis, proofs, secp);
     expect_ok(ctx, claims, "binding-test public inputs prepare");
@@ -198,14 +278,33 @@ void check_bindings_and_encodings(TestContext& ctx, purify_secp_context* secp) {
 
     auto changed = *first;
     changed.rho = FieldElement::from_int(99).to_bytes_be();
-    check_changed_norm(ctx, *basis, changed, secp);
+    check_changed_norm(ctx, *basis, changed, *reduction, secp);
     changed = *first;
     changed.commitment = second->commitment;
-    check_changed_norm(ctx, *basis, changed, secp);
+    check_changed_norm(ctx, *basis, changed, *reduction, secp);
     changed = *first;
     changed.c_vec[0] = FieldElement::from_int(99).to_bytes_be();
-    ctx.expect(!accum::prepare_norm(*basis, changed, secp),
-               "different exact c-vector cannot enter the same accumulation bucket");
+    check_changed_norm(ctx, *basis, changed, *reduction, secp);
+    auto changed_coefficients = accum::prepare_norm(*basis, changed, secp);
+    expect_ok(ctx, changed_coefficients, "changed canonical coefficients still parse");
+    if (!changed_coefficients) return;
+    ctx.expect(changed_coefficients->coefficient_commitment() != prepared->coefficient_commitment(),
+               "coefficient authentication binds the exact public vector");
+    ctx.expect(!accum::verify_norm_reduction(*basis, *changed_coefficients, *reduction, secp),
+               "fixed reduction rejects a changed authenticated coefficient commitment");
+    changed = *first;
+    std::swap(changed.c_vec[0], changed.c_vec[1]);
+    check_changed_norm(ctx, *basis, changed, *reduction, secp);
+    changed = *first;
+    const auto terminal_start = changed.proof.size() - 64;
+    ScalarBytes terminal_n{};
+    std::copy_n(changed.proof.begin() + static_cast<std::ptrdiff_t>(terminal_start), 32, terminal_n.begin());
+    auto n = FieldElement::try_from_bytes32(terminal_n);
+    expect_ok(ctx, n, "honest norm terminal scalar is canonical");
+    if (!n) return;
+    const auto other_n = (*n + FieldElement::one()).to_bytes_be();
+    std::copy(other_n.begin(), other_n.end(), changed.proof.begin() + static_cast<std::ptrdiff_t>(terminal_start));
+    check_changed_norm(ctx, *basis, changed, *reduction, secp);
     changed = *first;
     std::swap(changed.generators[0], changed.generators[1]);
     ctx.expect(!accum::prepare_norm(*basis, changed, secp),
@@ -214,6 +313,14 @@ void check_bindings_and_encodings(TestContext& ctx, purify_secp_context* secp) {
     changed.n_vec_len = 2;
     ctx.expect(!accum::prepare_norm(*basis, changed, secp),
                "different norm dimensions cannot enter the same accumulation bucket");
+    changed = *first;
+    changed.c_vec.pop_back();
+    ctx.expect(!accum::prepare_norm(*basis, changed, secp),
+               "coefficient authentication rejects a vector with the wrong dimension");
+    changed = *first;
+    changed.c_vec[0].fill(0xff);
+    ctx.expect(!accum::prepare_norm(*basis, changed, secp),
+               "coefficient authentication rejects noncanonical field elements");
 
     for (const bool noncanonical : {false, true}) {
         changed = *first;
@@ -283,18 +390,18 @@ void check_bindings_and_encodings(TestContext& ctx, purify_secp_context* secp) {
                "fixed accumulation proof rejects an omitted child claim");
     ctx.expect(!accum::prove_step(*basis, {}, secp), "empty accumulation is rejected");
 
-    auto other_c = c;
-    other_c[0] = FieldElement::from_int(99).to_bytes_be();
-    auto wrong_c = accum::Basis::create(4, other_c, "test/escrow-norm/v1", secp);
-    auto wrong_domain = accum::Basis::create(4, c, "test/setup-norm/v1", secp);
-    auto wrong_shape = accum::Basis::create(8, c, "test/escrow-norm/v1", secp);
-    expect_ok(ctx, wrong_c, "alternative coefficient basis creates");
+    auto wrong_linear = accum::Basis::create(4, 4, "test/escrow-norm/v1", secp);
+    auto wrong_domain = accum::Basis::create(4, 2, "test/setup-norm/v1", secp);
+    auto wrong_shape = accum::Basis::create(8, 2, "test/escrow-norm/v1", secp);
+    expect_ok(ctx, wrong_linear, "alternative linear dimension basis creates");
     expect_ok(ctx, wrong_domain, "alternative semantic basis creates");
     expect_ok(ctx, wrong_shape, "alternative dimension basis creates");
-    if (!wrong_c || !wrong_domain || !wrong_shape) return;
+    if (!wrong_linear || !wrong_domain || !wrong_shape) return;
     // Semantic domains bind prepared claims and transitions. A standalone
     // norm proof has no application-domain field of its own.
-    for (const auto* other : {&*wrong_c, &*wrong_domain, &*wrong_shape}) {
+    for (const auto* other : {&*wrong_linear, &*wrong_domain, &*wrong_shape}) {
+        ctx.expect(!accum::verify_norm_reduction(*other, *prepared, *reduction, secp),
+                   "fixed norm reduction binds its prepared basis and domain");
         ctx.expect(!accum::prove_step(*other, *claims, secp),
                    "claims cannot be accumulated under another basis or domain");
         ctx.expect(!accum::verify_step(*other, *claims, *step, secp),
@@ -302,16 +409,21 @@ void check_bindings_and_encodings(TestContext& ctx, purify_secp_context* secp) {
         ctx.expect(!accum::decide(*other, claims->front(), secp),
                    "final decision requires the claim's exact basis and domain");
     }
-    ctx.expect(!accum::prepare_norm(*wrong_c, *first, secp),
-               "standalone proof rejects a basis with different coefficients");
-    ctx.expect(!accum::Basis::create(1, c, "test/invalid-shape", secp),
+    auto other_domain_prepared = accum::prepare_norm(*wrong_domain, *first, secp);
+    expect_ok(ctx, other_domain_prepared, "raw standalone norm can be prepared for another application domain");
+    if (!other_domain_prepared) return;
+    ctx.expect(!accum::verify_norm_reduction(*wrong_domain, *other_domain_prepared, *reduction, secp),
+               "fixed reduction cannot be relabeled into another application domain");
+    ctx.expect(!accum::prepare_norm(*wrong_linear, *first, secp),
+               "standalone proof rejects a basis with different linear dimension");
+    ctx.expect(!accum::Basis::create(1, 2, "test/invalid-shape", secp),
                "basis rejects a linear family larger than the norm family");
-    ctx.expect(!accum::Basis::create(4, c, "", secp),
+    ctx.expect(!accum::Basis::create(4, 2, "", secp),
                "basis requires an explicit semantic domain");
 }
 
 void check_zero_families(TestContext& ctx, purify_secp_context* secp) {
-    auto basis = accum::Basis::create(4, std::vector<ScalarBytes>(4),
+    auto basis = accum::Basis::create(4, 4,
                                       "test/zero-family/v1", secp);
     expect_ok(ctx, basis, "zero-coefficient basis creates");
     if (!basis) return;
@@ -320,23 +432,45 @@ void check_zero_families(TestContext& ctx, purify_secp_context* secp) {
         expect_ok(ctx, proof, "zero witness family still gives an honest finite norm proof");
         if (!proof) return;
         ctx.expect(proof->commitment != PointBytes{}, "zero-family norm commitment remains finite");
-        const std::array proofs{*proof};
-        auto claims = public_claims(ctx, *basis, proofs, secp);
-        expect_ok(ctx, claims, "zero-family norm prepares and decides");
-        if (!claims) return;
-        auto step = accum::prove_step(*basis, *claims, secp);
+        ctx.expect(purify::bppp::verify_norm_arg(*proof, secp), "honest zero-family standalone norm verifies");
+        auto prepared = accum::prepare_norm(*basis, *proof, secp);
+        expect_ok(ctx, prepared, "zero-family norm prepares");
+        if (!prepared) return;
+        ctx.expect(prepared->coefficient_commitment() == PointBytes{},
+                   "zero coefficient vector has the canonical identity commitment");
+        auto reduction = accum::prove_norm_reduction(*basis, *prepared, secp);
+        expect_ok(ctx, reduction, "zero coefficient opening proves");
+        if (!reduction) return;
+        ctx.expect(reduction->coefficient_evaluation == ScalarBytes{},
+                   "zero coefficient vector has zero tensor evaluation");
+        ctx.expect(reduction->coefficient_opening.terminal_scalar == ScalarBytes{},
+                   "honest zero coefficient opening accepts a zero terminal scalar");
+        ctx.expect(std::all_of(reduction->coefficient_opening.left.begin(),
+            reduction->coefficient_opening.left.end(), [](const auto& p) { return p == PointBytes{}; }) &&
+            std::all_of(reduction->coefficient_opening.right.begin(),
+            reduction->coefficient_opening.right.end(), [](const auto& p) { return p == PointBytes{}; }),
+            "honest zero coefficient opening exercises identity round encodings");
+        auto reduction_bytes = accum::serialize_norm_reduction(*basis, *reduction, secp);
+        expect_ok(ctx, reduction_bytes, "honest identity coefficient rounds serialize");
+        if (!reduction_bytes) return;
+        auto parsed_reduction = accum::parse_norm_reduction(*basis, *reduction_bytes, secp);
+        expect_ok(ctx, parsed_reduction, "honest identity coefficient rounds parse");
+        if (!parsed_reduction) return;
+        auto claim = accum::verify_norm_reduction(*basis, *prepared, *parsed_reduction, secp);
+        expect_ok(ctx, claim, "zero coefficient opening authenticates both norm obligations");
+        if (!claim) return;
+        expect_ok(ctx, accum::decide(*basis, *claim, secp), "zero-family fused norm claim decides");
+        const std::array claims{*claim};
+        auto step = accum::prove_step(*basis, claims, secp);
         expect_ok(ctx, step, "zero-family accumulation proves");
         if (!step) return;
-        const auto& zero_round = zero == ZeroFamily::Norm ? step->left[0] : step->right[0];
-        ctx.expect(zero_round == PointBytes{},
-                   "honest zero family exercises canonical identity round encoding");
         auto encoded = accum::serialize_step(*basis, *step, secp);
         expect_ok(ctx, encoded, "honest identity round serializes");
         if (!encoded) return;
         auto decoded = accum::parse_step(*basis, *encoded, secp);
         expect_ok(ctx, decoded, "honest identity round parses");
         if (!decoded) return;
-        auto pending = accum::verify_step(*basis, *claims, *decoded, secp);
+        auto pending = accum::verify_step(*basis, claims, *decoded, secp);
         expect_ok(ctx, pending, "honest identity round verifies");
         if (!pending) return;
         expect_ok(ctx, accum::decide(*basis, *pending, secp),
@@ -346,8 +480,7 @@ void check_zero_families(TestContext& ctx, purify_secp_context* secp) {
 
 void check_reference_vector(TestContext& ctx, purify_secp_context* secp) {
     const auto scalar = [](int value) { return FieldElement::from_int(value).to_bytes_be(); };
-    const std::array c{scalar(20), scalar(21)};
-    auto basis = accum::Basis::create(4, c, "honest-test", secp);
+    auto basis = accum::Basis::create(4, 2, "honest-test", secp);
     expect_ok(ctx, basis, "independent reference basis creates");
     if (!basis) return;
     const auto norm = [&] {
@@ -358,8 +491,22 @@ void check_reference_vector(TestContext& ctx, purify_secp_context* secp) {
     }();
     expect_ok(ctx, norm, "independent reference owner publishes norm proof");
     if (!norm) return;
-    auto claim = accum::prepare_norm(*basis, *norm, secp);
-    expect_ok(ctx, claim, "independent reference norm prepares");
+    auto prepared = accum::prepare_norm(*basis, *norm, secp);
+    expect_ok(ctx, prepared, "independent reference norm prepares");
+    if (!prepared) return;
+    auto reduction = accum::prove_norm_reduction(*basis, *prepared, secp);
+    expect_ok(ctx, reduction, "independent reference coefficient opening proves");
+    if (!reduction) return;
+    auto reduction_bytes = accum::serialize_norm_reduction(*basis, *reduction, secp);
+    expect_ok(ctx, reduction_bytes, "independent reference coefficient opening serializes");
+    if (!reduction_bytes) return;
+    accum::Digest reduction_digest{};
+    purify_sha256(reduction_digest.data(), reduction_bytes->data(), reduction_bytes->size());
+    ctx.expect(reduction_digest == purify::UInt256::from_hex(
+        "430ba5e3a0183d278ad3cb5251d081f70b27586db3e407a899b59660c8d59d87").to_bytes_be(),
+        "native coefficient opening encoding matches the independent Python vector");
+    auto claim = accum::verify_norm_reduction(*basis, *prepared, *reduction, secp);
+    expect_ok(ctx, claim, "independent reference norm reduction verifies");
     if (!claim) return;
     const std::array claims{*claim};
     auto proof = accum::prove_step(*basis, claims, secp);
@@ -373,7 +520,7 @@ void check_reference_vector(TestContext& ctx, purify_secp_context* secp) {
     // reference_norm_accumulation.py independently reconstructs the norm
     // transcript, polynomial commitment and every IPA round for this fixture.
     ctx.expect(digest == purify::UInt256::from_hex(
-        "662b6b3d9dd73e60a8ab438e184c83844db9a1b7affecb20128f57b33f75add5").to_bytes_be(),
+        "b3a14ad17548fed019e02a5d90063be232826750d1f5987a72b22013585f7b1b").to_bytes_be(),
         "native accumulation encoding matches the independent Python vector");
 }
 

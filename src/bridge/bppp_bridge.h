@@ -164,7 +164,8 @@ int purify_bppp_verify_norm_arg_with_resources(purify_bppp_backend_resources* re
  *
  * Success checks encodings and computes the exact transcript and short group
  * equation. It does NOT verify the proof: the returned residual must still be
- * checked against the folded generators by an accumulator's final decider.
+ * reduced using an authenticated coefficient opening and discharged by an
+ * accumulator's final decider.
  * gamma_count must equal log2(n_vec_len); gammas32 may be NULL only when zero.
  * The residual uses canonical compressed SEC1, or 33 zero bytes for infinity.
  */
@@ -179,15 +180,12 @@ int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
                                      unsigned char residual33[33]);
 
 /**
- * Converts a norm generator stream to the pending claim's SEC1 basis.
- * The first n_vec_len points are unchanged. The next c_vec_len points become
- * H_i + c_i*G. Remaining points are unchanged independent padding generators.
- * The caller authenticates the deterministic stream and common coefficients.
+ * Converts a nonempty generator stream to finite canonical SEC1 points.
+ * The caller authenticates the stream's derivation and protocol role.
  */
-int purify_bppp_shift_norm_basis(purify_secp_context* context,
-                               const unsigned char* generators33, size_t generators_count,
-                               const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
-                               unsigned char* points_out33);
+int purify_bppp_generators_to_points(purify_secp_context* context,
+                                   const unsigned char* generators33, size_t generators_count,
+                                   unsigned char* points_out33);
 
 /**
  * Variable-time arithmetic for public accumulator data only.

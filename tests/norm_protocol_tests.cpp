@@ -248,20 +248,25 @@ void check_pending_norm_equation(TestContext& ctx) {
     const auto terminal_l = FieldElement::from_bytes32(l);
     // Enumerate the four G and two H coefficients directly, independently
     // of the later compact-polynomial accumulator's expansion routine.
-    const std::array<ScalarBytes, 8> coefficients{
+    const auto coefficient_evaluation = FieldElement::from_int(13) + FieldElement::from_int(17) * gamma0;
+    const std::array<ScalarBytes, 9> coefficients{
         (terminal_n * rho * rho * rho).to_bytes_be(),
         (terminal_n * rho * rho * gamma0).to_bytes_be(),
         (terminal_n * rho * gamma1).to_bytes_be(),
         (terminal_n * gamma0 * gamma1).to_bytes_be(),
-        terminal_l.to_bytes_be(), (terminal_l * gamma0).to_bytes_be(), scalar(0), scalar(0)};
-    std::array<PointBytes, 8> basis{};
-    ctx.expect(purify_bppp_shift_norm_basis(secp.get(), gs, 8, cs, 2, 4,
-        reinterpret_cast<unsigned char*>(basis.data())) != 0, "shifted norm basis creates");
+        terminal_l.to_bytes_be(), (terminal_l * gamma0).to_bytes_be(), scalar(0), scalar(0),
+        (terminal_l * coefficient_evaluation).to_bytes_be()};
+    std::array<PointBytes, 9> basis{};
+    ctx.expect(purify_bppp_generators_to_points(secp.get(), gs, 8,
+        reinterpret_cast<unsigned char*>(basis.data())) != 0, "unshifted norm basis creates");
+    const auto encoded_base = base_generator(secp.get());
+    ctx.expect(purify_bppp_generators_to_points(secp.get(), encoded_base.data(), 1,
+        basis[8].data()) != 0, "standard base converts to SEC1");
     PointBytes expected{};
     ctx.expect(purify_bppp_public_msm(secp.get(),
         reinterpret_cast<const unsigned char*>(basis.data()),
-        reinterpret_cast<const unsigned char*>(coefficients.data()), 8, expected.data()) != 0
-        && expected == residual, "pending equation agrees with direct native MSM");
+        reinterpret_cast<const unsigned char*>(coefficients.data()), basis.size(), expected.data()) != 0
+        && expected == residual, "unshifted pending equation includes the direct coefficient fold");
 
     const PointBytes infinity{};
     auto one = scalar(1);

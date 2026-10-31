@@ -2364,11 +2364,11 @@ int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
     }
     secp256k1_sha256_clear(&transcript);
 
-    /* Absorb <c, s_h> into the public basis H'_i = H_i + c_i*G.
-     * The remaining base-generator coefficient is n^2 * rho^(2*g).
-     * This computes only the short side of the verification equation:
+    /* Remove only the weighted-norm base-generator contribution. This
+     * computes the short side of the verification equation:
      * T = C + sum(gamma*X + (gamma^2-1)*R) - n^2*rho^(2*g)*G.
-     * Equality to the claimed polynomial commitment remains deferred.
+     * The linear contribution l*<c,w_gamma>*G still needs an authenticated
+     * coefficient opening; equality to the fixed-basis MSM remains deferred.
      */
     norm = rho;
     for (i = 0; i <= rounds; ++i) {
@@ -2401,41 +2401,22 @@ cleanup:
     return ok;
 }
 
-int purify_bppp_shift_norm_basis(purify_secp_context* context,
-                               const unsigned char* generators33, size_t generators_count,
-                               const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
-                               unsigned char* points_out33) {
+int purify_bppp_generators_to_points(purify_secp_context* context,
+                                   const unsigned char* generators33, size_t generators_count,
+                                   unsigned char* points_out33) {
     secp256k1_context* ctx = purify_context_handle(context);
-    secp256k1_scalar one;
-    size_t used, bytes, i;
+    size_t bytes, i;
 
-    if (ctx == NULL || generators33 == NULL || c_vec32 == NULL || points_out33 == NULL ||
-        !secp256k1_is_power_of_two(n_vec_len) || !secp256k1_is_power_of_two(c_vec_len) ||
-        n_vec_len < c_vec_len ||
-        !purify_bridge_checked_add_size(n_vec_len, c_vec_len, &used) ||
-        generators_count < used ||
+    if (ctx == NULL || generators33 == NULL || points_out33 == NULL || generators_count == 0 ||
         !purify_bridge_checked_mul_size(generators_count, 33u, &bytes)) {
         return 0;
     }
-    secp256k1_scalar_set_int(&one, 1);
     for (i = 0; i < generators_count; ++i) {
         secp256k1_ge point;
-        if (!purify_parse_generator_as_ge(ctx, generators33 + 33u * i, &point)) {
+        if (!purify_parse_generator_as_ge(ctx, generators33 + 33u * i, &point) ||
+            !purify_serialize_point(points_out33 + 33u * i, &point)) {
             return 0;
         }
-        if (i >= n_vec_len && i < used) {
-            secp256k1_scalar coefficient;
-            secp256k1_gej point_j;
-            if (!purify_parse_scalar(c_vec32 + 32u * (i - n_vec_len), &coefficient, 0)) {
-                return 0;
-            }
-            secp256k1_gej_set_ge(&point_j, &point);
-            secp256k1_ecmult(&point_j, &point_j, &one, &coefficient);
-            secp256k1_ge_set_gej_var(&point, &point_j);
-        }
-        /* A polynomial commitment basis must contain finite generators. */
-        if (secp256k1_ge_is_infinity(&point)) return 0;
-        secp256k1_ge_serialize_ext(points_out33 + 33u * i, &point);
     }
     return 1;
 }

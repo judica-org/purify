@@ -296,7 +296,7 @@ norm_arg_l_vec_len=2048
 norm_arg_c_vec_len=2048
 norm_arg_proof_size_bytes=779
 puresign_signature_size_bytes=64
-puresign_legacy_proven_signature_size_bytes=1268
+puresign_legacy_proven_signature_size_bytes=1272
 puresign_plusplus_proven_signature_size_bytes=1137
 ```
 

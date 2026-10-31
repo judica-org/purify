@@ -17,3 +17,4 @@
 #include "purify/puresign/accountable_responses.hpp"
 #include "purify/puresign/slash_adaptor.hpp"
 #include "purify/puresign/recovery_root.hpp"
+#include "purify/puresign/anchor_escrow.hpp"

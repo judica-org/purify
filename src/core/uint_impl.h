@@ -57,6 +57,16 @@ int PURIFY_UINT_FN(compare)(const uint64_t lhs[PURIFY_UINT_WORDS], const uint64_
     return (int)greater - (int)less;
 }
 
+void PURIFY_UINT_FN(conditional_assign)(uint64_t value[PURIFY_UINT_WORDS],
+                                        const uint64_t other[PURIFY_UINT_WORDS], int flag) {
+    volatile uint64_t selected = (uint64_t)(flag != 0);
+    const uint64_t mask = (uint64_t)0 - selected;
+    size_t i;
+    for (i = 0; i < PURIFY_UINT_WORDS; ++i) {
+        value[i] ^= mask & (value[i] ^ other[i]);
+    }
+}
+
 int PURIFY_UINT_FN(try_add_small)(uint64_t value[PURIFY_UINT_WORDS], uint32_t addend) {
     uint64_t carry = addend;
     size_t i;

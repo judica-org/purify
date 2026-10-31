@@ -453,6 +453,13 @@ static void test_uint_core(void) {
            "purify_u256_compare orders distinct values");
     expect(purify_u256_compare(other256, other256) == 0,
            "purify_u256_compare reports equality");
+    memcpy(tmp256, value256, sizeof(tmp256));
+    purify_u256_conditional_assign(tmp256, other256, 0);
+    expect(u256_eq(tmp256, value256),
+           "purify_u256_conditional_assign keeps the destination");
+    purify_u256_conditional_assign(tmp256, other256, 1);
+    expect(u256_eq(tmp256, other256),
+           "purify_u256_conditional_assign selects the source");
     purify_u256_set_zero(value256);
     value256[0] = UINT64_MAX;
     expect(purify_u256_try_add_small(value256, 1u) != 0 &&
@@ -536,6 +543,13 @@ static void test_uint_core(void) {
     purify_u320_set_u64(tmp320, 1u);
     expect(purify_u320_compare(value320, tmp320) > 0,
            "purify_u320_compare orders distinct values");
+    memcpy(other320, value320, sizeof(other320));
+    purify_u320_conditional_assign(other320, tmp320, 0);
+    expect(u320_eq(other320, value320),
+           "purify_u320_conditional_assign keeps the destination");
+    purify_u320_conditional_assign(other320, tmp320, 1);
+    expect(u320_eq(other320, tmp320),
+           "purify_u320_conditional_assign selects the source");
     purify_u320_set_zero(value320);
     value320[0] = UINT64_MAX;
     expect(purify_u320_try_add_small(value320, 1u) != 0 &&
@@ -624,6 +638,13 @@ static void test_uint_core(void) {
            "purify_u512_from_bytes_be round-trips through purify_u512_to_bytes_be");
     expect(purify_u512_compare(value512, other512) < 0,
            "purify_u512_compare orders distinct values");
+    memcpy(tmp512, value512, sizeof(tmp512));
+    purify_u512_conditional_assign(tmp512, other512, 0);
+    expect(u512_eq(tmp512, value512),
+           "purify_u512_conditional_assign keeps the destination");
+    purify_u512_conditional_assign(tmp512, other512, 1);
+    expect(u512_eq(tmp512, other512),
+           "purify_u512_conditional_assign selects the source");
     purify_u512_set_zero(value512);
     value512[0] = UINT64_MAX;
     expect(purify_u512_try_add_small(value512, 1u) != 0 &&

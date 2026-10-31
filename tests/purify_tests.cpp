@@ -200,6 +200,21 @@ void test_biguint_arithmetic(TestContext& ctx) {
     const auto [quotient, remainder] = purify::divmod_same(squared, purify::widen<8>(value));
     ctx.expect(quotient == purify::widen<8>(value) && remainder.is_zero(),
                "BigUInt long division round-trips a wide square product");
+
+    using UInt192 = purify::BigUInt<3>;
+    const UInt192 low = UInt192::from_u64(7);
+    UInt192 high = UInt192::zero();
+    high.limbs[2] = 1;
+    ctx.expect(low.compare(high) < 0 && high.compare(low) > 0 &&
+                   low != high && low == low,
+               "generic BigUInt comparison scans fixed-width values");
+    UInt192 selected = low;
+    selected.conditional_assign(high, false);
+    ctx.expect(selected == low,
+               "generic BigUInt conditional assignment keeps its value");
+    selected.conditional_assign(high, true);
+    ctx.expect(selected == high,
+               "generic BigUInt conditional assignment selects its input");
 }
 
 void test_known_sample(TestContext& ctx) {

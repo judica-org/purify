@@ -175,6 +175,10 @@ static void test_uint_helpers_consttime(void) {
                             UINT64_C(0x123456789abcdef0),
                             UINT64_C(0), UINT64_C(0), UINT64_C(0),
                             UINT64_C(0), UINT64_C(0), UINT64_C(0)};
+    uint64_t selected256[4] = {UINT64_C(42), 0, 0, 0};
+    uint64_t selected320[5] = {UINT64_C(42), 0, 0, 0, 0};
+    uint64_t selected512[8] = {UINT64_C(42), 0, 0, 0, 0, 0, 0, 0};
+    int select = 1;
     int result;
     size_t i;
 
@@ -229,6 +233,36 @@ static void test_uint_helpers_consttime(void) {
     expect(result != 0 && value512[0] == 0 &&
                value512[1] == UINT64_C(0x123456789abcdef1),
            "u512 add_small propagates a secret carry in fixed rounds");
+
+    VALGRIND_MAKE_MEM_UNDEFINED(value256, sizeof(value256));
+    VALGRIND_MAKE_MEM_UNDEFINED(selected256, sizeof(selected256));
+    VALGRIND_MAKE_MEM_UNDEFINED(&select, sizeof(select));
+    purify_u256_conditional_assign(value256, selected256, select);
+    VALGRIND_MAKE_MEM_DEFINED(value256, sizeof(value256));
+    VALGRIND_MAKE_MEM_DEFINED(selected256, sizeof(selected256));
+    VALGRIND_MAKE_MEM_DEFINED(&select, sizeof(select));
+    expect(value256[0] == 42,
+           "u256 conditional assignment does not branch on secret inputs");
+
+    VALGRIND_MAKE_MEM_UNDEFINED(value320, sizeof(value320));
+    VALGRIND_MAKE_MEM_UNDEFINED(selected320, sizeof(selected320));
+    VALGRIND_MAKE_MEM_UNDEFINED(&select, sizeof(select));
+    purify_u320_conditional_assign(value320, selected320, select);
+    VALGRIND_MAKE_MEM_DEFINED(value320, sizeof(value320));
+    VALGRIND_MAKE_MEM_DEFINED(selected320, sizeof(selected320));
+    VALGRIND_MAKE_MEM_DEFINED(&select, sizeof(select));
+    expect(value320[0] == 42,
+           "u320 conditional assignment does not branch on secret inputs");
+
+    VALGRIND_MAKE_MEM_UNDEFINED(value512, sizeof(value512));
+    VALGRIND_MAKE_MEM_UNDEFINED(selected512, sizeof(selected512));
+    VALGRIND_MAKE_MEM_UNDEFINED(&select, sizeof(select));
+    purify_u512_conditional_assign(value512, selected512, select);
+    VALGRIND_MAKE_MEM_DEFINED(value512, sizeof(value512));
+    VALGRIND_MAKE_MEM_DEFINED(selected512, sizeof(selected512));
+    VALGRIND_MAKE_MEM_DEFINED(&select, sizeof(select));
+    expect(value512[0] == 42,
+           "u512 conditional assignment does not branch on secret inputs");
 
     VALGRIND_MAKE_MEM_UNDEFINED(bytes256, sizeof(bytes256));
     purify_u256_from_bytes_be(value256, bytes256, sizeof(bytes256));

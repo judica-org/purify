@@ -249,6 +249,129 @@ Result<FieldElement> round_challenge(Digest& transcript, std::size_t round,
     return t;
 }
 
+PolynomialTerm geometric_tensor(const FieldElement& x, std::size_t dimension) {
+    PolynomialTerm out{FieldElement::one(), 0, {}};
+    auto power = x;
+    for (std::size_t i = 0; i < log2_dimension(dimension); ++i) {
+        out.factors.push_back(power);
+        power = power * power;
+    }
+    return out;
+}
+
+FieldElement tensor_inner_product(const PolynomialTerm& lhs, const PolynomialTerm& rhs) {
+    assert(lhs.offset == 0 && rhs.offset == 0 && lhs.factors.size() == rhs.factors.size());
+    auto out = lhs.scale * rhs.scale;
+    for (std::size_t i = 0; i < lhs.factors.size(); ++i) {
+        out = out * (FieldElement::one() + lhs.factors[i] * rhs.factors[i]);
+    }
+    return out;
+}
+
+Result<StepProof> prove_ipa(std::span<const PointBytes> basis, std::vector<FieldElement> a,
+                            const PolynomialTerm& weights, const PointBytes& opening_base,
+                            Digest transcript, purify_secp_context* context) {
+    assert(a.size() == basis.size() && is_power_of_two_size(a.size()));
+    assert(weights.offset == 0 && weights.factors.size() == log2_dimension(a.size()));
+    std::vector<FieldElement> b(a.size(), FieldElement::zero());
+    const std::array<PolynomialTerm, 1> tensor{weights};
+    add_coefficients(b, tensor, FieldElement::one());
+    std::vector<PointBytes> generators(basis.begin(), basis.end());
+    StepProof proof;
+    const auto rounds = log2_dimension(a.size());
+    proof.left.reserve(rounds);
+    proof.right.reserve(rounds);
+    for (std::size_t round = 0; round < rounds; ++round) {
+        const auto half = a.size() / 2;
+        std::vector<PointBytes> left_points, right_points;
+        std::vector<FieldElement> left_scalars, right_scalars;
+        left_points.reserve(half + 1);
+        right_points.reserve(half + 1);
+        left_scalars.reserve(half + 1);
+        right_scalars.reserve(half + 1);
+        auto left_inner = FieldElement::zero();
+        auto right_inner = FieldElement::zero();
+        for (std::size_t i = 0; i < half; ++i) {
+            left_points.push_back(generators[half + i]);
+            left_scalars.push_back(a[i]);
+            right_points.push_back(generators[i]);
+            right_scalars.push_back(a[half + i]);
+            left_inner = left_inner + a[i] * b[half + i];
+            right_inner = right_inner + a[half + i] * b[i];
+        }
+        left_points.push_back(opening_base);
+        right_points.push_back(opening_base);
+        left_scalars.push_back(left_inner);
+        right_scalars.push_back(right_inner);
+        PURIFY_ASSIGN_OR_RETURN(auto left, msm(left_points, left_scalars, context),
+                                "accumulation:prove_left");
+        PURIFY_ASSIGN_OR_RETURN(auto right, msm(right_points, right_scalars, context),
+                                "accumulation:prove_right");
+        proof.left.push_back(left);
+        proof.right.push_back(right);
+        PURIFY_ASSIGN_OR_RETURN(auto t, round_challenge(transcript, round, left, right),
+                                "accumulation:prove_round");
+        const auto t_inv = t.inverse();
+        for (std::size_t i = 0; i < half; ++i) {
+            a[i] = t * a[i] + t_inv * a[half + i];
+            b[i] = t_inv * b[i] + t * b[half + i];
+            const std::array<PointBytes, 2> pair{generators[i], generators[half + i]};
+            const std::array<FieldElement, 2> fold_weights{t_inv, t};
+            PURIFY_ASSIGN_OR_RETURN(generators[i], msm(pair, fold_weights, context),
+                                    "accumulation:prove_fold_basis");
+        }
+        a.resize(half);
+        b.resize(half);
+        generators.resize(half);
+    }
+    proof.terminal_scalar = a[0].to_bytes_be();
+    proof.folded_generator = generators[0];
+    return proof;
+}
+
+Result<PolynomialTerm> verify_ipa(std::size_t dimension, const StepProof& proof,
+                                  const PolynomialTerm& weights, const PointBytes& commitment,
+                                  const FieldElement& evaluation, const PointBytes& opening_base,
+                                  Digest transcript, purify_secp_context* context) {
+    assert(is_power_of_two_size(dimension));
+    assert(weights.offset == 0 && weights.factors.size() == log2_dimension(dimension));
+    const auto rounds = log2_dimension(dimension);
+    if (proof.left.size() != rounds || proof.right.size() != rounds) {
+        return unexpected_error(ErrorCode::SizeMismatch, "accumulation:step_proof_rounds");
+    }
+    PURIFY_ASSIGN_OR_RETURN(auto a, FieldElement::try_from_bytes32(proof.terminal_scalar),
+                            "accumulation:step_terminal_scalar");
+    PolynomialTerm folded{FieldElement::one(), 0, {}};
+    folded.factors.resize(rounds);
+    std::vector<PointBytes> points{commitment};
+    std::vector<FieldElement> scalars{FieldElement::one()};
+    for (std::size_t round = 0; round < rounds; ++round) {
+        PURIFY_ASSIGN_OR_RETURN(auto t, round_challenge(transcript, round,
+                                                        proof.left[round], proof.right[round]),
+                                "accumulation:verify_round");
+        const auto t_inv = t.inverse();
+        const auto t_squared = t * t;
+        folded.scale = folded.scale * t_inv;
+        // Half-splitting uses the most significant index bit first.
+        folded.factors[rounds - 1 - round] = t_squared;
+        points.push_back(proof.left[round]);
+        scalars.push_back(t_squared);
+        points.push_back(proof.right[round]);
+        scalars.push_back(t_inv * t_inv);
+    }
+    const auto b_final = tensor_inner_product(weights, folded);
+    points.push_back(opening_base);
+    scalars.push_back(evaluation - a * b_final);
+    points.push_back(proof.folded_generator);
+    scalars.push_back(a.negate());
+    PURIFY_ASSIGN_OR_RETURN(auto residual, msm(points, scalars, context),
+                            "accumulation:verify_equation");
+    if (residual != PointBytes{}) {
+        return unexpected_error(ErrorCode::EquationMismatch, "accumulation:step_equation");
+    }
+    return folded;
+}
+
 } // namespace
 
 Result<Basis> Basis::create(std::size_t n_vec_len, std::span<const ScalarBytes> c_vec,
@@ -385,59 +508,10 @@ Result<StepProof> prove_step(const Basis& basis, std::span<const PendingClaim> c
         add_coefficients(a, claim.polynomial(), weight);
         weight = weight * state.beta;
     }
-    std::vector<FieldElement> b(basis.dimension());
-    b[0] = FieldElement::one();
-    for (std::size_t i = 1; i < b.size(); ++i) b[i] = b[i - 1] * state.x;
-    auto generators = basis.points();
-    StepProof proof;
-    const auto rounds = log2_dimension(basis.dimension());
-    proof.left.reserve(rounds);
-    proof.right.reserve(rounds);
-    for (std::size_t round = 0; round < rounds; ++round) {
-        const auto half = a.size() / 2;
-        std::vector<PointBytes> left_points, right_points;
-        std::vector<FieldElement> left_scalars, right_scalars;
-        left_points.reserve(half + 1);
-        right_points.reserve(half + 1);
-        left_scalars.reserve(half + 1);
-        right_scalars.reserve(half + 1);
-        auto left_inner = FieldElement::zero();
-        auto right_inner = FieldElement::zero();
-        for (std::size_t i = 0; i < half; ++i) {
-            left_points.push_back(generators[half + i]);
-            left_scalars.push_back(a[i]);
-            right_points.push_back(generators[i]);
-            right_scalars.push_back(a[half + i]);
-            left_inner = left_inner + a[i] * b[half + i];
-            right_inner = right_inner + a[half + i] * b[i];
-        }
-        left_points.push_back(state.opening_base);
-        right_points.push_back(state.opening_base);
-        left_scalars.push_back(left_inner);
-        right_scalars.push_back(right_inner);
-        PURIFY_ASSIGN_OR_RETURN(auto left, msm(left_points, left_scalars, context),
-                                "accumulation:prove_left");
-        PURIFY_ASSIGN_OR_RETURN(auto right, msm(right_points, right_scalars, context),
-                                "accumulation:prove_right");
-        proof.left.push_back(left);
-        proof.right.push_back(right);
-        PURIFY_ASSIGN_OR_RETURN(auto t, round_challenge(state.transcript, round, left, right),
-                                "accumulation:prove_round");
-        const auto t_inv = t.inverse();
-        for (std::size_t i = 0; i < half; ++i) {
-            a[i] = t * a[i] + t_inv * a[half + i];
-            b[i] = t_inv * b[i] + t * b[half + i];
-            const std::array<PointBytes, 2> pair{generators[i], generators[half + i]};
-            const std::array<FieldElement, 2> weights{t_inv, t};
-            PURIFY_ASSIGN_OR_RETURN(generators[i], msm(pair, weights, context),
-                                    "accumulation:prove_fold_basis");
-        }
-        a.resize(half);
-        b.resize(half);
-        generators.resize(half);
-    }
-    proof.terminal_scalar = a[0].to_bytes_be();
-    proof.folded_generator = generators[0];
+    const auto weights = geometric_tensor(state.x, basis.dimension());
+    PURIFY_ASSIGN_OR_RETURN(auto proof,
+        prove_ipa(basis.points(), std::move(a), weights, state.opening_base, state.transcript, context),
+        "accumulation:prove_ipa");
     // Check the aggregated short equation before returning a generated proof.
     // This needs no additional fixed-basis MSM; batching is probabilistic.
     PURIFY_ASSIGN_OR_RETURN(auto pending, verify_step(basis, claims, proof, context),
@@ -453,39 +527,15 @@ Result<PendingClaim> verify_step(const Basis& basis, std::span<const PendingClai
     if (proof.left.size() != rounds || proof.right.size() != rounds) {
         return unexpected_error(ErrorCode::SizeMismatch, "accumulation:step_proof_rounds");
     }
-    PURIFY_ASSIGN_OR_RETURN(auto a, FieldElement::try_from_bytes32(proof.terminal_scalar),
+    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar),
                             "accumulation:step_terminal_scalar");
+    (void)terminal;
     PURIFY_ASSIGN_OR_RETURN(auto state, make_step_context(basis, claims, context),
                             "accumulation:verify_context");
-    PolynomialTerm folded{FieldElement::one(), 0, {}};
-    folded.factors.resize(rounds);
-    std::vector<PointBytes> points{state.commitment};
-    std::vector<FieldElement> scalars{FieldElement::one()};
-    for (std::size_t round = 0; round < rounds; ++round) {
-        PURIFY_ASSIGN_OR_RETURN(auto t, round_challenge(state.transcript, round,
-                                                        proof.left[round], proof.right[round]),
-                                "accumulation:verify_round");
-        const auto t_inv = t.inverse();
-        const auto t_squared = t * t;
-        folded.scale = folded.scale * t_inv;
-        // Half-splitting uses the most significant index bit first.
-        folded.factors[rounds - 1 - round] = t_squared;
-        points.push_back(proof.left[round]);
-        scalars.push_back(t_squared);
-        points.push_back(proof.right[round]);
-        scalars.push_back(t_inv * t_inv);
-    }
-    const std::array<PolynomialTerm, 1> polynomial{folded};
-    const auto b_final = evaluate(polynomial, state.x);
-    points.push_back(state.opening_base);
-    scalars.push_back(state.y - a * b_final);
-    points.push_back(proof.folded_generator);
-    scalars.push_back(a.negate());
-    PURIFY_ASSIGN_OR_RETURN(auto residual, msm(points, scalars, context),
-                            "accumulation:verify_equation");
-    if (residual != PointBytes{}) {
-        return unexpected_error(ErrorCode::EquationMismatch, "accumulation:step_equation");
-    }
+    const auto weights = geometric_tensor(state.x, basis.dimension());
+    PURIFY_ASSIGN_OR_RETURN(auto folded,
+        verify_ipa(basis.dimension(), proof, weights, state.commitment, state.y,
+                   state.opening_base, state.transcript, context), "accumulation:verify_ipa");
     return PendingClaim(basis.digest(), proof.folded_generator, {std::move(folded)});
 }
 

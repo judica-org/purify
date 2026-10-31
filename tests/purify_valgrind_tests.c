@@ -18,6 +18,7 @@
 #endif
 
 #include "../src/core/curve.h"
+#include "../src/core/core.h"
 #include "../src/core/field.h"
 
 void purify_curve_mul_secret_ladder_only(purify_complete_projective_point* out, const purify_curve* curve,
@@ -160,6 +161,117 @@ static void test_valid_packed_secret_path_consttime(const purify_curve* curve1, 
     VALGRIND_MAKE_MEM_DEFINED(&public2, sizeof(public2));
 }
 
+static void test_uint_helpers_consttime(void) {
+    unsigned char bytes256[32];
+    unsigned char bytes320[40];
+    unsigned char bytes512[64];
+    uint64_t value256[4] = {UINT64_C(0xffffffffffffffff),
+                            UINT64_C(0x123456789abcdef0),
+                            UINT64_C(0), UINT64_C(0)};
+    uint64_t value320[5] = {UINT64_C(0xffffffffffffffff),
+                            UINT64_C(0x123456789abcdef0),
+                            UINT64_C(0), UINT64_C(0), UINT64_C(0)};
+    uint64_t value512[8] = {UINT64_C(0xffffffffffffffff),
+                            UINT64_C(0x123456789abcdef0),
+                            UINT64_C(0), UINT64_C(0), UINT64_C(0),
+                            UINT64_C(0), UINT64_C(0), UINT64_C(0)};
+    int result;
+    size_t i;
+
+    for (i = 0; i < sizeof(bytes256); ++i) {
+        bytes256[i] = (unsigned char)(i * 7u + 3u);
+    }
+    for (i = 0; i < sizeof(bytes320); ++i) {
+        bytes320[i] = (unsigned char)(i * 11u + 5u);
+    }
+    for (i = 0; i < sizeof(bytes512); ++i) {
+        bytes512[i] = (unsigned char)(i * 13u + 9u);
+    }
+
+    VALGRIND_MAKE_MEM_UNDEFINED(value256, sizeof(value256));
+    result = purify_u256_is_zero(value256);
+    VALGRIND_MAKE_MEM_DEFINED(value256, sizeof(value256));
+    VALGRIND_MAKE_MEM_DEFINED(&result, sizeof(result));
+    expect(result == 0, "u256 is_zero scans a secret value without branching");
+
+    VALGRIND_MAKE_MEM_UNDEFINED(value320, sizeof(value320));
+    result = purify_u320_is_zero(value320);
+    VALGRIND_MAKE_MEM_DEFINED(value320, sizeof(value320));
+    VALGRIND_MAKE_MEM_DEFINED(&result, sizeof(result));
+    expect(result == 0, "u320 is_zero scans a secret value without branching");
+
+    VALGRIND_MAKE_MEM_UNDEFINED(value512, sizeof(value512));
+    result = purify_u512_is_zero(value512);
+    VALGRIND_MAKE_MEM_DEFINED(value512, sizeof(value512));
+    VALGRIND_MAKE_MEM_DEFINED(&result, sizeof(result));
+    expect(result == 0, "u512 is_zero scans a secret value without branching");
+
+    VALGRIND_MAKE_MEM_UNDEFINED(value256, sizeof(value256));
+    result = purify_u256_try_add_small(value256, 1u);
+    VALGRIND_MAKE_MEM_DEFINED(value256, sizeof(value256));
+    VALGRIND_MAKE_MEM_DEFINED(&result, sizeof(result));
+    expect(result != 0 && value256[0] == 0 &&
+               value256[1] == UINT64_C(0x123456789abcdef1),
+           "u256 add_small propagates a secret carry in fixed rounds");
+
+    VALGRIND_MAKE_MEM_UNDEFINED(value320, sizeof(value320));
+    result = purify_u320_try_add_small(value320, 1u);
+    VALGRIND_MAKE_MEM_DEFINED(value320, sizeof(value320));
+    VALGRIND_MAKE_MEM_DEFINED(&result, sizeof(result));
+    expect(result != 0 && value320[0] == 0 &&
+               value320[1] == UINT64_C(0x123456789abcdef1),
+           "u320 add_small propagates a secret carry in fixed rounds");
+
+    VALGRIND_MAKE_MEM_UNDEFINED(value512, sizeof(value512));
+    result = purify_u512_try_add_small(value512, 1u);
+    VALGRIND_MAKE_MEM_DEFINED(value512, sizeof(value512));
+    VALGRIND_MAKE_MEM_DEFINED(&result, sizeof(result));
+    expect(result != 0 && value512[0] == 0 &&
+               value512[1] == UINT64_C(0x123456789abcdef1),
+           "u512 add_small propagates a secret carry in fixed rounds");
+
+    VALGRIND_MAKE_MEM_UNDEFINED(bytes256, sizeof(bytes256));
+    purify_u256_from_bytes_be(value256, bytes256, sizeof(bytes256));
+    VALGRIND_MAKE_MEM_DEFINED(bytes256, sizeof(bytes256));
+    VALGRIND_MAKE_MEM_DEFINED(value256, sizeof(value256));
+
+    VALGRIND_MAKE_MEM_UNDEFINED(bytes320, sizeof(bytes320));
+    purify_u320_from_bytes_be(value320, bytes320, sizeof(bytes320));
+    VALGRIND_MAKE_MEM_DEFINED(bytes320, sizeof(bytes320));
+    VALGRIND_MAKE_MEM_DEFINED(value320, sizeof(value320));
+
+    VALGRIND_MAKE_MEM_UNDEFINED(bytes512, sizeof(bytes512));
+    purify_u512_from_bytes_be(value512, bytes512, sizeof(bytes512));
+    VALGRIND_MAKE_MEM_DEFINED(bytes512, sizeof(bytes512));
+    VALGRIND_MAKE_MEM_DEFINED(value512, sizeof(value512));
+}
+
+static void test_secret_comparison_consttime(void) {
+    unsigned char lhs[PURIFY_SECRET_KEY_BYTES];
+    unsigned char rhs[PURIFY_SECRET_KEY_BYTES];
+    int comparison;
+    purify_error_code validation;
+
+    memset(lhs, 0x19, sizeof(lhs));
+    memset(rhs, 0xa7, sizeof(rhs));
+    VALGRIND_MAKE_MEM_UNDEFINED(lhs, sizeof(lhs));
+    VALGRIND_MAKE_MEM_UNDEFINED(rhs, sizeof(rhs));
+    comparison = purify_core_compare_be_test(lhs, rhs, sizeof(lhs));
+    VALGRIND_MAKE_MEM_DEFINED(lhs, sizeof(lhs));
+    VALGRIND_MAKE_MEM_DEFINED(rhs, sizeof(rhs));
+    VALGRIND_MAKE_MEM_DEFINED(&comparison, sizeof(comparison));
+    expect(comparison < 0,
+           "big-endian secret comparison scans every byte without branching");
+
+    memset(lhs, 0, sizeof(lhs));
+    VALGRIND_MAKE_MEM_UNDEFINED(lhs + 1, sizeof(lhs) - 1u);
+    validation = purify_validate_secret_key(lhs);
+    VALGRIND_MAKE_MEM_DEFINED(lhs + 1, sizeof(lhs) - 1u);
+    VALGRIND_MAKE_MEM_DEFINED(&validation, sizeof(validation));
+    expect(validation == PURIFY_ERROR_OK,
+           "secret-key validation does not branch on trailing secret bytes");
+}
+
 static void run_divmod_tests(void) {
     test_divmod_secret_numerator_consttime();
 }
@@ -182,6 +294,11 @@ static void run_packed_secret_tests(const purify_curve* curve1, const purify_cur
     test_valid_packed_secret_path_consttime(curve1, curve2);
 }
 
+static void run_uint_tests(void) {
+    test_uint_helpers_consttime();
+    test_secret_comparison_consttime();
+}
+
 int main(int argc, char** argv) {
     purify_curve curve1;
     purify_curve curve2;
@@ -195,6 +312,7 @@ int main(int argc, char** argv) {
         run_affine_tests(&curve1, &curve2);
         run_inverse_tests();
         run_packed_secret_tests(&curve1, &curve2);
+        run_uint_tests();
     } else if (strcmp(argv[1], "divmod") == 0) {
         run_divmod_tests();
     } else if (strcmp(argv[1], "ladder") == 0) {
@@ -205,6 +323,8 @@ int main(int argc, char** argv) {
         run_inverse_tests();
     } else if (strcmp(argv[1], "packed_secret") == 0) {
         run_packed_secret_tests(&curve1, &curve2);
+    } else if (strcmp(argv[1], "uint") == 0) {
+        run_uint_tests();
     } else {
         expect(0, "unknown valgrind test selector");
     }

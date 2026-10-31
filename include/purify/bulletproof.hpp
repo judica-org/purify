@@ -258,7 +258,7 @@ struct NativeBulletproofCircuit {
     /** @brief Reinitializes the circuit shape and clears all accumulated constraints. */
     void resize(std::size_t gates, std::size_t commitments, std::size_t bits = 0);
 
-    /** @brief Returns true when the sparse matrix vectors match the declared circuit dimensions. */
+    /** @brief Checks declared dimensions and every sparse constraint index. */
     bool has_valid_shape() const;
 
     /** @brief Appends a new linear constraint constant term and returns its index. */

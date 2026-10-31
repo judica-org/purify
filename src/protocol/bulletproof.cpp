@@ -147,10 +147,10 @@ std::uint32_t narrow_symbol_index(std::size_t index) {
 
 struct ResolvedValues {
     WitnessAssignments witness;
-    std::vector<std::optional<FieldElement>> left;
-    std::vector<std::optional<FieldElement>> right;
-    std::vector<std::optional<FieldElement>> output;
-    std::vector<std::optional<FieldElement>> commitment;
+    WitnessAssignments left;
+    WitnessAssignments right;
+    WitnessAssignments output;
+    WitnessAssignments commitment;
 
     ResolvedValues(std::size_t witness_count, std::size_t gate_count, std::size_t commitment_count)
         : witness(witness_count), left(gate_count), right(gate_count), output(gate_count), commitment(commitment_count) {}
@@ -2302,7 +2302,7 @@ Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data_impl(co
     assignment.right.reserve(n_muls_);
     assignment.output.reserve(n_muls_);
     assignment.commitments.reserve(n_commitments_);
-    auto read_column = [&](const std::vector<std::optional<FieldElement>>& source,
+    auto read_column = [&](const WitnessAssignments& source,
                            std::vector<FieldElement>& column) -> Status {
         for (const auto& value : source) {
             if (!value.has_value()) {

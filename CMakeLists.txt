@@ -536,6 +536,14 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(construction_receipt)
     purify_add_cpp_suite_test(receipt_sha256)
 
+    # These proof experiments saturate sanitizer runners. Keep their work
+    # out of the property suites' bounded execution time.
+    set_tests_properties(
+        purify.tests.construction_receipt
+        purify.tests.receipt_sha256
+        PROPERTIES RUN_SERIAL TRUE
+    )
+
     add_executable(purify_property_tests
         tests/purify_property_tests.cpp
     )

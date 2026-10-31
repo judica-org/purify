@@ -9,6 +9,8 @@
 
 #include "purify/expr.hpp"
 
+#include "purify/secret.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -51,6 +53,13 @@ std::string make_symbol_string(std::string_view prefix, std::uint32_t index, std
 }  // namespace
 
 namespace purify {
+
+Transcript::~Transcript() {
+    static_assert(std::is_trivially_destructible_v<
+                  WitnessAssignments::value_type>);
+    detail::secure_clear_bytes(
+        varmap_.data(), varmap_.size() * sizeof(varmap_.front()));
+}
 
 Symbol Symbol::witness(std::uint32_t index) {
     return {SymbolKind::Witness, index};

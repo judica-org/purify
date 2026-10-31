@@ -31,13 +31,15 @@ namespace purify {
 using BulletproofScalarBytes = std::array<unsigned char, 32>;
 using BulletproofPointBytes = std::array<unsigned char, 33>;
 using BulletproofGeneratorBytes = std::array<unsigned char, 33>;
+using BulletproofWitnessColumn =
+    std::vector<FieldElement, detail::SecureAllocator<FieldElement>>;
 
 /** @brief Columnar witness assignment compatible with the native Bulletproof circuit layout. */
 struct BulletproofAssignmentData {
-    std::vector<FieldElement> left;
-    std::vector<FieldElement> right;
-    std::vector<FieldElement> output;
-    std::vector<FieldElement> commitments;
+    BulletproofWitnessColumn left;
+    BulletproofWitnessColumn right;
+    BulletproofWitnessColumn output;
+    BulletproofWitnessColumn commitments;
 
     /** @brief Serializes the witness columns in the legacy assignment blob format. */
     Result<Bytes> serialize() const;

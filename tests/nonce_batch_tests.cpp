@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <type_traits>
 #include <vector>
 
 #include "purify.hpp"
@@ -64,7 +65,10 @@ void test_batch_relation(TestContext& ctx) {
 
     ctx.expect(circuit->n_commitments == fixture.groups.size(),
                "each coalition/topic retains a distinct output commitment");
-    ctx.expect(assignment->commitments == fixture.totals,
+    ctx.expect(assignment->commitments.size() == fixture.totals.size() &&
+                   std::equal(assignment->commitments.begin(),
+                              assignment->commitments.end(),
+                              fixture.totals.begin()),
                "each batch output equals only its own coalition/topic sum");
     ctx.expect(circuit->evaluate(*assignment), "multi-topic multi-coalition witness satisfies relation");
 
@@ -148,10 +152,39 @@ void test_batch_inputs(TestContext& ctx) {
                  "duplicate members within a coalition reject");
 }
 
+void test_witness_storage_lifecycle(TestContext& ctx) {
+    static_assert(std::is_same_v<
+                  purify::BulletproofWitnessColumn::allocator_type,
+                  purify::detail::SecureAllocator<purify::FieldElement>>);
+
+    purify::BulletproofAssignmentData assignment;
+    assignment.left.push_back(purify::FieldElement::one());
+    assignment.right.push_back(purify::FieldElement::one());
+    assignment.output.push_back(purify::FieldElement::one());
+    assignment.commitments.push_back(purify::FieldElement::one());
+
+    purify::BulletproofWitnessData source{
+        purify::UInt512::zero(), purify::FieldElement::one(),
+        std::move(assignment)};
+    purify::BulletproofWitnessData destination(std::move(source));
+    ctx.expect(source.output == purify::FieldElement::zero(),
+               "moving a witness clears the source output scalar");
+    ctx.expect(destination.output == purify::FieldElement::one(),
+               "moving a witness preserves the destination output scalar");
+
+    auto copied = destination.assignment;
+    ctx.expect(copied.left == destination.assignment.left &&
+                   copied.right == destination.assignment.right &&
+                   copied.output == destination.assignment.output &&
+                   copied.commitments == destination.assignment.commitments,
+               "copying an assignment preserves secure witness columns");
+}
+
 } // namespace
 
 void run_nonce_batch_tests(TestContext& ctx) {
     // All witness columns are held by this process; no MPC is exercised.
     test_batch_relation(ctx);
     test_batch_inputs(ctx);
+    test_witness_storage_lifecycle(ctx);
 }

@@ -54,6 +54,10 @@ struct BenchConfig {
 
 /** @brief Precomputed benchmark fixture shared across benchmark cases. */
 struct PurifyBenchCase {
+    PurifyBenchCase()
+        : witness(purify::UInt512{}, FieldElement::zero(),
+                  purify::BulletproofAssignmentData{}) {}
+
     purify::SecpContextPtr secp_context;
     Bytes message;
     BulletproofWitnessData witness;

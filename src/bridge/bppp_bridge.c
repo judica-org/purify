@@ -38,6 +38,9 @@ struct purify_secp_context {
 };
 
 static void purify_bridge_secure_clear(void* data, size_t size);
+static int purify_bridge_memeq_const(const unsigned char* lhs,
+                                     const unsigned char* rhs,
+                                     size_t size);
 
 static secp256k1_context* purify_context_handle(const purify_secp_context* context) {
     return context != NULL ? context->ctx : NULL;
@@ -640,17 +643,42 @@ void purify_hmac_sha256(unsigned char output32[32],
     secp256k1_hmac_sha256_clear(&hmac);
 }
 
+static int purify_bip340_canonicalize_scalar(
+    const secp256k1_context* ctx, unsigned char scalar32[32],
+    unsigned char xonly_pubkey32[32]) {
+    secp256k1_scalar scalar = {0};
+    secp256k1_ge point;
+    secp256k1_gej pointj;
+    int overflow = 0;
+    int ok = 0;
+
+    secp256k1_scalar_set_b32(&scalar, scalar32, &overflow);
+    if (overflow || secp256k1_scalar_is_zero(&scalar)) {
+        goto cleanup;
+    }
+    secp256k1_ecmult_gen(&ctx->ecmult_gen_ctx, &pointj, &scalar);
+    secp256k1_ge_set_gej(&point, &pointj);
+    secp256k1_fe_normalize(&point.x);
+    secp256k1_fe_normalize(&point.y);
+    secp256k1_scalar_cond_negate(
+        &scalar, secp256k1_fe_is_odd(&point.y));
+    secp256k1_scalar_get_b32(scalar32, &scalar);
+    secp256k1_fe_get_b32(xonly_pubkey32, &point.x);
+    ok = 1;
+
+cleanup:
+    secp256k1_scalar_clear(&scalar);
+    purify_bridge_secure_clear(&point, sizeof(point));
+    purify_bridge_secure_clear(&pointj, sizeof(pointj));
+    return ok;
+}
+
 int purify_bip340_key_from_seckey(purify_secp_context* context,
                                   unsigned char seckey32[32],
                                   unsigned char xonly_pubkey32[32]) {
     secp256k1_context* ctx = purify_context_handle(context);
-    secp256k1_keypair keypair;
-    secp256k1_xonly_pubkey xonly;
-    int parity = 0;
     int ok = 0;
 
-    memset(&keypair, 0, sizeof(keypair));
-    memset(&xonly, 0, sizeof(xonly));
     if (xonly_pubkey32 != NULL) {
         memset(xonly_pubkey32, 0, 32);
     }
@@ -659,23 +687,12 @@ int purify_bip340_key_from_seckey(purify_secp_context* context,
         return 0;
     }
 
-    ok = secp256k1_keypair_create(ctx, &keypair, seckey32);
-    if (ok) {
-        ok = secp256k1_keypair_xonly_pub(ctx, &xonly, &parity, &keypair);
-    }
-    if (ok) {
-        ok = secp256k1_xonly_pubkey_serialize(ctx, xonly_pubkey32, &xonly);
-    }
-    if (ok && parity != 0) {
-        ok = secp256k1_ec_seckey_negate(ctx, seckey32);
-    }
+    ok = purify_bip340_canonicalize_scalar(
+        ctx, seckey32, xonly_pubkey32);
     if (!ok) {
         purify_bridge_secure_clear(seckey32, 32);
         memset(xonly_pubkey32, 0, 32);
     }
-
-    purify_bridge_secure_clear(&keypair, sizeof(keypair));
-    purify_bridge_secure_clear(&xonly, sizeof(xonly));
     return ok;
 }
 
@@ -683,13 +700,8 @@ int purify_bip340_nonce_from_scalar(purify_secp_context* context,
                                     unsigned char scalar32[32],
                                     unsigned char xonly_nonce32[32]) {
     secp256k1_context* ctx = purify_context_handle(context);
-    secp256k1_pubkey pubkey;
-    secp256k1_xonly_pubkey xonly;
-    int parity = 0;
     int ok = 0;
 
-    memset(&pubkey, 0, sizeof(pubkey));
-    memset(&xonly, 0, sizeof(xonly));
     if (xonly_nonce32 != NULL) {
         memset(xonly_nonce32, 0, 32);
     }
@@ -698,23 +710,12 @@ int purify_bip340_nonce_from_scalar(purify_secp_context* context,
         return 0;
     }
 
-    ok = secp256k1_ec_pubkey_create(ctx, &pubkey, scalar32);
-    if (ok) {
-        ok = secp256k1_xonly_pubkey_from_pubkey(ctx, &xonly, &parity, &pubkey);
-    }
-    if (ok) {
-        ok = secp256k1_xonly_pubkey_serialize(ctx, xonly_nonce32, &xonly);
-    }
-    if (ok && parity != 0) {
-        ok = secp256k1_ec_seckey_negate(ctx, scalar32);
-    }
+    ok = purify_bip340_canonicalize_scalar(
+        ctx, scalar32, xonly_nonce32);
     if (!ok) {
         purify_bridge_secure_clear(scalar32, 32);
         memset(xonly_nonce32, 0, 32);
     }
-
-    purify_bridge_secure_clear(&pubkey, sizeof(pubkey));
-    purify_bridge_secure_clear(&xonly, sizeof(xonly));
     return ok;
 }
 
@@ -851,7 +852,8 @@ int purify_bip340_sign_with_fixed_nonce(purify_secp_context* context,
     memcpy(canonical_nonce32, nonce32, 32);
     ok = purify_bip340_nonce_from_scalar(context, canonical_nonce32, xonly_nonce32);
     if (ok) {
-        ok = secp256k1_memcmp_var(canonical_nonce32, nonce32, 32) == 0;
+        ok = purify_bridge_memeq_const(
+            canonical_nonce32, nonce32, sizeof(canonical_nonce32));
     }
     secp256k1_scalar_set_b32(&nonce_scalar, nonce32, &overflow);
     if (ok && !overflow && !secp256k1_scalar_is_zero(&nonce_scalar)) {
@@ -918,9 +920,24 @@ static int purify_parse_scalar_array(const unsigned char* input32, size_t count,
 }
 
 static int purify_serialize_point(unsigned char out33[33], secp256k1_ge* point) {
-    secp256k1_fe_normalize_var(&point->x);
-    secp256k1_fe_normalize_var(&point->y);
+    /* This helper also serializes prover commitments derived from secret
+     * witnesses. Keep normalization constant-time; serialization is the
+     * deliberate declassification boundary. */
+    secp256k1_fe_normalize(&point->x);
+    secp256k1_fe_normalize(&point->y);
     return secp256k1_bppp_serialize_pt(out33, point);
+}
+
+static int purify_bridge_memeq_const(const unsigned char* lhs,
+                                     const unsigned char* rhs,
+                                     size_t size) {
+    volatile unsigned char difference = 0;
+    size_t i;
+
+    for (i = 0; i < size; ++i) {
+        difference |= lhs[i] ^ rhs[i];
+    }
+    return difference == 0;
 }
 
 static int purify_parse_fast_scalar(const unsigned char input32[32], secp256k1_fast_scalar* scalar) {

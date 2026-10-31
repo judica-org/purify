@@ -180,7 +180,10 @@ void test_setup_and_recovery(TestContext& ctx) {
         ctx.expect(*owned == *unlocked && owned_point && unlocked_point && *owned_point == *unlocked_point,
                    "extracted coalition scalar unlocks each exact leaf scalar and full point");
     }
-    const auto proof_bytes = proof->proof.size() + proof->a_commitment.size() + proof->s_commitment.size() + proof->t2.size();
+    const auto proof_bytes = proof->proof.size() + proof->a_commitment.size() +
+        proof->s_commitment.size() + proof->t2.size() +
+        proof->public_commitment_dlog_nonce.size() +
+        proof->public_commitment_dlog_response.size();
     std::cout << "canonical_root_honest_setup gates=" << circuit->n_gates << " constraints=" << circuit->c.size()
               << " inner_proof_bytes=" << proof->proof.size() << " complete_proof_bytes=" << proof_bytes
               << " root_bytes=64 total_with_root_and_full_Q=" << proof_bytes + 64 + key->size()

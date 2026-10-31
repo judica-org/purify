@@ -175,7 +175,10 @@ void test_companion_scalar_escrow(TestContext& ctx) {
         expect_ok(ctx, values, "boundary witness constructs");
         if (relation && values) ctx.expect(relation->evaluate(*values), "minimum and maximum canonical payloads satisfy the native relation");
     }
-    const auto proof_bytes = proof->proof.size() + proof->a_commitment.size() + proof->s_commitment.size() + proof->t2.size();
+    const auto proof_bytes = proof->proof.size() + proof->a_commitment.size() +
+        proof->s_commitment.size() + proof->t2.size() +
+        proof->public_commitment_dlog_nonce.size() +
+        proof->public_commitment_dlog_response.size();
     std::cout << "companion_scalar_escrow gates=" << circuit->n_gates << " constraints=" << circuit->c.size()
               << " inner_proof_bytes=" << proof->proof.size() << " complete_proof_bytes=" << proof_bytes
               << " ciphertext_bytes=192 bridge_bytes=" << proof_bytes + 192

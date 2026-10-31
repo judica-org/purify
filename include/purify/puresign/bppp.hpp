@@ -10,6 +10,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <utility>
@@ -253,8 +254,10 @@ struct TopicProofCache {
 };
 
 struct NonceProof {
-    // Version 2 binds the factored public-data BP++ norm transcript.
-    static constexpr unsigned char kSerializationVersion = 2;
+    // Version 3 commits raw circuit coordinates before deriving fold weights.
+    static constexpr unsigned char kSerializationVersion = 3;
+    static constexpr std::size_t kInnerProofSize = 844;
+    static constexpr std::size_t kSerializedSize = 228 + kInnerProofSize;
 
     Nonce nonce;
     bppp::PointBytes commitment_point{};
@@ -266,7 +269,9 @@ struct NonceProof {
 };
 
 struct ProvenSignature {
-    static constexpr unsigned char kSerializationVersion = 1;
+    static constexpr unsigned char kSerializationVersion = 2;
+    static constexpr std::size_t kSerializedSize =
+        1 + NonceProof::kSerializedSize + Signature::kSerializedSize;
 
     Signature signature;
     NonceProof nonce_proof;

@@ -227,9 +227,15 @@ norm argument has related folding structure, but its smaller proofs and support
 for joint aggregation do not by themselves specify a public accumulator for
 completed BP++ circuit proofs. Adapting the accumulation route requires an exact
 reduction/accumulator relation, transcript, final decision procedure and security
-argument for that relation. Neither our current code nor the workload profiler
-implements it. Batch verification that still needs all child proofs is also
-not a compressed construction receipt.
+argument for that relation. The native
+[norm accumulator](norm-accumulation.md) now implements partial norm
+verification, public coefficient openings for varying `c`, accumulation
+transitions and a mandatory final decision. Its API requires all child
+statements and transition transcripts. It does not implement their recursive
+authentication or repair the outer-circuit wrapper, and the concrete protocol
+still requires cryptographic review. The workload profiler does not model
+those recursive transitions. Neither native accumulation nor batch verification
+alone is a compressed construction receipt.
 
 Before selecting a replacement backend on cost grounds, evaluate this route
 alongside direct recursive verification. Account separately for the recursive

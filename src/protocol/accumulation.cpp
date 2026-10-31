@@ -9,13 +9,17 @@
 namespace purify::bppp::accumulation {
 namespace {
 
-const TaggedHash kBasisHash("Purify/BPPP/NormAccumBasisV1");
+const TaggedHash kBasisHash("Purify/BPPP/NormAccumBasisV2");
 const TaggedHash kClaimsHash("Purify/BPPP/AccumClaimsV1");
 const TaggedHash kBatchHash("Purify/BPPP/AccumBatchV1");
 const TaggedHash kEvaluationHash("Purify/BPPP/AccumEvaluationV1");
 const TaggedHash kOpeningBaseHash("Purify/BPPP/AccumOpeningBaseV1");
 const TaggedHash kOpeningHash("Purify/BPPP/AccumOpeningV1");
 const TaggedHash kRoundHash("Purify/BPPP/AccumRoundV1");
+const TaggedHash kNormBindingHash("Purify/BPPP/NormReduction/StatementV1");
+const TaggedHash kNormOpeningBaseHash("Purify/BPPP/NormReduction/OpeningBaseV1");
+const TaggedHash kNormOpeningHash("Purify/BPPP/NormReduction/OpeningV1");
+const TaggedHash kNormFusionHash("Purify/BPPP/NormReduction/FusionV1");
 
 void append_size(Bytes& out, std::size_t value) {
     static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
@@ -59,22 +63,46 @@ Status validate_basis(const Basis& basis) {
     std::size_t dimension = 0;
     std::size_t generators = 0;
     if (!is_power_of_two_size(basis.n_vec_len()) ||
-        !is_power_of_two_size(basis.c_vec().size()) ||
-        basis.c_vec().size() > basis.n_vec_len() ||
+        !is_power_of_two_size(basis.l_vec_len()) ||
+        basis.l_vec_len() > basis.n_vec_len() ||
         !checked_mul_size(basis.n_vec_len(), 2, dimension) ||
-        !checked_add_size(basis.n_vec_len(), basis.c_vec().size(), generators) ||
+        !checked_add_size(basis.n_vec_len(), basis.l_vec_len(), generators) ||
         basis.dimension() != dimension || basis.norm_generators().size() != generators) {
         return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:basis_shape");
     }
     return {};
 }
 
+Status validate_prepared(const Basis& basis, const PreparedNorm& norm) {
+    if (norm.basis_digest() != basis.digest()) {
+        return unexpected_error(ErrorCode::BindingMismatch, "accumulation:prepared_basis");
+    }
+    const auto& g = norm.polynomial()[0];
+    const auto& h = norm.polynomial()[1];
+    if (norm.c_vec().size() != basis.l_vec_len() || g.offset != 0 || h.offset != basis.n_vec_len() ||
+        g.factors.size() != log2_dimension(basis.n_vec_len()) ||
+        h.factors.size() != log2_dimension(basis.l_vec_len())) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:prepared_shape");
+    }
+    return {};
+}
+
+void append_polynomial(Bytes& encoded, std::span<const PolynomialTerm> polynomial) {
+    append_size(encoded, polynomial.size());
+    for (const auto& term : polynomial) {
+        append(encoded, term.scale.to_bytes_be());
+        append_size(encoded, term.offset);
+        append_size(encoded, term.factors.size());
+        for (const auto& factor : term.factors) append(encoded, factor.to_bytes_be());
+    }
+}
+
 Status validate_claim(const Basis& basis, const PendingClaim& claim) {
     if (claim.basis_digest() != basis.digest()) {
         return unexpected_error(ErrorCode::BindingMismatch, "accumulation:claim_basis");
     }
-    // The only constructors produce a norm's two terms or an IPA's one term.
-    if (claim.polynomial().empty() || claim.polynomial().size() > 2) {
+    // A reduced norm has three coupled terms; an accumulated IPA has one.
+    if (claim.polynomial().empty() || claim.polynomial().size() > 3) {
         return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:polynomial_shape");
     }
     for (const auto& term : claim.polynomial()) {
@@ -137,12 +165,14 @@ Result<PointBytes> msm(std::span<const PointBytes> points, std::span<const Field
     return out;
 }
 
-Status validate_step_encoding(const Basis& basis, const StepProof& proof,
+Status validate_ipa_encoding(std::size_t dimension, const StepProof& proof,
                               purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
                             "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    const auto rounds = log2_dimension(basis.dimension());
+    if (!is_power_of_two_size(dimension)) {
+        return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:ipa_encoding_dimension");
+    }
+    const auto rounds = log2_dimension(dimension);
     if (proof.left.size() != rounds || proof.right.size() != rounds) {
         return unexpected_error(ErrorCode::SizeMismatch, "accumulation:step_encoding_rounds");
     }
@@ -163,6 +193,38 @@ Status validate_step_encoding(const Basis& basis, const StepProof& proof,
                             "accumulation:step_encoding_points");
     (void)identity;
     return {};
+}
+
+void append_ipa(Bytes& out, const StepProof& proof) {
+    for (std::size_t round = 0; round < proof.left.size(); ++round) {
+        append(out, proof.left[round]);
+        append(out, proof.right[round]);
+    }
+    append(out, proof.terminal_scalar);
+    append(out, proof.folded_generator);
+}
+
+Result<StepProof> parse_ipa(std::size_t dimension, std::span<const unsigned char> encoded,
+                           purify_secp_context* context) {
+    const auto rounds = log2_dimension(dimension);
+    if (encoded.size() != 66 * rounds + 65) {
+        return unexpected_error(ErrorCode::InvalidFixedSize, "accumulation:parse_ipa_size");
+    }
+    StepProof proof;
+    proof.left.resize(rounds);
+    proof.right.resize(rounds);
+    std::size_t offset = 0;
+    for (std::size_t round = 0; round < rounds; ++round) {
+        std::copy_n(encoded.data() + offset, 33, proof.left[round].begin());
+        offset += 33;
+        std::copy_n(encoded.data() + offset, 33, proof.right[round].begin());
+        offset += 33;
+    }
+    std::copy_n(encoded.data() + offset, 32, proof.terminal_scalar.begin());
+    offset += 32;
+    std::copy_n(encoded.data() + offset, 33, proof.folded_generator.begin());
+    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(dimension, proof, context), "accumulation:parse_ipa");
+    return proof;
 }
 
 struct StepContext {
@@ -188,13 +250,7 @@ Result<StepContext> make_step_context(const Basis& basis, std::span<const Pendin
     for (const auto& claim : claims) {
         PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim), "accumulation:claim");
         append(encoded, claim.point());
-        append_size(encoded, claim.polynomial().size());
-        for (const auto& term : claim.polynomial()) {
-            append(encoded, term.scale.to_bytes_be());
-            append_size(encoded, term.offset);
-            append_size(encoded, term.factors.size());
-            for (const auto& factor : term.factors) append(encoded, factor.to_bytes_be());
-        }
+        append_polynomial(encoded, claim.polynomial());
     }
     const auto claims_digest = kClaimsHash.digest(encoded);
     StepContext out;
@@ -372,15 +428,49 @@ Result<PolynomialTerm> verify_ipa(std::size_t dimension, const StepProof& proof,
     return folded;
 }
 
+struct NormOpeningContext {
+    FieldElement evaluation;
+    PolynomialTerm weights;
+    PointBytes opening_base;
+    Digest transcript;
+};
+
+Result<NormOpeningContext> make_norm_context(const Basis& basis, const PreparedNorm& norm,
+                                            const ScalarBytes& evaluation,
+                                            purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"), "accumulation:context");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(validate_prepared(basis, norm), "accumulation:prepared");
+    NormOpeningContext out;
+    PURIFY_ASSIGN_OR_RETURN(out.evaluation, FieldElement::try_from_bytes32(evaluation),
+                            "accumulation:coefficient_evaluation");
+    out.weights = PolynomialTerm{FieldElement::one(), 0, norm.polynomial()[1].factors};
+    Bytes encoded;
+    append(encoded, basis.digest());
+    append(encoded, norm.transcript_digest());
+    append(encoded, norm.coefficient_commitment());
+    const std::array<PolynomialTerm, 1> weights{out.weights};
+    append_polynomial(encoded, weights);
+    append(encoded, evaluation);
+    // C_c and the claimed tensor evaluation are fixed before choosing U.
+    const auto seed = kNormOpeningBaseHash.digest(encoded);
+    if (purify_bppp_public_hash_to_point(context, seed.data(), seed.size(), out.opening_base.data()) == 0) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:coefficient_opening_base");
+    }
+    append(encoded, out.opening_base);
+    out.transcript = kNormOpeningHash.digest(encoded);
+    return out;
+}
+
 } // namespace
 
-Result<Basis> Basis::create(std::size_t n_vec_len, std::span<const ScalarBytes> c_vec,
+Result<Basis> Basis::create(std::size_t n_vec_len, std::size_t l_vec_len,
                             std::string_view semantic_domain, purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
                             "accumulation:context");
     std::size_t dimension = 0;
-    if (!is_power_of_two_size(n_vec_len) || !is_power_of_two_size(c_vec.size()) ||
-        c_vec.size() > n_vec_len || !checked_mul_size(n_vec_len, 2, dimension)) {
+    if (!is_power_of_two_size(n_vec_len) || !is_power_of_two_size(l_vec_len) ||
+        l_vec_len > n_vec_len || !checked_mul_size(n_vec_len, 2, dimension)) {
         return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:create_basis_shape");
     }
     if (semantic_domain.empty()) {
@@ -388,25 +478,23 @@ Result<Basis> Basis::create(std::size_t n_vec_len, std::span<const ScalarBytes> 
     }
     Basis out;
     out.n_vec_len_ = n_vec_len;
-    out.c_vec_.assign(c_vec.begin(), c_vec.end());
+    out.l_vec_len_ = l_vec_len;
     PURIFY_ASSIGN_OR_RETURN(auto generators, create_generators(dimension, context),
                             "accumulation:deterministic_generators");
     out.points_.resize(dimension);
-    if (purify_bppp_shift_norm_basis(context,
+    if (purify_bppp_generators_to_points(context,
             reinterpret_cast<const unsigned char*>(generators.data()), generators.size(),
-            reinterpret_cast<const unsigned char*>(c_vec.data()), c_vec.size(), n_vec_len,
             reinterpret_cast<unsigned char*>(out.points_.data())) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:shift_basis");
+        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:raw_basis");
     }
-    generators.resize(n_vec_len + c_vec.size());
+    generators.resize(n_vec_len + l_vec_len);
     out.norm_generators_ = std::move(generators);
     Bytes encoded;
     append_size(encoded, semantic_domain.size());
     append(encoded, std::span(reinterpret_cast<const unsigned char*>(semantic_domain.data()),
                              semantic_domain.size()));
     append_size(encoded, n_vec_len);
-    append_size(encoded, c_vec.size());
-    for (const auto& coefficient : c_vec) append(encoded, coefficient);
+    append_size(encoded, l_vec_len);
     for (const auto& point : out.points_) append(encoded, point);
     out.digest_ = kBasisHash.digest(encoded);
     return out;
@@ -414,58 +502,71 @@ Result<Basis> Basis::create(std::size_t n_vec_len, std::span<const ScalarBytes> 
 
 Result<Bytes> serialize_step(const Basis& basis, const StepProof& proof,
                              purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_step_encoding(basis, proof, context),
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.dimension(), proof, context),
                             "accumulation:serialize_step");
-    const auto rounds = log2_dimension(basis.dimension());
     Bytes out;
-    // Valid power-of-two size_t dimensions bound rounds below 64.
-    out.reserve(66 * rounds + 66);
+    out.reserve(66 * log2_dimension(basis.dimension()) + 66);
     out.push_back(1);
-    for (std::size_t round = 0; round < rounds; ++round) {
-        append(out, proof.left[round]);
-        append(out, proof.right[round]);
-    }
-    append(out, proof.terminal_scalar);
-    append(out, proof.folded_generator);
+    append_ipa(out, proof);
     return out;
 }
 
 Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> encoded,
                              purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
-                            "accumulation:context");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"), "accumulation:context");
     PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    const auto rounds = log2_dimension(basis.dimension());
-    if (encoded.size() != 66 * rounds + 66) {
+    if (encoded.size() != 66 * log2_dimension(basis.dimension()) + 66) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "accumulation:parse_step_size");
     }
     if (encoded[0] != 1) {
         return unexpected_error(ErrorCode::UnsupportedSymbol, "accumulation:parse_step_version");
     }
-    StepProof proof;
-    proof.left.resize(rounds);
-    proof.right.resize(rounds);
-    std::size_t offset = 1;
-    for (std::size_t round = 0; round < rounds; ++round) {
-        std::copy_n(encoded.data() + offset, 33, proof.left[round].begin());
-        offset += 33;
-        std::copy_n(encoded.data() + offset, 33, proof.right[round].begin());
-        offset += 33;
+    return parse_ipa(basis.dimension(), encoded.subspan(1), context);
+}
+
+Result<Bytes> serialize_norm_reduction(const Basis& basis, const NormReductionProof& proof,
+                                       purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation),
+                            "accumulation:serialize_reduction_evaluation");
+    (void)evaluation;
+    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.l_vec_len(), proof.coefficient_opening, context),
+                            "accumulation:serialize_reduction");
+    Bytes out;
+    out.reserve(66 * log2_dimension(basis.l_vec_len()) + 98);
+    out.push_back(1);
+    append(out, proof.coefficient_evaluation);
+    append_ipa(out, proof.coefficient_opening);
+    return out;
+}
+
+Result<NormReductionProof> parse_norm_reduction(const Basis& basis, std::span<const unsigned char> encoded,
+                                               purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"), "accumulation:context");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    if (encoded.size() != 66 * log2_dimension(basis.l_vec_len()) + 98) {
+        return unexpected_error(ErrorCode::InvalidFixedSize, "accumulation:parse_reduction_size");
     }
-    std::copy_n(encoded.data() + offset, 32, proof.terminal_scalar.begin());
-    offset += 32;
-    std::copy_n(encoded.data() + offset, 33, proof.folded_generator.begin());
-    PURIFY_RETURN_IF_ERROR(validate_step_encoding(basis, proof, context),
-                            "accumulation:parse_step");
+    if (encoded[0] != 1) {
+        return unexpected_error(ErrorCode::UnsupportedSymbol, "accumulation:parse_reduction_version");
+    }
+    NormReductionProof proof;
+    std::copy_n(encoded.data() + 1, 32, proof.coefficient_evaluation.begin());
+    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation),
+                            "accumulation:parse_reduction_evaluation");
+    (void)evaluation;
+    PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening,
+        parse_ipa(basis.l_vec_len(), encoded.subspan(33), context), "accumulation:parse_reduction_ipa");
     return proof;
 }
 
-Result<PendingClaim> prepare_norm(const Basis& basis, const NormArgProof& proof,
+Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,
                                   purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
                             "accumulation:context");
     PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    if (proof.n_vec_len != basis.n_vec_len() || proof.c_vec != basis.c_vec() ||
+    if (proof.n_vec_len != basis.n_vec_len() || proof.c_vec.size() != basis.l_vec_len() ||
         proof.generators != basis.norm_generators()) {
         return unexpected_error(ErrorCode::BindingMismatch, "accumulation:norm_basis");
     }
@@ -487,7 +588,7 @@ Result<PendingClaim> prepare_norm(const Basis& basis, const NormArgProof& proof,
     PolynomialTerm g{n * pow_size(rho, basis.n_vec_len() - 1), 0, {}};
     PolynomialTerm h{l, basis.n_vec_len(), {}};
     auto rho_inv_power = rho.inverse();
-    const auto h_rounds = log2_dimension(basis.c_vec().size());
+    const auto h_rounds = log2_dimension(basis.l_vec_len());
     for (std::size_t j = 0; j < rounds; ++j) {
         PURIFY_ASSIGN_OR_RETURN(auto gamma, FieldElement::try_from_bytes32(gammas[j]),
                                 "accumulation:norm_gamma");
@@ -495,7 +596,116 @@ Result<PendingClaim> prepare_norm(const Basis& basis, const NormArgProof& proof,
         if (j < h_rounds) h.factors.push_back(gamma);
         rho_inv_power = rho_inv_power * rho_inv_power;
     }
-    return PendingClaim(basis.digest(), residual, {std::move(g), std::move(h)});
+    std::vector<FieldElement> coefficients;
+    coefficients.reserve(proof.c_vec.size());
+    for (const auto& encoded : proof.c_vec) {
+        PURIFY_ASSIGN_OR_RETURN(auto coefficient, FieldElement::try_from_bytes32(encoded),
+                                "accumulation:norm_coefficient");
+        coefficients.push_back(coefficient);
+    }
+    const auto h_basis = std::span(basis.points()).subspan(basis.n_vec_len(), basis.l_vec_len());
+    PURIFY_ASSIGN_OR_RETURN(auto commitment, msm(h_basis, coefficients, context),
+                            "accumulation:coefficient_commitment");
+    Bytes encoded;
+    append(encoded, basis.digest());
+    append(encoded, proof.rho);
+    append(encoded, proof.commitment);
+    for (const auto& coefficient : proof.c_vec) append(encoded, coefficient);
+    append(encoded, commitment);
+    append_size(encoded, proof.proof.size());
+    append(encoded, proof.proof);
+    return PreparedNorm(basis.digest(), kNormBindingHash.digest(encoded), proof.c_vec,
+                        commitment, residual, {std::move(g), std::move(h)});
+}
+
+Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const PreparedNorm& norm,
+                                               purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"), "accumulation:context");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(validate_prepared(basis, norm), "accumulation:prepared");
+    std::vector<FieldElement> coefficients;
+    coefficients.reserve(norm.c_vec().size());
+    for (const auto& encoded : norm.c_vec()) {
+        PURIFY_ASSIGN_OR_RETURN(auto coefficient, FieldElement::try_from_bytes32(encoded),
+                                "accumulation:coefficient_scalar");
+        coefficients.push_back(coefficient);
+    }
+    const PolynomialTerm weights{FieldElement::one(), 0, norm.polynomial()[1].factors};
+    const std::array<PolynomialTerm, 1> tensor{weights};
+    std::vector<FieldElement> expanded_weights(basis.l_vec_len(), FieldElement::zero());
+    add_coefficients(expanded_weights, tensor, FieldElement::one());
+    auto evaluation = FieldElement::zero();
+    for (std::size_t i = 0; i < coefficients.size(); ++i) {
+        evaluation = evaluation + coefficients[i] * expanded_weights[i];
+    }
+    NormReductionProof proof;
+    proof.coefficient_evaluation = evaluation.to_bytes_be();
+    PURIFY_ASSIGN_OR_RETURN(auto state, make_norm_context(basis, norm, proof.coefficient_evaluation, context),
+                            "accumulation:prove_reduction_context");
+    const auto h_basis = std::span(basis.points()).subspan(basis.n_vec_len(), basis.l_vec_len());
+    PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening,
+        prove_ipa(h_basis, std::move(coefficients), state.weights, state.opening_base,
+                  state.transcript, context), "accumulation:prove_coefficient_ipa");
+    // This checks only the short reduction, never accepts the original norm.
+    PURIFY_ASSIGN_OR_RETURN(auto pending, verify_norm_reduction(basis, norm, proof, context),
+                            "accumulation:prove_reduction_check");
+    (void)pending;
+    return proof;
+}
+
+Result<PendingClaim> verify_norm_reduction(const Basis& basis, const PreparedNorm& norm,
+                                          const NormReductionProof& proof, purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(validate_prepared(basis, norm), "accumulation:prepared");
+    const auto rounds = log2_dimension(basis.l_vec_len());
+    const auto& opening = proof.coefficient_opening;
+    if (opening.left.size() != rounds || opening.right.size() != rounds) {
+        return unexpected_error(ErrorCode::SizeMismatch, "accumulation:reduction_rounds");
+    }
+    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(opening.terminal_scalar),
+                            "accumulation:reduction_terminal");
+    (void)terminal;
+    PURIFY_ASSIGN_OR_RETURN(auto state, make_norm_context(basis, norm, proof.coefficient_evaluation, context),
+                            "accumulation:verify_reduction_context");
+    PURIFY_ASSIGN_OR_RETURN(auto folded,
+        verify_ipa(basis.l_vec_len(), opening, state.weights, norm.coefficient_commitment(),
+                   state.evaluation, state.opening_base, state.transcript, context),
+        "accumulation:verify_coefficient_ipa");
+    folded.offset = basis.n_vec_len();
+
+    const auto generator_encoding = base_generator(context);
+    PointBytes generator{};
+    if (purify_bppp_generators_to_points(context, generator_encoding.data(), 1, generator.data()) == 0) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:standard_generator");
+    }
+    const std::array<PointBytes, 2> norm_points{norm.residual(), generator};
+    const std::array<FieldElement, 2> norm_scalars{
+        FieldElement::one(), (norm.polynomial()[1].scale * state.evaluation).negate()};
+    PURIFY_ASSIGN_OR_RETURN(auto norm_point, msm(norm_points, norm_scalars, context),
+                            "accumulation:unshifted_norm_claim");
+
+    // Both equations and the complete opening transcript are fixed before chi.
+    // Returning their random combination prevents dropping the opening side.
+    Bytes encoded;
+    append(encoded, basis.digest());
+    append(encoded, norm.transcript_digest());
+    append(encoded, state.transcript);
+    append(encoded, proof.coefficient_evaluation);
+    append_ipa(encoded, opening);
+    append(encoded, norm_point);
+    append_polynomial(encoded, norm.polynomial());
+    append(encoded, opening.folded_generator);
+    const std::array<PolynomialTerm, 1> folded_polynomial{folded};
+    append_polynomial(encoded, folded_polynomial);
+    PURIFY_ASSIGN_OR_RETURN(auto chi, challenge(kNormFusionHash, encoded), "accumulation:reduction_fusion");
+    const std::array<PointBytes, 2> fusion_points{norm_point, opening.folded_generator};
+    const std::array<FieldElement, 2> fusion_scalars{FieldElement::one(), chi};
+    PURIFY_ASSIGN_OR_RETURN(auto combined_point, msm(fusion_points, fusion_scalars, context),
+                            "accumulation:combined_reduction_claim");
+    std::vector<PolynomialTerm> polynomial(norm.polynomial().begin(), norm.polynomial().end());
+    folded.scale = folded.scale * chi;
+    polynomial.push_back(std::move(folded));
+    return PendingClaim(basis.digest(), combined_point, std::move(polynomial));
 }
 
 Result<StepProof> prove_step(const Basis& basis, std::span<const PendingClaim> claims,

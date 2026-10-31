@@ -115,7 +115,8 @@ git submodule update --init third_party/nanobench
 Then build `bench_purify` normally from the top-level project, or enable `PURIFY_BUILD_BENCH` before `add_subdirectory(...)` in a parent project.
 
 The separate `bench_norm_accumulation` target measures public accumulation of
-standalone norm obligations sharing exact parameters. See
+standalone norm obligations with different public coefficient vectors on a
+shared deterministic basis. It reports coefficient-opening costs separately. See
 [`docs/norm-accumulation.md`](docs/norm-accumulation.md) for the protocol,
 canonical sizes, final verification requirement and reproduction commands.
 

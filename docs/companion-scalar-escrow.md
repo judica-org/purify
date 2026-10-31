@@ -18,11 +18,11 @@ Using `M` directly as the anchor root is an optional bootstrap shortcut. It
 requires choosing the initial coalition key before deriving those anchors.
 The encryption bridge is what preserves flexible joining and growth.
 
-This document specifies relations and records honest reference measurements.
-It does not establish the experimental proof backend's soundness or ZK,
-correlated-key privacy, a distributed setup/prover, or certificate validity.
-It advances [scalar escrow #23](https://github.com/judica-org/purify/issues/23)
-without enabling enrollment. The independent leaf experiment is in
+The production API implements this relation as a fixed-size escrow record. It
+does not establish correlated-key privacy, a distributed setup/prover, or
+certificate validity. It advances
+[scalar escrow #23](https://github.com/judica-org/purify/issues/23) without
+enabling enrollment. The independent leaf experiment is in
 [#37](https://github.com/judica-org/purify/pull/37).
 
 ## Groups, keys and canonical encodings
@@ -40,11 +40,10 @@ their public keys contain x-coordinates. Their 64-byte secret encoding is
 the mixed-radix integer `(d1-1) + floor(l1/2)*(d2-1)`. Packed zero is valid
 and represents `(1,1)`. It must never be reduced modulo `n`.
 
-A public pair is packed as `x1 + n*x2` in 64 bytes. Validate the packed
-range, both coordinate encodings, curve membership, finiteness and subgroup
-membership before circuit construction. Ciphertext field elements have
-canonical 32-byte encodings in `F_n`, including zero. The experiments use
-typed field elements and do not add a production byte parser.
+A public pair is packed as `x1 + n*x2` in 64 bytes. The production parser
+validates the packed range, both coordinate encodings, curve membership,
+finiteness and subgroup membership before circuit construction. Ciphertext
+field elements have canonical 32-byte encodings in `F_n`, including zero.
 
 ## Recoverable recipient setup
 
@@ -65,7 +64,7 @@ bounded integer `a`, Boolean sign `s`, both companion coordinates, and the
 full secp output point `Q`. Checking only a field equality without the
 integer bound leaves different representatives in different groups.
 
-The test circuit allocates 255 Boolean bits for `x=a-1` and one sign bit
+The setup circuit allocates 255 Boolean bits for `x=a-1` and one sign bit
 before any other multiplication gates. It compares `x` with `h-1` using an
 MSB-first prefix comparison. With `eq=1` and `greater=0`, each bit computes
 `one=eq*x_i`. If the bound bit is one, set `eq=one`; otherwise add `one` to
@@ -95,11 +94,13 @@ relevant nonzero sum/difference is at most `2^255`, below both group orders.
 The affine x-denominators do not vanish. Extending the gadget directly to
 256 bits would not inherit that argument.
 
-**Conditional uniqueness:** assuming a sound proof with exact output
-binding, finite `Q` fixes `q` modulo `n`. The bound and sign then uniquely
-fix `a,s`, which fixes both recipient points and canonical components.
-This mathematical implication is separate from proving that the current
-experimental backend establishes its premise.
+Finite `Q` fixes `q` modulo `n`. The bound and sign then uniquely fix `a,s`,
+which fixes both recipient points and canonical components. The V3 setup
+proof binds all of those outputs to the same witness. Verification is the
+only constructor for `RecoveryBoundSigningRoster`; anchor escrow creation
+does not accept an arbitrary recipient root. Consequently a roster cannot
+register a hidden second-generator component and later open a different
+recovery root while retaining the typed capability.
 
 ## Encrypt the old root, not the new coalition
 
@@ -120,20 +121,24 @@ The bridge proof jointly constrains:
 - Both `c_j` equations, using exactly those bounded plaintext witnesses.
 
 The transcript binds the suite/version, ordered ciphertext, recipient, old
-root and application setup/purpose context. The reference circuit has ten
-companion scalar multiplications: two for the old root and four for each
-pad. Its only external output commitment is fixed to `G`, with a constrained
-value of one. Encrypted plaintext relations are native field/curve equations,
-not independently blinded Pedersen output values.
+root and application setup/purpose context. It also binds the roster's even-Y
+`Q`, key-list hash, coalition-core digest, and registered recovery root. The
+circuit has ten companion scalar multiplications: two for the old root and
+four for each pad. Its only output commitment is the public constant one.
+Unlike setup, the anchor proof therefore needs no public-commitment DLog
+fields. Encrypted plaintext relations are native field/curve equations, not
+independently blinded Pedersen output values.
 
-Decryption first verifies the bridge and checks that its secret opens `M`.
-It computes `k_j=PurifyCombine(x(m1*A_j1), x(m2*A_j2))`, then `d_j=c_j-k_j`
-in `F_n`. It strictly checks the canonical component ranges, packs them,
-and requires their derived public root to equal the registered old `D`.
+`recover_escrowed_anchor` first verifies the bridge and checks that an exposed
+coalition scalar opens the recovery-bound roster's exact `Q` and registered
+`M`. It computes `k_j=PurifyCombine(x(m1*A_j1), x(m2*A_j2))`, then computes
+`d_j=c_j-k_j` in `F_n`. It strictly checks the canonical component ranges,
+packs them, and requires their derived public root to equal the registered
+old `D`.
 
-**Conditional validity:** the x-coordinates of the sender and receiver shared
-points agree even if either public pair chooses the opposite point signs.
-A satisfying encryption relation therefore decrypts to its exact bounded
+The x-coordinates of the sender and receiver shared points agree even if
+either public pair chooses the opposite point signs. A satisfying encryption
+relation therefore decrypts to its exact bounded
 `d1,d2`, and those scalars open `D`. This remains true if the prover already
 knows the recipient secret. It does not rely on the recipient public key
 being an unknown-log Pedersen generator.
@@ -146,10 +151,20 @@ not an application of an already proved complete protocol.
 
 ## Privacy, custody and ordering boundaries
 
-Use independent fresh ephemeral pairs for both pads and every encryption.
-Reusing one pair exposes plaintext differences. The transcript binds context,
-but context does not change these pads. No general chosen-ciphertext security
-or decryption-oracle service is claimed.
+`create_anchor_escrow` samples one fresh 32-byte operating-system auxiliary
+input for every encryption. It hashes that input together with the anchor
+secret and complete pre-ciphertext statement into a randomness master.
+Separate tags derive both ephemeral pairs, and a further tag including the
+final ciphertext binding derives the proof seed. A repeated context does not
+reuse pads when the operating-system input changes, while a changed context
+cannot reuse pads even under repeated auxiliary input. Reusing an entire
+derived ephemeral pair would expose plaintext differences.
+
+Exact validity and post-conflict extraction follow from the setup and anchor
+proofs. Pre-conflict confidentiality is a separate claim: it relies on a
+correlated-key, adaptive multi-user Purify/DH assumption for the public secp
+and companion representations. No general chosen-ciphertext security or
+decryption-oracle service is claimed.
 
 Recipient roots correlated with the secp coalition scalar need a privacy
 argument covering all public group representations together. Independent
@@ -185,44 +200,52 @@ The test-local C++20 Release experiments measured:
 | --- | ---: | ---: |
 | Padded gates | 2,048 | 8,192 |
 | Native constraints | 4,710 | 18,325 |
-| Inner proof bytes | 909 | 1,039 |
-| Outer proof fields | 98 | 98 |
-| Complete proof bytes | 1,007 | 1,137 |
+| Inner proof bytes | 844 | 974 |
+| Outer proof fields | 162 | 98 |
+| Complete proof bytes | 1,006 | 1,072 |
 | Ciphertext bytes | 0 | 192 |
-| Proof plus ciphertext | 1,007 | 1,329 |
+| Proof plus ciphertext | 1,006 | 1,264 |
+| Versioned fixed record | 1,007 | 1,265 |
 
 Setup additionally needs its 64-byte `M` and the registered `Q` (33 bytes
 as a full point, or its existing authenticated x-only representation).
-If `Q` is already registered, setup adds 1,071 bytes before context/framing.
-The bridge's 192 bytes are two 64-byte ephemeral pairs and two 32-byte
-field elements. Including both public roots adds 128 bytes, yielding 1,457
-bytes before context. The fixture's 45-byte context gives 1,502 bytes;
-this is not a complete registry or Bitcoin transaction format.
+If `Q` is already registered, setup adds 1,071 bytes including the 64-byte
+root and proof version byte. The anchor escrow is exactly 1,265 bytes. The
+bridge's 192 bytes are two 64-byte ephemeral pairs and two 32-byte field
+elements. The record does not repeat either 64-byte root or the 32-byte
+application-context digest. A standalone envelope carrying both roots and
+that digest would therefore be 1,425 bytes before registry references,
+consents, or transport framing.
 
 With setup shared across `R` independent old roots, incremental cryptographic
-data is `1071 + 1329*R` bytes, excluding old root data, references, context,
-consents and transport framing. A single shared root therefore adds about
-2.4 KB for setup plus bridge. This does not meet a strict 1 KB coalition
-record goal. For 100 anchors sharing that root the incremental amount is
-24 bytes per anchor; for 100 independent roots it is about 1,340 bytes each.
-Permanent anchor leaves remain additional historical data. The earlier
-1,104-byte leaf measurement must not be hidden by calling the bridge small.
+data is `1071 + 1265*R` bytes when roots and context are authenticated by
+reference. One setup plus one bridge is 2,336 bytes. For 100 independent
+anchors under one coalition, amortizing setup gives 1,275.71 bytes per
+anchor before roots, references, consents, and transport framing. This is
+close to, but does not meet, a strict 1 KB per-anchor goal. Permanent anchor
+leaves remain additional historical data.
 
-One AppleClang 16 / arm64 sample took about 0.87 seconds to prove setup and
-0.38 seconds to verify it. Bridge proving took about 3.42 seconds and checked
-verification/decryption 1.59 seconds. Proving excludes witness/circuit
-construction; verification includes public circuit construction. These are
-single centralized honest fixtures, not full setup, MPC or throughput
-benchmarks. Proof repairs can change all size/timing estimates.
+One AppleClang 16 / arm64 Release sample of the final tree took about 2.95
+seconds to prove setup and 0.52 seconds to verify it. The first anchor escrow
+in its focused suite took about 9.21 seconds to prove and 2.19 seconds to
+verify. These are centralized honest fixtures run while other sanitizer work
+was active, not an MPC or throughput benchmark. Proving includes witness and
+public-circuit construction; verification includes public-circuit
+construction. Treat the timings as reproducibility samples, not performance
+guarantees.
 
 ## Executable boundary and remaining work
 
 `canonical_recovery_root_tests.cpp` checks the comparator, independent bit
 recoding, both scalar signs, upper-bound companion normalization, a public
 setup proof, and toy accountable extraction followed by root/leaf recovery.
-`companion_scalar_escrow_tests.cpp` checks an old root chosen before its
-recipient, exact decryption, changed public inputs and canonical plaintext
-boundaries, including packed-zero `(1,1)`. It also extracts a recipient from
+`anchor_escrow_tests.cpp` checks the production fixed-size codec, an old root
+chosen before its recipient, exact same-slot scalar extraction followed by
+verified decryption, fresh encryption randomness, roster/context/root/
+ciphertext substitutions, and malformed public encodings. The lower-level
+`companion_scalar_escrow_tests.cpp` additionally checks exact decryption,
+changed public inputs, and canonical plaintext boundaries, including
+packed-zero `(1,1)`. It also extracts a recipient from
 toy accountable responses, decrypts the old root, and matches two independent
 owners' punishment scalars from owner-side, old-root and recovered-root
 computations. Nonce evidence and setup authentication remain external
@@ -231,19 +254,21 @@ prerequisites; those toy responses are not accepted decision certificates.
 Run the registered suites with:
 
 ```
-ctest --test-dir build -R 'canonical_recovery_root|companion_scalar_escrow' --output-on-failure
+ctest --test-dir build -R 'canonical_recovery_root|anchor_escrow|companion_scalar_escrow' --output-on-failure
 ```
 
-Both are test-local honest experiments with public toy secrets. They do not
-validate decision certificates or application liability. The separate setup
-must be authenticated before treating a recipient as controlled by a given
-coalition, and all public evidence on the recovery path must remain available.
+The suites use public toy secrets. They do not validate decision certificates
+or application liability. The separate setup must be authenticated before
+treating a recipient as controlled by a given coalition, and all public
+evidence on the recovery path must remain available.
 
-Before production use, review the complete proof system, exact setup-output
-binding, composed privacy/validity, distributed generation, resource bounds,
-and the actual punishment/redemption contracts. Recovery of a scalar is not
-by itself a proof of forced economic loss under Bitcoin's spend rules.
-Enrollment remains disabled, and Daybreak work remains deferred.
+The individual-proof validity path now binds the exact setup and escrow
+outputs. Production deployment still requires independent cryptographic
+review, a distributed setup/prover, explicit resource bounds, authenticated
+coalition registration, and reviewed punishment/redemption contracts.
+Recovery of a scalar is not by itself a proof of forced economic loss under
+Bitcoin's spend rules. Enrollment remains disabled while the distributed
+setup and prover are not implemented.
 
 The next [construction receipt experiment](construction-receipt.md) treats
 these setup and encryption proofs as out-of-band inputs to a public assembler.

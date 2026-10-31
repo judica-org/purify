@@ -12,6 +12,7 @@
 
 #include "../bridge/bppp_bridge.h"
 #include "purify/curve.hpp"
+#include "purify/puresign/accountable_responses.hpp"
 #include "slash_adaptor_internal.hpp"
 
 namespace purify::puresign {
@@ -533,6 +534,36 @@ verify_slash_adaptor_receipt(const SlashAdaptorReceipt &receipt,
                          "slash_adaptor:verify:receipt");
   return verify_equation(receipt, anchor_xonly, coalition_key, message_digest,
                          secp_context);
+}
+
+Result<Bip340Signature> complete_slash_adaptor_receipt(
+    const SlashAdaptorReceipt &receipt,
+    const std::array<unsigned char, 32> &anchor_xonly,
+    const SlashMessageDigest &message_digest,
+    const accountable::NonceHostBoundSigningRoster &roster,
+    const accountable::ExposedCoalitionKey &exposed_key,
+    purify_secp_context *secp_context) {
+  if (exposed_key.signing_key() != roster.signing_key() ||
+      exposed_key.host_commitment() != roster.nonce_host_commitment() ||
+      exposed_key.coalition_core_digest() !=
+          roster.coalition_core_digest()) {
+    return unexpected_error(ErrorCode::BindingMismatch,
+                            "slash_adaptor:complete:exposure_binding");
+  }
+
+  SecpPoint coalition_point{};
+  coalition_point[0] = 0x02;
+  std::copy(roster.signing_key().begin(), roster.signing_key().end(),
+            coalition_point.begin() + 1);
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &coalition_key,
+      EvenCoalitionKey::parse(coalition_point, secp_context),
+      "slash_adaptor:complete:coalition_key");
+  const CoalitionScalar coalition_scalar =
+      exposed_key.scalar().to_bytes_be();
+  return detail::complete_slash_adaptor_receipt_with_scalar(
+      receipt, anchor_xonly, coalition_key, message_digest,
+      coalition_scalar, secp_context);
 }
 
 Result<Bip340Signature> detail::complete_slash_adaptor_receipt_with_scalar(

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "purify/puresign/accountable_responses.hpp"
+#include "purify/puresign/slash_adaptor.hpp"
 #include "purify_test_helpers.hpp"
 
 namespace {
@@ -303,6 +304,70 @@ void run_accountable_response_tests(TestContext& ctx) {
         }
         ctx.expect(recovered->scalar() == expected_key,
                    "typed extraction returns the exact aggregate scalar");
+
+        std::array<unsigned char, 32> anchor_seed{};
+        anchor_seed[0] = 0xa7;
+        anchor_seed[1] = static_cast<unsigned char>(count);
+        auto anchor_secret = purify::generate_key(anchor_seed);
+        expect_ok(ctx, anchor_secret, "slash anchor secret derives");
+        if (!anchor_secret) return;
+        auto anchor_key = purify::derive_bip340_key(
+            anchor_secret->secret, secp.get());
+        expect_ok(ctx, anchor_key, "slash anchor key derives");
+        if (!anchor_key) return;
+        purify::puresign::SecpPoint coalition_point{};
+        coalition_point[0] = 0x02;
+        std::copy(roster->signing_key().begin(),
+                  roster->signing_key().end(),
+                  coalition_point.begin() + 1);
+        auto coalition_key = purify::puresign::EvenCoalitionKey::parse(
+            coalition_point, secp.get());
+        expect_ok(ctx, coalition_key,
+                  "bound roster yields an exact even coalition key");
+        if (!coalition_key) return;
+        purify::puresign::SlashMessageDigest slash_digest{};
+        slash_digest.fill(static_cast<unsigned char>(0x40 + count));
+        auto receipt = purify::puresign::create_slash_adaptor_receipt(
+            *anchor_key, *coalition_key, slash_digest, secp.get());
+        expect_ok(ctx, receipt,
+                  "anchor creates a receipt for the bound coalition");
+        if (!receipt) return;
+        auto slash_signature =
+            purify::puresign::complete_slash_adaptor_receipt(
+                *receipt, anchor_key->xonly_pubkey, slash_digest,
+                *roster, *recovered, secp.get());
+        expect_ok(ctx, slash_signature,
+                  "proof-produced exposure completes the slash receipt");
+        if (!slash_signature) return;
+        ctx.expect(
+            purify_bip340_verify(
+                secp.get(), slash_signature->data(), slash_digest.data(),
+                slash_digest.size(), anchor_key->xonly_pubkey.data()) != 0,
+            "typed completion returns the exact slash signature");
+        auto extracted = purify::puresign::extract_slash_adaptor_secret(
+            *receipt, *slash_signature, anchor_key->xonly_pubkey,
+            *coalition_key, slash_digest, secp.get());
+        expect_ok(ctx, extracted,
+                  "completed signature extracts the coalition scalar");
+        if (extracted) {
+            ctx.expect(*extracted == recovered->scalar().to_bytes_be(),
+                       "receipt extracts the proof-produced exact scalar");
+        }
+
+        auto other_core = coalition_core_digest;
+        other_core[0] ^= 1;
+        auto other_core_roster = purify::accountable::bind_nonce_hosts(
+            *raw_roster, other_core, hosts, secp.get());
+        expect_ok(ctx, other_core_roster,
+                  "same key and hosts can register under another core");
+        if (!other_core_roster) return;
+        expect_error(ctx,
+                     purify::puresign::complete_slash_adaptor_receipt(
+                         *receipt, anchor_key->xonly_pubkey, slash_digest,
+                         *other_core_roster, *recovered, secp.get()),
+                     purify::ErrorCode::BindingMismatch,
+                     "exposure cannot complete a receipt for another core");
+
         auto changed_response = partials->front();
         auto plus_one =
             FieldElement::from_bytes32(changed_response.response.serialize()) +

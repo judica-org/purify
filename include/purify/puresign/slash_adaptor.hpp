@@ -15,6 +15,11 @@
 
 #include "purify/api.hpp"
 
+namespace purify::accountable {
+class ExposedCoalitionKey;
+class NonceHostBoundSigningRoster;
+}
+
 namespace purify::puresign {
 
 using SlashMessageDigest = std::array<unsigned char, 32>;
@@ -98,6 +103,22 @@ verify_slash_adaptor_receipt(const SlashAdaptorReceipt &receipt,
                              const EvenCoalitionKey &coalition_key,
                              const SlashMessageDigest &message_digest,
                              purify_secp_context *secp_context);
+
+/**
+ * @brief Completes a receipt from one proof-produced coalition exposure.
+ *
+ * The exposed key must match the registered roster's exact signing key,
+ * nonce-host commitment, and coalition core. The returned signature is
+ * verified against the exact anchor and transaction digest before release.
+ */
+[[nodiscard]] Result<Bip340Signature>
+complete_slash_adaptor_receipt(
+    const SlashAdaptorReceipt &receipt,
+    const std::array<unsigned char, 32> &anchor_xonly,
+    const SlashMessageDigest &message_digest,
+    const accountable::NonceHostBoundSigningRoster &roster,
+    const accountable::ExposedCoalitionKey &exposed_key,
+    purify_secp_context *secp_context);
 
 /**
  * @brief Extracts the exact coalition scalar from a completed BIP340 signature.

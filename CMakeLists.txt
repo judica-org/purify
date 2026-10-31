@@ -311,6 +311,7 @@ add_library(purify
     src/api/c_api.cpp
     src/api/api.cpp
     src/protocol/bulletproof.cpp
+    src/protocol/nonce_batch.cpp
     src/support/curve.cpp
     src/protocol/expr.cpp
     src/legacy_bulletproof/scratch_frames.c
@@ -402,6 +403,7 @@ if(PURIFY_BUILD_BENCH)
         src/api/c_api.cpp
         src/api/api.cpp
         src/protocol/bulletproof.cpp
+        src/protocol/nonce_batch.cpp
         src/support/curve.cpp
         src/protocol/expr.cpp
         src/legacy_bulletproof/scratch_frames.c
@@ -464,6 +466,15 @@ if(PURIFY_BUILD_BENCH)
     purify_enable_warnings(bench_norm_accumulation)
     purify_enable_sanitizers(bench_norm_accumulation)
     purify_enable_release_optimizations(bench_norm_accumulation)
+    add_executable(bench_aggregate_nonce bench/bench_aggregate_nonce.cpp)
+    target_link_libraries(bench_aggregate_nonce PRIVATE purify::purify)
+    purify_enable_warnings(bench_aggregate_nonce)
+    purify_enable_sanitizers(bench_aggregate_nonce)
+
+    add_executable(bench_nonce_batch bench/bench_nonce_batch.cpp)
+    target_link_libraries(bench_nonce_batch PRIVATE purify::purify)
+    purify_enable_warnings(bench_nonce_batch)
+    purify_enable_sanitizers(bench_nonce_batch)
 endif()
 
 if(PURIFY_BUILD_TESTS OR PURIFY_BUILD_CBMC)
@@ -516,6 +527,9 @@ if(PURIFY_BUILD_TESTS)
         tests/construction_receipt_helpers.cpp
         tests/construction_receipt_tests.cpp
         tests/receipt_sha256_tests.cpp
+        tests/aggregate_nonce_tests.cpp
+        tests/nonce_batch_tests.cpp
+        tests/nonce_certificate_tests.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 
@@ -560,6 +574,10 @@ if(PURIFY_BUILD_TESTS)
         purify.tests.receipt_sha256
         PROPERTIES RUN_SERIAL TRUE
     )
+    purify_add_cpp_suite_test(aggregate_nonce)
+    purify_add_cpp_suite_test(aggregate_nonce_100)
+    purify_add_cpp_suite_test(nonce_batch)
+    purify_add_cpp_suite_test(nonce_certificate)
 
     add_executable(purify_property_tests
         tests/purify_property_tests.cpp

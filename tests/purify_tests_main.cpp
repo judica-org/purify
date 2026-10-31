@@ -23,6 +23,10 @@ void run_canonical_recovery_root_tests(TestContext& ctx);
 void run_companion_scalar_escrow_tests(TestContext& ctx);
 void run_construction_receipt_tests(TestContext& ctx);
 void run_receipt_sha256_tests(TestContext& ctx);
+void run_aggregate_nonce_tests(TestContext& ctx);
+void run_aggregate_nonce_100_tests(TestContext& ctx);
+void run_nonce_batch_tests(TestContext& ctx);
+void run_nonce_certificate_tests(TestContext& ctx);
 
 namespace {
 
@@ -33,7 +37,7 @@ struct SuiteSpec {
     SuiteFn run;
 };
 
-constexpr std::array<SuiteSpec, 13> kSuites{{
+constexpr std::array<SuiteSpec, 17> kSuites{{
     {"core", &run_purify_tests},
     {"puresign", &run_puresign_tests},
     {"legacy_bulletproof", &run_legacy_bulletproof_tests},
@@ -47,6 +51,10 @@ constexpr std::array<SuiteSpec, 13> kSuites{{
     {"companion_scalar_escrow", &run_companion_scalar_escrow_tests},
     {"construction_receipt", &run_construction_receipt_tests},
     {"receipt_sha256", &run_receipt_sha256_tests},
+    {"aggregate_nonce", &run_aggregate_nonce_tests},
+    {"aggregate_nonce_100", &run_aggregate_nonce_100_tests},
+    {"nonce_batch", &run_nonce_batch_tests},
+    {"nonce_certificate", &run_nonce_certificate_tests},
 }};
 
 const SuiteSpec* find_suite(std::string_view name) {

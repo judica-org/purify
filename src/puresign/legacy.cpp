@@ -108,7 +108,10 @@ Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof, purify_sec
     int parity = 0;
     PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "nonce_proof_matches_nonce:secp_context"),
                            "nonce_proof_matches_nonce:secp_context");
-    if (purify_bip340_xonly_from_point(secp_context, nonce_proof.proof.commitment.data(), xonly.data(), &parity) == 0) {
+    if (nonce_proof.proof.commitments.size() != 1) {
+        return unexpected_error(ErrorCode::SizeMismatch, "nonce_proof_matches_nonce:commitments_size");
+    }
+    if (purify_bip340_xonly_from_point(secp_context, nonce_proof.proof.commitments.front().data(), xonly.data(), &parity) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "nonce_proof_matches_nonce:invalid_commitment");
     }
     (void)parity;
@@ -159,7 +162,7 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret, cons
         auto proof,
         prove_experimental_circuit_assume_valid(circuit, witness.assignment, proof_nonce,
                                                 bppp::base_generator(secp_context), secp_context,
-                                                statement_binding, std::nullopt,
+                                                statement_binding, {},
                                                 backend_cache),
         "build_nonce_proof_from_template:prove_experimental_circuit");
 

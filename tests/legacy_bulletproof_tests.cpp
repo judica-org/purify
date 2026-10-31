@@ -81,7 +81,7 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
         return;
     }
 
-    ctx.expect(proof->commitment != purify::BulletproofPointBytes{},
+    ctx.expect(proof->commitments.front() != purify::BulletproofPointBytes{},
                "experimental circuit proof includes a concrete public commitment");
 
     Result<bool> verified =
@@ -122,6 +122,93 @@ void test_experimental_bulletproof_roundtrip(TestContext& ctx) {
     }
 }
 
+void test_experimental_bulletproof_multiple_outputs(TestContext& ctx) {
+    auto context = make_test_secp_context(ctx);
+    if (context == nullptr) return;
+    NativeBulletproofCircuit circuit(2, 2, 0);
+    for (std::size_t i = 0; i < 2; ++i) {
+        const auto row = circuit.add_constraint();
+        circuit.add_output_term(i, row, FieldElement::one());
+        circuit.add_commitment_term(i, row, FieldElement::one().negate());
+    }
+    BulletproofAssignmentData assignment;
+    assignment.left = {FieldElement::from_int(3), FieldElement::from_int(5)};
+    assignment.right = {FieldElement::from_int(4), FieldElement::from_int(6)};
+    assignment.output = {FieldElement::from_int(12), FieldElement::from_int(30)};
+    assignment.commitments = assignment.output;
+    purify::BulletproofScalarBytes nonce{};
+    nonce.fill(0x35);
+    const auto generator = purify::bppp::base_generator(context.get());
+    const auto binding = purify::bytes_from_ascii("distinct-committed-outputs");
+    purify::ExperimentalBulletproofBackendCache prover_cache;
+    auto proof = purify::prove_experimental_circuit(
+        circuit, assignment, nonce, generator, context.get(), binding, {}, &prover_cache);
+    expect_ok(ctx, proof, "one proof binds two distinct output commitments");
+    if (!proof.has_value()) return;
+    ctx.expect(proof->commitments.size() == 2, "proof carries both ordered outputs");
+    if (proof->commitments.size() != 2) return;
+    ctx.expect(proof->commitments[0] != proof->commitments[1], "distinct output values have distinct points");
+    auto encoded = proof->serialize();
+    expect_ok(ctx, encoded, "multi-output proof serializes");
+    if (!encoded.has_value()) return;
+    auto decoded = purify::ExperimentalBulletproofProof::deserialize(*encoded);
+    expect_ok(ctx, decoded, "multi-output proof deserializes");
+    if (!decoded.has_value()) return;
+    ctx.expect(decoded->commitments == proof->commitments && decoded->proof == proof->proof,
+               "serialization preserves every output and proof byte");
+    auto packed = circuit.pack_with_slack();
+    expect_ok(ctx, packed, "multi-output circuit packs");
+    if (!packed.has_value()) return;
+    purify::ExperimentalBulletproofBackendCache verifier_cache;
+    auto verified = purify::verify_experimental_circuit(
+        *packed, *decoded, generator, context.get(), binding, &verifier_cache);
+    ctx.expect(verified.has_value() && *verified, "cold packed verifier accepts all committed outputs");
+
+    auto changed = *proof;
+    std::swap(changed.commitments[0], changed.commitments[1]);
+    auto swapped = purify::verify_experimental_circuit(circuit, changed, generator, context.get(), binding);
+    ctx.expect(swapped.has_value() && !*swapped, "swapping output points invalidates the proof");
+    changed = *proof;
+    changed.commitments[1] = changed.commitments[0];
+    auto replaced = purify::verify_experimental_circuit(circuit, changed, generator, context.get(), binding);
+    ctx.expect(replaced.has_value() && !*replaced, "changing one output point invalidates the proof");
+    changed.commitments.pop_back();
+    auto missing = purify::verify_experimental_circuit(circuit, changed, generator, context.get(), binding);
+    ctx.expect(!missing.has_value(), "missing output is rejected before the bridge reads it");
+    changed = *proof;
+    changed.commitments[1].fill(0xff);
+    auto malformed = purify::verify_experimental_circuit(circuit, changed, generator, context.get(), binding);
+    ctx.expect(malformed.has_value() && !*malformed, "invalid point encoding is rejected");
+
+    std::array<purify::BulletproofScalarBytes, 2> blinds{};
+    blinds[0].back() = 7;
+    blinds[1].back() = 11;
+    auto blinded = purify::prove_experimental_circuit(
+        circuit, assignment, nonce, generator, context.get(), binding, blinds);
+    expect_ok(ctx, blinded, "per-output blinds produce a proof");
+    if (blinded.has_value()) {
+        auto accepted = purify::verify_experimental_circuit(circuit, *blinded, generator, context.get(), binding);
+        ctx.expect(accepted.has_value() && *accepted, "proof verifies with separate output blinds");
+    }
+    auto wrong_blinds = purify::prove_experimental_circuit(
+        circuit, assignment, nonce, generator, context.get(), binding,
+        std::span<const purify::BulletproofScalarBytes>(blinds).first(1));
+    ctx.expect(!wrong_blinds.has_value(), "partial blind array is rejected");
+
+    auto truncated = *encoded;
+    truncated.pop_back();
+    ctx.expect(!purify::ExperimentalBulletproofProof::deserialize(truncated).has_value(),
+               "truncated multi-output proof is rejected");
+    auto wrong_count = *encoded;
+    std::fill_n(wrong_count.begin() + 5, 4, 0xff);
+    ctx.expect(!purify::ExperimentalBulletproofProof::deserialize(wrong_count).has_value(),
+               "oversized commitment count is rejected before allocation");
+    auto trailing = *encoded;
+    trailing.push_back(0);
+    ctx.expect(!purify::ExperimentalBulletproofProof::deserialize(trailing).has_value(),
+               "trailing proof bytes are rejected");
+}
+
 void test_legacy_scratch_tracks_constraint_count(TestContext& ctx) {
     auto context = make_test_secp_context(ctx);
     if (context == nullptr) return;
@@ -144,7 +231,7 @@ void test_legacy_scratch_tracks_constraint_count(TestContext& ctx) {
     purify::ExperimentalBulletproofBackendCache prover_cache;
     auto proof = purify::prove_experimental_circuit(
         circuit, assignment, nonce, generator, context.get(), binding,
-        std::nullopt, &prover_cache);
+        {}, &prover_cache);
     expect_ok(ctx, proof, "proof scratch grows with constraints despite a small gate count");
     if (!proof.has_value()) return;
 
@@ -334,6 +421,7 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
 
 void run_legacy_bulletproof_tests(TestContext& ctx) {
     test_experimental_bulletproof_roundtrip(ctx);
+    test_experimental_bulletproof_multiple_outputs(ctx);
     test_legacy_scratch_tracks_constraint_count(ctx);
     test_experimental_bulletproof_rejects_malformed_inner_product_point(ctx);
     test_legacy_bridge_zero_constraint_roundtrip(ctx);

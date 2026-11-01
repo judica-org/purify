@@ -13,9 +13,9 @@ can disappear after the final receipt is published.
 
 A construction receipt is accepted only when both checks succeed:
 
-1. the secq parent proof verifies for the exact construction payload, setup
-   statement, resolved anchor statements, and serialized root pending claim;
-   and
+1. the secq parent proof verifies for the exact construction payload,
+   registry-resolved setup-record digest and setup statement, resolved anchor
+   statements, and serialized root pending claim; and
 2. native `accumulation::decide` discharges that exact root claim against the
    fixed anchor-escrow basis.
 
@@ -31,6 +31,12 @@ each anchor statement from that setup, the deterministic ordered anchor
 reference and resolved root, the context, and the on-chain ciphertext.
 Registry policy still determines which manifest is authorized, but it does not
 replace setup-proof verification.
+
+Recovery-root lookup must be immutable and one-to-one. The public statement
+binds the nonzero digest of the exact historical setup record selected by that
+root; the record preimage includes the root itself, roster, core, nonce-host
+commitment, setup context, and registry schema version. This resolved digest is
+contextual input and adds no on-chain bytes.
 
 ## Constrained relation
 

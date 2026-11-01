@@ -32,10 +32,12 @@ of unavailable ciphertexts cannot fulfill this requirement.
 
 For an already registered exact coalition point `Q=qG`, a receipt must establish:
 
-1. The setup proof accepts for the exact `Q`, recipient `M`, and setup context.
-2. For every listed root `D_i`, its encryption proof accepts for the exact
+1. The recovery root resolves to one immutable setup-record digest and exact
+   roster, core, nonce-host commitment, setup context, and registry version.
+2. The setup proof accepts for that exact `Q`, recipient `M`, and setup context.
+3. For every listed root `D_i`, its encryption proof accepts for the exact
    `M`, `D_i`, ciphertext `E_i`, and enrollment context.
-3. The list covers the externally authorized manifest exactly, with no duplicate
+4. The list covers the externally authorized manifest exactly, with no duplicate
    roots, omissions, substitutions, or extra entries. Public references resolve
    to the same roots used by the child verifiers.
 
@@ -118,9 +120,19 @@ with an explicit recipient would be approximately:
 Here `N` counts independently encrypted recovery roots, not necessarily
 anchors. The implemented canonical payload is `69 + 192*N` bytes: one version
 byte, the 64-byte recovery root, a four-byte entry count, and the ciphertexts.
-The recovery root selects the authenticated coalition setup. Deterministically
-ordered anchor references, roots, and contexts stay off wire but are bound into
-the receipt statement digest.
+The recovery root selects the authenticated coalition setup. That lookup must
+also return a nonzero, 32-byte digest of the exact immutable setup record. Its
+canonical preimage includes the recovery root, ordered roster, coalition core,
+nonce-host commitment, setup context, and registry schema version. The setup
+digest and deterministically ordered anchor references, roots, and contexts
+stay off wire but are bound into the receipt statement digest.
+
+Registry resolution is historical and one-to-one: a recovery root cannot be
+reassigned after publication, and one setup-record digest cannot alias another
+recovery root because the recovery root is part of its preimage. Zero is
+reserved for an unresolved lookup and rejects. The receipt code binds the
+resolved digest; the application remains responsible for authenticating the
+registry lookup that supplied it.
 
 The selected accumulator boundary additionally carries a 545-byte final root
 claim for the current 32,768-point anchor basis. It is not proof acceptance:

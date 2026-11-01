@@ -84,7 +84,7 @@ impl Expression {
 pub(crate) struct Builder {
     gates: Vec<(Scalar, Scalar)>,
     operations: Vec<GateOperationShape>,
-    constraints: Vec<Expression>,
+    constraints: Vec<Vec<Term>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -205,7 +205,10 @@ impl Builder {
 
     pub(crate) fn constrain_zero(&mut self, expression: Expression) {
         if expression.constant != Scalar::ZERO || !expression.terms.is_empty() {
-            self.constraints.push(expression);
+            // Expressions use BTreeMap for convenient affine composition.
+            // Store the canonical row immediately so every retained
+            // constraint owns only its compact ordered terms.
+            self.constraints.push(expression_terms(expression));
         }
     }
 
@@ -230,11 +233,7 @@ impl Builder {
     ) -> Result<(Circuit, Assignment, Vec<GateOperationShape>), ReceiptCycleError> {
         let circuit = Circuit {
             gate_count: self.gates.len(),
-            constraints: self
-                .constraints
-                .into_iter()
-                .map(expression_terms)
-                .collect::<Result<_, _>>()?,
+            constraints: self.constraints,
         };
         validate_operations(&self.operations, &circuit)?;
         let assignment = Assignment { gates: self.gates };
@@ -423,7 +422,7 @@ fn validate_binding_constraint(
     Ok(())
 }
 
-fn expression_terms(expression: Expression) -> Result<Vec<Term>, ReceiptCycleError> {
+fn expression_terms(expression: Expression) -> Vec<Term> {
     let mut out = Vec::with_capacity(expression.terms.len() + 1);
     if expression.constant != Scalar::ZERO {
         out.push(Term {
@@ -439,10 +438,8 @@ fn expression_terms(expression: Expression) -> Result<Vec<Term>, ReceiptCycleErr
             coefficient,
         });
     }
-    if out.is_empty() {
-        return Err(ReceiptCycleError::Malformed("empty built constraint"));
-    }
-    Ok(out)
+    assert!(!out.is_empty());
+    out
 }
 
 fn append_u32(out: &mut Vec<u8>, value: usize) {
@@ -494,6 +491,12 @@ fn encode_assignment(assignment: &Assignment) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    fn row_term_mut(row: &mut [Term], kind: WireKind, index: usize) -> &mut Term {
+        row.iter_mut()
+            .find(|term| term.kind == kind && term.index == index)
+            .expect("constraint term")
+    }
+
     fn product_relation(
         input_value: u64,
         swap_operands: bool,
@@ -532,6 +535,64 @@ mod tests {
             .expect("stateful relation")
     }
 
+    fn representative_relation(input_value: u64, condition: bool) -> StatefulRelation {
+        let mut builder = Builder::default();
+        let input = builder.allocate_state(Scalar::from(input_value));
+        let condition = builder.allocate_boolean(condition);
+        let affine = input
+            .expression()
+            .clone()
+            .scale(Scalar::from(2))
+            .add(&Expression::constant(Scalar::from(5)));
+        let product = builder.multiply(&affine, &condition);
+        let output = builder.expose_state(&product);
+        builder
+            .finish_stateful(&[input], &[output])
+            .expect("representative relation")
+    }
+
+    fn term(kind: WireKind, index: usize, coefficient: Scalar) -> Term {
+        Term {
+            kind,
+            index,
+            coefficient,
+        }
+    }
+
+    fn legacy_representative_rows() -> Vec<Vec<Term>> {
+        vec![
+            vec![
+                term(WireKind::One, 0, -Scalar::ONE),
+                term(WireKind::Right, 0, Scalar::ONE),
+            ],
+            vec![
+                term(WireKind::Left, 1, Scalar::ONE),
+                term(WireKind::Right, 1, -Scalar::ONE),
+            ],
+            vec![
+                term(WireKind::Left, 1, -Scalar::ONE),
+                term(WireKind::Output, 1, Scalar::ONE),
+            ],
+            vec![
+                term(WireKind::One, 0, -Scalar::from(5)),
+                term(WireKind::Left, 0, -Scalar::from(2)),
+                term(WireKind::Left, 2, Scalar::ONE),
+            ],
+            vec![
+                term(WireKind::Left, 1, -Scalar::ONE),
+                term(WireKind::Right, 2, Scalar::ONE),
+            ],
+            vec![
+                term(WireKind::One, 0, -Scalar::ONE),
+                term(WireKind::Right, 3, Scalar::ONE),
+            ],
+            vec![
+                term(WireKind::Left, 3, Scalar::ONE),
+                term(WireKind::Output, 2, -Scalar::ONE),
+            ],
+        ]
+    }
+
     #[test]
     fn stateful_finish_retains_the_canonical_relation() {
         let (builder, inputs, outputs) = product_relation(3, false);
@@ -555,6 +616,33 @@ mod tests {
         );
         assert_eq!(encode_circuit(&relation.shape.circuit), circuit);
         assert_eq!(encode_assignment(&relation.assignment), assignment);
+    }
+
+    #[test]
+    fn eager_rows_preserve_legacy_canonical_encoding() {
+        let relation = representative_relation(3, true);
+        let legacy = Circuit {
+            gate_count: 4,
+            constraints: legacy_representative_rows(),
+        };
+
+        assert_eq!(relation.shape.circuit, legacy);
+        assert_eq!(
+            encode_circuit(&relation.shape.circuit),
+            encode_circuit(&legacy)
+        );
+        assert_eq!(
+            circuit_digest(&relation.shape.circuit),
+            circuit_digest(&legacy)
+        );
+
+        let changed_witness = representative_relation(9, false);
+        assert_eq!(changed_witness.shape.circuit, legacy);
+        assert_eq!(
+            circuit_digest(&changed_witness.shape.circuit),
+            circuit_digest(&legacy)
+        );
+        assert_ne!(relation.assignment, changed_witness.assignment);
     }
 
     #[test]
@@ -633,17 +721,20 @@ mod tests {
         ));
 
         let (mut wrong_coefficient, inputs, outputs) = product_relation(3, false);
-        *wrong_coefficient.constraints[1]
-            .terms
-            .get_mut(&(WireKind::Left, 1))
-            .expect("current-gate binding") = Scalar::from(2);
+        row_term_mut(&mut wrong_coefficient.constraints[1], WireKind::Left, 1).coefficient =
+            Scalar::from(2);
         assert!(matches!(
             wrong_coefficient.finish_stateful(&inputs, &outputs),
             Err(ReceiptCycleError::Malformed("builder operation binding"))
         ));
 
         let (mut non_prior, inputs, outputs) = product_relation(3, false);
-        non_prior.constraints[1].add_term((WireKind::Right, 1), Scalar::ONE);
+        non_prior.constraints[1].push(Term {
+            kind: WireKind::Right,
+            index: 1,
+            coefficient: Scalar::ONE,
+        });
+        non_prior.constraints[1].sort_by_key(|term| (term.kind, term.index));
         assert!(matches!(
             non_prior.finish_stateful(&inputs, &outputs),
             Err(ReceiptCycleError::Malformed("builder operation wire"))
@@ -653,10 +744,7 @@ mod tests {
     #[test]
     fn stateful_finish_rejects_changed_allocation_constraint() {
         let (mut builder, inputs, outputs) = product_relation(3, false);
-        *builder.constraints[0]
-            .terms
-            .get_mut(&(WireKind::Right, 0))
-            .expect("allocation constraint") = Scalar::from(2);
+        row_term_mut(&mut builder.constraints[0], WireKind::Right, 0).coefficient = Scalar::from(2);
         assert!(matches!(
             builder.finish_stateful(&inputs, &outputs),
             Err(ReceiptCycleError::Malformed("builder operation constraint"))
@@ -666,10 +754,7 @@ mod tests {
     #[test]
     fn stateful_finish_rejects_changed_boolean_constraint() {
         let (mut builder, inputs, outputs) = boolean_relation(true);
-        *builder.constraints[1]
-            .terms
-            .get_mut(&(WireKind::Right, 1))
-            .expect("boolean constraint") = Scalar::ONE;
+        row_term_mut(&mut builder.constraints[1], WireKind::Right, 1).coefficient = Scalar::ONE;
         assert!(matches!(
             builder.finish_stateful(&inputs, &outputs),
             Err(ReceiptCycleError::Malformed("builder operation constraint"))

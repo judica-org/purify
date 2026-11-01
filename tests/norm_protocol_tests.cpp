@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -18,6 +19,27 @@ using purify::FieldElement;
 using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
+
+struct FixedRoundChallenges {
+    std::vector<purify::bppp::ScalarBytes> scalars;
+    std::vector<std::array<unsigned char, 65>> pairs;
+};
+
+int fixed_round_challenge(void* callback_data,
+                          const unsigned char point_pair65[65],
+                          std::size_t round,
+                          unsigned char challenge32[32]) {
+    auto& state = *static_cast<FixedRoundChallenges*>(callback_data);
+    if (round != state.scalars.size()) return 0;
+    state.scalars.push_back(
+        FieldElement::from_u64(19 + round).to_bytes_be());
+    std::copy(state.scalars.back().begin(), state.scalars.back().end(),
+              challenge32);
+    std::array<unsigned char, 65> pair{};
+    std::copy_n(point_pair65, pair.size(), pair.begin());
+    state.pairs.push_back(pair);
+    return 1;
+}
 
 void check_secret_msm_zero_terms(TestContext& ctx) {
     using namespace purify::bppp;
@@ -279,6 +301,18 @@ void check_initial_point_boundary(TestContext& ctx) {
     auto generators = purify::bppp::create_generators(2, secp.get());
     expect_ok(ctx, generators, "norm boundary generators create");
     if (!generators) return;
+    purify::bppp::PointBytes finite_point{};
+    ctx.expect(purify_bppp_generator_to_point(
+                   secp.get(), (*generators)[0].data(),
+                   finite_point.data()) != 0,
+               "point subtraction fixture converts a generator");
+    purify::bppp::PointBytes point_difference{};
+    point_difference.fill(0xa5);
+    ctx.expect(purify_point_subtract_allow_infinity(
+                   secp.get(), finite_point.data(), finite_point.data(),
+                   point_difference.data()) != 0 &&
+                   point_difference == purify::bppp::PointBytes{},
+               "point subtraction canonically encodes infinity");
     purify::bppp::NormArgInputs inputs{
         FieldElement::from_int(3).to_bytes_be(), *generators,
         {FieldElement::from_int(5).to_bytes_be()},
@@ -459,6 +493,118 @@ void check_pending_norm_equation(TestContext& ctx) {
                "small malformed MSMs reject without retaining output state");
 }
 
+void check_protocol_owned_round_challenges(TestContext& ctx) {
+    using namespace purify::bppp;
+    auto secp = purify::make_secp_context();
+    ctx.expect(secp != nullptr,
+               "protocol challenge context creates");
+    if (!secp) return;
+
+    auto generators = create_generators(8, secp.get());
+    expect_ok(ctx, generators,
+              "protocol challenge generators create");
+    if (!generators) return;
+    const auto scalar = [](int value) {
+        return FieldElement::from_int(value).to_bytes_be();
+    };
+    NormArgInputs inputs{
+        scalar(3), *generators,
+        {scalar(2), scalar(3), scalar(4), scalar(5)},
+        {scalar(7), scalar(11), scalar(13), scalar(17)},
+        {scalar(19), scalar(23), scalar(29), scalar(31)}};
+    auto commitment = commit_norm_arg(inputs, secp.get());
+    expect_ok(ctx, commitment,
+              "protocol challenge commitment creates");
+    if (!commitment) return;
+
+    purify::Bytes proof(purify_bppp_required_proof_size(
+        inputs.n_vec.size(), inputs.c_vec.size()));
+    std::size_t proof_size = proof.size();
+    FixedRoundChallenges challenges;
+    const int proved =
+        purify_bppp_prove_norm_arg_to_commitment_with_callback(
+            secp.get(), inputs.rho.data(),
+            reinterpret_cast<const unsigned char*>(generators->data()),
+            generators->size(),
+            reinterpret_cast<const unsigned char*>(inputs.n_vec.data()),
+            inputs.n_vec.size(),
+            reinterpret_cast<const unsigned char*>(inputs.l_vec.data()),
+            inputs.l_vec.size(),
+            reinterpret_cast<const unsigned char*>(inputs.c_vec.data()),
+            inputs.c_vec.size(), commitment->data(),
+            fixed_round_challenge, &challenges, proof.data(), &proof_size);
+    ctx.expect(proved != 0 && proof_size == proof.size(),
+               "protocol challenge prover succeeds");
+    if (proved == 0) return;
+    ctx.expect(challenges.scalars.size() == 2 &&
+                   challenges.pairs.size() == 2,
+               "protocol challenge callback runs once per round");
+    bool pairs_match = challenges.pairs.size() == 2;
+    for (std::size_t round = 0;
+         pairs_match && round < challenges.pairs.size(); ++round) {
+        pairs_match = std::equal(
+            challenges.pairs[round].begin(),
+            challenges.pairs[round].end(),
+            proof.begin() + static_cast<std::ptrdiff_t>(65 * round));
+    }
+    ctx.expect(pairs_match,
+               "callback sees each exact emitted point pair");
+
+    const auto* gamma_bytes = reinterpret_cast<const unsigned char*>(
+        challenges.scalars.data());
+    const int verified = purify_bppp_verify_norm_arg_with_challenges(
+        secp.get(), inputs.rho.data(),
+        reinterpret_cast<const unsigned char*>(generators->data()),
+        generators->size(),
+        reinterpret_cast<const unsigned char*>(inputs.c_vec.data()),
+        inputs.c_vec.size(), inputs.n_vec.size(), commitment->data(),
+        proof.data(), proof.size(), gamma_bytes,
+        challenges.scalars.size());
+    ctx.expect(verified != 0,
+               "protocol challenge verifier accepts exact replay");
+    ctx.expect(purify_bppp_verify_norm_arg(
+                   secp.get(), inputs.rho.data(),
+                   reinterpret_cast<const unsigned char*>(
+                       generators->data()),
+                   generators->size(),
+                   reinterpret_cast<const unsigned char*>(
+                       inputs.c_vec.data()),
+                   inputs.c_vec.size(), inputs.n_vec.size(),
+                   commitment->data(), proof.data(), proof.size()) == 0,
+               "SHA transcript cannot accept protocol challenges");
+
+    auto changed = challenges.scalars;
+    changed[0] = scalar(41);
+    ctx.expect(purify_bppp_verify_norm_arg_with_challenges(
+                   secp.get(), inputs.rho.data(),
+                   reinterpret_cast<const unsigned char*>(
+                       generators->data()),
+                   generators->size(),
+                   reinterpret_cast<const unsigned char*>(
+                       inputs.c_vec.data()),
+                   inputs.c_vec.size(), inputs.n_vec.size(),
+                   commitment->data(), proof.data(), proof.size(),
+                   reinterpret_cast<const unsigned char*>(changed.data()),
+                   changed.size()) == 0,
+               "changed protocol challenge rejects the proof");
+
+    ScalarBytes terminal_n{}, terminal_l{};
+    PointBytes residual{};
+    ctx.expect(
+        purify_bppp_prepare_norm_arg_claim_with_challenges(
+            secp.get(), inputs.rho.data(),
+            reinterpret_cast<const unsigned char*>(generators->data()),
+            generators->size(),
+            reinterpret_cast<const unsigned char*>(inputs.c_vec.data()),
+            inputs.c_vec.size(), inputs.n_vec.size(), commitment->data(),
+            proof.data(), proof.size(), gamma_bytes,
+            challenges.scalars.size(), terminal_n.data(),
+            terminal_l.data(), residual.data()) != 0,
+        "protocol challenges prepare the matching pending claim");
+    ctx.expect(residual != PointBytes{},
+               "protocol challenge pending residual is finite");
+}
+
 } // namespace
 
 void run_norm_protocol_tests(TestContext& ctx) {
@@ -467,4 +613,5 @@ void run_norm_protocol_tests(TestContext& ctx) {
     check_initial_point_boundary(ctx);
     check_norm_length_boundary(ctx);
     check_pending_norm_equation(ctx);
+    check_protocol_owned_round_challenges(ctx);
 }

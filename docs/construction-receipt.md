@@ -1,10 +1,11 @@
 # Public construction receipts for coalition escrow
 
 This is the next experiment after
-[companion scalar escrow](companion-scalar-escrow.md). It fixes the intended
-statement and public-data flow. Native V4 leaves and their typed native
-accumulator adapter are implemented, but the compressed parent is not.
-Enrollment remains disabled pending review and application integration.
+[companion scalar escrow](companion-scalar-escrow.md). Native V4 leaves and
+their typed accumulator adapter are implemented. Nova 0.76 is the selected
+transparent folding backend, but its production recurrence adapter, canonical
+codec, resource limits, and acceptance path are not complete. Enrollment
+remains disabled pending review and application integration.
 
 Transparent setup is a hard requirement for the completed library: public
 parameters must not depend on a trusted ceremony or retained trapdoor. This
@@ -14,32 +15,39 @@ those witnesses merely to satisfy the setup requirement.
 
 ## Publication and recovery
 
-The coalition distributes its recipient-setup proof **out of band**. Each root
-owner independently distributes an encryption proof and ciphertext out of band.
-An assembler uses those public objects to construct the final receipt. Owners
-do not send secrets to the assembler or participate in another proving round.
+The coalition setup proof is published once through its immutable,
+Bitcoin-replayable registry record. Each root owner independently distributes
+its anchor-encryption proof out of band. An assembler starts from the
+registry's verified construction-basis seed root and uses the independent
+anchor proof bodies as witnesses. Owners do not reveal secrets or participate
+in another proving round.
 
-The intended on-chain object contains the coalition reference, recipient `M`,
-an ordered list of recovery-root references and ciphertexts, application context,
-and one final proof. The independent child proofs are not on-chain payloads.
-They are witnesses for the final prover, although they contain no additional
-secret inputs and may be distributed publicly.
+The candidate on-chain object contains a versioned setup reference and entry
+count, each ordered 192-byte ciphertext with its 32-byte V4 precommitment `d`,
+the 545-byte final root claim, and one compressed Nova proof. Resolved anchor
+references, roots, and contexts are statement data rather than duplicated wire
+fields. The independent proof bodies are not on-chain payloads.
 
 Bitcoin-only verification and recovery must remain possible after the children
 are unavailable. The final proof authenticates the construction; the ciphertexts
 and their exact root associations provide the data needed for recovery. A hash
 of unavailable ciphertexts cannot fulfill this requirement.
 
-For an already registered exact coalition point `Q=qG`, a receipt must establish:
+For an already registered exact coalition point `Q=qG`, a receipt must
+establish:
 
-1. The recovery root resolves to one immutable setup-record digest and exact
-   roster, core, nonce-host commitment, setup context, and registry version.
-2. The setup proof accepts for that exact `Q`, recipient `M`, and setup context.
-3. For every listed root `D_i`, its encryption proof accepts for the exact
-   `M`, `D_i`, ciphertext `E_i`, and enrollment context.
-4. The list covers the externally authorized manifest exactly, with no duplicate
-   roots, omissions, substitutions, or extra entries. Public references resolve
-   to the same roots used by the child verifiers.
+1. Its recovery root resolves to one immutable setup-record digest and
+   canonical, previously decided construction-basis seed root.
+2. For every listed anchor, the private V4 encryption-proof witness accepts for
+   the exact recipient, resolved root, ciphertext, and enrollment context.
+3. Exactly `N` homogeneous recurrence steps connect that registry seed to the
+   published manifest and root claim.
+4. The ordered list covers the externally authorized manifest with no
+   duplicate, omitted, substituted, or extra roots.
+
+Setup-proof acceptance, typed basis promotion, seed standardization, and the
+seed's native decision are immutable registry-registration checks. They are not
+repeated inside every receipt.
 
 The assembler may receive packets in any order. Reordering delivery does not
 require new owner proofs. The application supplies the authoritative manifest;
@@ -55,14 +63,25 @@ rules, not consequences of proof verification.
 
 ## Statement and proof boundary
 
-Let `pi_setup` and `pi_i` be completed independent child proofs. The intended
-parent relation is the conjunction:
+Let `pi_setup` and `pi_i` be completed independent proof bodies. The selected
+boundary is:
 
 ```
-VerifySetup(Q, M, setup_context, pi_setup)
-AND for every i:
-    VerifyEscrow(M, D_i, E_i, enrollment_context, pi_i)
+Registry creation:
+    seed = VerifyAndPromoteSetup(Q, M, setup_context, pi_setup)
+    Decide(seed)
+
+Construction receipt:
+    z_0 = RegistrySeedState(seed, setup_digest, statement_digest, N)
+    for i in 0..N:
+        z_{i+1} = VerifyAnchorAndAccumulate(z_i, statement_i, d_i, pi_i)
+    VerifyCompressedNova(z_0, z_N, N)
+    Decide(z_N.root)
 ```
+
+The setup proof is not repeated inside the homogeneous anchor matrix. Every
+anchor step uses the same matrix and manifest-binds the exact statement digest,
+`d`, coefficient commitment, and anchored offset used by its leaf equations.
 
 The final verifier authenticates the statement and verifies a proof of this
 relation. Calling the ordinary C++ child verifiers before signing or hashing a
@@ -112,64 +131,62 @@ The legacy V3 setup record is 1,007 bytes, alongside a 64-byte public
 recipient, for 1,071 bytes when the coalition point is already registered.
 Each fixed anchor-escrow record is 1,265 bytes: one version byte, a
 192-byte ciphertext and a 1,072-byte proof payload. These are comparison
-sizes, not V4 parent measurements. If a final parent proof replaces the
-setup and escrow proofs while retaining the ciphertext format,
-incremental data with an explicit recipient would be approximately:
+sizes, not V4 parent measurements. The superseded initial goal assumed a final
+proof could replace every setup and escrow proof while retaining only the
+ciphertexts:
 
 ```
 64 + 192*N + size(final_proof)
 ```
 
 Here `N` counts independently encrypted recovery roots, not necessarily
-anchors. The implemented canonical payload is `69 + 192*N` bytes: one version
+anchors. The existing pre-Nova payload codec is `69 + 192*N` bytes: one version
 byte, the 64-byte recovery root, a four-byte entry count, and the ciphertexts.
-The recovery root selects the authenticated coalition setup. That lookup must
-also return a nonzero, 32-byte digest of the exact immutable setup record. Its
-canonical preimage includes the recovery root, ordered roster, coalition core,
-nonce-host commitment, setup context, and registry schema version. The setup
-digest and deterministically ordered anchor references, roots, and contexts
-stay off wire but are bound into the receipt statement digest.
+It does not carry the per-anchor V4 precommitment needed to derive the expected
+coefficient commitment and anchored offset, so it is not the selected receipt
+codec.
 
 Registry resolution is historical and one-to-one: a recovery root cannot be
 reassigned after publication, and one setup-record digest cannot alias another
 recovery root because the recovery root is part of its preimage. Zero is
 reserved for an unresolved lookup and rejects. The receipt code binds the
-resolved digest; the application remains responsible for authenticating the
-registry lookup that supplied it.
+resolved digest. Consensus verification must authenticate that historical
+lookup; application policy separately decides whether the resolved coalition
+is authorized.
 
-The selected accumulator boundary additionally carries a 545-byte final root
-claim for the current 32,768-point anchor basis. It is not proof acceptance:
-the parent must authenticate the claim's complete ancestry, and the native
-verifier must discharge it with `decide()`. The present concrete target is:
+The selected versioned target is:
 
 ```
-69 + 192*N + 545 + size(final_parent_proof)
+69 + 224*N + 545 + size(canonical compressed Nova proof)
 ```
 
-The canonical envelope now implements that concatenation exactly, with no
-additional length or wrapper fields. The payload entry count determines the
-`69 + 192*N` prefix, the receipt version fixes the 545-byte root, and all
-remaining bytes are the parent proof. Parsing validates payload and root-claim
-syntax and bounds the proof transport; it is not receipt acceptance. The
-purpose parent verifier must bind the exact envelope and the native verifier
-must still decide the parsed root.
+Each 224-byte entry is one 192-byte ciphertext plus one nonzero 32-byte
+precommitment `d`. The 69-byte header selects the immutable setup record and
+fixes the ordered entry count. The setup lookup also returns the nonzero digest
+of the exact immutable record. Its preimage includes the recovery root, ordered
+roster, coalition core, nonce-host commitment, setup context, and registry
+schema version. Resolved setup and anchor metadata remain off wire but are
+bound into the construction statement and initial manifest.
 
-The legacy typed path prepares the exact 1,007-byte setup proof on its
-fixed 8,192-point basis and verifies its coefficient-opening reduction.
-It promotes the still-pending obligation into the exact prefix of the
-construction basis.
-Promotion is not exposed for generic claims: the public method reconstructs
-the roster, recovery root, setup proof, and reduction before changing bases.
-The typed native assembly owns that setup capability together with one payload,
-the resolved setup-record digest, its resulting statement digest, and its
-ordered resolved manifest. An anchor reduction can enter only at its exact
-index, with the payload ciphertext and resolved root/context fixed there.
-Missing, repeated, out-of-range, and ciphertext-substituted leaves cannot
-produce the ordered setup-first leaf list.
-An honest promoted setup claim has been folded, encoded as the 545-byte root,
-parsed, and discharged by the final MSM. The recursive parent must still prove
-that same setup preparation, reduction, promotion, and every anchor transition;
-the native test alone is not a compressed receipt.
+The boundary additionally carries a 545-byte final root claim for the current
+32,768-point anchor basis. It is not proof acceptance: Nova must authenticate
+the claim's ancestry and the native verifier must discharge it with
+`decide()`. At 100 anchors, the non-proof portion is 23,014 bytes. The new
+envelope and canonical Nova codec are not implemented consensus formats yet.
+The existing `69 + 192*N` envelope requires a new version rather than a silent
+reinterpretation.
+
+The typed native setup path reconstructs the exact setup record, verifies its
+V4 reduction, promotes the pending claim to the construction basis,
+standardizes it through the one-claim 15-round transition, and runs the
+mandatory native decision. Registry creation stores the resulting 545-byte
+seed root. Promotion is not exposed for generic claims.
+
+A construction receipt begins from that authenticated seed. Its recurrence
+verifies only homogeneous hidden-anchor leaves and ordered two-claim
+transitions; it does not repeat the public setup leaf. The historical
+setup-first native assembly remains useful as a test oracle, not as the
+selected recursive shape.
 
 The integrated V4 adapter checks the raw-generator bridge, gamma
 residual, coefficient commitment, and compact polynomial terms. Focused
@@ -181,12 +198,12 @@ Consents and existing anchor leaves remain contextual data. Moving the final
 basis decision inside the parent could remove the 545 bytes, but would add the
 linear fixed-basis work to the parent relation.
 
-The transparent secq proof transport is implemented, but the complete parent
-relation has not been implemented or measured. A 1-2 KB complete parent proof
-remains a target, not a result. Direct proofs of combined native relations and
-public proofs of already completed proofs also have different prover costs.
-Combining all native witnesses centrally would not satisfy the required public
-assembler interface.
+The selected Nova transport remains research-only. Synthetic compressed proof
+objects measured 10,660 to 11,916 bytes as the test relation grew from 1,024 to
+65,536 gates, but those values use noncanonical bincode and do not bound the
+approximately 950,000-gate anchor leaf, much less a complete recurrence step.
+A 1-2 KB proof is therefore an aspiration contradicted by current generic-Nova
+evidence, not a production estimate.
 
 ## Historical V2 public-prehashing experiment
 
@@ -293,13 +310,12 @@ The selected implementation boundary and its mandatory explicit root claim are
 specified in the
 [recursive construction receipt boundary](recursive-parent-receipt.md).
 
-Before selecting a replacement backend on cost grounds, evaluate this route
-alongside direct recursive verification. Account separately for the recursive
-circuit, final verifier, public accumulator bytes and authenticated manifest.
-Curve cycles and a suitable transcript can reduce recursive arithmetic
-costs. The scalar-field circuit and historical SHA-256 choices do not
-define the only possible transparent implementation. An accumulator
-still needs sound child
+While qualifying the selected Nova backend, account separately for the fixed
+recurrence, canonical proof codec, native final decision, public root bytes,
+authenticated manifest, and production peak memory. Direct recursive
+verification remains a comparison point, not an unmade backend choice. The
+scalar-field circuit and historical SHA-256 choices do not define the only
+possible transparent implementation. An accumulator still needs sound child
 proofs and a parent which authenticates every V4 leaf and transition.
 
 Anchor punishment-key derivation is also a design variable in this pre-release
@@ -338,11 +354,12 @@ public recovery, custody and privacy guarantees before replacing it.
    verification, matching Rust relations, and the typed native
    accumulator adapter.
    Reduction verification and final `decide()` remain mandatory.
-4. Remaining: choose and review the parent relation/backend. Implement canonical
-   child parsing, transcript replay and constrained curve verification; benchmark
-   one setup plus two encryption children before scaling to 100. The
-   green Nova probe is isolated feasibility evidence, not a backend
-   selection.
+4. In progress: complete the fixed homogeneous anchor recurrence, canonical
+   Nova codec, verifier-derived initial and expected final states, and
+   root-to-native-decision acceptance boundary. Measure one production-shaped
+   step before exposing proving through an RPC, then benchmark 1, 2, and 100
+   anchors. The green Nova scaling probe selects the implementation direction
+   but does not qualify production resources.
 5. Remaining: establish composition and correlated-key privacy security,
    implement distributed setup/proving, and integrate accepted certificate
    recovery with the registry and Bitcoin punishment path before enrollment.

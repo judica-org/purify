@@ -3780,8 +3780,8 @@ derive_circuit_norm_parent_constants_v4_impl(
                                  secp_context),
       "circuit_parent_constants_v4:anchored_offset");
   return candidate::CircuitNormParentConstantsV4{
-      std::move(binding_digest), std::move(coefficient_commitment),
-      std::move(anchored_offset)};
+      std::move(binding_digest), std::move(raw_generator_digest),
+      std::move(coefficient_commitment), std::move(anchored_offset)};
 }
 
 } // namespace

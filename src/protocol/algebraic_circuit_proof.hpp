@@ -184,6 +184,7 @@ prepare_circuit_zk_norm_arg_v4_impl(
 /** Verifier-derived constants needed by a constrained V4 parent leaf. */
 struct CircuitNormParentConstantsV4 {
   TranscriptDigest circuit_binding_digest{};
+  TranscriptDigest raw_generator_digest{};
   PointBytes coefficient_commitment{};
   PointBytes anchored_offset{};
 };

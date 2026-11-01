@@ -27,6 +27,17 @@ namespace candidate = purify::bppp::candidate;
 
 enum class ZeroFamily { Neither, Norm, Linear };
 
+candidate::TranscriptDigest raw_generator_digest(
+    std::span<const PointBytes> generators) {
+    candidate::TranscriptDigest digest{};
+    const auto bytes = std::as_bytes(generators);
+    purify_sha256(
+        digest.data(),
+        reinterpret_cast<const unsigned char*>(bytes.data()),
+        bytes.size());
+    return digest;
+}
+
 purify::Result<PointBytes> scalar_point(const FieldElement& scalar,
                                         purify_secp_context* secp) {
     const ScalarBytes zero{};
@@ -1040,6 +1051,8 @@ void check_v4_algebraic_circuit_adapter(
     ctx.expect(
         parent_constants->circuit_binding_digest ==
                 (**prepared).circuit_binding_digest() &&
+            parent_constants->raw_generator_digest ==
+                raw_generator_digest((**prepared).raw_generators()) &&
             parent_constants->coefficient_commitment ==
                 (**prepared).transcript_input().coefficient_commitment &&
             parent_constants->anchored_offset ==
@@ -1323,6 +1336,9 @@ void check_v4_algebraic_circuit_adapter(
     ctx.expect(
         public_parent_constants->circuit_binding_digest ==
                 (**public_prepared).circuit_binding_digest() &&
+            public_parent_constants->raw_generator_digest ==
+                raw_generator_digest(
+                    (**public_prepared).raw_generators()) &&
             public_parent_constants->coefficient_commitment ==
                 (**public_prepared)
                     .transcript_input()

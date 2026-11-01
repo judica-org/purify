@@ -36,6 +36,21 @@ const TaggedHash kSecondEphemeralHash(
 const TaggedHash kProofSeedHash(
     "Purify/Accountable/AnchorEscrowProofSeed/v2");
 
+Status require_anchor_v3_hash_suite(const char* label) {
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+    return unexpected_error(ErrorCode::UnsupportedSymbol, label);
+#else
+    (void)label;
+    return {};
+#endif
+}
+
+const Bytes& anchor_punishment_evaluation_input() {
+    static const Bytes input = bytes_from_ascii(
+        "Purify/Accountable/AnchorPunishmentKey/v1");
+    return input;
+}
+
 template <typename T>
 class WipeObjectOnDestruction {
 public:
@@ -110,6 +125,85 @@ struct EscrowOpening {
     const SecretKey& payload;
     std::array<const GeneratedKey*, 2> ephemeral;
 };
+
+struct PunishmentEvaluation {
+    FieldElement normalized_scalar;
+    bool negated;
+    Bip340Key key;
+
+    PunishmentEvaluation(const FieldElement& scalar, const bool& negate,
+                         Bip340Key bip340)
+        : normalized_scalar(scalar), negated(negate),
+          key(std::move(bip340)) {}
+    PunishmentEvaluation(const PunishmentEvaluation&) = delete;
+    PunishmentEvaluation& operator=(const PunishmentEvaluation&) = delete;
+    PunishmentEvaluation(PunishmentEvaluation&& other) noexcept
+        : normalized_scalar(other.normalized_scalar),
+          negated(other.negated), key(std::move(other.key)) {
+        detail::secure_clear_bytes(&other.normalized_scalar,
+                                   sizeof(other.normalized_scalar));
+        detail::secure_clear_bytes(&other.negated, sizeof(other.negated));
+    }
+    PunishmentEvaluation& operator=(PunishmentEvaluation&&) = delete;
+    ~PunishmentEvaluation() {
+        detail::secure_clear_bytes(&normalized_scalar,
+                                   sizeof(normalized_scalar));
+        detail::secure_clear_bytes(&negated, sizeof(negated));
+    }
+};
+
+Result<PunishmentEvaluation> evaluate_punishment_key(
+    const GeneratedKey& anchor_recovery_key,
+    purify_secp_context* secp_context) {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v3_hash_suite(
+            "anchor_escrow:punishment_hash_suite"),
+        "anchor_escrow:punishment_hash_suite");
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(secp_context,
+                             "anchor_escrow:punishment_context"),
+        "anchor_escrow:punishment_context");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& derived_anchor,
+        derive_key(anchor_recovery_key.secret),
+        "anchor_escrow:punishment_anchor");
+    if (derived_anchor.public_key != anchor_recovery_key.public_key) {
+        return unexpected_error(ErrorCode::BindingMismatch,
+                                "anchor_escrow:punishment_keypair");
+    }
+    auto raw_scalar = eval(anchor_recovery_key.secret,
+                           anchor_punishment_evaluation_input());
+    if (!raw_scalar) {
+        return unexpected_error(raw_scalar.error(),
+                                "anchor_escrow:punishment_evaluation");
+    }
+    WipeObjectOnDestruction raw_scalar_guard(*raw_scalar);
+    auto raw_bytes = raw_scalar->to_bytes_be();
+    WipeObjectOnDestruction raw_bytes_guard(raw_bytes);
+    Bip340Key key;
+    key.seckey = raw_bytes;
+    if (purify_bip340_key_from_seckey(
+            secp_context, key.seckey.data(), key.xonly_pubkey.data()) == 0) {
+        return unexpected_error(ErrorCode::RangeViolation,
+                                "anchor_escrow:zero_punishment_scalar");
+    }
+    unsigned char difference = 0;
+    for (std::size_t i = 0; i < raw_bytes.size(); ++i) {
+        difference |= raw_bytes[i] ^ key.seckey[i];
+    }
+    bool negated = difference != 0;
+    detail::secure_clear_bytes(&difference, sizeof(difference));
+    WipeObjectOnDestruction negated_guard(negated);
+    auto normalized = FieldElement::try_from_bytes32(key.seckey);
+    if (!normalized) {
+        return unexpected_error(
+            normalized.error(),
+            "anchor_escrow:normalized_punishment_scalar");
+    }
+    WipeObjectOnDestruction normalized_guard(*normalized);
+    return PunishmentEvaluation(*normalized, negated,
+                                std::move(key));
+}
 
 Status require_roster(const RecoveryBoundSigningRoster& roster,
                       const char* label) {
@@ -501,6 +595,31 @@ Result<GeneratedKey> decrypt_anchor(
 }
 
 } // namespace
+
+Result<AnchorPunishmentPublicKey> AnchorPunishmentPublicKey::create(
+    const std::array<unsigned char, 32>& xonly,
+    purify_secp_context* secp_context) {
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(secp_context,
+                             "anchor_escrow:punishment_public_key"),
+        "anchor_escrow:punishment_public_key");
+    if (purify_bip340_validate_xonly_pubkey(secp_context, xonly.data()) ==
+        0) {
+        return unexpected_error(ErrorCode::BackendRejectedInput,
+                                "anchor_escrow:punishment_public_key");
+    }
+    return AnchorPunishmentPublicKey(xonly);
+}
+
+Result<AnchorPunishmentKey> derive_anchor_punishment_key(
+    const GeneratedKey& anchor_recovery_key,
+    purify_secp_context* secp_context) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto evaluated,
+        evaluate_punishment_key(anchor_recovery_key, secp_context),
+        "anchor_escrow:derive_punishment_key");
+    return AnchorPunishmentKey(std::move(evaluated.key));
+}
 
 Status AnchorEscrowRecord::validate_encoding(
     purify_secp_context* secp_context) const {

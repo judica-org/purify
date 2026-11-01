@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <span>
+#include <utility>
 
 #include "purify/api.hpp"
 #include "purify/bppp.hpp"
@@ -24,6 +25,65 @@ class AnchorEscrowAccumulator;
  * digest must not include the escrow record itself.
  */
 using AnchorEscrowContextDigest = std::array<unsigned char, 32>;
+
+/** Canonical x-only BIP340 key authorized to punish one anchor. */
+class AnchorPunishmentPublicKey {
+public:
+    AnchorPunishmentPublicKey(const AnchorPunishmentPublicKey&) = default;
+    AnchorPunishmentPublicKey& operator=(
+        const AnchorPunishmentPublicKey&) = default;
+    AnchorPunishmentPublicKey(AnchorPunishmentPublicKey&&) noexcept =
+        default;
+    AnchorPunishmentPublicKey& operator=(
+        AnchorPunishmentPublicKey&&) noexcept = default;
+
+    [[nodiscard]] static Result<AnchorPunishmentPublicKey> create(
+        const std::array<unsigned char, 32>& xonly,
+        purify_secp_context* secp_context);
+
+    [[nodiscard]] const std::array<unsigned char, 32>& xonly() const noexcept {
+        return xonly_;
+    }
+
+    friend bool operator==(const AnchorPunishmentPublicKey&,
+                           const AnchorPunishmentPublicKey&) = default;
+
+private:
+    explicit AnchorPunishmentPublicKey(
+        const std::array<unsigned char, 32>& xonly) : xonly_(xonly) {}
+
+    std::array<unsigned char, 32> xonly_{};
+
+    friend class AnchorPunishmentKey;
+};
+
+/** Move-only recovered BIP340 punishment key with an even-Y secret. */
+class AnchorPunishmentKey {
+public:
+    AnchorPunishmentKey(const AnchorPunishmentKey&) = delete;
+    AnchorPunishmentKey& operator=(const AnchorPunishmentKey&) = delete;
+    AnchorPunishmentKey(AnchorPunishmentKey&&) noexcept = default;
+    AnchorPunishmentKey& operator=(AnchorPunishmentKey&&) noexcept = default;
+
+    [[nodiscard]] const Bip340Key& bip340_key() const noexcept {
+        return key_;
+    }
+
+    [[nodiscard]] const AnchorPunishmentPublicKey& public_key() const
+        noexcept {
+        return public_key_;
+    }
+
+private:
+    explicit AnchorPunishmentKey(Bip340Key key)
+        : key_(std::move(key)), public_key_(key_.xonly_pubkey) {}
+
+    Bip340Key key_;
+    AnchorPunishmentPublicKey public_key_;
+
+    friend Result<AnchorPunishmentKey> derive_anchor_punishment_key(
+        const GeneratedKey&, purify_secp_context*);
+};
 
 /** Public ciphertext carrying both scalars of one Purify recovery key. */
 struct AnchorEscrowCiphertext {
@@ -93,6 +153,19 @@ static_assert(AnchorEscrowRecord::kProofPayloadSize ==
                   bppp::ScalarBytes{}.size() +
                   AnchorEscrowRecord::kNormProofSize);
 static_assert(AnchorEscrowRecord::kSerializedSize == 1265);
+
+/**
+ * Evaluate the anchor's fixed punishment-key domain and normalize it to the
+ * even-Y BIP340 representative.
+ *
+ * A zero evaluation is rejected. The caller must replace the anchor recovery
+ * key; this suite has no counter-based rekey branch whose choice could diverge
+ * from the later escrow relation. `PURIFY_USE_LEGACY_FIELD_HASHES` builds
+ * return `ErrorCode::UnsupportedSymbol` for this versioned derivation.
+ */
+[[nodiscard]] Result<AnchorPunishmentKey> derive_anchor_punishment_key(
+    const GeneratedKey& anchor_recovery_key,
+    purify_secp_context* secp_context);
 
 /**
  * Encrypt an existing anchor recovery key to a verified coalition root.

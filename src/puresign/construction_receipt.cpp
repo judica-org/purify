@@ -285,6 +285,24 @@ ConstructionReceiptAccumulator::verify_setup_reduction(
 }
 
 Result<bppp::accumulation::PendingClaim>
+ConstructionReceiptAccumulator::verify_anchor_reduction(
+    const RecoveryBoundSigningRoster& roster,
+    const UInt512& advertised_anchor_root,
+    const AnchorEscrowContextDigest& context_digest,
+    const AnchorEscrowRecord& record,
+    const bppp::accumulation::NormReductionProof& reduction,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) const {
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& prepared,
+        anchors_.prepare(roster, advertised_anchor_root,
+                         context_digest, record, secp_context, cache),
+        "construction_accumulation:prepare_anchor");
+    return bppp::accumulation::verify_norm_reduction(
+        anchors_.basis(), prepared, reduction, secp_context);
+}
+
+Result<bppp::accumulation::PendingClaim>
 ConstructionReceiptAccumulator::promote_setup_claim(
     const bppp::accumulation::PendingClaim& setup_claim) const {
     const auto& source = setup_.basis();

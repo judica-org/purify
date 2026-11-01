@@ -204,10 +204,11 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, reduction,
               "anchor escrow coefficient opening proves");
     if (!reduction) return;
-    auto pending = purify::bppp::accumulation::verify_norm_reduction(
-        accumulator->basis(), *prepared, *reduction, secp.get());
+    auto pending = construction_accumulator->verify_anchor_reduction(
+        fixture->roster, anchor->public_key, context, *parsed,
+        *reduction, secp.get());
     expect_ok(ctx, pending,
-              "anchor escrow reduction yields a pending obligation");
+              "exact anchor reduction yields a pending obligation");
     if (!pending) return;
     expect_ok(ctx, purify::bppp::accumulation::decide(
                        accumulator->basis(), *pending, secp.get()),
@@ -344,6 +345,11 @@ void test_anchor_escrow(TestContext& ctx) {
             secp.get());
     ctx.expect(!changed_context_claim,
                "anchor reduction cannot move to another context");
+    ctx.expect(
+        !construction_accumulator->verify_anchor_reduction(
+            fixture->roster, anchor->public_key, changed_context,
+            *record, *reduction, secp.get()),
+        "construction leaf authenticates the exact anchor statement");
     expect_error(
         ctx,
         purify::accountable::recover_escrowed_anchor(

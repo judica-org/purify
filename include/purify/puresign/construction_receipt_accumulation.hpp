@@ -60,6 +60,16 @@ public:
         purify_secp_context* secp_context,
         bppp::ExperimentalCircuitBackend* cache = nullptr) const;
 
+    [[nodiscard]] Result<bppp::accumulation::PendingClaim>
+    verify_anchor_reduction(
+        const RecoveryBoundSigningRoster& roster,
+        const UInt512& advertised_anchor_root,
+        const AnchorEscrowContextDigest& context_digest,
+        const AnchorEscrowRecord& record,
+        const bppp::accumulation::NormReductionProof& reduction,
+        purify_secp_context* secp_context,
+        bppp::ExperimentalCircuitBackend* cache = nullptr) const;
+
 private:
     ConstructionReceiptAccumulator(
         RecoveryRootSetupAccumulator setup,

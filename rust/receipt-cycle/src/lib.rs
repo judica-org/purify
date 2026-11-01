@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 mod ffi;
+mod gadgets;
 pub mod parent_relation;
 
 pub(crate) type Scalar = <Secq256k1Cycle as Cycle>::Scalar;

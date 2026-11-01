@@ -255,15 +255,176 @@ pub(crate) struct DirectNovaSuite<const ARITY: usize> {
     operation: Mutex<()>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FrozenNovaDimensions {
+    constraints: u64,
+    variables: u64,
+}
+
+impl FrozenNovaDimensions {
+    const fn new(constraints: u64, variables: u64) -> Self {
+        Self {
+            constraints,
+            variables,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FrozenNovaProofMetrics {
+    encoded_length: u64,
+    sequence_count: u32,
+}
+
+impl FrozenNovaProofMetrics {
+    const fn new(encoded_length: u64, sequence_count: u32) -> Self {
+        Self {
+            encoded_length,
+            sequence_count,
+        }
+    }
+}
+
+/// One locally selected suite. Receipts and peers never construct this value.
+///
+/// A production constant is intentionally absent until its public-parameter
+/// digest and receipt-layer versions have completed qualification.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ExpectedDirectNovaSuite {
+    construction_versions: DirectNovaConstructionVersions,
+    relation_id: [u8; 32],
+    public_parameter_digest: [u8; 32],
+    primary: FrozenNovaDimensions,
+    secondary: FrozenNovaDimensions,
+    proof: FrozenNovaProofMetrics,
+    suite_id: DirectNovaSuiteId,
+}
+
+impl ExpectedDirectNovaSuite {
+    const fn new(
+        construction_versions: DirectNovaConstructionVersions,
+        relation_id: [u8; 32],
+        public_parameter_digest: [u8; 32],
+        primary: FrozenNovaDimensions,
+        secondary: FrozenNovaDimensions,
+        proof: FrozenNovaProofMetrics,
+        suite_id: DirectNovaSuiteId,
+    ) -> Self {
+        Self {
+            construction_versions,
+            relation_id,
+            public_parameter_digest,
+            primary,
+            secondary,
+            proof,
+            suite_id,
+        }
+    }
+
+    fn precheck_relation(
+        &self,
+        relation_id: DirectRelationId,
+    ) -> Result<(), DirectNovaSessionError> {
+        if relation_id.bytes() != &self.relation_id {
+            return Err(DirectNovaSessionError::SuiteMismatch("relation ID"));
+        }
+        Ok(())
+    }
+
+    fn validate<const ARITY: usize>(
+        &self,
+        metadata: &DirectNovaSuiteMetadata,
+        proof_shape: &NovaCompressedProofShape,
+    ) -> Result<(), DirectNovaSessionError> {
+        self.precheck_relation(metadata.relation_id)?;
+        if metadata.public_parameter_digest != self.public_parameter_digest {
+            return Err(DirectNovaSessionError::SuiteMismatch(
+                "public-parameter digest",
+            ));
+        }
+        for (actual, expected, label) in [
+            (
+                suite_u64(metadata.primary_constraints, "primary constraints")?,
+                self.primary.constraints,
+                "primary constraints",
+            ),
+            (
+                suite_u64(metadata.secondary_constraints, "secondary constraints")?,
+                self.secondary.constraints,
+                "secondary constraints",
+            ),
+            (
+                suite_u64(metadata.primary_variables, "primary variables")?,
+                self.primary.variables,
+                "primary variables",
+            ),
+            (
+                suite_u64(metadata.secondary_variables, "secondary variables")?,
+                self.secondary.variables,
+                "secondary variables",
+            ),
+            (
+                suite_u64(metadata.proof_length, "proof length")?,
+                self.proof.encoded_length,
+                "proof length",
+            ),
+        ] {
+            if actual != expected {
+                return Err(DirectNovaSessionError::SuiteMismatch(label));
+            }
+        }
+        if suite_u32(metadata.codec_sequence_count, "codec sequence count")?
+            != self.proof.sequence_count
+        {
+            return Err(DirectNovaSessionError::SuiteMismatch(
+                "codec sequence count",
+            ));
+        }
+        let suite_id = metadata.suite_id::<ARITY>(proof_shape, self.construction_versions)?;
+        if suite_id != self.suite_id {
+            return Err(DirectNovaSessionError::SuiteMismatch("suite ID"));
+        }
+        Ok(())
+    }
+}
+
+/// A generic suite promoted through one exact local selection profile.
+pub(crate) struct SelectedDirectNovaSuite<const ARITY: usize> {
+    expected: &'static ExpectedDirectNovaSuite,
+    inner: DirectNovaSuite<ARITY>,
+}
+
 impl<const ARITY: usize> DirectNovaSuite<ARITY> {
-    /// Builds transparent parameters from one trusted canonical relation.
-    ///
-    /// Callers selecting a production suite must compare `metadata()` with
-    /// locally frozen values before accepting any proof.
+    /// Builds an unselected suite for internal qualification and test tools.
+    /// Receipt acceptance must use `setup_exact` instead.
+    #[cfg(test)]
     pub(crate) fn setup(
         trusted_relation: StatefulRelation,
     ) -> Result<Self, DirectNovaSessionError> {
         let (template, trusted_step) = DirectNovaTemplate::from_relation(trusted_relation)?;
+        Self::setup_prepared(template, trusted_step)
+    }
+
+    /// Builds a suite only after its relation and complete resulting metadata
+    /// match one local profile. There is no alternate or fallback profile.
+    pub(crate) fn setup_exact(
+        trusted_relation: StatefulRelation,
+        expected: &'static ExpectedDirectNovaSuite,
+    ) -> Result<SelectedDirectNovaSuite<ARITY>, DirectNovaSessionError> {
+        let (template, trusted_step) = DirectNovaTemplate::from_relation(trusted_relation)?;
+        expected.precheck_relation(trusted_step.relation_id())?;
+        let suite = Self::setup_prepared(template, trusted_step)?;
+        expected.validate::<ARITY>(&suite.metadata, &suite.proof_shape)?;
+        Ok(SelectedDirectNovaSuite {
+            expected,
+            inner: suite,
+        })
+    }
+
+    fn setup_prepared(
+        template: DirectNovaTemplate<ARITY>,
+        trusted_step: DirectNovaStep<ARITY>,
+    ) -> Result<Self, DirectNovaSessionError> {
         let relation_id = trusted_step.relation_id();
         let pool = ThreadPoolBuilder::new()
             .num_threads(1)
@@ -351,11 +512,11 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
     pub(crate) fn verify_exact(
         &self,
         initial_state: &[DirectNovaScalar; ARITY],
-        steps: usize,
+        expected_steps: usize,
         expected_final_state: &[DirectNovaScalar; ARITY],
         proof: &[u8],
     ) -> Result<(), DirectNovaSessionError> {
-        if steps == 0 {
+        if expected_steps == 0 {
             return Err(DirectNovaSessionError::StepCount {
                 expected: 1,
                 actual: 0,
@@ -371,7 +532,8 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
         self.serialized(|| {
             let shape = self.proof_shape.as_fixed_serde_shape();
             let compressed = shape.decode_canonical::<DirectCompressedSnark<ARITY>>(proof)?;
-            let final_state = compressed.verify(&self.verifier_key, steps, initial_state)?;
+            let final_state =
+                compressed.verify(&self.verifier_key, expected_steps, initial_state)?;
             if final_state.as_slice() != expected_final_state {
                 return Err(DirectNovaSessionError::FinalState);
             }
@@ -388,6 +550,37 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
             .lock()
             .expect("direct Nova suite operation mutex poisoned");
         self.pool.install(operation)
+    }
+}
+
+impl<const ARITY: usize> SelectedDirectNovaSuite<ARITY> {
+    pub(crate) const fn expected(&self) -> &'static ExpectedDirectNovaSuite {
+        self.expected
+    }
+
+    pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
+        self.inner.metadata()
+    }
+
+    pub(crate) fn start(
+        &self,
+        initial_state: [DirectNovaScalar; ARITY],
+        expected_steps: usize,
+    ) -> Result<DirectNovaProverSession<'_, ARITY>, DirectNovaSessionError> {
+        self.inner.start(initial_state, expected_steps)
+    }
+
+    /// Verifies only the caller's exact statement. The proof supplies neither
+    /// suite metadata nor its own recursive step count.
+    pub(crate) fn verify_exact(
+        &self,
+        initial_state: &[DirectNovaScalar; ARITY],
+        expected_steps: usize,
+        expected_final_state: &[DirectNovaScalar; ARITY],
+        proof: &[u8],
+    ) -> Result<(), DirectNovaSessionError> {
+        self.inner
+            .verify_exact(initial_state, expected_steps, expected_final_state, proof)
     }
 }
 
@@ -847,17 +1040,136 @@ mod tests {
         );
     }
 
+    const TEST_EXPECTED_SUITE: ExpectedDirectNovaSuite = ExpectedDirectNovaSuite::new(
+        TEST_CONSTRUCTION_VERSIONS,
+        [0x11; 32],
+        [0x22; 32],
+        FrozenNovaDimensions::new(13_606, 13_636),
+        FrozenNovaDimensions::new(10_787, 10_769),
+        FrozenNovaProofMetrics::new(10_436, 104),
+        TEST_SUITE_ID,
+    );
+    const TEST_WRONG_RELATION_SUITE: ExpectedDirectNovaSuite = ExpectedDirectNovaSuite::new(
+        TEST_CONSTRUCTION_VERSIONS,
+        [0; 32],
+        [0x22; 32],
+        FrozenNovaDimensions::new(13_606, 13_636),
+        FrozenNovaDimensions::new(10_787, 10_769),
+        FrozenNovaProofMetrics::new(10_436, 104),
+        TEST_SUITE_ID,
+    );
+    const TINY_RELATION_ID: [u8; 32] = [
+        216, 68, 225, 212, 141, 3, 38, 194, 117, 15, 42, 255, 34, 4, 125, 137, 129, 43, 41, 78,
+        189, 244, 129, 131, 165, 2, 204, 234, 60, 149, 220, 168,
+    ];
+    const TINY_PUBLIC_PARAMETER_DIGEST: [u8; 32] = [
+        247, 248, 171, 109, 59, 169, 222, 232, 34, 50, 169, 143, 71, 133, 71, 85, 255, 3, 30, 104,
+        161, 57, 66, 253, 195, 30, 88, 65, 224, 42, 105, 3,
+    ];
+    const TINY_SUITE_ID: DirectNovaSuiteId = DirectNovaSuiteId::new([
+        0x5b, 0x92, 0xf7, 0x26, 0x24, 0x50, 0x8e, 0xd9, 0x67, 0xa7, 0xa0, 0x0e, 0x0a, 0x27, 0x75,
+        0x70, 0xf0, 0x3f, 0xb0, 0xfa, 0xaf, 0x78, 0x66, 0xc1, 0xdc, 0xe8, 0x63, 0xb8, 0x8b, 0xb2,
+        0x00, 0xd4,
+    ]);
+    const TINY_EXPECTED_SUITE: ExpectedDirectNovaSuite = ExpectedDirectNovaSuite::new(
+        TEST_CONSTRUCTION_VERSIONS,
+        TINY_RELATION_ID,
+        TINY_PUBLIC_PARAMETER_DIGEST,
+        FrozenNovaDimensions::new(13_606, 13_636),
+        FrozenNovaDimensions::new(10_787, 10_769),
+        FrozenNovaProofMetrics::new(10_436, 104),
+        TINY_SUITE_ID,
+    );
+
+    #[test]
+    fn exact_suite_profile_rejects_every_metadata_drift() {
+        let (metadata, proof_shape) = fixed_suite_fixture();
+        let expected = TEST_EXPECTED_SUITE;
+        expected
+            .validate::<TEST_ARITY>(&metadata, &proof_shape)
+            .expect("exact local suite profile");
+
+        let mut changed = expected;
+        changed.relation_id[0] ^= 1;
+        assert!(matches!(
+            changed.validate::<TEST_ARITY>(&metadata, &proof_shape),
+            Err(DirectNovaSessionError::SuiteMismatch("relation ID"))
+        ));
+
+        let mut changed = expected;
+        changed.public_parameter_digest[0] ^= 1;
+        assert!(matches!(
+            changed.validate::<TEST_ARITY>(&metadata, &proof_shape),
+            Err(DirectNovaSessionError::SuiteMismatch(
+                "public-parameter digest"
+            ))
+        ));
+
+        for label in [
+            "primary constraints",
+            "secondary constraints",
+            "primary variables",
+            "secondary variables",
+            "proof length",
+        ] {
+            let mut changed = expected;
+            match label {
+                "primary constraints" => changed.primary.constraints += 1,
+                "secondary constraints" => changed.secondary.constraints += 1,
+                "primary variables" => changed.primary.variables += 1,
+                "secondary variables" => changed.secondary.variables += 1,
+                "proof length" => changed.proof.encoded_length += 1,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                changed.validate::<TEST_ARITY>(&metadata, &proof_shape),
+                Err(DirectNovaSessionError::SuiteMismatch(label))
+            );
+        }
+
+        let mut changed = expected;
+        changed.proof.sequence_count += 1;
+        assert!(matches!(
+            changed.validate::<TEST_ARITY>(&metadata, &proof_shape),
+            Err(DirectNovaSessionError::SuiteMismatch(
+                "codec sequence count"
+            ))
+        ));
+
+        let mut changed = expected;
+        changed.construction_versions = DirectNovaConstructionVersions::new(
+            ConstructionPayloadVersion::new(0x0102_0305),
+            ConstructionStatementVersion::new(0x1112_1314),
+            ConstructionManifestVersion::new(0x2122_2324),
+            ConstructionNativeDecisionVersion::new(0x3132_3334),
+        );
+        assert!(matches!(
+            changed.validate::<TEST_ARITY>(&metadata, &proof_shape),
+            Err(DirectNovaSessionError::SuiteMismatch("suite ID"))
+        ));
+
+        let mut changed = expected;
+        changed.suite_id = DirectNovaSuiteId::new([0x55; 32]);
+        assert!(matches!(
+            changed.validate::<TEST_ARITY>(&metadata, &proof_shape),
+            Err(DirectNovaSessionError::SuiteMismatch("suite ID"))
+        ));
+    }
+
+    #[test]
+    fn exact_suite_prechecks_relation_before_parameter_setup() {
+        assert!(matches!(
+            DirectNovaSuite::<TEST_ARITY>::setup_exact(
+                relation(source_state(3)),
+                &TEST_WRONG_RELATION_SUITE,
+            ),
+            Err(DirectNovaSessionError::SuiteMismatch("relation ID"))
+        ));
+    }
+
     #[test]
     #[ignore = "explicit slow real two-step Nova session"]
     fn tiny_twenty_state_session_round_trips_canonically() {
-        const EXPECTED_RELATION_ID: [u8; 32] = [
-            216, 68, 225, 212, 141, 3, 38, 194, 117, 15, 42, 255, 34, 4, 125, 137, 129, 43, 41, 78,
-            189, 244, 129, 131, 165, 2, 204, 234, 60, 149, 220, 168,
-        ];
-        const EXPECTED_PUBLIC_PARAMETER_DIGEST: [u8; 32] = [
-            247, 248, 171, 109, 59, 169, 222, 232, 34, 50, 169, 143, 71, 133, 71, 85, 255, 3, 30,
-            104, 161, 57, 66, 253, 195, 30, 88, 65, 224, 42, 105, 3,
-        ];
         let source_z0 = source_state(3);
         let source_z1 = increment(source_z0);
         let source_z2 = increment(source_z1);
@@ -865,13 +1177,15 @@ mod tests {
         let z1 = nova_state(source_z1);
         let z2 = nova_state(source_z2);
 
-        let suite = DirectNovaSuite::<TEST_ARITY>::setup(relation(source_z0))
-            .expect("tiny direct Nova suite");
-        let metadata = suite.metadata();
-        assert_eq!(*metadata.relation_id.bytes(), EXPECTED_RELATION_ID);
+        let selected =
+            DirectNovaSuite::<TEST_ARITY>::setup_exact(relation(source_z0), &TINY_EXPECTED_SUITE)
+                .expect("selected tiny direct Nova suite");
+        assert_eq!(selected.expected(), &TINY_EXPECTED_SUITE);
+        let metadata = selected.metadata();
+        assert_eq!(*metadata.relation_id.bytes(), TINY_RELATION_ID);
         assert_eq!(
             metadata.public_parameter_digest,
-            EXPECTED_PUBLIC_PARAMETER_DIGEST
+            TINY_PUBLIC_PARAMETER_DIGEST
         );
         assert_eq!(
             (metadata.primary_constraints, metadata.secondary_constraints),
@@ -884,7 +1198,7 @@ mod tests {
         assert_eq!(metadata.proof_length, 10_436);
         assert_eq!(metadata.codec_sequence_count, 104);
 
-        let session = suite
+        let session = selected
             .start(z0, 2)
             .expect("two-step session")
             .add_relation(relation(source_z0))
@@ -893,26 +1207,26 @@ mod tests {
             .expect("second fold");
         let proof = session.finish().expect("compress two-step proof");
         assert_eq!(proof.len(), metadata.proof_length);
-        suite
+        selected
             .verify_exact(&z0, 2, &z2, &proof)
             .expect("verify canonical proof");
 
         let mut short = proof.clone();
         short.pop();
         assert!(matches!(
-            suite.verify_exact(&z0, 2, &z2, &short),
+            selected.verify_exact(&z0, 2, &z2, &short),
             Err(DirectNovaSessionError::ProofLength { .. })
         ));
 
         let mut wrong_final = z2;
         wrong_final[0] += DirectNovaScalar::ONE;
         assert!(matches!(
-            suite.verify_exact(&z0, 2, &wrong_final, &proof),
+            selected.verify_exact(&z0, 2, &wrong_final, &proof),
             Err(DirectNovaSessionError::FinalState)
         ));
-        assert!(suite.verify_exact(&z0, 1, &z1, &proof).is_err());
+        assert!(selected.verify_exact(&z0, 1, &z1, &proof).is_err());
 
-        let incomplete = suite.start(z0, 2).expect("incomplete session");
+        let incomplete = selected.start(z0, 2).expect("incomplete session");
         assert!(matches!(
             incomplete.finish(),
             Err(DirectNovaSessionError::StepCount {
@@ -921,7 +1235,7 @@ mod tests {
             })
         ));
 
-        let discontinuous = suite
+        let discontinuous = selected
             .start(z0, 2)
             .expect("discontinuous session")
             .add_relation(relation(source_z1));

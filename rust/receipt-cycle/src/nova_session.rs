@@ -286,9 +286,6 @@ impl FrozenNovaProofMetrics {
 }
 
 /// One locally selected suite. Receipts and peers never construct this value.
-///
-/// A production constant is intentionally absent until its public-parameter
-/// digest and receipt-layer versions have completed qualification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ExpectedDirectNovaSuite {
     construction_versions: DirectNovaConstructionVersions,
@@ -387,6 +384,53 @@ impl ExpectedDirectNovaSuite {
         Ok(())
     }
 }
+
+const QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION: ConstructionPayloadVersion =
+    ConstructionPayloadVersion::new(2);
+const QUALIFIED_CONSTRUCTION_STATEMENT_VERSION: ConstructionStatementVersion =
+    ConstructionStatementVersion::new(3);
+const QUALIFIED_CONSTRUCTION_MANIFEST_VERSION: ConstructionManifestVersion =
+    ConstructionManifestVersion::new(2);
+
+/// Candidate-decision v1 binds `CandidateAccumStep/v1` and the native linear
+/// decision over `point:33 || scale:32 || factors:15*32`, the current 545-byte
+/// construction-root semantics.
+const QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION: ConstructionNativeDecisionVersion =
+    ConstructionNativeDecisionVersion::new(1);
+const QUALIFIED_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
+    DirectNovaConstructionVersions::new(
+        QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION,
+        QUALIFIED_CONSTRUCTION_STATEMENT_VERSION,
+        QUALIFIED_CONSTRUCTION_MANIFEST_VERSION,
+        QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION,
+    );
+const QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID: [u8; 32] = [
+    0x53, 0x0d, 0xc1, 0x8d, 0x9b, 0xa3, 0x76, 0x9c, 0x16, 0xa1, 0x3a, 0xc4, 0xac, 0x7d, 0x8a, 0x87,
+    0xf6, 0x28, 0x98, 0x98, 0xc4, 0x03, 0x6d, 0xa6, 0xa1, 0x8b, 0xe8, 0xee, 0x0d, 0x87, 0xc1, 0xda,
+];
+const QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST: [u8; 32] = [
+    0xc2, 0xf5, 0x2a, 0xae, 0x32, 0x39, 0xdb, 0x04, 0xa7, 0x3a, 0x5f, 0xc3, 0xb1, 0x57, 0xfa, 0x85,
+    0x85, 0xff, 0x20, 0x3d, 0x6e, 0x36, 0xee, 0x82, 0x3c, 0x29, 0x7d, 0xf8, 0x29, 0xcf, 0xc8, 0x00,
+];
+const QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID: DirectNovaSuiteId = DirectNovaSuiteId::new([
+    0xe1, 0x95, 0xbd, 0x3d, 0x04, 0x75, 0x00, 0x37, 0xc5, 0xb3, 0x49, 0x15, 0xa8, 0xf9, 0xbe, 0x2b,
+    0xf2, 0xf6, 0xe8, 0x95, 0x9c, 0xea, 0xc3, 0x19, 0x06, 0x3a, 0x4b, 0x35, 0x39, 0xbb, 0x08, 0x57,
+]);
+
+/// Qualified production-shape construction-parent suite.
+///
+/// This static selector records setup qualification only. It does not activate
+/// a construction-receipt codec or consensus acceptance path.
+pub(crate) static QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE: ExpectedDirectNovaSuite =
+    ExpectedDirectNovaSuite::new(
+        QUALIFIED_CONSTRUCTION_VERSIONS,
+        QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
+        QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
+        FrozenNovaDimensions::new(1_975_624, 1_865_190),
+        FrozenNovaDimensions::new(10_787, 10_769),
+        FrozenNovaProofMetrics::new(12_466, 125),
+        QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID,
+    );
 
 /// A generic suite promoted through one exact local selection profile.
 pub(crate) struct SelectedDirectNovaSuite<const ARITY: usize> {
@@ -985,6 +1029,38 @@ mod tests {
                 "proof codec metadata"
             ))
         ));
+    }
+
+    #[test]
+    fn qualified_construction_parent_suite_id_is_frozen() {
+        let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
+            NovaR1csDimensions::new(1_975_624, 1_865_190),
+            NovaR1csDimensions::new(10_787, 10_769),
+            TEST_ARITY,
+        )
+        .expect("qualified production proof shape");
+        assert_eq!(proof_shape.encoded_len(), 12_466);
+        assert_eq!(proof_shape.sequence_count(), 125);
+
+        let metadata = DirectNovaSuiteMetadata {
+            relation_id: DirectRelationId::from_test_bytes(
+                QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
+            ),
+            public_parameter_digest: QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
+            primary_constraints: 1_975_624,
+            primary_variables: 1_865_190,
+            secondary_constraints: 10_787,
+            secondary_variables: 10_769,
+            proof_length: proof_shape.encoded_len(),
+            codec_sequence_count: proof_shape.sequence_count(),
+        };
+        let suite_id = metadata
+            .suite_id::<TEST_ARITY>(&proof_shape, QUALIFIED_CONSTRUCTION_VERSIONS)
+            .expect("qualified production suite ID");
+        assert_eq!(suite_id, QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID);
+        QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE
+            .validate::<TEST_ARITY>(&metadata, &proof_shape)
+            .expect("qualified production suite profile");
     }
 
     #[test]

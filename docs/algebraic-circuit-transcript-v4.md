@@ -146,3 +146,7 @@ sizes, not a complete parent-proof size or an operational memory
 qualification. An actual small public-leaf prove and verify regression
 uses 309,133 gates and a 1,679-byte proof. It rejects a changed Schnorr
 response.
+
+The hidden-anchor number is a historical measurement. Anchor escrow record
+version 3 uses public mode with one punishment commitment; the production
+recurrence has not yet been remeasured or migrated to that leaf mode.

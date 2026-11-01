@@ -849,15 +849,16 @@ not acceptance. Coefficient reduction, authenticated accumulation
 transitions, and the final native decision remain mandatory.
 
 The measured production-shape relations have 854,293 gates for the
-public setup leaf and 949,880 gates for the hidden anchor leaf. These
-are leaf relation sizes, not complete parent costs. No final
-construction receipt exists, and no recursive backend has been selected.
+public setup leaf and 949,880 gates for the historical hidden anchor
+leaf. These are leaf relation sizes, not complete parent costs. Anchor
+escrow record version~3 now uses V4 public mode with one punishment-key
+commitment; its recursive leaf has not yet been remeasured in this
+document. No final construction receipt exists.
 
-The public PureSign++ and escrow record codecs still encode V3 proofs
-while migration remains pending. The remainder of this section through
-the historical efficiency note records that V3 implementation and its
-measurements. Its polynomial argument and transcript analysis are not a
-security proof for V4.
+The remainder of this section through the historical efficiency note
+records the preceding V3 implementation and its measurements. Its
+polynomial argument and transcript analysis are not a security proof for
+V4.
 
 \subsection{Historical V3 Reduction to One Norm Relation}
 

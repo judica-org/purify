@@ -27,10 +27,10 @@ enabling enrollment. The independent leaf experiment is in
 
 V4 is the candidate active leaf path for a construction receipt. Native
 V4 proof production, preparation, verification, and the algebraic
-accumulation adapter are implemented. The fixed-size setup and escrow
-records still encode V3 proofs. Their codecs, sizes, and timings below
-are retained as a historical individual-proof baseline. They have not
-been migrated into a final parent receipt.
+accumulation adapter are implemented. The fixed-size setup record and anchor
+record version 3 both encode V4 proofs. Their historical hidden-output sizes
+and timings below remain useful as an individual-proof baseline. Neither leaf
+has been migrated into a final production parent receipt.
 
 ## Groups, keys and canonical encodings
 
@@ -131,20 +131,23 @@ The bridge proof jointly constrains:
 - Both plaintext bounds `1 <= di <= floor(li/2)` and the old root's points.
 - Each ephemeral public pair and its shared-point multiplications under `M`.
 - Both `c_j` equations, using exactly those bounded plaintext witnesses.
+- A fixed-domain Purify evaluation of the same plaintext witnesses, normalized
+  to the even-Y BIP340 punishment scalar.
 
 The transcript binds the suite/version, ordered ciphertext, recipient, old
-root and application setup/purpose context. It also binds the roster's even-Y
-`Q`, key-list hash, coalition-core digest, and registered recovery root. The
-circuit has ten companion scalar multiplications: two for the old root and
-four for each pad. Its only output commitment is the public constant one.
-Unlike setup, the anchor proof therefore needs no public-commitment DLog
-fields. Encrypted plaintext relations are native field/curve equations, not
-independently blinded Pedersen output values.
+root, exact canonical punishment key and application setup/purpose context. It
+also binds the roster's even-Y `Q`, key-list hash, coalition-core digest, and
+registered recovery root. The circuit has twelve companion scalar
+multiplications: two for the old root, four for each pad, and two fixed-base
+multiplications for the punishment evaluation. The two evaluation
+multiplications reuse the old-root scalar bits and their bit-only lookup
+products. The circuit's sole output is the normalized punishment scalar,
+bound to canonical `02 || Kx` by V4 public-commitment mode and its 64-byte DLog
+argument. Encrypted plaintext relations remain native field/curve equations,
+not independently blinded Pedersen output values.
 
-The V4 candidate anchor leaf uses hidden mode, whose DLog fields are
-constrained to the canonical zero values. Its complete transcript and
-pending norm obligation still require reduction, parent authentication,
-and the final accumulator decision.
+The complete V4 transcript and pending norm obligation still require
+reduction, parent authentication, and the final accumulator decision.
 
 `recover_escrowed_anchor` first verifies the bridge and checks that an exposed
 coalition scalar opens the recovery-bound roster's exact `Q` and registered
@@ -209,7 +212,7 @@ an old authority which lacks their required participation. A shared root
 amortizes a bridge only when that common custody/exposure group already
 exists; independently created roots do not become one root for free.
 
-## Historical V3 sizes and cost accounting
+## Historical hidden-output sizes and current cost accounting
 
 The test-local C++20 Release experiments measured:
 
@@ -222,25 +225,25 @@ The test-local C++20 Release experiments measured:
 | Complete proof bytes | 1,006 | 1,072 |
 | Ciphertext bytes | 0 | 192 |
 | Proof plus ciphertext | 1,006 | 1,264 |
-| Versioned fixed record | 1,007 | 1,265 |
+| Historical versioned fixed record | 1,007 | 1,265 |
 
 Setup additionally needs its 64-byte `M` and the registered `Q` (33 bytes
 as a full point, or its existing authenticated x-only representation).
 If `Q` is already registered, setup adds 1,071 bytes including the 64-byte
-root and proof version byte. The anchor escrow is exactly 1,265 bytes. The
-bridge's 192 bytes are two 64-byte ephemeral pairs and two 32-byte field
-elements. The record does not repeat either 64-byte root or the 32-byte
-application-context digest. A standalone envelope carrying both roots and
-that digest would therefore be 1,425 bytes before registry references,
-consents, or transport framing.
+root and proof version byte. The 1,265-byte anchor figure was the historical
+hidden-output record. The current public-commitment anchor record adds the
+32-byte DLog nonce and 32-byte DLog response, for 1,329 bytes. Its 192-byte
+ciphertext is two 64-byte ephemeral pairs and two 32-byte field elements.
+The record does not repeat the 64-byte root, canonical 32-byte punishment
+key, or 32-byte application-context digest; all are authenticated public
+inputs.
 
-With setup shared across `R` independent old roots, incremental cryptographic
-data is `1071 + 1265*R` bytes when roots and context are authenticated by
-reference. One setup plus one bridge is 2,336 bytes. For 100 independent
-anchors under one coalition, amortizing setup gives 1,275.71 bytes per
-anchor before roots, references, consents, and transport framing. This is
-close to, but does not meet, a strict 1 KB per-anchor goal. Permanent anchor
-leaves remain additional historical data.
+With setup shared across `R` independent old roots, current incremental
+cryptographic data is `1071 + 1329*R` bytes when roots, punishment keys, and
+context are authenticated by reference. One setup plus one bridge is 2,400
+bytes. For 100 independent anchors under one coalition, amortizing setup gives
+1,339.71 bytes per anchor before roots, references, consents, and transport
+framing. Permanent anchor leaves remain additional historical data.
 
 One AppleClang 16 / arm64 Release sample of the V3 tree took about 2.95
 seconds to prove setup and 0.52 seconds to verify it. The first anchor escrow

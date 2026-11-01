@@ -129,11 +129,12 @@ Published escrow cannot be revoked cryptographically by leaving a coalition.
 
 The V4 setup record is 1,007 bytes, alongside a 64-byte public
 recipient, for 1,071 bytes when the coalition point is already registered.
-Each fixed anchor-escrow record is 1,265 bytes: one version byte, a
-192-byte ciphertext and a 1,072-byte V4 proof payload. These are comparison
-sizes, not V4 parent measurements. The superseded initial goal assumed a final
-proof could replace every setup and escrow proof while retaining only the
-ciphertexts:
+Each fixed public-commitment anchor-escrow record is 1,329 bytes: one version
+byte, a 192-byte ciphertext and a 1,136-byte V4 proof payload. The latter adds
+the 32-byte DLog nonce and 32-byte response which bind the circuit output to
+the canonical punishment key. These are comparison sizes, not V4 parent
+measurements. The superseded initial goal assumed a final proof could replace
+every setup and escrow proof while retaining only the ciphertexts:
 
 ```
 64 + 192*N + size(final_proof)
@@ -145,6 +146,11 @@ the 64-byte recovery root, a four-byte entry count, and one 224-byte entry per
 anchor. Each entry appends the validated V4 circuit precommitment needed to
 derive the expected coefficient commitment and anchored offset to its
 ciphertext.
+
+Payload framing remains version 2 because those bytes and field semantics are
+unchanged. `ConstructionReceiptStatement/v3` and the eventual parent suite ID
+version the authenticated interpretation that now includes each resolved
+punishment key.
 
 Registry resolution is historical and one-to-one: a recovery root cannot be
 reassigned after publication, and one setup-record digest cannot alias another
@@ -185,11 +191,14 @@ standardizes it through the one-claim 15-round transition, and runs the
 mandatory native decision. Registry creation stores the resulting 545-byte
 seed root. Promotion is not exposed for generic claims.
 
-A construction receipt begins from that authenticated seed. Its recurrence
-verifies only homogeneous hidden-anchor leaves and ordered two-claim
-transitions; it does not repeat the public setup leaf. The historical
-setup-first native assembly remains useful as a test oracle, not as the
-selected recursive shape.
+A construction receipt begins from that authenticated seed. The checked-in
+Rust recurrence still verifies only homogeneous hidden-anchor leaves and must
+not be activated for the public-commitment anchor record. Its separate
+migration must constrain the public DLog equation under the exact resolved
+statement already bound by the construction digest and initial manifest; it
+does not require a new payload field and still need not repeat the public setup
+leaf. The historical setup-first native assembly remains useful as a test
+oracle, not as the selected recursive shape.
 
 The integrated V4 adapter checks the raw-generator bridge, gamma
 residual, coefficient commitment, and compact polynomial terms. Focused
@@ -321,31 +330,26 @@ scalar-field circuit and historical SHA-256 choices do not define the only
 possible transparent implementation. An accumulator still needs sound child
 proofs and a parent which authenticates every V4 leaf and transition.
 
-Anchor punishment-key derivation is also a design variable in this pre-release
-protocol. Public descriptors and hash-to-curve bases may be derived outside the
-circuit when the verifier can reconstruct them exactly. A hash of an unknown
-secret cannot be lifted on that basis. Any replacement leaf relation must still
-let the owner derive its key and the recovered root derive the exact same
-punishment scalar, while retaining the intended custody and exposure rules.
+Anchor escrow record version 3 fixes punishment-key derivation to
+`k_raw = PurifyEval(d, "Purify/Accountable/AnchorPunishmentKey/v1")`, followed
+by even-Y BIP340 normalization. The verifier reconstructs the two public
+hash-to-curve bases outside the circuit; no hash of the unknown root secret is
+required. The circuit reuses the root's `d1,d2` bit witnesses and publicly
+commits the normalized scalar to the exact canonical punishment key. No anchor
+descriptor or final anchor ID enters this derivation, so there is no circular
+identifier dependency.
 
-For independent owner-held roots, a candidate leaf is
-`k = Purify(d, public_anchor_descriptor)`, with registered root `D`. Both the
-owner and anyone recovering `d` can evaluate `k`. Its public hash-to-curve bases
-come from an acyclic descriptor containing the suite, network, root and relevant
-owner/refund identities plus a uniqueness salt, not the final anchor ID that
-already contains the derived key. This could replace the fresh 64-byte public
-ephemeral pair in the earlier leaf experiment; descriptor/reference costs and
-the exact `kG` binding proof remain. It is a candidate, not an implemented leaf
-or deployed anchor format. An owner who does not know a shared root would need
-distributed evaluation, so this substitution cannot silently change shared-root
-custody into individual custody. Anchor-key topics must be domain-separated
-from signing-nonce topics, and root reuse retains every historical escrow
-authority's exposure. The current canonical aggregate `q`-to-recipient
-construction requires distributed proving to avoid reconstructing `q` at a
-coordinator, and its correlated-key privacy argument remains unresolved. This
-is a requirement of that construction, not a claim that every possible
-recipient setup must use MPC. An alternative relation must establish its own
-public recovery, custody and privacy guarantees before replacing it.
+An owner who does not know a shared root would still need distributed
+evaluation and proving, so this relation cannot silently change shared-root
+custody into individual custody. The fixed punishment input is
+domain-separated from signing-nonce topics, and root reuse retains every
+historical escrow authority's exposure. The current canonical aggregate
+`q`-to-recipient construction requires distributed proving to avoid
+reconstructing `q` at a coordinator, and its correlated-key privacy argument
+remains unresolved. This is a requirement of that construction, not a claim
+that every possible recipient setup must use MPC. An alternative relation
+must establish its own public recovery, custody and privacy guarantees before
+replacing it.
 
 ## Implementation milestones
 

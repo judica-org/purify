@@ -1,5 +1,10 @@
 # Recursive construction receipt boundary
 
+> Migration note: anchor escrow record version 3 changes the production
+> anchor leaf from hidden to public V4 mode with one punishment commitment.
+> The hidden-anchor recurrence described below is the preceding design and
+> must not be activated for version 3 until its public-DLog migration lands.
+
 This document fixes the selected boundary between a transparent Nova parent
 proof and the native BP++ accumulator. It is an implementation map, not a
 claim that construction receipts are accepted yet.

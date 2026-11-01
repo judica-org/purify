@@ -132,13 +132,18 @@ transparent proof. This is a composition check, not a production 15-round or
 This transition uses the separate
 `Purify/BPPP/CandidateAccumStep/v1` Poseidon transcript. It is not compatible
 with the current SHA transcript and is not accepted by native receipt code.
-Most importantly, its opening base is a verifier-supplied circuit constant: the
-relation does not yet prove that this point is the output of the exact
-transcript-bound algebraic hash-to-curve map. Allowing the prover or verifier to
-choose an arbitrary finite point, including a known-discrete-log multiple of a
-basis point, would destroy the opening argument. The candidate type cannot feed
-an acceptance API until that derivation, native transcript migration, child
-reductions, and final decision binding are all composed end to end.
+
+The candidate [opening-base derivation](opening-base-v2.md) removes both fresh
+hash-to-curve evaluations from the constrained path. It derives two
+domain-separated constants per basis and role, samples a nonzero transcript
+scalar only after the opening claim is fixed, and constrains
+`U = U0 + u U1`. This remains a V2 candidate until the native reduction and
+step suites use the identical transcript and reject cross-version proofs.
+The standalone relation is implemented and cross-checked against the vendored
+native map, but the candidate step still receives its opening base as a circuit
+constant. Those relations must be composed so no caller can substitute an
+arbitrary finite point. Native transcript migration, child reductions, and
+final decision binding must also be composed before any acceptance API exists.
 
 ## Why the final MSM stays native
 

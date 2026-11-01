@@ -77,11 +77,12 @@ The compressed-point foundation constrains a unique coordinate-field integer,
 the SEC1 parity bit, the curve equation, and non-identity. Complete fixed-shape
 variable-base scalar multiplication costs 23,280 gates and produces a
 1,415-byte standalone backend proof. A naive 32-term accumulation-step MSM
-would therefore cost about 745,000 gates before transcript and scalar algebra;
-the parent needs one shared Straus-style MSM instead. Wide transcript
-reduction, transcript integration, that shared MSM, and the complete
-V3/reduction/promotion/step relations remain before an acceptance API can be
-exposed.
+would therefore cost about 745,000 gates before transcript and scalar algebra.
+The implemented fixed-shape Straus relation shares all 255 doublings and costs
+`10,983 + 12,297*T` gates for `T` variable terms: 404,487 gates for the
+32-term step equation. Wide transcript reduction, transcript integration, and
+the complete V3/reduction/promotion/step relations remain before an acceptance
+API can be exposed.
 
 The exact secq SHA-256 gadget costs 30,952 multipliers per compression block,
 plus eight multipliers per private input byte. Replaying the current V3
@@ -97,10 +98,11 @@ pre-release, that migration should replace the suite cleanly rather than add a
 permanent compatibility path.
 
 The native candidate Poseidon permutation is reproducible from the pinned
-parameter generator and cross-language vectors. It is deliberately not an
-accepted transcript suite: typed absorption, its R1CS implementation, native
-prover integration, and cross-suite rejection must land together before the
-SHA format can be replaced.
+parameter generator and cross-language vectors. Its exact Secq R1CS gadget uses
+264 multipliers and yields a 1,019-byte standalone proof. It is deliberately
+not an accepted transcript suite: typed absorption, native prover integration,
+and cross-suite rejection must land together before the SHA format can be
+replaced.
 
 ## Why the final MSM stays native
 

@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 
 use crate::algebraic_transcript::BuilderTranscript;
 use crate::parent_relation::{
-    add_point_values, add_points, scale_point, PointValue, SecpEncodedPointWitness, SecpPoint,
+    add_point_values, add_points, scale_constant_point, PointValue, SecpEncodedPointWitness,
+    SecpPoint,
 };
 use crate::relation_builder::{Builder, Expression};
 use crate::secp_scalar::select_challenge_lanes;
@@ -239,8 +240,7 @@ pub(crate) fn constrain_opening_base_pair(
     let scalar = select_challenge_lanes(builder, &challenge_lanes[0], &challenge_lanes[1]);
     let [first, second] = opening_generator_pair(basis_digest, role)?;
     let first = constant_point(first);
-    let second = constant_point(second);
-    let scaled = scale_point(builder, &second, &scalar);
+    let scaled = scale_constant_point(builder, second, &scalar)?;
     let output = add_points(builder, &first, &scaled);
     builder.constrain_zero(output.identity.clone());
     Ok(output)

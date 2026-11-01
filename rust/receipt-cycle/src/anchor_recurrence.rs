@@ -248,3 +248,5 @@ pub(crate) fn build_anchor_recurrence_relation(
         true,
     )
 }
+#[cfg(test)]
+mod tests;

@@ -1545,7 +1545,7 @@ pub fn build_secp_msm_relation(
 }
 
 #[cfg(test)]
-fn derive_candidate_folded_generator(
+pub(crate) fn derive_candidate_folded_generator(
     basis_digest: [u8; 32],
     claims: &[CandidatePendingClaimWitness],
     proof: &CandidateStepProofWitness,
@@ -2293,10 +2293,7 @@ mod tests {
             build_candidate_accumulation_step_relation(basis, &changed_claims, &proof, &root)
                 .expect("changed candidate claim");
         assert_eq!(circuit, changed_circuit);
-        assert!(!relation_satisfied(
-            &changed_circuit,
-            &changed_assignment
-        ));
+        assert!(!relation_satisfied(&changed_circuit, &changed_assignment));
     }
 
     #[test]

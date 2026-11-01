@@ -16,14 +16,19 @@ use nova_snark::{
     traits::snark::RelaxedR1CSSNARKTrait,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
     direct_nova::{
         DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine, DirectNovaStep,
-        DirectNovaTemplate, DirectRelationId,
+        DirectNovaTemplate, DirectRelationId, DIRECT_LOWERING_VERSION,
+        DIRECT_RELATION_ENCODING_VERSION,
     },
-    fixed_serde::{FixedSerdeError, NovaCompressedProofShape, NovaR1csDimensions},
+    fixed_serde::{
+        FixedSerdeError, NovaCompressedProofShape, NovaR1csDimensions,
+        NOVA_COMPRESSED_PROOF_CODEC_VERSION,
+    },
     relation_builder::StatefulRelation,
     ReceiptCycleError,
 };
@@ -58,6 +63,79 @@ type DirectVerifierKey<const ARITY: usize> = VerifierKey<
     SecondarySnark,
 >;
 
+const DIRECT_NOVA_SUITE_ID_TAG: &[u8] = b"Purify/Accountable/ConstructionParentNovaSuite/v1";
+const DIRECT_NOVA_SUITE_ENCODING_VERSION: u8 = 1;
+const NOVA_VERSION: [u8; 3] = [0, 76, 0];
+const PRIMARY_ENGINE_SECQ256K1: u8 = 1;
+const SECONDARY_ENGINE_SECP256K1: u8 = 2;
+const FOLDING_SCHEME_NOVA: u8 = 1;
+const COMPRESSION_SCHEME_SPARTAN: u8 = 1;
+const EVALUATION_ENGINE_IPA_PC: u8 = 1;
+
+macro_rules! construction_version {
+    ($name:ident) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub(crate) struct $name(u32);
+
+        impl $name {
+            const fn new(value: u32) -> Self {
+                Self(value)
+            }
+
+            const fn value(self) -> u32 {
+                self.0
+            }
+        }
+    };
+}
+
+construction_version!(ConstructionPayloadVersion);
+construction_version!(ConstructionStatementVersion);
+construction_version!(ConstructionManifestVersion);
+construction_version!(ConstructionNativeDecisionVersion);
+
+/// Receipt-layer versions whose meanings are external to the Nova matrix.
+///
+/// No production value is defined here. Receipt activation must supply one
+/// explicit, locally selected combination after its acceptance boundary is
+/// fixed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DirectNovaConstructionVersions {
+    payload: ConstructionPayloadVersion,
+    statement: ConstructionStatementVersion,
+    manifest: ConstructionManifestVersion,
+    native_decision: ConstructionNativeDecisionVersion,
+}
+
+impl DirectNovaConstructionVersions {
+    const fn new(
+        payload: ConstructionPayloadVersion,
+        statement: ConstructionStatementVersion,
+        manifest: ConstructionManifestVersion,
+        native_decision: ConstructionNativeDecisionVersion,
+    ) -> Self {
+        Self {
+            payload,
+            statement,
+            manifest,
+            native_decision,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DirectNovaSuiteId([u8; 32]);
+
+impl DirectNovaSuiteId {
+    const fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub(crate) const fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(crate) enum DirectNovaSessionError {
     #[error(transparent)]
@@ -68,6 +146,10 @@ pub(crate) enum DirectNovaSessionError {
     Codec(#[from] FixedSerdeError),
     #[error("direct Nova suite setup failed: {0}")]
     Setup(&'static str),
+    #[error("direct Nova suite identity failed: {0}")]
+    SuiteIdentity(&'static str),
+    #[error("direct Nova selected suite mismatch: {0}")]
+    SuiteMismatch(&'static str),
     #[error("direct Nova state continuity mismatch")]
     StateContinuity,
     #[error("direct Nova verified final state mismatch")]
@@ -88,6 +170,78 @@ pub(crate) struct DirectNovaSuiteMetadata {
     pub(crate) secondary_variables: usize,
     pub(crate) proof_length: usize,
     pub(crate) codec_sequence_count: usize,
+}
+
+impl DirectNovaSuiteMetadata {
+    /// Commits to the complete local proof suite with BIP340 tagged SHA256.
+    fn suite_id<const ARITY: usize>(
+        &self,
+        proof_shape: &NovaCompressedProofShape,
+        construction: DirectNovaConstructionVersions,
+    ) -> Result<DirectNovaSuiteId, DirectNovaSessionError> {
+        if self.proof_length != proof_shape.encoded_len()
+            || self.codec_sequence_count != proof_shape.sequence_count()
+        {
+            return Err(DirectNovaSessionError::SuiteIdentity(
+                "proof codec metadata",
+            ));
+        }
+
+        let tag_hash = Sha256::digest(DIRECT_NOVA_SUITE_ID_TAG);
+        let mut digest = Sha256::new();
+        digest.update(tag_hash);
+        digest.update(tag_hash);
+        // Canonical body order is: three one-byte suite/relation/lowering
+        // versions; four big-endian u32 receipt-layer versions; the three
+        // one-byte Nova semantic-version components; six one-byte ordered
+        // engine/backend/codec identifiers; big-endian u32 arity; relation
+        // and PP digests; five big-endian u64 dimensions/lengths; then a
+        // big-endian u32 schedule count and every schedule length as u32.
+        digest.update([
+            DIRECT_NOVA_SUITE_ENCODING_VERSION,
+            DIRECT_RELATION_ENCODING_VERSION,
+            DIRECT_LOWERING_VERSION,
+        ]);
+        digest.update(construction.payload.value().to_be_bytes());
+        digest.update(construction.statement.value().to_be_bytes());
+        digest.update(construction.manifest.value().to_be_bytes());
+        digest.update(construction.native_decision.value().to_be_bytes());
+        digest.update(NOVA_VERSION);
+        digest.update([
+            PRIMARY_ENGINE_SECQ256K1,
+            SECONDARY_ENGINE_SECP256K1,
+            FOLDING_SCHEME_NOVA,
+            COMPRESSION_SCHEME_SPARTAN,
+            EVALUATION_ENGINE_IPA_PC,
+            NOVA_COMPRESSED_PROOF_CODEC_VERSION,
+        ]);
+        digest.update(suite_u32(ARITY, "state arity")?.to_be_bytes());
+        digest.update(self.relation_id.bytes());
+        digest.update(self.public_parameter_digest);
+        for (value, label) in [
+            (self.primary_constraints, "primary constraints"),
+            (self.primary_variables, "primary variables"),
+            (self.secondary_constraints, "secondary constraints"),
+            (self.secondary_variables, "secondary variables"),
+            (self.proof_length, "proof length"),
+        ] {
+            digest.update(suite_u64(value, label)?.to_be_bytes());
+        }
+        digest
+            .update(suite_u32(proof_shape.sequence_count(), "codec sequence count")?.to_be_bytes());
+        for &length in proof_shape.suite_sequence_lengths() {
+            digest.update(suite_u32(length, "codec sequence length")?.to_be_bytes());
+        }
+        Ok(DirectNovaSuiteId(digest.finalize().into()))
+    }
+}
+
+fn suite_u32(value: usize, label: &'static str) -> Result<u32, DirectNovaSessionError> {
+    u32::try_from(value).map_err(|_| DirectNovaSessionError::SuiteIdentity(label))
+}
+
+fn suite_u64(value: usize, label: &'static str) -> Result<u64, DirectNovaSessionError> {
+    u64::try_from(value).map_err(|_| DirectNovaSessionError::SuiteIdentity(label))
 }
 
 pub(crate) struct DirectNovaSuite<const ARITY: usize> {
@@ -353,6 +507,19 @@ mod tests {
     const NOVA_SECONDARY_CONSTRAINTS: usize = 10_787;
     const NOVA_SECONDARY_VARIABLES: usize = 10_769;
 
+    const TEST_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
+        DirectNovaConstructionVersions::new(
+            ConstructionPayloadVersion::new(0x0102_0304),
+            ConstructionStatementVersion::new(0x1112_1314),
+            ConstructionManifestVersion::new(0x2122_2324),
+            ConstructionNativeDecisionVersion::new(0x3132_3334),
+        );
+    const TEST_SUITE_ID: DirectNovaSuiteId = DirectNovaSuiteId::new([
+        0x83, 0xcf, 0x59, 0x62, 0xc1, 0xb2, 0x6d, 0x40, 0x16, 0x0c, 0xe7, 0xb5, 0xfe, 0xc3, 0xa0,
+        0x29, 0xb3, 0xa2, 0xf8, 0x60, 0x92, 0x66, 0x18, 0x76, 0xdb, 0xb2, 0x89, 0x85, 0x3e, 0xad,
+        0x47, 0xe1,
+    ]);
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct SyntheticQualificationShape {
         log2_bucket: u32,
@@ -517,6 +684,26 @@ mod tests {
         })
     }
 
+    fn fixed_suite_fixture() -> (DirectNovaSuiteMetadata, NovaCompressedProofShape) {
+        let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
+            NovaR1csDimensions::new(13_606, 13_636),
+            NovaR1csDimensions::new(10_787, 10_769),
+            TEST_ARITY,
+        )
+        .expect("tiny suite proof shape");
+        let metadata = DirectNovaSuiteMetadata {
+            relation_id: DirectRelationId::from_test_bytes([0x11; 32]),
+            public_parameter_digest: [0x22; 32],
+            primary_constraints: 13_606,
+            secondary_constraints: 10_787,
+            primary_variables: 13_636,
+            secondary_variables: 10_769,
+            proof_length: proof_shape.encoded_len(),
+            codec_sequence_count: proof_shape.sequence_count(),
+        };
+        (metadata, proof_shape)
+    }
+
     #[test]
     fn synthetic_qualification_shapes_preserve_production_ratios() {
         let mut prior: Option<SyntheticQualificationShape> = None;
@@ -555,6 +742,56 @@ mod tests {
             }
             prior = Some(shape);
         }
+    }
+
+    #[test]
+    fn suite_id_has_a_fixed_codec_complete_encoding() {
+        let (metadata, proof_shape) = fixed_suite_fixture();
+        let suite_id = metadata
+            .suite_id::<TEST_ARITY>(&proof_shape, TEST_CONSTRUCTION_VERSIONS)
+            .expect("tiny suite ID");
+        assert_eq!(suite_id, TEST_SUITE_ID);
+
+        let mut changed_schedule = proof_shape.clone();
+        changed_schedule.increment_suite_sequence_length_for_test(7);
+        assert_ne!(
+            metadata
+                .suite_id::<TEST_ARITY>(&changed_schedule, TEST_CONSTRUCTION_VERSIONS)
+                .expect("changed codec schedule suite ID"),
+            suite_id
+        );
+
+        let mut changed_metadata = metadata;
+        changed_metadata.public_parameter_digest[0] ^= 1;
+        assert_ne!(
+            changed_metadata
+                .suite_id::<TEST_ARITY>(&proof_shape, TEST_CONSTRUCTION_VERSIONS)
+                .expect("changed suite ID"),
+            suite_id
+        );
+        assert_ne!(
+            metadata
+                .suite_id::<TEST_ARITY>(
+                    &proof_shape,
+                    DirectNovaConstructionVersions::new(
+                        ConstructionPayloadVersion::new(0x0102_0305),
+                        ConstructionStatementVersion::new(0x1112_1314),
+                        ConstructionManifestVersion::new(0x2122_2324),
+                        ConstructionNativeDecisionVersion::new(0x3132_3334),
+                    ),
+                )
+                .expect("changed construction version suite ID"),
+            suite_id
+        );
+
+        let mut inconsistent = metadata;
+        inconsistent.proof_length += 1;
+        assert!(matches!(
+            inconsistent.suite_id::<TEST_ARITY>(&proof_shape, TEST_CONSTRUCTION_VERSIONS),
+            Err(DirectNovaSessionError::SuiteIdentity(
+                "proof codec metadata"
+            ))
+        ));
     }
 
     #[test]

@@ -26,6 +26,7 @@ const MAX_TOTAL_SEQUENCE_ELEMENTS: usize = 1 << 14;
 
 const NOVA_PUBLIC_IO_ARITY: usize = 2;
 const NOVA_IPA_MAX_ROUNDS: usize = 32;
+pub(crate) const NOVA_COMPRESSED_PROOF_CODEC_VERSION: u8 = 1;
 // Twelve top-level commitments and forty fixed scalars, including both
 // Spartan proofs. Round-dependent bytes are accounted for separately.
 const NOVA_COMPRESSED_FIXED_BYTES: usize = 1_676;
@@ -332,6 +333,17 @@ impl NovaCompressedProofShape {
 
     pub(crate) fn sequence_count(&self) -> usize {
         self.sequence_lengths.len()
+    }
+
+    /// Returns the locally derived schedule solely for suite identification.
+    /// Proof bytes never supply or alter these lengths.
+    pub(crate) fn suite_sequence_lengths(&self) -> &[usize] {
+        &self.sequence_lengths
+    }
+
+    #[cfg(test)]
+    pub(crate) fn increment_suite_sequence_length_for_test(&mut self, index: usize) {
+        self.sequence_lengths[index] += 1;
     }
 }
 

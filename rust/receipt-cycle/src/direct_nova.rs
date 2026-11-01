@@ -29,8 +29,8 @@ use crate::{
 };
 
 const RELATION_ID_DOMAIN: &[u8] = b"Purify/Receipt/DirectNovaRelation/v1";
-const RELATION_ENCODING_VERSION: u8 = 1;
-const DIRECT_LOWERING_VERSION: u8 = 1;
+pub(crate) const DIRECT_RELATION_ENCODING_VERSION: u8 = 1;
+pub(crate) const DIRECT_LOWERING_VERSION: u8 = 1;
 
 pub(crate) type DirectNovaPrimaryEngine = Secq256k1Engine;
 pub(crate) type DirectNovaSecondaryEngine = Secp256k1Engine;
@@ -48,6 +48,11 @@ impl DirectRelationId {
     /// compression, and the canonical proof codec.
     pub(crate) fn bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_test_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 }
 
@@ -902,7 +907,7 @@ fn relation_id<const ARITY: usize>(
 ) -> Result<DirectRelationId, ReceiptCycleError> {
     let mut digest = Sha256::new();
     digest.update(RELATION_ID_DOMAIN);
-    digest.update([RELATION_ENCODING_VERSION, lowering_version]);
+    digest.update([DIRECT_RELATION_ENCODING_VERSION, lowering_version]);
     emit_circuit(circuit, |bytes| digest.update(bytes));
     hash_u32(&mut digest, operations.len())?;
     for operation in operations {

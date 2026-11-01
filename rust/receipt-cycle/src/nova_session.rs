@@ -553,13 +553,14 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
         })
     }
 
-    pub(crate) fn verify_exact(
+    /// Verifies the proof against the exact initial state and external step
+    /// count, returning its authenticated recurrence output.
+    pub(crate) fn verify_final(
         &self,
         initial_state: &[DirectNovaScalar; ARITY],
         expected_steps: usize,
-        expected_final_state: &[DirectNovaScalar; ARITY],
         proof: &[u8],
-    ) -> Result<(), DirectNovaSessionError> {
+    ) -> Result<[DirectNovaScalar; ARITY], DirectNovaSessionError> {
         if expected_steps == 0 {
             return Err(DirectNovaSessionError::StepCount {
                 expected: 1,
@@ -578,11 +579,23 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
             let compressed = shape.decode_canonical::<DirectCompressedSnark<ARITY>>(proof)?;
             let final_state =
                 compressed.verify(&self.verifier_key, expected_steps, initial_state)?;
-            if final_state.as_slice() != expected_final_state {
-                return Err(DirectNovaSessionError::FinalState);
-            }
-            Ok(())
+            final_state
+                .try_into()
+                .map_err(|_| DirectNovaSessionError::FinalState)
         })
+    }
+
+    pub(crate) fn verify_exact(
+        &self,
+        initial_state: &[DirectNovaScalar; ARITY],
+        expected_steps: usize,
+        expected_final_state: &[DirectNovaScalar; ARITY],
+        proof: &[u8],
+    ) -> Result<(), DirectNovaSessionError> {
+        if self.verify_final(initial_state, expected_steps, proof)? != *expected_final_state {
+            return Err(DirectNovaSessionError::FinalState);
+        }
+        Ok(())
     }
 
     fn serialized<T: Send>(
@@ -617,6 +630,21 @@ impl<const ARITY: usize> SelectedDirectNovaSuite<ARITY> {
         expected_steps: usize,
     ) -> Result<DirectNovaProverSession<'_, ARITY>, DirectNovaSessionError> {
         self.inner.start(initial_state, expected_steps)
+    }
+
+    /// Authenticates the recurrence output under this selected suite.
+    ///
+    /// The returned state is not construction-receipt acceptance: the
+    /// construction wrapper must still bind its verifier-derived suffix and
+    /// complete the native final accumulation decision.
+    pub(crate) fn verify_final(
+        &self,
+        initial_state: &[DirectNovaScalar; ARITY],
+        expected_steps: usize,
+        proof: &[u8],
+    ) -> Result<[DirectNovaScalar; ARITY], DirectNovaSessionError> {
+        self.inner
+            .verify_final(initial_state, expected_steps, proof)
     }
 
     /// Verifies only the caller's exact statement. The proof supplies neither
@@ -1288,6 +1316,12 @@ mod tests {
             .expect("second fold");
         let proof = session.finish().expect("compress two-step proof");
         assert_eq!(proof.len(), metadata.proof_length);
+        assert_eq!(
+            selected
+                .verify_final(&z0, 2, &proof)
+                .expect("authenticate final state"),
+            z2
+        );
         selected
             .verify_exact(&z0, 2, &z2, &proof)
             .expect("verify canonical proof");
@@ -1295,8 +1329,17 @@ mod tests {
         let mut short = proof.clone();
         short.pop();
         assert!(matches!(
-            selected.verify_exact(&z0, 2, &z2, &short),
+            selected.verify_final(&z0, 2, &short),
             Err(DirectNovaSessionError::ProofLength { .. })
+        ));
+        let malformed = vec![0xff; proof.len()];
+        assert!(selected.verify_final(&z0, 2, &malformed).is_err());
+        assert!(matches!(
+            selected.verify_final(&z0, 0, &proof),
+            Err(DirectNovaSessionError::StepCount {
+                expected: 1,
+                actual: 0
+            })
         ));
 
         let mut wrong_final = z2;

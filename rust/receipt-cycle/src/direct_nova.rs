@@ -50,6 +50,17 @@ pub(crate) fn source_state_to_nova<const ARITY: usize>(
     Ok(state)
 }
 
+/// Converts one complete primary Nova state back into the source field.
+pub(crate) fn nova_state_to_source<const ARITY: usize>(
+    state: [DirectNovaScalar; ARITY],
+) -> Result<[Scalar; ARITY], ReceiptCycleError> {
+    let mut source = [Scalar::ZERO; ARITY];
+    for (target, value) in source.iter_mut().zip(state) {
+        *target = nova_to_source(value)?;
+    }
+    Ok(source)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DirectRelationId([u8; 32]);
 
@@ -1335,6 +1346,10 @@ mod tests {
             Scalar::random(&mut rng),
         ];
         let nova_values = source_state_to_nova(values).expect("source state to Nova");
+        assert_eq!(
+            nova_state_to_source(nova_values).expect("Nova state to source"),
+            values
+        );
         for (value, nova) in values.into_iter().zip(nova_values) {
             let round_trip = nova_to_source(nova).expect("Nova to source");
             assert_eq!(round_trip, value);

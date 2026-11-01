@@ -104,6 +104,13 @@ pub(crate) struct SecpScalarVar {
     value: BigUint,
 }
 
+impl SecpScalarVar {
+    /// Returns the assignment integer used to derive subsequent witnesses.
+    pub(crate) fn integer(&self) -> &BigUint {
+        &self.value
+    }
+}
+
 #[derive(Clone)]
 struct ColumnTerm {
     expression: Expression,
@@ -224,7 +231,8 @@ fn less_than_constant(
     less
 }
 
-fn embedded_integer(value: &SecpScalarVar) -> Expression {
+/// Embeds a canonical secp scalar in the outer coordinate field.
+pub(crate) fn embedded_integer(value: &SecpScalarVar) -> Expression {
     let mut out = Expression::constant(Scalar::ZERO);
     let mut coefficient = Scalar::ONE;
     for bit in &value.bits {
@@ -321,7 +329,8 @@ pub(crate) fn select_challenge_lanes(
     }
 }
 
-fn constant_uint256(value: u64) -> SecpScalarVar {
+/// Constructs a typed small constant without allocating prover wires.
+pub(crate) fn constant_scalar(value: u64) -> SecpScalarVar {
     let bits = (0..SCALAR_BITS)
         .map(|index| {
             let bit = if index < 64 { (value >> index) & 1 } else { 0 };
@@ -492,6 +501,106 @@ fn constrain_modular_product(
     )
 }
 
+fn constrain_modular_sum(
+    builder: &mut Builder,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+    expected: &SecpScalarVar,
+) -> Result<(), ReceiptCycleError> {
+    let reduction = builder.allocate_boolean(left.integer() + right.integer() >= order_n());
+    let modulus = modulus_var();
+    let output_value = left.integer() + right.integer();
+    let output = allocate_wide_limbs(builder, &output_value, 5)?;
+    let left_columns = linear_columns(builder, &[(left, None), (right, None)], 5);
+    let right_columns = linear_columns(
+        builder,
+        &[(expected, None), (&modulus, Some(&reduction))],
+        5,
+    );
+    constrain_normalized(builder, &left_columns, &output, 1, false)?;
+    constrain_normalized(builder, &right_columns, &output, 1, false)
+}
+
+fn constrain_modular_difference(
+    builder: &mut Builder,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+    expected: &SecpScalarVar,
+) -> Result<(), ReceiptCycleError> {
+    let reduction = builder.allocate_boolean(left.integer() < right.integer());
+    let modulus = modulus_var();
+    let offset = if left.value < right.value {
+        order_n()
+    } else {
+        BigUint::zero()
+    };
+    let output_value = left.integer() + offset;
+    let output = allocate_wide_limbs(builder, &output_value, 5)?;
+    let left_columns = linear_columns(builder, &[(left, None), (&modulus, Some(&reduction))], 5);
+    let right_columns = linear_columns(builder, &[(right, None), (expected, None)], 5);
+    constrain_normalized(builder, &left_columns, &output, 1, false)?;
+    constrain_normalized(builder, &right_columns, &output, 1, false)
+}
+
+/// Constrains equality without exposing the scalar's limb representation.
+pub(crate) fn constrain_scalar_equal(
+    builder: &mut Builder,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+) {
+    for index in 0..LIMB_COUNT {
+        builder.constrain_equal(&left.limbs[index], &right.limbs[index]);
+    }
+}
+
+/// Allocates a typed output and constrains `left * right` modulo the order.
+pub(crate) fn multiply_scalars(
+    builder: &mut Builder,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+    witness: SecpScalarWitness,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let output = allocate_canonical_scalar(builder, witness)?;
+    constrain_modular_product(builder, left, right, &output, MulFault::None)?;
+    Ok(output)
+}
+
+/// Allocates a typed output and constrains `left + right` modulo the order.
+pub(crate) fn add_scalars(
+    builder: &mut Builder,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+    witness: SecpScalarWitness,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let output = allocate_canonical_scalar(builder, witness)?;
+    constrain_modular_sum(builder, left, right, &output)?;
+    Ok(output)
+}
+
+/// Allocates a typed output and constrains `left - right` modulo the order.
+pub(crate) fn subtract_scalars(
+    builder: &mut Builder,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+    witness: SecpScalarWitness,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let output = allocate_canonical_scalar(builder, witness)?;
+    constrain_modular_difference(builder, left, right, &output)?;
+    Ok(output)
+}
+
+/// Allocates a typed inverse and constrains a nonzero input.
+pub(crate) fn invert_scalar(
+    builder: &mut Builder,
+    value: &SecpScalarVar,
+    witness: SecpScalarWitness,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let inverse = allocate_canonical_scalar(builder, witness)?;
+    let one = constant_scalar(1);
+    constrain_modular_product(builder, value, &inverse, &one, MulFault::None)?;
+    Ok(inverse)
+}
+
 fn linear_columns(
     builder: &mut Builder,
     terms: &[(&SecpScalarVar, Option<&Expression>)],
@@ -543,8 +652,12 @@ fn build_multiplication_with_fault(
     let mut builder = Builder::default();
     let left = allocate_canonical_scalar(&mut builder, left)?;
     let right = allocate_canonical_scalar(&mut builder, right)?;
-    let expected = allocate_canonical_scalar(&mut builder, expected)?;
-    constrain_modular_product(&mut builder, &left, &right, &expected, fault)?;
+    if fault == MulFault::None {
+        multiply_scalars(&mut builder, &left, &right, expected)?;
+    } else {
+        let expected = allocate_canonical_scalar(&mut builder, expected)?;
+        constrain_modular_product(&mut builder, &left, &right, &expected, fault)?;
+    }
     builder.finish()
 }
 
@@ -566,19 +679,7 @@ pub fn build_scalar_addition_relation(
     let mut builder = Builder::default();
     let left = allocate_canonical_scalar(&mut builder, left)?;
     let right = allocate_canonical_scalar(&mut builder, right)?;
-    let expected = allocate_canonical_scalar(&mut builder, expected)?;
-    let reduction = builder.allocate_boolean(&left.value + &right.value >= order_n());
-    let modulus = modulus_var();
-    let output_value = &left.value + &right.value;
-    let output = allocate_wide_limbs(&mut builder, &output_value, 5)?;
-    let left_columns = linear_columns(&mut builder, &[(&left, None), (&right, None)], 5);
-    let right_columns = linear_columns(
-        &mut builder,
-        &[(&expected, None), (&modulus, Some(&reduction))],
-        5,
-    );
-    constrain_normalized(&mut builder, &left_columns, &output, 1, false)?;
-    constrain_normalized(&mut builder, &right_columns, &output, 1, false)?;
+    add_scalars(&mut builder, &left, &right, expected)?;
     builder.finish()
 }
 
@@ -591,24 +692,7 @@ pub fn build_scalar_subtraction_relation(
     let mut builder = Builder::default();
     let left = allocate_canonical_scalar(&mut builder, left)?;
     let right = allocate_canonical_scalar(&mut builder, right)?;
-    let expected = allocate_canonical_scalar(&mut builder, expected)?;
-    let reduction = builder.allocate_boolean(left.value < right.value);
-    let modulus = modulus_var();
-    let offset = if left.value < right.value {
-        order_n()
-    } else {
-        BigUint::zero()
-    };
-    let output_value = &left.value + offset;
-    let output = allocate_wide_limbs(&mut builder, &output_value, 5)?;
-    let left_columns = linear_columns(
-        &mut builder,
-        &[(&left, None), (&modulus, Some(&reduction))],
-        5,
-    );
-    let right_columns = linear_columns(&mut builder, &[(&right, None), (&expected, None)], 5);
-    constrain_normalized(&mut builder, &left_columns, &output, 1, false)?;
-    constrain_normalized(&mut builder, &right_columns, &output, 1, false)?;
+    subtract_scalars(&mut builder, &left, &right, expected)?;
     builder.finish()
 }
 
@@ -619,9 +703,7 @@ pub fn build_scalar_inverse_relation(
 ) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
     let mut builder = Builder::default();
     let value = allocate_canonical_scalar(&mut builder, value)?;
-    let inverse = allocate_canonical_scalar(&mut builder, inverse)?;
-    let one = constant_uint256(1);
-    constrain_modular_product(&mut builder, &value, &inverse, &one, MulFault::None)?;
+    invert_scalar(&mut builder, &value, inverse)?;
     builder.finish()
 }
 
@@ -640,9 +722,7 @@ pub fn build_challenge_selection_relation(
     let second = builder.allocate(second.scalar()?);
     let selected = select_challenge_lanes(&mut builder, &first, &second);
     let expected = allocate_canonical_scalar(&mut builder, expected)?;
-    for index in 0..LIMB_COUNT {
-        builder.constrain_equal(&selected.limbs[index], &expected.limbs[index]);
-    }
+    constrain_scalar_equal(&mut builder, &selected, &expected);
     builder.finish()
 }
 
@@ -690,6 +770,42 @@ mod tests {
         let proof =
             prove(&circuit, &assignment, statement, [marker; 32]).expect("prove malformed witness");
         assert!(verify(&circuit, statement, &proof).is_err());
+    }
+
+    fn build_composed_relation(
+        left: SecpScalarWitness,
+        right: SecpScalarWitness,
+        addend: SecpScalarWitness,
+        subtrahend: SecpScalarWitness,
+        expected: SecpScalarWitness,
+    ) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+        let mut builder = Builder::default();
+        let left = allocate_canonical_scalar(&mut builder, left)?;
+        let right = allocate_canonical_scalar(&mut builder, right)?;
+        let addend = allocate_canonical_scalar(&mut builder, addend)?;
+        let subtrahend = allocate_canonical_scalar(&mut builder, subtrahend)?;
+        let modulus = order_n();
+        let product_value = (left.integer() * right.integer()) % &modulus;
+        let product = multiply_scalars(&mut builder, &left, &right, witness(&product_value))?;
+        let sum_value = (product.integer() + addend.integer()) % &modulus;
+        let sum = add_scalars(&mut builder, &product, &addend, witness(&sum_value))?;
+        let difference_value = (sum.integer() + &modulus - subtrahend.integer()) % &modulus;
+        let difference =
+            subtract_scalars(&mut builder, &sum, &subtrahend, witness(&difference_value))?;
+        let inverse_value = difference
+            .integer()
+            .modpow(&(&modulus - BigUint::from(2u8)), &modulus);
+        let inverse = invert_scalar(&mut builder, &difference, witness(&inverse_value))?;
+        let round_trip_value = (difference.integer() * inverse.integer()) % &modulus;
+        let round_trip = multiply_scalars(
+            &mut builder,
+            &difference,
+            &inverse,
+            witness(&round_trip_value),
+        )?;
+        let expected = allocate_canonical_scalar(&mut builder, expected)?;
+        constrain_scalar_equal(&mut builder, &round_trip, &expected);
+        builder.finish()
     }
 
     #[test]
@@ -850,6 +966,61 @@ mod tests {
                 SecpScalarWitness::from_u64(3),
             ),
             0x63,
+        );
+    }
+
+    #[test]
+    fn typed_scalar_operations_compose_at_modulus_boundaries() {
+        let maximum = order_n() - BigUint::one();
+        let (boundary, gates) = accepts(
+            build_composed_relation(
+                witness(&maximum),
+                witness(&maximum),
+                witness(&maximum),
+                SecpScalarWitness::from_u64(1),
+                SecpScalarWitness::from_u64(1),
+            ),
+            0x64,
+        );
+        let (ordinary, ordinary_gates) = accepts(
+            build_composed_relation(
+                SecpScalarWitness::from_u64(2),
+                SecpScalarWitness::from_u64(3),
+                SecpScalarWitness::from_u64(4),
+                SecpScalarWitness::from_u64(5),
+                SecpScalarWitness::from_u64(1),
+            ),
+            0x65,
+        );
+        assert_eq!(boundary, ordinary);
+        assert_eq!(gates, ordinary_gates);
+        eprintln!(
+            "receipt_scalar_composition_gates={gates} proof_bytes={}",
+            proof_wire_len(&boundary).expect("composition proof size")
+        );
+    }
+
+    #[test]
+    fn typed_scalar_composition_rejects_zero_inverse_and_wrong_result() {
+        rejects(
+            build_composed_relation(
+                SecpScalarWitness::from_u64(2),
+                SecpScalarWitness::from_u64(3),
+                SecpScalarWitness::from_u64(4),
+                SecpScalarWitness::from_u64(10),
+                SecpScalarWitness::from_u64(1),
+            ),
+            0x66,
+        );
+        rejects(
+            build_composed_relation(
+                SecpScalarWitness::from_u64(2),
+                SecpScalarWitness::from_u64(3),
+                SecpScalarWitness::from_u64(4),
+                SecpScalarWitness::from_u64(5),
+                SecpScalarWitness::from_u64(2),
+            ),
+            0x67,
         );
     }
 

@@ -61,9 +61,9 @@ impl SecpScalarWitness {
 }
 
 #[derive(Clone)]
-struct UInt256Var {
+pub(crate) struct SecpScalarVar {
     limbs: [Expression; LIMB_COUNT],
-    bits: Vec<Expression>,
+    pub(crate) bits: Vec<Expression>,
     limb_values: [u64; LIMB_COUNT],
     value: BigUint,
 }
@@ -131,7 +131,7 @@ fn allocate_unsigned(
 fn allocate_uint256(
     builder: &mut Builder,
     value: BigUint,
-) -> Result<UInt256Var, ReceiptCycleError> {
+) -> Result<SecpScalarVar, ReceiptCycleError> {
     if value.bits() > SCALAR_BITS as u64 {
         return Err(ReceiptCycleError::Malformed("uint256 width"));
     }
@@ -152,7 +152,7 @@ fn allocate_uint256(
         }
         expression
     });
-    Ok(UInt256Var {
+    Ok(SecpScalarVar {
         limbs,
         bits,
         limb_values,
@@ -160,7 +160,7 @@ fn allocate_uint256(
     })
 }
 
-fn constant_uint256(value: u64) -> UInt256Var {
+fn constant_uint256(value: u64) -> SecpScalarVar {
     let bits = (0..SCALAR_BITS)
         .map(|index| {
             let bit = if index < 64 { (value >> index) & 1 } else { 0 };
@@ -170,7 +170,7 @@ fn constant_uint256(value: u64) -> UInt256Var {
     let limbs = std::array::from_fn(|index| {
         Expression::constant(Scalar::from(if index == 0 { value } else { 0 }))
     });
-    UInt256Var {
+    SecpScalarVar {
         limbs,
         bits,
         limb_values: [value, 0, 0, 0],
@@ -178,7 +178,7 @@ fn constant_uint256(value: u64) -> UInt256Var {
     }
 }
 
-fn constrain_less_than_order(builder: &mut Builder, value: &UInt256Var) {
+fn constrain_less_than_order(builder: &mut Builder, value: &SecpScalarVar) {
     let one = Expression::constant(Scalar::ONE);
     let mut equal = one.clone();
     let mut less = Expression::constant(Scalar::ZERO);
@@ -195,10 +195,10 @@ fn constrain_less_than_order(builder: &mut Builder, value: &UInt256Var) {
     builder.constrain_equal(&less, &one);
 }
 
-fn allocate_canonical_scalar(
+pub(crate) fn allocate_canonical_scalar(
     builder: &mut Builder,
     witness: SecpScalarWitness,
-) -> Result<UInt256Var, ReceiptCycleError> {
+) -> Result<SecpScalarVar, ReceiptCycleError> {
     let value = allocate_uint256(builder, witness.integer())?;
     constrain_less_than_order(builder, &value);
     Ok(value)
@@ -266,7 +266,7 @@ fn constrain_normalized(
     Ok(())
 }
 
-fn product_columns(builder: &mut Builder, left: &UInt256Var, right: &UInt256Var) -> Columns {
+fn product_columns(builder: &mut Builder, left: &SecpScalarVar, right: &SecpScalarVar) -> Columns {
     let mut columns = empty_columns(PRODUCT_LIMBS);
     for i in 0..LIMB_COUNT {
         for j in 0..LIMB_COUNT {
@@ -278,7 +278,7 @@ fn product_columns(builder: &mut Builder, left: &UInt256Var, right: &UInt256Var)
     columns
 }
 
-fn quotient_remainder_columns(quotient: &UInt256Var, remainder: &UInt256Var) -> Columns {
+fn quotient_remainder_columns(quotient: &SecpScalarVar, remainder: &SecpScalarVar) -> Columns {
     let mut columns = empty_columns(PRODUCT_LIMBS);
     for i in 0..LIMB_COUNT {
         for (j, modulus_limb) in ORDER_N_LIMBS.iter().enumerate() {
@@ -298,9 +298,9 @@ fn quotient_remainder_columns(quotient: &UInt256Var, remainder: &UInt256Var) -> 
 
 fn constrain_modular_product(
     builder: &mut Builder,
-    left: &UInt256Var,
-    right: &UInt256Var,
-    remainder: &UInt256Var,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+    remainder: &SecpScalarVar,
     fault: MulFault,
 ) -> Result<(), ReceiptCycleError> {
     let product = &left.value * &right.value;
@@ -333,7 +333,7 @@ fn constrain_modular_product(
 
 fn linear_columns(
     builder: &mut Builder,
-    terms: &[(&UInt256Var, Option<&Expression>)],
+    terms: &[(&SecpScalarVar, Option<&Expression>)],
     count: usize,
 ) -> Columns {
     let mut columns = empty_columns(count);
@@ -360,12 +360,12 @@ fn linear_columns(
     columns
 }
 
-fn modulus_var() -> UInt256Var {
+fn modulus_var() -> SecpScalarVar {
     let bits = (0..SCALAR_BITS)
         .map(|index| Expression::constant(Scalar::from(order_bit(index) as u64)))
         .collect();
     let limbs = ORDER_N_LIMBS.map(|limb| Expression::constant(Scalar::from(limb)));
-    UInt256Var {
+    SecpScalarVar {
         limbs,
         bits,
         limb_values: ORDER_N_LIMBS,

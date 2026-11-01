@@ -25,6 +25,13 @@ certificate validity. It advances
 enabling enrollment. The independent leaf experiment is in
 [#37](https://github.com/judica-org/purify/pull/37).
 
+V4 is the candidate active leaf path for a construction receipt. Native
+V4 proof production, preparation, verification, and the algebraic
+accumulation adapter are implemented. The fixed-size setup and escrow
+records still encode V3 proofs. Their codecs, sizes, and timings below
+are retained as a historical individual-proof baseline. They have not
+been migrated into a final parent receipt.
+
 ## Groups, keys and canonical encodings
 
 Write `(G,n)` for secp256k1's generator/order and `(Gi,li)` for Purify's
@@ -94,13 +101,18 @@ relevant nonzero sum/difference is at most `2^255`, below both group orders.
 The affine x-denominators do not vanish. Extending the gadget directly to
 256 bits would not inherit that argument.
 
-Finite `Q` fixes `q` modulo `n`. The bound and sign then uniquely fix `a,s`,
-which fixes both recipient points and canonical components. The V3 setup
-proof binds all of those outputs to the same witness. Verification is the
-only constructor for `RecoveryBoundSigningRoster`; anchor escrow creation
-does not accept an arbitrary recipient root. Consequently a roster cannot
-register a hidden second-generator component and later open a different
-recovery root while retaining the typed capability.
+Finite `Q` fixes `q` modulo `n`. The bound and sign then uniquely fix
+`a,s`, which fixes both recipient points and canonical components. The
+legacy V3 setup proof binds all of those outputs to the same witness.
+Verification is the only constructor for `RecoveryBoundSigningRoster`;
+anchor escrow creation does not accept an arbitrary recipient root.
+Consequently a roster cannot register a hidden second-generator
+component and later open a different recovery root while retaining the
+typed capability.
+
+The V4 candidate public setup leaf constrains the same circuit outputs
+and its public-point DLog equation. The current roster constructor still
+uses V3 verification until the fixed-record API is migrated.
 
 ## Encrypt the old root, not the new coalition
 
@@ -128,6 +140,11 @@ four for each pad. Its only output commitment is the public constant one.
 Unlike setup, the anchor proof therefore needs no public-commitment DLog
 fields. Encrypted plaintext relations are native field/curve equations, not
 independently blinded Pedersen output values.
+
+The V4 candidate anchor leaf uses hidden mode, whose DLog fields are
+constrained to the canonical zero values. Its complete transcript and
+pending norm obligation still require reduction, parent authentication,
+and the final accumulator decision.
 
 `recover_escrowed_anchor` first verifies the bridge and checks that an exposed
 coalition scalar opens the recovery-bound roster's exact `Q` and registered
@@ -192,7 +209,7 @@ an old authority which lacks their required participation. A shared root
 amortizes a bridge only when that common custody/exposure group already
 exists; independently created roots do not become one root for free.
 
-## Measured sizes and cost accounting
+## Historical V3 sizes and cost accounting
 
 The test-local C++20 Release experiments measured:
 
@@ -225,7 +242,7 @@ anchor before roots, references, consents, and transport framing. This is
 close to, but does not meet, a strict 1 KB per-anchor goal. Permanent anchor
 leaves remain additional historical data.
 
-One AppleClang 16 / arm64 Release sample of the final tree took about 2.95
+One AppleClang 16 / arm64 Release sample of the V3 tree took about 2.95
 seconds to prove setup and 0.52 seconds to verify it. The first anchor escrow
 in its focused suite took about 9.21 seconds to prove and 2.19 seconds to
 verify. These are centralized honest fixtures run while other sanitizer work
@@ -270,8 +287,10 @@ Recovery of a scalar is not by itself a proof of forced economic loss under
 Bitcoin's spend rules. Enrollment remains disabled while the distributed
 setup and prover are not implemented.
 
-The next [construction receipt experiment](construction-receipt.md) treats
-these setup and encryption proofs as out-of-band inputs to a public assembler.
-The intended on-chain receipt retains the ciphertexts and replaces the child
-proofs with one parent proof. That parent is not yet implemented or measured;
-the individual proof sizes above are not an estimate of its size or prover cost.
+The next [construction receipt experiment](construction-receipt.md)
+treats the setup and encryption proofs as out-of-band inputs to a public
+assembler. V4 is the candidate child relation for that design. The
+intended on-chain receipt retains the ciphertexts and replaces the child
+proofs with one parent proof. That parent is not yet implemented or
+measured; the historical V3 sizes above are not an estimate of its size
+or prover cost.

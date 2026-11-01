@@ -108,21 +108,41 @@ PureSign++ and rejects missing, reordered, substituted, opposite-sign, or
 wrong-topic points. The scalar response carries no duplicate `R`; verification
 reconstructs it from `sigma`, `e`, and `Q` and compares the exact full point.
 
+### Candidate V4 receipt leaf
+
 Only the signature challenge excludes `R`. The nonce proof's Fiat-Shamir
 transcript still binds `R`, its circuit/relation, generators, host/context
-inputs, and all commitments needed by the construction. V3 commits raw
-circuit coordinates before deriving fold weights and binds each advertised
-public point through a transcript-derived batched DLog check. In the
-random-oracle and algebraic-group model, the latter adds approximately
-`(m-1)/q` soundness loss for `m` batched openings. A later recursive parent
-must prove acceptance of this same statement and its semantic coverage; it
-cannot repair an unsound leaf relation.
+inputs, and all commitments needed by the construction. V4 is the
+candidate active leaf for a receipt. Its typed transcript authenticates
+the exact statement, mode, shape, ordered public points, raw commitment,
+generator digest, and proof fields. Public mode retains a mandatory
+batched DLog equation for the advertised points.
+
+Native V4 production, preparation, verification, and the algebraic
+accumulation adapter are implemented. Preparation is not acceptance. A
+later parent must authenticate the same statement and semantic coverage,
+verify reduction and every transition, and reach the mandatory final
+decision. It cannot repair an unsound leaf relation. No compressed
+accountable-signature certificate implements that parent yet.
+
+### Historical V3 public codec
+
+The current public `NonceProof` codec and `verify_coalition_nonce_set`
+integration still carry V3 proofs while that migration remains pending.
+V3 commits raw circuit coordinates before deriving fold weights. It
+binds each advertised public point through a transcript-derived batched
+DLog check. In the random-oracle and algebraic-group model, the latter
+adds approximately `(m-1)/q` soundness loss for `m` batched openings.
+This analysis is retained as the historical baseline for the legacy
+codec; it is not a security proof for the V4 transcript.
 
 The earlier generic arithmetic wrapper permitted output blinding and therefore
 did not establish this exact-point property merely because its honest prover
-used a zero blind. The V3 public-point proof and typed nonce-set verifier close
-that leaf-level gap. This does not by itself authenticate coalition
-registration or prove that two bodies are economically slashable.
+used a zero blind. The legacy V3 public-point proof and typed nonce-set
+verifier close that leaf-level gap for the current integration. The V4
+migration must preserve the same exact external-point check. Neither
+path by itself authenticates coalition registration or proves that two
+bodies are economically slashable.
 
 ## Conditional extraction and signing obligations
 

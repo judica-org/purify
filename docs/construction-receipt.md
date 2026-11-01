@@ -156,6 +156,11 @@ The native path now prepares the exact 1,007-byte setup proof on its fixed
 the still-pending obligation into the exact prefix of the construction basis.
 Promotion is not exposed for generic claims: the public method reconstructs
 the roster, recovery root, setup proof, and reduction before changing bases.
+The typed native assembly owns that setup capability together with one payload
+and its ordered resolved manifest. An anchor reduction can enter only at its
+exact index, with the payload ciphertext and resolved root/context fixed there.
+Missing, repeated, out-of-range, and ciphertext-substituted leaves cannot
+produce the ordered setup-first leaf list.
 An honest promoted setup claim has been folded, encoded as the 545-byte root,
 parsed, and discharged by the final MSM. The recursive parent must still prove
 that same setup preparation, reduction, promotion, and every anchor transition;

@@ -140,12 +140,28 @@ The candidate [opening-base derivation](opening-base-v2.md) removes both fresh
 hash-to-curve evaluations from the constrained path. It derives two
 domain-separated constants per basis and role, samples a nonzero transcript
 scalar only after the opening claim is fixed, and constrains
-`U = U0 + u U1`. This remains a V2 candidate until the native reduction and
-step suites use the identical transcript and reject cross-version proofs.
+`U = U0 + u U1`. The native V2 reduction and step suites now use the identical
+typed transcript, distinct proof types and codecs, and reject V1 encodings.
 The standalone relation is cross-checked against the vendored native map and
-is now composed directly into the candidate step; no caller supplies an
-opening point. Native transcript migration, child reductions, and final
-decision binding must still be composed before any acceptance API exists.
+is composed directly into the candidate step; no caller supplies an opening
+point. Native child-suite migration, the prepared-norm leaf relation, and
+final decision binding must still be composed before any acceptance API
+exists.
+
+The candidate coefficient reduction consumes an internal
+`ConstrainedPreparedNorm`; there is no production constructor from raw claim
+values. It absorbs the child relation's canonical `prepared_binding` scalar,
+coefficient commitment, tensor weights, and claimed evaluation, derives the
+role-1 opening base, and constrains the complete short IPA equation. It then
+removes the coefficient evaluation from the norm residual and derives the
+fusion challenge only after both pending equations and polynomials are fixed.
+The resulting three-term pending claim feeds the accumulation-step installer
+as existing circuit variables, without reallocation. A child relation must
+still produce the constrained prepared norm and its algebraic binding; a
+caller-supplied prepared norm is not authenticated ancestry.
+The shared one-reduction, one-claim, three-round-step probe uses 342,434 gates
+and a 1,679-byte transparent proof. Its accepted proof plus deliberate
+false-assignment proof completed in 110.85 seconds in the Release test run.
 
 ## Why the final MSM stays native
 

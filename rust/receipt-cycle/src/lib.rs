@@ -23,6 +23,9 @@ use thiserror::Error;
 mod algebraic_transcript;
 mod ffi;
 mod gadgets;
+// This is an internal candidate component, not a receipt acceptance API.
+#[allow(dead_code)]
+mod norm_reduction;
 // This is a candidate suite component, not an accepted receipt verifier.
 pub mod opening_base;
 // This is a tested migration primitive, not an accepted transcript suite yet.

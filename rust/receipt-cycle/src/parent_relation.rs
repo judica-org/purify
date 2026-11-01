@@ -474,17 +474,25 @@ fn select_point(
     }
 }
 
-fn constant_identity_point() -> SecpPoint {
+fn constant_point(value: PointValue) -> SecpPoint {
     SecpPoint {
-        x: Expression::constant(Scalar::ZERO),
-        y: Expression::constant(Scalar::ZERO),
-        identity: Expression::constant(Scalar::ONE),
-        witness: PointValue {
-            x: Scalar::ZERO,
-            y: Scalar::ZERO,
-            identity: true,
-        },
+        x: Expression::constant(value.x),
+        y: Expression::constant(value.y),
+        identity: Expression::constant(if value.identity {
+            Scalar::ONE
+        } else {
+            Scalar::ZERO
+        }),
+        witness: value,
     }
+}
+
+fn constant_identity_point() -> SecpPoint {
+    constant_point(PointValue {
+        x: Scalar::ZERO,
+        y: Scalar::ZERO,
+        identity: true,
+    })
 }
 
 pub(crate) fn scale_point(
@@ -1057,6 +1065,97 @@ fn msm_points(
     msm_points_windowed::<3>(builder, points, scalars)
 }
 
+fn validate_constant_point(point: PointValue) -> Result<(), ReceiptCycleError> {
+    if point.identity {
+        if point.x != Scalar::ZERO || point.y != Scalar::ZERO {
+            return Err(ReceiptCycleError::Malformed(
+                "noncanonical constant identity",
+            ));
+        }
+    } else if point.y.square() != point.x.square() * point.x + Scalar::from(7) {
+        return Err(ReceiptCycleError::Malformed("constant point off curve"));
+    }
+    Ok(())
+}
+
+fn precompute_constant_window(
+    point: PointValue,
+    window_bits: usize,
+) -> Result<Vec<SecpPoint>, ReceiptCycleError> {
+    let table_size = 1usize << window_bits;
+    let mut values = Vec::with_capacity(table_size);
+    values.push(PointValue {
+        x: Scalar::ZERO,
+        y: Scalar::ZERO,
+        identity: true,
+    });
+    values.push(point);
+    while values.len() != table_size {
+        values.push(add_point_values(
+            *values.last().expect("nonempty constant table"),
+            point,
+        ));
+    }
+    if values
+        .iter()
+        .skip(1)
+        .any(|multiple| multiple.identity != point.identity)
+    {
+        return Err(ReceiptCycleError::Malformed(
+            "constant point has a small order",
+        ));
+    }
+    Ok(values.into_iter().map(constant_point).collect())
+}
+
+fn scale_constant_point_windowed<const WINDOW_BITS: usize>(
+    builder: &mut Builder,
+    point: PointValue,
+    scalar: &SecpScalarVar,
+) -> Result<SecpPoint, ReceiptCycleError> {
+    if WINDOW_BITS == 0 || WINDOW_BITS > 4 || scalar.bits.is_empty() {
+        return Err(ReceiptCycleError::Malformed(
+            "constant scalar multiplication window",
+        ));
+    }
+    validate_constant_point(point)?;
+    let window_count = scalar.bits.len().div_ceil(WINDOW_BITS);
+    let mut tables = Vec::with_capacity(window_count);
+    let mut shifted = point;
+    for window in 0..window_count {
+        tables.push(precompute_constant_window(shifted, WINDOW_BITS)?);
+        if window + 1 != window_count {
+            for _ in 0..WINDOW_BITS {
+                shifted = add_point_values(shifted, shifted);
+            }
+        }
+    }
+
+    let mut accumulator = constant_identity_point();
+    for (window, table) in tables.iter().enumerate() {
+        let offset = window * WINDOW_BITS;
+        let active_bits = WINDOW_BITS.min(scalar.bits.len() - offset);
+        let bits = &scalar.bits[offset..offset + active_bits];
+        let selected = select_window_point(
+            builder,
+            bits,
+            &table[..1usize << active_bits],
+            &table[1].identity,
+        );
+        accumulator = add_points(builder, &accumulator, &selected);
+    }
+    Ok(accumulator)
+}
+
+/// Multiply a verifier-derived constant point by a canonical secp scalar.
+pub(crate) fn scale_constant_point(
+    builder: &mut Builder,
+    point: PointValue,
+    scalar: &SecpScalarVar,
+) -> Result<SecpPoint, ReceiptCycleError> {
+    scale_constant_point_windowed::<4>(builder, point, scalar)
+}
+
 /// Builds the canonical compressed-point relation used by parent transcripts.
 ///
 /// The private y coordinate must open a non-identity secp256k1 point and its
@@ -1122,6 +1221,27 @@ pub fn build_secp_scalar_multiplication_relation(
     let scalar = allocate_canonical_scalar(&mut builder, scalar)?;
     let expected = allocate_point(&mut builder, parse_point(expected)?);
     let product = scale_point(&mut builder, &point, &scalar);
+    builder.constrain_equal(&product.x, &expected.x);
+    builder.constrain_equal(&product.y, &expected.y);
+    builder.constrain_equal(&product.identity, &expected.identity);
+    builder.finish()
+}
+
+/// Builds `scalar * point = expected` for a verifier-derived constant point.
+///
+/// The point coordinates are embedded in the regenerated circuit. Four-bit
+/// pre-shifted tables therefore require no constrained table construction or
+/// inter-window doublings. The scalar remains a canonical private witness.
+pub fn build_secp_fixed_base_scalar_multiplication_relation(
+    point: SecpAffineWitness,
+    scalar: SecpScalarWitness,
+    expected: SecpAffineWitness,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    let mut builder = Builder::default();
+    let point = parse_point(point)?;
+    let scalar = allocate_canonical_scalar(&mut builder, scalar)?;
+    let expected = allocate_point(&mut builder, parse_point(expected)?);
+    let product = scale_constant_point(&mut builder, point, &scalar)?;
     builder.constrain_equal(&product.x, &expected.x);
     builder.constrain_equal(&product.y, &expected.y);
     builder.constrain_equal(&product.identity, &expected.identity);
@@ -1345,6 +1465,21 @@ mod tests {
             build_secp_scalar_multiplication_relation(point, scalar, expected)?;
         let statement = b"secp scalar multiplication foundation";
         let proof = prove(&circuit, &assignment, statement, [0x81; 32])?;
+        verify(&circuit, statement, &proof)?;
+        assert_eq!(proof.len(), proof_wire_len(&circuit)?);
+        let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("gate count")) as usize;
+        Ok((circuit, gates, proof.len()))
+    }
+
+    fn prove_fixed_scale_relation(
+        point: SecpAffineWitness,
+        scalar: SecpScalarWitness,
+        expected: SecpAffineWitness,
+    ) -> Result<(Vec<u8>, usize, usize), ReceiptCycleError> {
+        let (circuit, assignment) =
+            build_secp_fixed_base_scalar_multiplication_relation(point, scalar, expected)?;
+        let statement = b"fixed-base secp scalar multiplication foundation";
+        let proof = prove(&circuit, &assignment, statement, [0x84; 32])?;
         verify(&circuit, statement, &proof)?;
         assert_eq!(proof.len(), proof_wire_len(&circuit)?);
         let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("gate count")) as usize;
@@ -1613,6 +1748,58 @@ mod tests {
             0xd0, 0x36, 0x41, 0x41,
         ]);
         assert!(prove_scale_relation(generator(), order, SecpAffineWitness::identity(),).is_err());
+    }
+
+    #[test]
+    fn fixed_base_scalar_multiplication_handles_boundaries() {
+        let (zero_circuit, gates, proof_bytes) = prove_fixed_scale_relation(
+            generator(),
+            SecpScalarWitness::from_u64(0),
+            SecpAffineWitness::identity(),
+        )
+        .expect("fixed-base zero scalar");
+        let (maximum_circuit, _, _) =
+            prove_fixed_scale_relation(generator(), maximum_scalar(), negate(generator()))
+                .expect("fixed-base order minus one");
+        prove_fixed_scale_relation(
+            SecpAffineWitness::identity(),
+            maximum_scalar(),
+            SecpAffineWitness::identity(),
+        )
+        .expect("fixed-base identity");
+
+        assert_eq!(zero_circuit, maximum_circuit);
+        assert_eq!(gates, 5_449);
+        assert_eq!(proof_bytes, 1_283);
+        eprintln!("receipt_secp_fixed_base_gates={gates} proof_bytes={proof_bytes}");
+    }
+
+    #[test]
+    fn fixed_base_scalar_multiplication_rejects_bad_inputs() {
+        assert!(prove_fixed_scale_relation(
+            generator(),
+            SecpScalarWitness::from_u64(2),
+            three_times_generator(),
+        )
+        .is_err());
+
+        let mut off_curve = generator();
+        off_curve.y[0] ^= 1;
+        assert!(build_secp_fixed_base_scalar_multiplication_relation(
+            off_curve,
+            SecpScalarWitness::from_u64(1),
+            generator(),
+        )
+        .is_err());
+
+        let mut malformed_identity = SecpAffineWitness::identity();
+        malformed_identity.x[0] = 1;
+        assert!(build_secp_fixed_base_scalar_multiplication_relation(
+            malformed_identity,
+            SecpScalarWitness::from_u64(0),
+            SecpAffineWitness::identity(),
+        )
+        .is_err());
     }
 
     #[test]

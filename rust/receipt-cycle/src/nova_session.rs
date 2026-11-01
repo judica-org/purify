@@ -571,29 +571,6 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
         })
     }
 
-    /// Verifies the proof against the exact initial state and external step
-    /// count, returning its authenticated recurrence output.
-    pub(crate) fn verify_final(
-        &self,
-        initial_state: &[DirectNovaScalar; ARITY],
-        expected_steps: usize,
-        proof: &[u8],
-    ) -> Result<[DirectNovaScalar; ARITY], DirectNovaSessionError> {
-        self.verifier
-            .verify_final(initial_state, expected_steps, proof)
-    }
-
-    pub(crate) fn verify_exact(
-        &self,
-        initial_state: &[DirectNovaScalar; ARITY],
-        expected_steps: usize,
-        expected_final_state: &[DirectNovaScalar; ARITY],
-        proof: &[u8],
-    ) -> Result<(), DirectNovaSessionError> {
-        self.verifier
-            .verify_exact(initial_state, expected_steps, expected_final_state, proof)
-    }
-
     fn serialized<T: Send>(
         &self,
         operation: impl FnOnce() -> Result<T, DirectNovaSessionError> + Send,
@@ -697,34 +674,6 @@ impl<const ARITY: usize> SelectedDirectNovaSuite<ARITY> {
             expected: self.expected,
             inner: self.inner.into_verifier(),
         }
-    }
-
-    /// Authenticates the recurrence output under this selected suite.
-    ///
-    /// The returned state is not construction-receipt acceptance: the
-    /// construction wrapper must still bind its verifier-derived suffix and
-    /// complete the native final accumulation decision.
-    pub(crate) fn verify_final(
-        &self,
-        initial_state: &[DirectNovaScalar; ARITY],
-        expected_steps: usize,
-        proof: &[u8],
-    ) -> Result<[DirectNovaScalar; ARITY], DirectNovaSessionError> {
-        self.inner
-            .verify_final(initial_state, expected_steps, proof)
-    }
-
-    /// Verifies only the caller's exact statement. The proof supplies neither
-    /// suite metadata nor its own recursive step count.
-    pub(crate) fn verify_exact(
-        &self,
-        initial_state: &[DirectNovaScalar; ARITY],
-        expected_steps: usize,
-        expected_final_state: &[DirectNovaScalar; ARITY],
-        proof: &[u8],
-    ) -> Result<(), DirectNovaSessionError> {
-        self.inner
-            .verify_exact(initial_state, expected_steps, expected_final_state, proof)
     }
 }
 

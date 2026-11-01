@@ -801,9 +801,10 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
     );
     assert_eq!(proof.len(), metadata.proof_length);
 
+    let verifier = selected.into_verifier();
     let verify_started = std::time::Instant::now();
     eprintln!("native_profile_nova: verifying canonical compressed proof");
-    selected
+    verifier
         .verify_exact(&z0, 1, &z1, &proof)
         .expect("exact compressed native-profile proof");
     eprintln!(

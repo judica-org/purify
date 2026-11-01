@@ -637,6 +637,7 @@ if(PURIFY_BUILD_TESTS)
         tests/construction_receipt_helpers.cpp
         tests/construction_receipt_tests.cpp
         tests/construction_receipt_codec_tests.cpp
+        tests/construction_receipt_batch_tests.cpp
         tests/receipt_sha256_tests.cpp
         tests/coordinate_field_tests.cpp
         tests/poseidon_tests.cpp
@@ -722,6 +723,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(companion_scalar_escrow)
     purify_add_cpp_suite_test(construction_receipt)
     purify_add_cpp_suite_test(construction_receipt_codec)
+    purify_add_cpp_suite_test(construction_receipt_batch)
     purify_add_cpp_suite_test(receipt_sha256)
     purify_add_cpp_suite_test(coordinate_field)
     purify_add_cpp_suite_test(poseidon)

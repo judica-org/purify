@@ -277,16 +277,18 @@ impl BuilderTranscript {
     }
 }
 
-#[cfg(test)]
+/// Native counterpart to the constrained typed transcript.
+///
+/// Callers must validate scalar and point encodings before appending their
+/// field representatives.
 #[derive(Clone)]
-struct NativeTranscript {
+pub(crate) struct NativeTranscript {
     state: [Scalar; WIDTH],
     rate_index: usize,
 }
 
-#[cfg(test)]
 impl NativeTranscript {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: [suite_capacity(), Scalar::ZERO, Scalar::ZERO],
             rate_index: 0,
@@ -302,17 +304,17 @@ impl NativeTranscript {
         }
     }
 
-    fn append_field(&mut self, value: Scalar) {
+    pub(crate) fn append_field(&mut self, value: Scalar) {
         self.absorb(header(FIELD_ITEM, 0));
         self.absorb(value);
     }
 
-    fn append_scalar(&mut self, value: Scalar) {
+    pub(crate) fn append_scalar(&mut self, value: Scalar) {
         self.absorb(header(SCALAR_ITEM, 0));
         self.absorb(value);
     }
 
-    fn append_point(&mut self, prefix: u8, x: Scalar) {
+    pub(crate) fn append_point(&mut self, prefix: u8, x: Scalar) {
         self.absorb(header(POINT_ITEM, u64::from(prefix)));
         self.absorb(x);
     }
@@ -324,18 +326,18 @@ impl NativeTranscript {
         self.absorb(second_x);
     }
 
-    fn append_bytes(&mut self, bytes: &[u8]) {
+    pub(crate) fn append_bytes(&mut self, bytes: &[u8]) {
         self.absorb(header(BYTES_ITEM, bytes.len() as u64));
         for word in byte_words(bytes) {
             self.absorb(word);
         }
     }
 
-    fn append_u64(&mut self, value: u64) {
+    pub(crate) fn append_u64(&mut self, value: u64) {
         self.absorb(header(U64_ITEM, value));
     }
 
-    fn challenge(&self, round: u64) -> [Scalar; 2] {
+    pub(crate) fn challenge(&self, round: u64) -> [Scalar; 2] {
         let mut challenge = self.clone();
         challenge.absorb(header(CHALLENGE_ITEM, round));
         challenge.absorb(Scalar::ONE);
@@ -369,9 +371,8 @@ pub(crate) fn native_opening_base_probe(
     transcript.opening_base_scalar(basis_digest, role)
 }
 
-#[cfg(test)]
-fn byte_words(bytes: &[u8]) -> Vec<Scalar> {
-    bytes.chunks(31).map(integer_from_be).collect()
+fn byte_words(bytes: &[u8]) -> impl Iterator<Item = Scalar> + '_ {
+    bytes.chunks(31).map(integer_from_be)
 }
 
 #[cfg(test)]
@@ -523,7 +524,6 @@ mod tests {
         let first_x = builder.allocate(probe.first_x);
         let second_x = builder.allocate(probe.second_x);
         let words = byte_words(&probe.bytes)
-            .into_iter()
             .map(|word| builder.allocate(word))
             .collect::<Vec<_>>();
         let expected = expected.map(|value| builder.allocate(value));

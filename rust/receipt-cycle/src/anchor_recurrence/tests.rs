@@ -9,6 +9,7 @@ use crate::algebraic_circuit_norm_leaf::install_manifest_bound_anchor_leaf;
 use crate::algebraic_circuit_transcript::{
     install_transcript, CircuitPointPairWitnessV4, CircuitTranscriptShapeV4,
 };
+use crate::algebraic_transcript::NativeTranscript;
 use crate::parent_relation::{
     add_point_values, derive_candidate_folded_generator, CandidatePendingClaimWitness,
     CandidatePolynomialTermWitness, ConstrainedPendingClaim, EncodedSecpPoint, PointValue,
@@ -343,80 +344,6 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-#[derive(Clone)]
-struct NativeManifestTranscript {
-    state: [Scalar; 3],
-    rate_index: usize,
-}
-
-impl NativeManifestTranscript {
-    fn new() -> Self {
-        Self {
-            state: [
-                integer_from_be(b"Purify/PoseidonTranscript/v1"),
-                Scalar::ZERO,
-                Scalar::ZERO,
-            ],
-            rate_index: 0,
-        }
-    }
-
-    fn absorb(&mut self, value: Scalar) {
-        self.state[self.rate_index + 1] += value;
-        self.rate_index += 1;
-        if self.rate_index == 2 {
-            self.state = crate::poseidon::permute(self.state);
-            self.rate_index = 0;
-        }
-    }
-
-    fn append_bytes(&mut self, bytes: &[u8]) {
-        self.absorb(header(0x4259_5445, bytes.len() as u64));
-        for chunk in bytes.chunks(31) {
-            self.absorb(integer_from_be(chunk));
-        }
-    }
-
-    fn append_field(&mut self, value: Scalar) {
-        self.absorb(header(0x4649_454c, 0));
-        self.absorb(value);
-    }
-
-    fn append_scalar(&mut self, value: Scalar) {
-        self.absorb(header(0x5343_414c, 0));
-        self.absorb(value);
-    }
-
-    fn append_point(&mut self, point: SecpEncodedPointWitness) {
-        self.absorb(header(0x504f_494e, u64::from(point.encoded[0])));
-        self.absorb(point_value(point).x);
-    }
-
-    fn challenge(&self) -> Scalar {
-        let mut output = self.clone();
-        output.absorb(header(0x4348_414c, 0));
-        output.absorb(Scalar::ONE);
-        while output.rate_index != 0 {
-            output.absorb(Scalar::ZERO);
-        }
-        output.state[1]
-    }
-}
-
-fn integer_from_be(bytes: &[u8]) -> Scalar {
-    bytes.iter().fold(Scalar::ZERO, |value, byte| {
-        value * Scalar::from(256) + Scalar::from(u64::from(*byte))
-    })
-}
-
-fn header(item: u32, auxiliary: u64) -> Scalar {
-    let mut shift = Scalar::ONE;
-    for _ in 0..64 {
-        shift = shift + shift;
-    }
-    Scalar::from(u64::from(item)) * shift + Scalar::from(auxiliary)
-}
-
 fn native_manifest_transition(
     prior_manifest: Scalar,
     index: Scalar,
@@ -425,15 +352,18 @@ fn native_manifest_transition(
     coefficient_commitment: SecpEncodedPointWitness,
     anchored_offset: SecpEncodedPointWitness,
 ) -> Scalar {
-    let mut transcript = NativeManifestTranscript::new();
+    let mut transcript = NativeTranscript::new();
     transcript.append_bytes(MANIFEST_STEP_DOMAIN);
     transcript.append_field(prior_manifest);
     transcript.append_field(index);
     transcript.append_bytes(&binding);
     transcript.append_scalar(precommitment);
-    transcript.append_point(coefficient_commitment);
-    transcript.append_point(anchored_offset);
-    transcript.challenge()
+    transcript.append_point(
+        coefficient_commitment.encoded[0],
+        point_value(coefficient_commitment).x,
+    );
+    transcript.append_point(anchored_offset.encoded[0], point_value(anchored_offset).x);
+    transcript.challenge(0)[0]
 }
 
 #[test]

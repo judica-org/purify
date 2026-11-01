@@ -3,6 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include "purify/puresign/construction_receipt.hpp"
+#include "purify/puresign/construction_receipt_accumulation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -247,6 +248,62 @@ construction_receipt_statement_digest(
         append_array(statement, resolved.context_digest);
     }
     return kConstructionReceiptStatementHash.digest(statement);
+}
+
+Result<ConstructionReceiptAccumulator>
+ConstructionReceiptAccumulator::create(
+    purify_secp_context* secp_context) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto setup, RecoveryRootSetupAccumulator::create(secp_context),
+        "construction_accumulation:setup_basis");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto anchors, AnchorEscrowAccumulator::create(secp_context),
+        "construction_accumulation:anchor_basis");
+    return ConstructionReceiptAccumulator(std::move(setup),
+                                          std::move(anchors));
+}
+
+Result<bppp::accumulation::PendingClaim>
+ConstructionReceiptAccumulator::promote_setup_claim(
+    const bppp::accumulation::PendingClaim& setup_claim) const {
+    const auto& source = setup_.basis();
+    const auto& target = anchors_.basis();
+    if (setup_claim.basis_digest() != source.digest()) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "construction_accumulation:setup_claim_basis");
+    }
+    if (source.dimension() >= target.dimension() ||
+        !std::equal(source.points().begin(), source.points().end(),
+                    target.points().begin())) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "construction_accumulation:basis_prefix");
+    }
+    const auto& polynomial = setup_claim.polynomial();
+    if (polynomial.empty() || polynomial.size() > 3) {
+        return unexpected_error(
+            ErrorCode::InvalidDimensions,
+            "construction_accumulation:setup_claim_shape");
+    }
+    for (const auto& term : polynomial) {
+        if (term.factors.size() >=
+            std::numeric_limits<std::size_t>::digits) {
+            return unexpected_error(
+                ErrorCode::Overflow,
+                "construction_accumulation:setup_claim_degree");
+        }
+        const std::size_t width =
+            std::size_t{1} << term.factors.size();
+        if (width > source.dimension() ||
+            term.offset > source.dimension() - width) {
+            return unexpected_error(
+                ErrorCode::InvalidDimensions,
+                "construction_accumulation:setup_claim_degree");
+        }
+    }
+    return bppp::accumulation::PendingClaim(
+        target.digest(), setup_claim.point(), polynomial);
 }
 
 }  // namespace purify::accountable

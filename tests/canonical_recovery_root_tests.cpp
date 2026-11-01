@@ -7,6 +7,7 @@
 #include <chrono>
 #include <iostream>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -191,11 +192,12 @@ void test_setup_and_recovery(TestContext& ctx) {
     auto reencoded_proof = parsed_proof->serialize(secp.get());
     ctx.expect(reencoded_proof && *reencoded_proof == *encoded_proof,
                "setup proof encoding round-trips exactly");
-    auto setup_accumulator = purify::accountable::
-        RecoveryRootSetupAccumulator::create(secp.get());
-    expect_ok(ctx, setup_accumulator,
-              "recovery-root setup fixed accumulation basis creates");
-    if (!setup_accumulator) return;
+    auto construction_accumulator = purify::accountable::
+        ConstructionReceiptAccumulator::create(secp.get());
+    expect_ok(ctx, construction_accumulator,
+              "construction receipt fixed accumulation bases create");
+    if (!construction_accumulator) return;
+    const auto* setup_accumulator = &construction_accumulator->setup();
     ctx.expect(
         setup_accumulator->basis().n_vec_len() ==
                 purify::accountable::RecoveryRootSetupAccumulator::
@@ -226,6 +228,53 @@ void test_setup_and_recovery(TestContext& ctx) {
                        setup_accumulator->basis(), *setup_pending,
                        secp.get()),
               "final MSM discharges the honest setup obligation");
+    auto promoted_setup =
+        construction_accumulator->promote_setup_claim(*setup_pending);
+    expect_ok(ctx, promoted_setup,
+              "pending setup claim promotes to the construction basis");
+    if (!promoted_setup) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       construction_accumulator->anchors().basis(),
+                       *promoted_setup, secp.get()),
+              "construction basis preserves the setup obligation");
+    const std::span<const purify::bppp::accumulation::PendingClaim>
+        promoted_claims(&*promoted_setup, 1);
+    auto construction_step = purify::bppp::accumulation::prove_step(
+        construction_accumulator->anchors().basis(), promoted_claims,
+        secp.get());
+    expect_ok(ctx, construction_step,
+              "promoted setup claim folds into a construction root");
+    if (!construction_step) return;
+    auto construction_root = purify::bppp::accumulation::verify_step(
+        construction_accumulator->anchors().basis(), promoted_claims,
+        *construction_step, secp.get());
+    expect_ok(ctx, construction_root,
+              "construction root remains a pending obligation");
+    if (!construction_root) return;
+    auto encoded_construction_root =
+        purify::bppp::accumulation::serialize_root_claim(
+            construction_accumulator->anchors().basis(),
+            *construction_root, secp.get());
+    expect_ok(ctx, encoded_construction_root,
+              "construction root has a canonical encoding");
+    if (!encoded_construction_root) return;
+    ctx.expect(
+        encoded_construction_root->size() ==
+            purify::accountable::ConstructionReceiptAccumulator::
+                kRootClaimSerializedSize &&
+            encoded_construction_root->size() == 545,
+        "construction root encoding is exactly 545 bytes");
+    auto parsed_construction_root =
+        purify::bppp::accumulation::parse_root_claim(
+            construction_accumulator->anchors().basis(),
+            *encoded_construction_root, secp.get());
+    expect_ok(ctx, parsed_construction_root,
+              "construction root reparses against its fixed basis");
+    if (!parsed_construction_root) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       construction_accumulator->anchors().basis(),
+                       *parsed_construction_root, secp.get()),
+              "final MSM discharges the parsed construction root");
     auto changed_encoding = *encoded_proof;
     changed_encoding[0] ^= 1;
     expect_error(ctx,

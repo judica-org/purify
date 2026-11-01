@@ -6,6 +6,10 @@
 
 #include "purify/bppp.hpp"
 
+namespace purify::accountable {
+class ConstructionReceiptAccumulator;
+}
+
 namespace purify::bppp::accumulation {
 
 using Digest = std::array<unsigned char, 32>;
@@ -118,6 +122,7 @@ private:
     friend Result<PendingClaim> parse_root_claim(
         const Basis&, std::span<const unsigned char>,
         purify_secp_context*);
+    friend class purify::accountable::ConstructionReceiptAccumulator;
 };
 
 /** Public one-vector IPA transcript; all-zero33 encodes the point at infinity. */

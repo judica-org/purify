@@ -78,8 +78,9 @@ This order exactly matches the Rust candidate parent relation:
 10. for every round, append points `L`, `R`, squeeze challenge `2 + round`,
     and append the selected scalar.
 
-The native entry point enforces the parent relation's limits of 1,024 claims
-and 24 IPA rounds.
+Algebraic prepared binding, coefficient reduction, and accumulation steps all
+reject bases requiring more than 24 full-basis IPA rounds. Accumulation steps
+also enforce the parent relation's limit of 1,024 claims.
 
 The terminal scalar and folded generator are checked by the short group
 equation. The folded generator becomes the next pending claim.

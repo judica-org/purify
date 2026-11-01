@@ -123,6 +123,9 @@ Status validate_prepared(const Basis& basis, const PreparedNorm& norm) {
 
 Status validate_algebraic_prepared(
     const Basis& basis, const AlgebraicPreparedNorm& norm) {
+    PURIFY_RETURN_IF_ERROR(
+        validate_algebraic_dimension(basis.dimension()),
+        "accumulation:algebraic_prepared_dimension");
     if (norm.basis_digest() != basis.digest()) {
         return unexpected_error(
             ErrorCode::BindingMismatch,
@@ -1235,6 +1238,9 @@ Result<Bytes> serialize_algebraic_norm_reduction(
     PURIFY_RETURN_IF_ERROR(
         validate_basis(basis), "accumulation:basis");
     PURIFY_RETURN_IF_ERROR(
+        validate_algebraic_dimension(basis.dimension()),
+        "accumulation:algebraic_reduction_dimension");
+    PURIFY_RETURN_IF_ERROR(
         validate_algebraic_dimension(basis.l_vec_len()),
         "accumulation:algebraic_reduction_dimension");
     PURIFY_ASSIGN_OR_RETURN(
@@ -1266,6 +1272,9 @@ parse_algebraic_norm_reduction(
         "accumulation:context");
     PURIFY_RETURN_IF_ERROR(
         validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(
+        validate_algebraic_dimension(basis.dimension()),
+        "accumulation:algebraic_reduction_dimension");
     PURIFY_RETURN_IF_ERROR(
         validate_algebraic_dimension(basis.l_vec_len()),
         "accumulation:algebraic_reduction_dimension");
@@ -1427,6 +1436,9 @@ Result<AlgebraicPreparedNorm> bind_algebraic_prepared_norm(
     FieldElement prepared_binding) {
     PURIFY_RETURN_IF_ERROR(
         validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(
+        validate_algebraic_dimension(basis.dimension()),
+        "accumulation:algebraic_prepared_dimension");
     PURIFY_RETURN_IF_ERROR(
         validate_prepared(basis, prepared),
         "accumulation:prepared");

@@ -29,6 +29,10 @@ mod algebraic_transcript;
 mod anchor_recurrence;
 #[allow(dead_code)]
 mod construction_manifest;
+// This authenticates a pending construction root. Native decide remains
+// mandatory before receipt acceptance.
+#[allow(dead_code)]
+mod construction_parent_verifier;
 // This is an internal candidate lowering, not a receipt acceptance API.
 #[allow(dead_code)]
 mod direct_nova;

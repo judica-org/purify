@@ -72,8 +72,8 @@ impl DirectRelationId {
         &self.0
     }
 
-    #[cfg(test)]
-    pub(crate) const fn from_test_bytes(bytes: [u8; 32]) -> Self {
+    /// Reconstructs an ID only from a locally frozen suite profile.
+    pub(crate) const fn from_frozen_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 }

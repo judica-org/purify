@@ -33,6 +33,8 @@ use crate::{
     ReceiptCycleError,
 };
 
+pub(crate) mod verifier_artifact;
+
 type PrimaryEvaluationEngine = ipa_pc::EvaluationEngine<DirectNovaPrimaryEngine>;
 type SecondaryEvaluationEngine = ipa_pc::EvaluationEngine<DirectNovaSecondaryEngine>;
 type PrimarySnark = RelaxedR1CSSNARK<DirectNovaPrimaryEngine, PrimaryEvaluationEngine>;
@@ -244,6 +246,18 @@ fn suite_u64(value: usize, label: &'static str) -> Result<u64, DirectNovaSession
     u64::try_from(value).map_err(|_| DirectNovaSessionError::SuiteIdentity(label))
 }
 
+fn suite_usize(value: u64, label: &'static str) -> Result<usize, DirectNovaSessionError> {
+    usize::try_from(value).map_err(|_| DirectNovaSessionError::SuiteIdentity(label))
+}
+
+fn direct_nova_thread_pool() -> Result<ThreadPool, DirectNovaSessionError> {
+    ThreadPoolBuilder::new()
+        .num_threads(1)
+        .thread_name(|_| "purify-direct-nova".to_owned())
+        .build()
+        .map_err(|_| DirectNovaSessionError::Setup("one-thread Rayon pool"))
+}
+
 pub(crate) struct DirectNovaSuite<const ARITY: usize> {
     template: DirectNovaTemplate<ARITY>,
     public_params: DirectPublicParams<ARITY>,
@@ -392,6 +406,34 @@ impl ExpectedDirectNovaSuite {
         }
         Ok(())
     }
+
+    /// Reconstructs verifier metadata exclusively from this local profile.
+    fn local_verifier_components<const ARITY: usize>(
+        &self,
+    ) -> Result<(DirectNovaSuiteMetadata, NovaCompressedProofShape), DirectNovaSessionError> {
+        let primary_constraints = suite_usize(self.primary.constraints, "primary constraints")?;
+        let primary_variables = suite_usize(self.primary.variables, "primary variables")?;
+        let secondary_constraints =
+            suite_usize(self.secondary.constraints, "secondary constraints")?;
+        let secondary_variables = suite_usize(self.secondary.variables, "secondary variables")?;
+        let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
+            NovaR1csDimensions::new(primary_constraints, primary_variables),
+            NovaR1csDimensions::new(secondary_constraints, secondary_variables),
+            ARITY,
+        )?;
+        let metadata = DirectNovaSuiteMetadata {
+            relation_id: DirectRelationId::from_frozen_bytes(self.relation_id),
+            public_parameter_digest: self.public_parameter_digest,
+            primary_constraints,
+            secondary_constraints,
+            primary_variables,
+            secondary_variables,
+            proof_length: proof_shape.encoded_len(),
+            codec_sequence_count: proof_shape.sequence_count(),
+        };
+        self.validate::<ARITY>(&metadata, &proof_shape)?;
+        Ok((metadata, proof_shape))
+    }
 }
 
 const QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION: ConstructionPayloadVersion =
@@ -486,11 +528,7 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
         trusted_step: DirectNovaStep<ARITY>,
     ) -> Result<Self, DirectNovaSessionError> {
         let relation_id = trusted_step.relation_id();
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(1)
-            .thread_name(|_| "purify-direct-nova".to_owned())
-            .build()
-            .map_err(|_| DirectNovaSessionError::Setup("one-thread Rayon pool"))?;
+        let pool = direct_nova_thread_pool()?;
 
         let (public_params, prover_key, verifier_key, proof_shape, metadata) =
             pool.install(|| -> Result<_, DirectNovaSessionError> {
@@ -584,6 +622,20 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
 }
 
 impl<const ARITY: usize> DirectNovaVerifier<ARITY> {
+    fn from_loaded_key(
+        verifier_key: DirectVerifierKey<ARITY>,
+        proof_shape: NovaCompressedProofShape,
+        metadata: DirectNovaSuiteMetadata,
+    ) -> Result<Self, DirectNovaSessionError> {
+        Ok(Self {
+            verifier_key,
+            proof_shape,
+            metadata,
+            pool: direct_nova_thread_pool()?,
+            operation: Mutex::new(()),
+        })
+    }
+
     pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
         self.metadata
     }
@@ -814,6 +866,9 @@ mod tests {
     use ff::{Field, PrimeField};
     use golden_halo2curves::Secq256k1Cycle;
 
+    use super::verifier_artifact::{
+        DirectNovaVerifierArtifactError, ExpectedDirectNovaVerifierArtifact,
+    };
     use super::*;
     use crate::{
         direct_nova::direct_nova_raw_metrics,
@@ -1017,7 +1072,7 @@ mod tests {
         )
         .expect("tiny suite proof shape");
         let metadata = DirectNovaSuiteMetadata {
-            relation_id: DirectRelationId::from_test_bytes([0x11; 32]),
+            relation_id: DirectRelationId::from_frozen_bytes([0x11; 32]),
             public_parameter_digest: [0x22; 32],
             primary_constraints: 13_606,
             secondary_constraints: 10_787,
@@ -1131,7 +1186,7 @@ mod tests {
         assert_eq!(proof_shape.sequence_count(), 125);
 
         let metadata = DirectNovaSuiteMetadata {
-            relation_id: DirectRelationId::from_test_bytes(
+            relation_id: DirectRelationId::from_frozen_bytes(
                 QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
             ),
             public_parameter_digest: QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
@@ -1392,26 +1447,150 @@ mod tests {
         let verifier = selected.into_verifier();
         assert_eq!(verifier.expected(), &TINY_EXPECTED_SUITE);
         assert_eq!(verifier.metadata(), metadata);
+
+        let mut first_artifact = std::io::Cursor::new(Vec::new());
+        let first_descriptor = verifier
+            .write_artifact(&mut first_artifact)
+            .expect("write selected verifier artifact");
+        assert_eq!(first_descriptor.encoded_length(), 17_466_504);
         assert_eq!(
-            verifier
+            first_descriptor.digest(),
+            [
+                94, 103, 254, 146, 63, 221, 167, 60, 61, 229, 138, 252, 24, 21, 114, 50, 152, 56,
+                195, 21, 75, 130, 74, 171, 243, 238, 125, 203, 196, 77, 95, 91,
+            ]
+        );
+        let first_artifact = first_artifact.into_inner();
+        let mut second_artifact = std::io::Cursor::new(Vec::new());
+        let second_descriptor = verifier
+            .write_artifact(&mut second_artifact)
+            .expect("rewrite selected verifier artifact");
+        assert_eq!(second_artifact.into_inner(), first_artifact);
+        assert_eq!(second_descriptor, first_descriptor);
+
+        let mut nonempty = std::io::Cursor::new(vec![0]);
+        assert!(matches!(
+            verifier.write_artifact(&mut nonempty),
+            Err(DirectNovaVerifierArtifactError::DestinationNotEmpty)
+        ));
+
+        let loaded = SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
+            &first_artifact,
+            &TINY_EXPECTED_SUITE,
+            &first_descriptor,
+        )
+        .expect("load selected verifier artifact");
+        assert_eq!(loaded.expected(), &TINY_EXPECTED_SUITE);
+        assert_eq!(loaded.metadata(), metadata);
+        assert!(matches!(
+            SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
+                &first_artifact,
+                &TEST_EXPECTED_SUITE,
+                &first_descriptor,
+            ),
+            Err(DirectNovaVerifierArtifactError::Header("suite ID"))
+        ));
+        assert_eq!(
+            loaded
                 .verify_final(&z0, 2, &proof)
                 .expect("authenticate final state"),
             z2
         );
-        verifier
+        loaded
             .verify_exact(&z0, 2, &z2, &proof)
             .expect("verify canonical proof");
+
+        let wrong_length = ExpectedDirectNovaVerifierArtifact::new(
+            first_descriptor.encoded_length() + 1,
+            first_descriptor.digest(),
+        );
+        assert!(matches!(
+            SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
+                &first_artifact,
+                &TINY_EXPECTED_SUITE,
+                &wrong_length,
+            ),
+            Err(DirectNovaVerifierArtifactError::Length)
+        ));
+        let wrong_digest =
+            ExpectedDirectNovaVerifierArtifact::new(first_descriptor.encoded_length(), [0; 32]);
+        assert!(matches!(
+            SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
+                &first_artifact,
+                &TINY_EXPECTED_SUITE,
+                &wrong_digest,
+            ),
+            Err(DirectNovaVerifierArtifactError::Digest)
+        ));
+
+        let mut corrupted_payload = first_artifact.clone();
+        corrupted_payload[64] ^= 1;
+        assert!(matches!(
+            SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
+                &corrupted_payload,
+                &TINY_EXPECTED_SUITE,
+                &first_descriptor,
+            ),
+            Err(DirectNovaVerifierArtifactError::Digest)
+        ));
+
+        for (offset, label) in [
+            (0, "magic"),
+            (19, "encoding version"),
+            (20, "suite ID"),
+            (55, "state arity"),
+            (63, "payload length"),
+        ] {
+            let mut malformed = first_artifact.clone();
+            malformed[offset] ^= 1;
+            let descriptor = ExpectedDirectNovaVerifierArtifact::for_test_bytes(&malformed);
+            assert!(matches!(
+                SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
+                    &malformed,
+                    &TINY_EXPECTED_SUITE,
+                    &descriptor,
+                ),
+                Err(DirectNovaVerifierArtifactError::Header(actual)) if actual == label
+            ));
+        }
+
+        let mut truncated = first_artifact.clone();
+        truncated.pop();
+        let truncated_descriptor = ExpectedDirectNovaVerifierArtifact::for_test_bytes(&truncated);
+        assert!(matches!(
+            SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
+                &truncated,
+                &TINY_EXPECTED_SUITE,
+                &truncated_descriptor,
+            ),
+            Err(DirectNovaVerifierArtifactError::Header("payload length"))
+        ));
+
+        let mut trailing = first_artifact.clone();
+        trailing.push(0);
+        let payload_length =
+            u64::try_from(trailing.len() - 64).expect("test artifact payload length fits u64");
+        trailing[56..64].copy_from_slice(&payload_length.to_be_bytes());
+        let trailing_descriptor = ExpectedDirectNovaVerifierArtifact::for_test_bytes(&trailing);
+        assert!(matches!(
+            SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
+                &trailing,
+                &TINY_EXPECTED_SUITE,
+                &trailing_descriptor,
+            ),
+            Err(DirectNovaVerifierArtifactError::Length)
+        ));
 
         let mut short = proof.clone();
         short.pop();
         assert!(matches!(
-            verifier.verify_final(&z0, 2, &short),
+            loaded.verify_final(&z0, 2, &short),
             Err(DirectNovaSessionError::ProofLength { .. })
         ));
         let malformed = vec![0xff; proof.len()];
-        assert!(verifier.verify_final(&z0, 2, &malformed).is_err());
+        assert!(loaded.verify_final(&z0, 2, &malformed).is_err());
         assert!(matches!(
-            verifier.verify_final(&z0, 0, &proof),
+            loaded.verify_final(&z0, 0, &proof),
             Err(DirectNovaSessionError::StepCount {
                 expected: 1,
                 actual: 0
@@ -1421,9 +1600,9 @@ mod tests {
         let mut wrong_final = z2;
         wrong_final[0] += DirectNovaScalar::ONE;
         assert!(matches!(
-            verifier.verify_exact(&z0, 2, &wrong_final, &proof),
+            loaded.verify_exact(&z0, 2, &wrong_final, &proof),
             Err(DirectNovaSessionError::FinalState)
         ));
-        assert!(verifier.verify_exact(&z0, 1, &z1, &proof).is_err());
+        assert!(loaded.verify_exact(&z0, 1, &z1, &proof).is_err());
     }
 }

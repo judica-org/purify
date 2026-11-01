@@ -209,3 +209,6 @@ pub(crate) fn install_candidate_norm_reduction(
     });
     Ok(ConstrainedPendingClaim { point, polynomial })
 }
+
+#[cfg(test)]
+mod tests;

@@ -25,11 +25,9 @@ use crate::relation_builder::{circuit_digest, Builder, StateWire};
 use crate::secp_scalar::SecpScalarVar;
 use crate::{Assignment, Circuit, WireKind};
 
-const RAW_GENERATORS: [u8; 32] = [0x52; 32];
-const BASIS: [u8; 32] = [0x73; 32];
 const PRODUCTION_DIRECT_NOVA_RELATION_ID: [u8; 32] = [
-    0x53, 0x0d, 0xc1, 0x8d, 0x9b, 0xa3, 0x76, 0x9c, 0x16, 0xa1, 0x3a, 0xc4, 0xac, 0x7d, 0x8a, 0x87,
-    0xf6, 0x28, 0x98, 0x98, 0xc4, 0x03, 0x6d, 0xa6, 0xa1, 0x8b, 0xe8, 0xee, 0x0d, 0x87, 0xc1, 0xda,
+    0xec, 0xfd, 0x8e, 0x56, 0x08, 0x40, 0x83, 0xba, 0x9a, 0x94, 0x43, 0x1f, 0xad, 0x5a, 0x5b, 0x1e,
+    0x09, 0x91, 0xd7, 0x59, 0x77, 0x46, 0x44, 0x0e, 0x76, 0xcc, 0xf7, 0x79, 0x24, 0x44, 0x4a, 0x66,
 ];
 const PRODUCTION_DIRECT_NOVA_VARIABLES: usize = 1_851_594;
 const PRODUCTION_DIRECT_NOVA_CONSTRAINTS: usize = 1_962_058;
@@ -199,20 +197,32 @@ fn finite_witness(
     witness.mask_commitment = mask;
     let dlog_challenge = {
         let mut builder = Builder::default();
-        install_transcript(&mut builder, shape, binding, RAW_GENERATORS, &witness)
-            .expect("derive anchor DLog challenge")
-            .dlog_challenge
-            .integer()
-            .clone()
+        install_transcript(
+            &mut builder,
+            shape,
+            binding,
+            CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+            &witness,
+        )
+        .expect("derive anchor DLog challenge")
+        .dlog_challenge
+        .integer()
+        .clone()
     };
     witness.dlog_response = scalar_add_one(&dlog_challenge);
     let alpha = {
         let mut builder = Builder::default();
-        install_transcript(&mut builder, shape, binding, RAW_GENERATORS, &witness)
-            .expect("derive anchor alpha")
-            .alpha
-            .integer()
-            .clone()
+        install_transcript(
+            &mut builder,
+            shape,
+            binding,
+            CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+            &witness,
+        )
+        .expect("derive anchor alpha")
+        .alpha
+        .integer()
+        .clone()
     };
     let masked = scale_value(point_value(mask), &alpha);
     witness.combined_commitment = encoded_value(add_point_values(
@@ -286,7 +296,8 @@ fn step_proof(claims: &[CandidatePendingClaimWitness]) -> CandidateStepProofWitn
         folded_generator: SecpEncodedPointWitness::identity(),
     };
     proof.folded_generator =
-        derive_candidate_folded_generator(BASIS, claims, &proof).expect("derive folded generator");
+        derive_candidate_folded_generator(CONSTRUCTION_PARENT_BASIS_DIGEST, claims, &proof)
+            .expect("derive folded generator");
     proof
 }
 
@@ -340,8 +351,8 @@ fn fixture_for_shape(
     let statement = ManifestBoundAnchorLeafStatementV4 {
         shape,
         circuit_binding_digest: [binding_byte; 32],
-        raw_generator_digest: RAW_GENERATORS,
-        basis_digest: BASIS,
+        raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+        basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
     };
     let witness = finite_witness(shape, statement.circuit_binding_digest, raw, offset, mask);
     let reduction = zero_reduction_proof(shape);
@@ -472,8 +483,8 @@ fn production_shape_is_exact() {
     let statement = ManifestBoundAnchorLeafStatementV4 {
         shape,
         circuit_binding_digest: [0x31; 32],
-        raw_generator_digest: RAW_GENERATORS,
-        basis_digest: BASIS,
+        raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+        basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
     };
     let reduction = zero_reduction_proof(shape);
     let step = CandidateStepProofWitness {
@@ -483,6 +494,30 @@ fn production_shape_is_exact() {
         folded_generator: SecpEncodedPointWitness::identity(),
     };
     validate_production_shape(statement, &reduction, &step).expect("production shape");
+}
+
+#[test]
+fn production_relation_digests_match_the_native_anchor_profile() {
+    assert_eq!(
+        CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+        [
+            0x10, 0x1c, 0xdb, 0x8d, 0x99, 0x28, 0x00, 0xb0, 0x3c, 0x39, 0x24, 0x6e, 0xb9, 0x20,
+            0xc8, 0x37, 0xa8, 0x04, 0x0c, 0x5a, 0x36, 0xa0, 0x97, 0x0f, 0x0e, 0xbf, 0x85, 0x51,
+            0x11, 0x21, 0xca, 0x8a,
+        ]
+    );
+    assert_eq!(
+        CONSTRUCTION_PARENT_BASIS_DIGEST,
+        [
+            0x69, 0xfe, 0x6d, 0x47, 0x5b, 0x58, 0x97, 0x97, 0x28, 0xf5, 0x52, 0x42, 0x84, 0x32,
+            0x42, 0x4a, 0xf6, 0xe1, 0xcc, 0x39, 0xbb, 0x8b, 0x88, 0xb6, 0x94, 0x37, 0x90, 0x41,
+            0xfb, 0x9b, 0x54, 0x23,
+        ]
+    );
+    assert_ne!(
+        CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+        CONSTRUCTION_PARENT_BASIS_DIGEST
+    );
 }
 
 #[test]
@@ -527,9 +562,9 @@ fn production_nova_076_pre_pp_forecast_is_exact() {
     assert_eq!(proof_shape.encoded_len(), 12_466);
     assert_eq!(proof_shape.sequence_count(), 125);
 
-    // This relation ID will enter the eventual suite identity. This forecast
-    // does not construct public parameters, so no PP digest or production
-    // suite identity is available or activated here.
+    // This forecast checks dimensions independently of the separately
+    // qualified native-profile relation, PP digest, and suite identity. It
+    // does not activate construction-receipt acceptance.
     assert_ne!(PRODUCTION_DIRECT_NOVA_RELATION_ID, [0; 32]);
 }
 
@@ -661,12 +696,13 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
 }
 
 #[test]
-#[ignore = "explicit full-scale test-profile Nova fold and compression"]
-fn qualified_shape_anchor_nova_one_step_is_exact() {
-    // This freezes the full-scale Nova machinery around the local fixture
-    // constants. It is not a cross-language receipt-acceptance profile.
+#[ignore = "pending native-profile full compression qualification"]
+fn native_profile_anchor_nova_lifecycle_is_exact() {
+    // Setup and one full-scale fold are qualified for the native relation
+    // constants. Full Spartan compression remains pending under the no-swap
+    // resource gate. This test is not construction-receipt acceptance.
     let total_started = std::time::Instant::now();
-    eprintln!("qualified_shape_nova_one_step: deriving fixture and verifier seed");
+    eprintln!("native_profile_nova: deriving fixture and verifier seed");
     let mut fixture = fixture_for_shape(
         production_anchor_shape(),
         0x31,
@@ -694,7 +730,7 @@ fn qualified_shape_anchor_nova_one_step_is_exact() {
         .state_suffix_fields()
         .expect("final manifest state suffix");
 
-    eprintln!("qualified_shape_nova_one_step: building trusted recurrence");
+    eprintln!("native_profile_nova: building trusted recurrence");
     let relation = build_anchor_recurrence_relation(
         &fixture.state,
         fixture.statement,
@@ -705,14 +741,14 @@ fn qualified_shape_anchor_nova_one_step_is_exact() {
     .expect("full-scale fixture anchor recurrence");
 
     let setup_started = std::time::Instant::now();
-    eprintln!("qualified_shape_nova_one_step: constructing transparent parameters");
+    eprintln!("native_profile_nova: constructing transparent parameters");
     let selected = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup_exact(
         relation,
         &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
     )
     .expect("qualified full-scale direct Nova suite");
     eprintln!(
-        "qualified_shape_nova_one_step: setup complete in {:.3}s",
+        "native_profile_nova: setup complete in {:.3}s",
         setup_started.elapsed().as_secs_f64()
     );
     assert_eq!(
@@ -723,7 +759,7 @@ fn qualified_shape_anchor_nova_one_step_is_exact() {
     assert_eq!(metadata.proof_length, 12_466);
     assert_eq!(metadata.codec_sequence_count, 125);
 
-    eprintln!("qualified_shape_nova_one_step: building matching recurrence");
+    eprintln!("native_profile_nova: building matching recurrence");
     let matching = build_anchor_recurrence_relation_with_builder(
         selected.matching_builder(),
         &fixture.state,
@@ -743,35 +779,35 @@ fn qualified_shape_anchor_nova_one_step_is_exact() {
     let z1 = source_state_to_nova(source_z1).expect("Nova z1");
 
     let fold_started = std::time::Instant::now();
-    eprintln!("qualified_shape_nova_one_step: folding one matching recurrence");
+    eprintln!("native_profile_nova: folding one matching recurrence");
     let session = selected
         .start(z0, 1)
-        .expect("one-step qualified-shape session")
+        .expect("one-step native-profile session")
         .add_relation(matching)
-        .expect("qualified-shape recurrence fold");
+        .expect("native-profile recurrence fold");
     eprintln!(
-        "qualified_shape_nova_one_step: fold complete in {:.3}s",
+        "native_profile_nova: fold complete in {:.3}s",
         fold_started.elapsed().as_secs_f64()
     );
 
     let compression_started = std::time::Instant::now();
-    eprintln!("qualified_shape_nova_one_step: recursively verifying and compressing");
+    eprintln!("native_profile_nova: recursively verifying and compressing");
     let proof = session
         .finish()
         .expect("recursive verify and Spartan IPA compression");
     eprintln!(
-        "qualified_shape_nova_one_step: compression complete in {:.3}s",
+        "native_profile_nova: compression complete in {:.3}s",
         compression_started.elapsed().as_secs_f64()
     );
     assert_eq!(proof.len(), metadata.proof_length);
 
     let verify_started = std::time::Instant::now();
-    eprintln!("qualified_shape_nova_one_step: verifying canonical compressed proof");
+    eprintln!("native_profile_nova: verifying canonical compressed proof");
     selected
         .verify_exact(&z0, 1, &z1, &proof)
-        .expect("exact compressed qualified-shape proof");
+        .expect("exact compressed native-profile proof");
     eprintln!(
-        "qualified_shape_nova_one_step: compressed verify complete in {:.3}s; total {:.3}s; proof_bytes={}",
+        "native_profile_nova: compressed verify complete in {:.3}s; total {:.3}s; proof_bytes={}",
         verify_started.elapsed().as_secs_f64(),
         total_started.elapsed().as_secs_f64(),
         proof.len()

@@ -326,7 +326,9 @@ fn byte_words(bytes: &[u8]) -> Vec<Scalar> {
 mod tests {
     use super::*;
 
+    use bulletproofs_cycle::Cycle;
     use ff::Field;
+    use golden_halo2curves::Secq256k1Cycle;
 
     use crate::{poseidon, proof_wire_len, prove, verify, ReceiptCycleError, Scalar};
 
@@ -335,6 +337,88 @@ mod tests {
         array::from_fn(|index| {
             u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).expect("hex")
         })
+    }
+
+    fn decode_hex_vec(value: &str) -> Vec<u8> {
+        assert_eq!(value.len() & 1, 0);
+        (0..value.len() / 2)
+            .map(|index| u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    fn json_string<'a>(json: &'a str, key: &str) -> &'a str {
+        let needle = format!("\"{key}\": \"");
+        let start = json.find(&needle).expect("JSON key") + needle.len();
+        let rest = &json[start..];
+        &rest[..rest.find('"').expect("JSON string")]
+    }
+
+    fn json_array<'a>(json: &'a str, key: &str) -> Vec<&'a str> {
+        let needle = format!("\"{key}\": [");
+        let start = json.find(&needle).expect("JSON array key") + needle.len();
+        let rest = &json[start..];
+        let array = &rest[..rest.find(']').expect("JSON array")];
+        let mut values = Vec::new();
+        let mut cursor = array;
+        while let Some(start) = cursor.find('"') {
+            cursor = &cursor[start + 1..];
+            let end = cursor.find('"').expect("JSON array string");
+            values.push(&cursor[..end]);
+            cursor = &cursor[end + 1..];
+        }
+        values
+    }
+
+    fn scalar_hex(value: &str) -> Scalar {
+        integer_from_be(&decode_hex::<32>(value))
+    }
+
+    fn selected_scalar(lanes: [Scalar; 2]) -> Scalar {
+        const ORDER: [u8; 32] = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+            0xd0, 0x36, 0x41, 0x41,
+        ];
+        lanes
+            .into_iter()
+            .find(|value| {
+                let mut encoded = Secq256k1Cycle::scalar_to_canonical(value);
+                encoded.reverse();
+                *value != Scalar::ZERO && encoded < ORDER
+            })
+            .expect("nonzero secp scalar lane")
+    }
+
+    fn append_point_hex(transcript: &mut NativeTranscript, value: &str) {
+        let encoded = decode_hex::<33>(value);
+        transcript.append_point(encoded[0], integer_from_be(&encoded[1..]));
+    }
+
+    fn append_polynomial_hex(transcript: &mut NativeTranscript, value: &str) {
+        let encoded = decode_hex_vec(value);
+        let mut offset = 0;
+        let take_u64 = |offset: &mut usize| {
+            let end = *offset + 8;
+            let value = u64::from_le_bytes(encoded[*offset..end].try_into().expect("u64"));
+            *offset = end;
+            value
+        };
+        let term_count = take_u64(&mut offset);
+        transcript.append_u64(term_count);
+        for _ in 0..term_count {
+            let end = offset + 32;
+            transcript.append_scalar(integer_from_be(&encoded[offset..end]));
+            offset = end;
+            transcript.append_u64(take_u64(&mut offset));
+            let factors = take_u64(&mut offset);
+            transcript.append_u64(factors);
+            for _ in 0..factors {
+                let end = offset + 32;
+                transcript.append_scalar(integer_from_be(&encoded[offset..end]));
+                offset = end;
+            }
+        }
+        assert_eq!(offset, encoded.len());
     }
 
     #[derive(Clone)]
@@ -551,6 +635,91 @@ mod tests {
                 transcript.opening_base_scalar(basis_digest, 1 + (seed & 1)),
                 [expected(words[5]), expected(words[6])]
             );
+        }
+    }
+
+    #[test]
+    fn complete_accumulation_context_matches_shared_vector() {
+        let vector = include_str!("../tests/vectors/algebraic_accumulation_v2.json");
+        let basis = decode_hex::<32>(json_string(vector, "basis_digest"));
+
+        let mut norm = NativeTranscript::new();
+        norm.append_bytes(b"Purify/BPPP/CandidateNormReduction/v2");
+        norm.append_bytes(&basis);
+        norm.append_u64(1);
+        norm.append_scalar(scalar_hex(json_string(vector, "prepared_binding")));
+        append_point_hex(&mut norm, json_string(vector, "coefficient_commitment"));
+        append_polynomial_hex(&mut norm, json_string(vector, "norm_weights"));
+        norm.append_scalar(scalar_hex(json_string(vector, "coefficient_evaluation")));
+        let norm_lanes = json_array(vector, "norm_opening_lanes")
+            .into_iter()
+            .map(scalar_hex)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            norm.opening_base_scalar(basis, 1),
+            [norm_lanes[0], norm_lanes[1]],
+        );
+        assert_eq!(
+            selected_scalar([norm_lanes[0], norm_lanes[1]]),
+            scalar_hex(json_string(vector, "norm_opening_scalar")),
+        );
+        append_point_hex(&mut norm, json_string(vector, "norm_opening"));
+        let left = json_array(vector, "norm_round_left");
+        let right = json_array(vector, "norm_round_right");
+        let challenge = json_array(vector, "norm_round_challenge");
+        for round in 0..left.len() {
+            append_point_hex(&mut norm, left[round]);
+            append_point_hex(&mut norm, right[round]);
+            let expected = scalar_hex(challenge[round]);
+            assert_eq!(selected_scalar(norm.challenge(round as u64)), expected,);
+            norm.append_scalar(expected);
+        }
+        norm.append_scalar(scalar_hex(json_string(vector, "norm_terminal")));
+        append_point_hex(&mut norm, json_string(vector, "norm_folded_generator"));
+        append_point_hex(&mut norm, json_string(vector, "norm_point"));
+        append_polynomial_hex(&mut norm, json_string(vector, "norm_polynomial"));
+        append_polynomial_hex(&mut norm, json_string(vector, "folded_polynomial"));
+        let chi = scalar_hex(json_string(vector, "fusion_challenge"));
+        assert_eq!(selected_scalar(norm.challenge(1)), chi);
+        norm.append_scalar(chi);
+
+        let mut step = NativeTranscript::new();
+        step.append_bytes(b"Purify/BPPP/CandidateAccumStep/v1");
+        step.append_bytes(&basis);
+        step.append_u64(3);
+        step.append_u64(1);
+        append_point_hex(&mut step, json_string(vector, "claim_point"));
+        append_polynomial_hex(&mut step, json_string(vector, "claim_polynomial"));
+        let beta = scalar_hex(json_string(vector, "step_beta"));
+        assert_eq!(selected_scalar(step.challenge(0)), beta);
+        step.append_scalar(beta);
+        append_point_hex(&mut step, json_string(vector, "claim_point"));
+        let x = scalar_hex(json_string(vector, "step_x"));
+        assert_eq!(selected_scalar(step.challenge(1)), x);
+        step.append_scalar(x);
+        step.append_scalar(scalar_hex(json_string(vector, "step_y")));
+        let step_lanes = json_array(vector, "step_opening_lanes")
+            .into_iter()
+            .map(scalar_hex)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            step.opening_base_scalar(basis, 2),
+            [step_lanes[0], step_lanes[1]],
+        );
+        assert_eq!(
+            selected_scalar([step_lanes[0], step_lanes[1]]),
+            scalar_hex(json_string(vector, "step_opening_scalar")),
+        );
+        append_point_hex(&mut step, json_string(vector, "step_opening"));
+        let left = json_array(vector, "step_round_left");
+        let right = json_array(vector, "step_round_right");
+        let challenge = json_array(vector, "step_round_challenge");
+        for round in 0..left.len() {
+            append_point_hex(&mut step, left[round]);
+            append_point_hex(&mut step, right[round]);
+            let expected = scalar_hex(challenge[round]);
+            assert_eq!(selected_scalar(step.challenge(2 + round as u64)), expected,);
+            step.append_scalar(expected);
         }
     }
 

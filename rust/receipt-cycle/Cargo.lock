@@ -777,6 +777,7 @@ dependencies = [
  "num-traits",
  "rand_chacha",
  "rand_core",
+ "rayon",
  "serde",
  "sha2",
  "thiserror",

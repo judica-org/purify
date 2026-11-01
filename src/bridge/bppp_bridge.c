@@ -3107,6 +3107,19 @@ int purify_bppp_public_msm(purify_secp_context* context,
     return ok;
 }
 
+int purify_bppp_public_point_validate(
+    const unsigned char point33[33]) {
+    secp256k1_ge point;
+    unsigned char canonical[33];
+
+    if (point33 == NULL ||
+        !secp256k1_ge_parse_ext(&point, point33)) {
+        return 0;
+    }
+    secp256k1_ge_serialize_ext(canonical, &point);
+    return memcmp(point33, canonical, sizeof(canonical)) == 0;
+}
+
 int purify_bppp_public_hash_to_point(purify_secp_context* context,
                                    const unsigned char* input, size_t input_len,
                                    unsigned char out33[33]) {

@@ -206,6 +206,15 @@ int purify_bppp_public_msm(purify_secp_context* context,
                          size_t count, unsigned char out33[33]);
 
 /**
+ * Parses one canonical public accumulator point.
+ *
+ * Points use compressed SEC1 or the unique all-zero33 identity encoding.
+ * This variable-time helper must never process secret data.
+ */
+int purify_bppp_public_point_validate(
+    const unsigned char point33[33]);
+
+/**
  * Hashes framed public input to a finite point using the vendored generator map.
  * Callers must bind their protocol domain and complete challenge transcript.
  */

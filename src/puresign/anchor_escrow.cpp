@@ -504,10 +504,10 @@ AnchorEscrowRecord::AnchorEscrowRecord(
     AnchorEscrowCiphertext ciphertext,
     bppp::ExperimentalCircuitZkNormArgProof&& proof)
     : ciphertext_(std::move(ciphertext)),
-      a_commitment_(proof.a_commitment),
-      s_commitment_(proof.s_commitment),
+      raw_commitment_(proof.a_commitment),
+      mask_commitment_(proof.s_commitment),
       t2_(proof.t2),
-      inner_proof_(std::move(proof.proof)) {}
+      norm_proof_(std::move(proof.proof)) {}
 
 Status AnchorEscrowRecord::validate_encoding(
     purify_secp_context* secp_context) const {
@@ -524,11 +524,11 @@ Status AnchorEscrowRecord::validate_encoding(
         return unexpected_error(ErrorCode::BindingMismatch,
                                 "anchor_escrow:duplicate_ephemeral");
     }
-    if (inner_proof_.size() != kInnerProofSize) {
+    if (norm_proof_.size() != kInnerProofSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize,
                                 "anchor_escrow:proof_inner_size");
     }
-    for (const auto* point : {&a_commitment_, &s_commitment_}) {
+    for (const auto* point : {&raw_commitment_, &mask_commitment_}) {
         std::array<unsigned char, 32> xonly{};
         int parity = 0;
         if (purify_bip340_xonly_from_point(
@@ -547,7 +547,7 @@ Status AnchorEscrowRecord::validate_encoding(
 bppp::ExperimentalCircuitZkNormArgProof
 AnchorEscrowRecord::circuit_proof() const {
     return bppp::ExperimentalCircuitZkNormArgProof{
-        a_commitment_, s_commitment_, t2_, {}, {}, inner_proof_};
+        raw_commitment_, mask_commitment_, t2_, {}, {}, norm_proof_};
 }
 
 Result<Bytes> AnchorEscrowRecord::serialize(
@@ -559,10 +559,10 @@ Result<Bytes> AnchorEscrowRecord::serialize(
     out.push_back(kSerializationVersion);
     const auto encrypted = ciphertext_bytes(ciphertext_);
     out.insert(out.end(), encrypted.begin(), encrypted.end());
-    out.insert(out.end(), a_commitment_.begin(), a_commitment_.end());
-    out.insert(out.end(), s_commitment_.begin(), s_commitment_.end());
+    out.insert(out.end(), raw_commitment_.begin(), raw_commitment_.end());
+    out.insert(out.end(), mask_commitment_.begin(), mask_commitment_.end());
     out.insert(out.end(), t2_.begin(), t2_.end());
-    out.insert(out.end(), inner_proof_.begin(), inner_proof_.end());
+    out.insert(out.end(), norm_proof_.begin(), norm_proof_.end());
     assert(out.size() == kSerializedSize);
     return out;
 }
@@ -592,16 +592,16 @@ Result<AnchorEscrowRecord> AnchorEscrowRecord::deserialize(
             FieldElement::try_from_bytes32(masked),
             "anchor_escrow:deserialize_masked");
     }
-    std::copy_n(encoded.begin() + offset, out.a_commitment_.size(),
-                out.a_commitment_.begin());
-    offset += out.a_commitment_.size();
-    std::copy_n(encoded.begin() + offset, out.s_commitment_.size(),
-                out.s_commitment_.begin());
-    offset += out.s_commitment_.size();
+    std::copy_n(encoded.begin() + offset, out.raw_commitment_.size(),
+                out.raw_commitment_.begin());
+    offset += out.raw_commitment_.size();
+    std::copy_n(encoded.begin() + offset, out.mask_commitment_.size(),
+                out.mask_commitment_.begin());
+    offset += out.mask_commitment_.size();
     std::copy_n(encoded.begin() + offset, out.t2_.size(),
                 out.t2_.begin());
     offset += out.t2_.size();
-    out.inner_proof_.assign(encoded.begin() + offset, encoded.end());
+    out.norm_proof_.assign(encoded.begin() + offset, encoded.end());
     PURIFY_RETURN_IF_ERROR(out.validate_encoding(secp_context),
                            "anchor_escrow:deserialize");
     return out;

@@ -72,10 +72,10 @@ private:
     circuit_proof() const;
 
     AnchorEscrowCiphertext ciphertext_{};
-    bppp::PointBytes a_commitment_{};
-    bppp::PointBytes s_commitment_{};
+    bppp::PointBytes raw_commitment_{};
+    bppp::PointBytes mask_commitment_{};
     bppp::ScalarBytes t2_{};
-    Bytes inner_proof_;
+    Bytes norm_proof_;
 
     friend Result<AnchorEscrowRecord> create_anchor_escrow(
         const RecoveryBoundSigningRoster&, const GeneratedKey&,

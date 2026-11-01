@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <utility>
 
@@ -37,13 +38,19 @@ public:
 private:
     RecoveryRootSetupProof() = default;
     explicit RecoveryRootSetupProof(
-        bppp::ExperimentalCircuitZkNormArgProof proof)
-        : circuit_proof_(std::move(proof)) {}
+        bppp::ExperimentalCircuitZkNormArgProof&& proof);
 
     [[nodiscard]] Status validate_encoding(
         purify_secp_context* secp_context) const;
+    [[nodiscard]] bppp::ExperimentalCircuitZkNormArgProof
+    circuit_proof() const;
 
-    bppp::ExperimentalCircuitZkNormArgProof circuit_proof_;
+    bppp::PointBytes raw_commitment_{};
+    bppp::PointBytes mask_commitment_{};
+    bppp::ScalarBytes t2_{};
+    std::array<unsigned char, 32> public_commitment_dlog_nonce_{};
+    bppp::ScalarBytes public_commitment_dlog_response_{};
+    Bytes norm_proof_;
 
     friend Result<RecoveryRootSetupProof> prove_recovery_root_setup(
         const NonceHostBoundSigningRoster&, const UInt512&,

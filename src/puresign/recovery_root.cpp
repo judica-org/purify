@@ -288,17 +288,35 @@ Result<Bytes> setup_binding(const NonceHostBoundSigningRoster& roster,
 
 } // namespace
 
+RecoveryRootSetupProof::RecoveryRootSetupProof(
+    bppp::ExperimentalCircuitZkNormArgProof&& proof)
+    : raw_commitment_(proof.a_commitment),
+      mask_commitment_(proof.s_commitment),
+      t2_(proof.t2),
+      public_commitment_dlog_nonce_(
+          proof.public_commitment_dlog_nonce),
+      public_commitment_dlog_response_(
+          proof.public_commitment_dlog_response),
+      norm_proof_(std::move(proof.proof)) {}
+
+bppp::ExperimentalCircuitZkNormArgProof
+RecoveryRootSetupProof::circuit_proof() const {
+    return bppp::ExperimentalCircuitZkNormArgProof{
+        raw_commitment_, mask_commitment_, t2_,
+        public_commitment_dlog_nonce_,
+        public_commitment_dlog_response_, norm_proof_};
+}
+
 Status RecoveryRootSetupProof::validate_encoding(
     purify_secp_context* secp_context) const {
     PURIFY_RETURN_IF_ERROR(
         require_secp_context(secp_context, "recovery_root:proof_encoding"),
         "recovery_root:proof_encoding");
-    const auto& inner = circuit_proof_;
-    if (inner.proof.size() != RecoveryRootSetupProof::kInnerProofSize) {
+    if (norm_proof_.size() != RecoveryRootSetupProof::kInnerProofSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize,
                                 "recovery_root:proof_inner_size");
     }
-    for (const auto* point : {&inner.a_commitment, &inner.s_commitment}) {
+    for (const auto* point : {&raw_commitment_, &mask_commitment_}) {
         std::array<unsigned char, 32> xonly{};
         int parity = 0;
         if (purify_bip340_xonly_from_point(
@@ -308,12 +326,12 @@ Status RecoveryRootSetupProof::validate_encoding(
         }
     }
     PURIFY_ASSIGN_OR_RETURN(const auto& t2,
-                            FieldElement::try_from_bytes32(inner.t2),
+                            FieldElement::try_from_bytes32(t2_),
                             "recovery_root:proof_t2");
     PURIFY_ASSIGN_OR_RETURN(
         const auto& response,
         FieldElement::try_from_bytes32(
-            inner.public_commitment_dlog_response),
+            public_commitment_dlog_response_),
         "recovery_root:proof_dlog_response");
     (void)t2;
     if (response.is_zero()) {
@@ -322,7 +340,7 @@ Status RecoveryRootSetupProof::validate_encoding(
     }
     if (purify_bip340_validate_xonly_pubkey(
             secp_context,
-            inner.public_commitment_dlog_nonce.data()) == 0) {
+            public_commitment_dlog_nonce_.data()) == 0) {
         return unexpected_error(ErrorCode::RangeViolation,
                                 "recovery_root:proof_dlog_nonce");
     }
@@ -336,18 +354,15 @@ Result<Bytes> RecoveryRootSetupProof::serialize(
     Bytes out;
     out.reserve(kSerializedSize);
     out.push_back(kSerializationVersion);
-    out.insert(out.end(), circuit_proof_.a_commitment.begin(),
-               circuit_proof_.a_commitment.end());
-    out.insert(out.end(), circuit_proof_.s_commitment.begin(),
-               circuit_proof_.s_commitment.end());
-    out.insert(out.end(), circuit_proof_.t2.begin(), circuit_proof_.t2.end());
-    out.insert(out.end(), circuit_proof_.public_commitment_dlog_nonce.begin(),
-               circuit_proof_.public_commitment_dlog_nonce.end());
+    out.insert(out.end(), raw_commitment_.begin(), raw_commitment_.end());
+    out.insert(out.end(), mask_commitment_.begin(), mask_commitment_.end());
+    out.insert(out.end(), t2_.begin(), t2_.end());
+    out.insert(out.end(), public_commitment_dlog_nonce_.begin(),
+               public_commitment_dlog_nonce_.end());
     out.insert(out.end(),
-               circuit_proof_.public_commitment_dlog_response.begin(),
-               circuit_proof_.public_commitment_dlog_response.end());
-    out.insert(out.end(), circuit_proof_.proof.begin(),
-               circuit_proof_.proof.end());
+               public_commitment_dlog_response_.begin(),
+               public_commitment_dlog_response_.end());
+    out.insert(out.end(), norm_proof_.begin(), norm_proof_.end());
     assert(out.size() == kSerializedSize);
     return out;
 }
@@ -367,17 +382,16 @@ Result<RecoveryRootSetupProof> RecoveryRootSetupProof::deserialize(
     }
     RecoveryRootSetupProof out;
     std::copy_n(encoded.begin() + 1, 33,
-                out.circuit_proof_.a_commitment.begin());
+                out.raw_commitment_.begin());
     std::copy_n(encoded.begin() + 34, 33,
-                out.circuit_proof_.s_commitment.begin());
+                out.mask_commitment_.begin());
     std::copy_n(encoded.begin() + 67, 32,
-                out.circuit_proof_.t2.begin());
+                out.t2_.begin());
     std::copy_n(encoded.begin() + 99, 32,
-                out.circuit_proof_.public_commitment_dlog_nonce.begin());
+                out.public_commitment_dlog_nonce_.begin());
     std::copy_n(encoded.begin() + 131, 32,
-                out.circuit_proof_.public_commitment_dlog_response.begin());
-    out.circuit_proof_.proof.assign(encoded.begin() + header_size,
-                                    encoded.end());
+                out.public_commitment_dlog_response_.begin());
+    out.norm_proof_.assign(encoded.begin() + header_size, encoded.end());
     PURIFY_RETURN_IF_ERROR(out.validate_encoding(secp_context),
                            "recovery_root:deserialize");
     return out;
@@ -499,9 +513,10 @@ RecoveryRootSetupAccumulator::prepare(
         const auto& binding, setup_binding(roster, recovery_root),
         "recovery_root_accumulation:binding");
     const std::array<PointBytes, 1> outputs{roster_point(roster)};
+    const auto circuit_proof = proof.circuit_proof();
     return bppp::accumulation::
         prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
-            basis_, circuit, proof.circuit_proof_, outputs,
+            basis_, circuit, circuit_proof, outputs,
             secp_context, binding, cache);
 }
 
@@ -519,10 +534,11 @@ Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
                             setup_binding(roster, recovery_root),
                             "recovery_root:binding");
     const std::array<PointBytes, 1> outputs{roster_point(roster)};
+    const auto circuit_proof = proof.circuit_proof();
     PURIFY_ASSIGN_OR_RETURN(
         const auto& root_valid,
         bppp::verify_experimental_circuit_zk_norm_arg_with_public_commitments(
-            circuit, proof.circuit_proof_, outputs, secp_context, binding),
+            circuit, circuit_proof, outputs, secp_context, binding),
         "recovery_root:verify_circuit");
     if (!root_valid) {
         return unexpected_error(ErrorCode::EquationMismatch,

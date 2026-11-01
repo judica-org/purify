@@ -40,6 +40,14 @@ struct PreparedExperimentalCircuitZkNormArg {
 };
 
 Result<std::optional<PreparedExperimentalCircuitZkNormArg>>
+prepare_experimental_circuit_zk_norm_arg(
+    const NativeBulletproofCircuit& circuit,
+    const ExperimentalCircuitZkNormArgProof& proof,
+    purify_secp_context* secp_context,
+    std::span<const unsigned char> statement_binding,
+    ExperimentalCircuitBackend* cache);
+
+Result<std::optional<PreparedExperimentalCircuitZkNormArg>>
 prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitZkNormArgProof& proof,

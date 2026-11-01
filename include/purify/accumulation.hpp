@@ -79,6 +79,11 @@ private:
 
     friend Result<PreparedNorm> prepare_norm(const Basis&, const NormArgProof&, purify_secp_context*);
     friend Result<PreparedNorm>
+    prepare_experimental_circuit_zk_norm_arg(
+        const Basis&, const NativeBulletproofCircuit&,
+        const ExperimentalCircuitZkNormArgProof&, purify_secp_context*,
+        std::span<const unsigned char>, ExperimentalCircuitBackend*);
+    friend Result<PreparedNorm>
     prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
         const Basis&, const NativeBulletproofCircuit&,
         const ExperimentalCircuitZkNormArgProof&,
@@ -143,6 +148,18 @@ Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> 
 /** Parses the norm transcript and computes C_c from its exact required public coefficients. */
 Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,
                                   purify_secp_context* context);
+
+/**
+ * Reconstructs a fixed-output V3 circuit proof and prepares its inner norm
+ * obligation on the stable raw circuit basis. Generic proofs require the
+ * public-output DLog fields to be zero.
+ */
+Result<PreparedNorm> prepare_experimental_circuit_zk_norm_arg(
+    const Basis& basis, const NativeBulletproofCircuit& circuit,
+    const ExperimentalCircuitZkNormArgProof& proof,
+    purify_secp_context* context,
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /**
  * Reconstructs a V3 circuit proof and prepares its inner norm obligation on

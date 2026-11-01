@@ -2197,14 +2197,11 @@ prove_experimental_circuit_zk_norm_arg_impl(
       "prove_experimental_circuit_zk_norm_arg_impl:masking_attempts");
 }
 
-Result<std::optional<detail::PreparedExperimentalCircuitZkNormArg>>
-detail::prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+namespace {
+
+Status validate_prepared_circuit_proof(
     const NativeBulletproofCircuit &circuit,
-    const ExperimentalCircuitZkNormArgProof &proof,
-    std::span<const PointBytes> public_commitments,
-    purify_secp_context *secp_context,
-    std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitBackend *cache) {
+    const ExperimentalCircuitZkNormArgProof &proof) {
   if (!circuit.has_valid_shape()) {
     return unexpected_error(
         ErrorCode::InvalidDimensions,
@@ -2220,6 +2217,75 @@ detail::prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
         ErrorCode::EmptyInput,
         "prepare_experimental_circuit_zk_norm_arg:proof_empty");
   }
+  return {};
+}
+
+bool has_zero_public_commitment_dlog(
+    const ExperimentalCircuitZkNormArgProof &proof) {
+  const auto all_zero = [](const auto &bytes) {
+    return std::all_of(bytes.begin(), bytes.end(),
+                       [](unsigned char byte) { return byte == 0; });
+  };
+  return all_zero(proof.public_commitment_dlog_nonce) &&
+         all_zero(proof.public_commitment_dlog_response);
+}
+
+Result<detail::PreparedExperimentalCircuitZkNormArg>
+finish_prepared_circuit_proof(
+    const ExperimentalCircuitZkNormArgProof &proof,
+    const CircuitNormArgPublicDataPtr &public_data,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context) {
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &t2, FieldElement::try_from_bytes32(proof.t2),
+      "prepare_experimental_circuit_zk_norm_arg:t2");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &a_commitment,
+      anchor_zk_a_commitment(proof.a_commitment, *public_data,
+                             public_commitments, secp_context),
+      "prepare_experimental_circuit_zk_norm_arg:a_commitment");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &challenge,
+      derive_zk_challenge(public_data->challenge_digest, a_commitment,
+                          proof.s_commitment, t2),
+      "prepare_experimental_circuit_zk_norm_arg:challenge");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &commitment,
+      combine_zk_commitments(a_commitment, proof.s_commitment, challenge, t2,
+                             secp_context),
+      "prepare_experimental_circuit_zk_norm_arg:commitment");
+
+  detail::PreparedExperimentalCircuitZkNormArg out;
+  out.norm.rho = public_data->rho_bytes;
+  out.norm.generators = public_data->generators;
+  out.norm.c_vec = public_data->c_vec_bytes;
+  out.norm.n_vec_len = public_data->n_vec_len;
+  out.norm.commitment = commitment;
+  out.norm.proof = proof.proof;
+  out.raw_generator_digest =
+      generator_backend_cache_key(public_data->raw_generators);
+  assert(public_data->challenge_digest.size() ==
+         out.challenge_digest.size());
+  std::copy(public_data->challenge_digest.begin(),
+            public_data->challenge_digest.end(),
+            out.challenge_digest.begin());
+  out.mul_scale = public_data->mul_scale;
+  out.mul_ratio = public_data->mul_ratio;
+  return out;
+}
+
+} // namespace
+
+Result<std::optional<detail::PreparedExperimentalCircuitZkNormArg>>
+detail::prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+    const NativeBulletproofCircuit &circuit,
+    const ExperimentalCircuitZkNormArgProof &proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding,
+    ExperimentalCircuitBackend *cache) {
+  PURIFY_RETURN_IF_ERROR(validate_prepared_circuit_proof(circuit, proof),
+                         "prepare_experimental_circuit_zk_norm_arg:validate");
   if (public_commitments.empty()) {
     return unexpected_error(
         ErrorCode::EmptyInput,
@@ -2258,36 +2324,38 @@ detail::prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
     return std::optional<PreparedExperimentalCircuitZkNormArg>{};
   }
   PURIFY_ASSIGN_OR_RETURN(
-      const auto &t2, FieldElement::try_from_bytes32(proof.t2),
-      "prepare_experimental_circuit_zk_norm_arg:t2");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &a_commitment,
-      anchor_zk_a_commitment(proof.a_commitment, *public_data, public_commitments, secp_context),
-      "prepare_experimental_circuit_zk_norm_arg:a_commitment");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &challenge,
-      derive_zk_challenge(public_data->challenge_digest, a_commitment,
-                          proof.s_commitment, t2),
-      "prepare_experimental_circuit_zk_norm_arg:challenge");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &commitment,
-      combine_zk_commitments(a_commitment, proof.s_commitment, challenge, t2, secp_context),
-      "prepare_experimental_circuit_zk_norm_arg:commitment");
+      auto out,
+      finish_prepared_circuit_proof(proof, public_data, public_commitments,
+                                    secp_context),
+      "prepare_experimental_circuit_zk_norm_arg:finish");
+  return std::optional<PreparedExperimentalCircuitZkNormArg>(std::move(out));
+}
 
-  PreparedExperimentalCircuitZkNormArg out;
-  out.norm.rho = public_data->rho_bytes;
-  out.norm.generators = public_data->generators;
-  out.norm.c_vec = public_data->c_vec_bytes;
-  out.norm.n_vec_len = public_data->n_vec_len;
-  out.norm.commitment = commitment;
-  out.norm.proof = proof.proof;
-  out.raw_generator_digest =
-      generator_backend_cache_key(public_data->raw_generators);
-  assert(public_data->challenge_digest.size() == out.challenge_digest.size());
-  std::copy(public_data->challenge_digest.begin(),
-            public_data->challenge_digest.end(), out.challenge_digest.begin());
-  out.mul_scale = public_data->mul_scale;
-  out.mul_ratio = public_data->mul_ratio;
+Result<std::optional<detail::PreparedExperimentalCircuitZkNormArg>>
+detail::prepare_experimental_circuit_zk_norm_arg(
+    const NativeBulletproofCircuit &circuit,
+    const ExperimentalCircuitZkNormArgProof &proof,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding,
+    ExperimentalCircuitBackend *cache) {
+  PURIFY_RETURN_IF_ERROR(validate_prepared_circuit_proof(circuit, proof),
+                         "prepare_experimental_circuit_zk_norm_arg:validate");
+
+  const Bytes bound_statement_binding(statement_binding.begin(),
+                                      statement_binding.end());
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &public_data,
+      build_circuit_norm_arg_public_data(
+          circuit, bound_statement_binding, proof.a_commitment, secp_context,
+          false, cache),
+      "prepare_experimental_circuit_zk_norm_arg:public_data");
+  if (!has_zero_public_commitment_dlog(proof)) {
+    return std::optional<PreparedExperimentalCircuitZkNormArg>{};
+  }
+  PURIFY_ASSIGN_OR_RETURN(
+      auto out,
+      finish_prepared_circuit_proof(proof, public_data, {}, secp_context),
+      "prepare_experimental_circuit_zk_norm_arg:finish");
   return std::optional<PreparedExperimentalCircuitZkNormArg>(std::move(out));
 }
 
@@ -2297,68 +2365,15 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend *cache) {
-  if (!circuit.has_valid_shape()) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "verify_experimental_circuit_zk_norm_arg_impl:circuit_shape");
-  }
-  if (!is_power_of_two_size(circuit.n_gates)) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "verify_experimental_circuit_zk_norm_arg_impl:n_gates_power_of_two");
-  }
-  if (proof.proof.empty()) {
-    return unexpected_error(
-        ErrorCode::EmptyInput,
-        "verify_experimental_circuit_zk_norm_arg_impl:proof_empty");
-  }
-
-  const Bytes bound_statement_binding(statement_binding.begin(),
-                                      statement_binding.end());
   PURIFY_ASSIGN_OR_RETURN(
-      const auto &public_data,
-      build_circuit_norm_arg_public_data(
-          circuit, bound_statement_binding, proof.a_commitment, secp_context,
-          false, cache),
-      "verify_experimental_circuit_zk_norm_arg_impl:public_data");
-  const bool nonce_is_zero = std::all_of(
-      proof.public_commitment_dlog_nonce.begin(),
-      proof.public_commitment_dlog_nonce.end(),
-      [](unsigned char byte) { return byte == 0; });
-  const bool response_is_zero = std::all_of(
-      proof.public_commitment_dlog_response.begin(),
-      proof.public_commitment_dlog_response.end(),
-      [](unsigned char byte) { return byte == 0; });
-  if (!nonce_is_zero || !response_is_zero) {
+      auto prepared,
+      detail::prepare_experimental_circuit_zk_norm_arg(
+          circuit, proof, secp_context, statement_binding, cache),
+      "verify_experimental_circuit_zk_norm_arg_impl:prepare");
+  if (!prepared.has_value()) {
     return false;
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &t2, FieldElement::try_from_bytes32(proof.t2),
-      "verify_experimental_circuit_zk_norm_arg_impl:t2");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &a_commitment,
-      anchor_zk_a_commitment(proof.a_commitment, *public_data, {},
-                             secp_context),
-      "verify_experimental_circuit_zk_norm_arg_impl:a_commitment");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &challenge,
-      derive_zk_challenge(public_data->challenge_digest, a_commitment,
-                          proof.s_commitment, t2),
-      "verify_experimental_circuit_zk_norm_arg_impl:challenge");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &commitment,
-      combine_zk_commitments(a_commitment, proof.s_commitment, challenge, t2,
-                             secp_context),
-      "verify_experimental_circuit_zk_norm_arg_impl:commitment");
-
-  NormArgProof bundle;
-  bundle.rho = public_data->rho_bytes;
-  bundle.generators = public_data->generators;
-  bundle.c_vec = public_data->c_vec_bytes;
-  bundle.n_vec_len = public_data->n_vec_len;
-  bundle.commitment = commitment;
-  bundle.proof = proof.proof;
-  return verify_norm_arg_with_cache(bundle, secp_context, nullptr);
+  return verify_norm_arg_with_cache(prepared->norm, secp_context, nullptr);
 }
 
 Result<ExperimentalCircuitZkNormArgProof>

@@ -663,6 +663,56 @@ void test_v4_native_circuit_proof(TestContext& ctx)
     ctx.expect(verified.has_value() && *verified,
                "V4 hidden proof verifies its full native norm equation");
 
+    BulletproofAssignmentData second_assignment;
+    second_assignment.left = {FieldElement::from_int(5)};
+    second_assignment.right = {FieldElement::from_int(6)};
+    second_assignment.output = {FieldElement::from_int(30)};
+    second_assignment.commitments = {FieldElement::from_int(30)};
+    auto second_publication = candidate::prove_circuit_zk_norm_arg_v4(
+        circuit, second_assignment, prover_seed, context.get(), binding);
+    ctx.expect(second_publication.has_value(),
+               "V4 reused seed proves a different valid assignment");
+    if (!second_publication.has_value()) return;
+    ctx.expect(second_publication->proof.raw_commitment !=
+                   publication->proof.raw_commitment,
+               "V4 different assignment changes the raw commitment");
+    auto raw_generators = purify::bppp::create_generators(8, context.get());
+    ctx.expect(raw_generators.has_value(),
+               "V4 seed-reuse raw generators derive");
+    if (!raw_generators.has_value()) return;
+    NormArgInputs assignment_delta;
+    assignment_delta.generators = *raw_generators;
+    const std::array<FieldElement, 4> delta_n{
+        FieldElement::from_int(4), FieldElement::zero(),
+        FieldElement::zero(), FieldElement::zero()};
+    const std::array<FieldElement, 4> delta_l{
+        FieldElement::from_int(18), FieldElement::zero(),
+        FieldElement::from_int(18), FieldElement::zero()};
+    assignment_delta.n_vec = purify::bppp::scalar_bytes(delta_n);
+    assignment_delta.l_vec = purify::bppp::scalar_bytes(delta_l);
+    auto assignment_delta_commitment =
+        commit_witness_only(assignment_delta, context.get());
+    ctx.expect(assignment_delta_commitment.has_value(),
+               "V4 public raw-coordinate delta commits");
+    if (!assignment_delta_commitment.has_value()) return;
+    auto old_reuse_prediction = add_points(
+        publication->proof.raw_commitment, *assignment_delta_commitment,
+        context.get());
+    ctx.expect(old_reuse_prediction.has_value(),
+               "V4 old reused-padding prediction derives");
+    if (!old_reuse_prediction.has_value()) return;
+    PointBytes hiding_delta{};
+    ctx.expect(purify_point_subtract_allow_infinity(
+                   context.get(),
+                   second_publication->proof.raw_commitment.data(),
+                   old_reuse_prediction->data(), hiding_delta.data()) != 0 &&
+                   hiding_delta != PointBytes{},
+               "V4 assignment binding changes the raw hiding coordinate");
+    auto second_verified = candidate::verify_circuit_zk_norm_arg_v4(
+        circuit, *second_publication, context.get(), binding);
+    ctx.expect(second_verified.has_value() && *second_verified,
+               "V4 reused-seed proof verifies for its assignment");
+
     auto identity_mask = *publication;
     identity_mask.proof.mask_commitment = PointBytes{};
     auto identity_mask_result = candidate::prepare_circuit_zk_norm_arg_v4(
@@ -670,6 +720,37 @@ void test_v4_native_circuit_proof(TestContext& ctx)
     ctx.expect(!identity_mask_result.has_value() ||
                    !identity_mask_result->has_value(),
                "V4 native boundary rejects an identity mask commitment");
+    auto identity_raw = *publication;
+    identity_raw.proof.raw_commitment = PointBytes{};
+    auto identity_raw_result = candidate::prepare_circuit_zk_norm_arg_v4(
+        circuit, identity_raw, context.get(), binding);
+    ctx.expect(!identity_raw_result.has_value() ||
+                   !identity_raw_result->has_value(),
+               "V4 native boundary rejects an identity raw commitment");
+
+    auto malformed_pair = *publication;
+    malformed_pair.proof.norm_proof[0] = 4;
+    auto malformed_pair_result = candidate::verify_circuit_zk_norm_arg_v4(
+        circuit, malformed_pair, context.get(), binding);
+    ctx.expect(!malformed_pair_result.has_value() ||
+                   !*malformed_pair_result,
+               "V4 verification rejects malformed packed round parity");
+
+    auto noncanonical_terminal = *publication;
+    const ScalarBytes group_order =
+        purify::UInt256::from_hex(
+            "fffffffffffffffffffffffffffffffebaaedce6af48a03b"
+            "bfd25e8cd0364141")
+            .to_bytes_be();
+    std::copy(group_order.begin(), group_order.end(),
+              noncanonical_terminal.proof.norm_proof.end() -
+                  group_order.size());
+    auto noncanonical_terminal_result =
+        candidate::verify_circuit_zk_norm_arg_v4(
+            circuit, noncanonical_terminal, context.get(), binding);
+    ctx.expect(!noncanonical_terminal_result.has_value() ||
+                   !*noncanonical_terminal_result,
+               "V4 verification rejects a noncanonical terminal scalar");
 
     auto changed_terminal = *publication;
     ScalarBytes terminal_l{};
@@ -719,6 +800,31 @@ void test_v4_native_circuit_proof(TestContext& ctx)
                        std::vector<PointBytes>(public_points.begin(),
                                                public_points.end()),
                "V4 preparation retains trusted ordered public points");
+
+    auto zero_response = *public_publication;
+    zero_response.proof.public_commitment_dlog_response.fill(0);
+    auto zero_response_result =
+        candidate::verify_circuit_zk_norm_arg_v4_with_public_commitments(
+            circuit, zero_response, public_points, context.get(), binding);
+    ctx.expect(zero_response_result.has_value() && !*zero_response_result,
+               "V4 public verification rejects a zero DLog response");
+
+    auto invalid_nonce = *public_publication;
+    invalid_nonce.proof.public_commitment_dlog_nonce.fill(0xff);
+    auto invalid_nonce_result =
+        candidate::verify_circuit_zk_norm_arg_v4_with_public_commitments(
+            circuit, invalid_nonce, public_points, context.get(), binding);
+    ctx.expect(!invalid_nonce_result.has_value() || !*invalid_nonce_result,
+               "V4 public verification rejects an invalid x-only nonce");
+
+    const std::array<PointBytes, 1> identity_public_points{PointBytes{}};
+    auto identity_public_result =
+        candidate::verify_circuit_zk_norm_arg_v4_with_public_commitments(
+            circuit, *public_publication, identity_public_points,
+            context.get(), binding);
+    ctx.expect(!identity_public_result.has_value() ||
+                   !*identity_public_result,
+               "V4 native boundary rejects identity public commitments");
 
     auto wrong_public_point =
         scalar_point(FieldElement::from_int(13), context.get());

@@ -17,11 +17,12 @@ namespace purify::bppp::candidate {
  * V4 wire proof, intentionally distinct from the V3 proof.
  *
  * Native BP++ proofs use the backend's finite initial-commitment language.
- * Raw A, S, derived A_anch/P, and public-mode commitment points therefore
- * must be finite. Reconstructed Cc and Q_off may use canonical zero33
- * identity encoding. The constrained leaf permits more algebraic identity
- * fixtures, but this producer/verifier pair intentionally exposes the
- * finite native subset until the underlying norm encoding supports infinity.
+ * Raw A, S, derived A_anch/P, public-mode commitment points, and every
+ * intermediate public batch operation therefore must stay finite.
+ * Reconstructed Cc and Q_off may use canonical zero33 identity encoding.
+ * The constrained leaf permits more algebraic identity fixtures, but this
+ * producer/verifier pair intentionally exposes the finite native subset
+ * until the underlying norm encoding supports infinity.
  */
 struct CircuitZkNormArgProofV4 {
   PointBytes raw_commitment{};
@@ -64,6 +65,14 @@ struct PreparedCircuitZkNormArgV4 {
   PointBytes pending_norm_residual{};
 };
 
+/**
+ * Produce a hidden-commitment V4 proof.
+ *
+ * `secret_prover_seed` must be secret and uniformly unpredictable. The
+ * synthetic randomness binds the complete ordered assignment and statement,
+ * so one seed may be reused safely; an identical input tuple is deterministic.
+ * Seed disclosure compromises witness-hiding randomness.
+ */
 [[nodiscard]] Result<CircuitZkNormArgPublicationV4>
 prove_circuit_zk_norm_arg_v4(
     const NativeBulletproofCircuit &circuit,
@@ -73,6 +82,15 @@ prove_circuit_zk_norm_arg_v4(
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend *cache = nullptr);
 
+/**
+ * Produce a public-commitment V4 proof.
+ *
+ * `secret_prover_seed` has the same secret, uniformly unpredictable contract
+ * as the hidden prover. Synthetic randomness binds the complete assignment,
+ * ordered public points, and statement, so reuse is safe. The DLog nonce is
+ * additionally hedged with the public precommitment, but seed disclosure
+ * still compromises witness hiding.
+ */
 [[nodiscard]] Result<CircuitZkNormArgPublicationV4>
 prove_circuit_zk_norm_arg_v4_with_public_commitments(
     const NativeBulletproofCircuit &circuit,

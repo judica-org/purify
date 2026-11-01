@@ -2736,6 +2736,11 @@ Result<candidate::TranscriptDigest> raw_generator_digest_v4(
   return generator_backend_cache_key(generators);
 }
 
+bool is_identity_point_v4(const PointBytes &point) {
+  return std::all_of(point.begin(), point.end(),
+                     [](unsigned char byte) { return byte == 0; });
+}
+
 Status validate_circuit_proof_v4_inputs(
     const NativeBulletproofCircuit &circuit,
     std::span<const PointBytes> public_commitments,
@@ -2753,6 +2758,11 @@ Status validate_circuit_proof_v4_inputs(
         public_commitments.size() != circuit.n_commitments) {
       return unexpected_error(ErrorCode::SizeMismatch,
                               "circuit_proof_v4:public_commitments");
+    }
+    if (std::any_of(public_commitments.begin(), public_commitments.end(),
+                    is_identity_point_v4)) {
+      return unexpected_error(ErrorCode::BackendRejectedInput,
+                              "circuit_proof_v4:identity_public_commitment");
     }
   } else if (!public_commitments.empty()) {
     return unexpected_error(ErrorCode::SizeMismatch,
@@ -2806,11 +2816,28 @@ prove_circuit_zk_norm_arg_v4_impl(
       "prove_circuit_zk_norm_arg_v4:shape");
 
   std::size_t public_point_bytes = 0;
+  std::size_t assignment_scalar_count = 0;
+  std::size_t assignment_bytes = 0;
+  std::size_t seed_prefix_size = 0;
   std::size_t seed_size = 0;
   if (!checked_mul_size(public_commitments.size(), sizeof(PointBytes),
                         public_point_bytes) ||
-      !checked_add_size(binding_digest.size() + secret_prover_seed.size() + 1,
-                        public_point_bytes, seed_size)) {
+      !checked_add_size(assignment.left.size(), assignment.right.size(),
+                        assignment_scalar_count) ||
+      !checked_add_size(assignment_scalar_count, assignment.output.size(),
+                        assignment_scalar_count) ||
+      !checked_add_size(assignment_scalar_count,
+                        assignment.commitments.size(),
+                        assignment_scalar_count) ||
+      !checked_mul_size(assignment_scalar_count, sizeof(ScalarBytes),
+                        assignment_bytes) ||
+      !checked_add_size(assignment_bytes, 4 * sizeof(std::uint64_t),
+                        assignment_bytes) ||
+      !checked_add_size(binding_digest.size(), secret_prover_seed.size(),
+                        seed_prefix_size) ||
+      !checked_add_size(seed_prefix_size, 1, seed_prefix_size) ||
+      !checked_add_size(seed_prefix_size, public_point_bytes, seed_size) ||
+      !checked_add_size(seed_size, assignment_bytes, seed_size)) {
     return unexpected_error(ErrorCode::Overflow,
                             "prove_circuit_zk_norm_arg_v4:seed_size");
   }
@@ -2824,6 +2851,33 @@ prove_circuit_zk_norm_arg_v4_impl(
   for (const auto &point : public_commitments) {
     seed.value.insert(seed.value.end(), point.begin(), point.end());
   }
+  const auto append_assignment_values =
+      [&](std::span<const FieldElement> values) -> Status {
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto &count,
+        narrow_size_to_u64(values.size(),
+                           "prove_circuit_zk_norm_arg_v4:assignment_count"),
+        "prove_circuit_zk_norm_arg_v4:assignment_count");
+    append_u64_le(seed.value, count);
+    for (const auto &value : values) {
+      SecretScalarBytes encoded;
+      purify_scalar_get_b32(
+          encoded.value.data(),
+          &::purify::detail::FieldElementAccess::raw(value));
+      seed.value.insert(seed.value.end(), encoded.value.begin(),
+                        encoded.value.end());
+    }
+    return {};
+  };
+  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.left),
+                         "prove_circuit_zk_norm_arg_v4:left_seed");
+  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.right),
+                         "prove_circuit_zk_norm_arg_v4:right_seed");
+  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.output),
+                         "prove_circuit_zk_norm_arg_v4:output_seed");
+  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.commitments),
+                         "prove_circuit_zk_norm_arg_v4:commitment_seed");
+  assert(seed.value.size() == seed_size);
 
   std::optional<Error> masked_failure;
   for (std::uint64_t attempt = 0; attempt < 32; ++attempt) {
@@ -2948,11 +3002,20 @@ prove_circuit_zk_norm_arg_v4_impl(
         transcript.append_dlog_response(dlog_response),
         "prove_circuit_zk_norm_arg_v4:dlog_response");
 
-    SecretBytes mask_seed;
-    mask_seed.value = seed.value;
     const ScalarBytes precommitment_bytes = precommitment.digest.bytes();
+    std::size_t mask_seed_size = 0;
+    if (!checked_add_size(seed.value.size(), precommitment_bytes.size(),
+                          mask_seed_size)) {
+      return unexpected_error(ErrorCode::Overflow,
+                              "prove_circuit_zk_norm_arg_v4:mask_seed_size");
+    }
+    SecretBytes mask_seed;
+    mask_seed.value.reserve(mask_seed_size);
+    mask_seed.value.insert(mask_seed.value.end(), seed.value.begin(),
+                           seed.value.end());
     mask_seed.value.insert(mask_seed.value.end(), precommitment_bytes.begin(),
                            precommitment_bytes.end());
+    assert(mask_seed.value.size() == mask_seed_size);
     std::vector<FieldElement> mask_n(hidden.n_vec.size(),
                                      FieldElement::zero());
     WipeVectorOnDestruction mask_n_wiper(mask_n);
@@ -3104,6 +3167,10 @@ prepare_circuit_zk_norm_arg_v4_impl(
     return unexpected_error(ErrorCode::EmptyInput,
                             "prepare_circuit_zk_norm_arg_v4:proof");
   }
+  if (is_identity_point_v4(publication.proof.raw_commitment) ||
+      is_identity_point_v4(publication.proof.mask_commitment)) {
+    return std::optional<candidate::PreparedCircuitZkNormArgV4>{};
+  }
   PURIFY_ASSIGN_OR_RETURN(
       const auto shape, circuit_shape_v4(circuit, externalize_commitments),
       "prepare_circuit_zk_norm_arg_v4:shape");
@@ -3149,6 +3216,9 @@ prepare_circuit_zk_norm_arg_v4_impl(
       anchor_zk_a_commitment(publication.proof.raw_commitment, *public_data,
                              public_commitments, secp_context),
       "prepare_circuit_zk_norm_arg_v4:anchored_commitment");
+  if (is_identity_point_v4(anchored_commitment)) {
+    return std::optional<candidate::PreparedCircuitZkNormArgV4>{};
+  }
   PURIFY_ASSIGN_OR_RETURN(
       const auto &anchored_offset,
       point_subtract_allow_infinity(anchored_commitment,
@@ -3231,6 +3301,9 @@ prepare_circuit_zk_norm_arg_v4_impl(
                              publication.proof.mask_commitment,
                              alpha.scalar, t2, secp_context),
       "prepare_circuit_zk_norm_arg_v4:combined_commitment");
+  if (is_identity_point_v4(combined_commitment)) {
+    return std::optional<candidate::PreparedCircuitZkNormArgV4>{};
+  }
   PURIFY_RETURN_IF_ERROR(
       transcript.append_combined_commitment(combined_commitment,
                                             secp_context),

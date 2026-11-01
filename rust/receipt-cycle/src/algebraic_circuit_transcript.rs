@@ -226,10 +226,7 @@ fn allocate_point_v4(
     witness: SecpEncodedPointWitness,
 ) -> Result<EncodedSecpPoint, ReceiptCycleError> {
     let identity = witness.encoded == [0; 33];
-    if (witness.encoded[0] == 0) != identity
-        || (!identity && !matches!(witness.encoded[0], 2 | 3))
-        || (identity && witness.y != [0; 32])
-    {
+    if (!identity && !matches!(witness.encoded[0], 2 | 3)) || (identity && witness.y != [0; 32]) {
         return Err(ReceiptCycleError::Malformed("V4 encoded point"));
     }
     allocate_encoded_point(builder, witness)

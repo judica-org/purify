@@ -24,9 +24,9 @@ in another proving round.
 
 The candidate on-chain object contains a versioned setup reference and entry
 count, each ordered 192-byte ciphertext with its 32-byte V4 precommitment `d`,
-the 545-byte final root claim, and one compressed Nova proof. Resolved anchor
-references, roots, and contexts are statement data rather than duplicated wire
-fields. The independent proof bodies are not on-chain payloads.
+and one compressed Nova proof. Resolved anchor references, roots, and contexts
+are statement data rather than duplicated wire fields. The independent proof
+bodies are not on-chain payloads.
 
 Bitcoin-only verification and recovery must remain possible after the children
 are unavailable. The final proof authenticates the construction; the ciphertexts
@@ -41,7 +41,7 @@ establish:
 2. For every listed anchor, the private V4 encryption-proof witness accepts for
    the exact recipient, resolved root, ciphertext, and enrollment context.
 3. Exactly `N` homogeneous recurrence steps connect that registry seed to the
-   published manifest and root claim.
+   expected final manifest and a root returned by compressed verification.
 4. The ordered list covers the externally authorized manifest with no
    duplicate, omitted, substituted, or extra roots.
 
@@ -157,7 +157,7 @@ is authorized.
 The selected versioned target is:
 
 ```
-69 + 224*N + 545 + size(canonical compressed Nova proof)
+69 + 224*N + size(canonical compressed Nova proof)
 ```
 
 Each 224-byte entry is one 192-byte ciphertext plus one nonzero 32-byte
@@ -168,13 +168,14 @@ roster, coalition core, nonce-host commitment, setup context, and registry
 schema version. Resolved setup and anchor metadata remain off wire but are
 bound into the construction statement and initial manifest.
 
-The boundary additionally carries a 545-byte final root claim for the current
-32,768-point anchor basis. It is not proof acceptance: Nova must authenticate
-the claim's ancestry and the native verifier must discharge it with
-`decide()`. At 100 anchors, the non-proof portion is 23,014 bytes. The new
-envelope and canonical Nova codec are not implemented consensus formats yet.
-The existing `69 + 192*N` envelope requires a new version rather than a silent
-reinterpretation.
+The current native root codec is 545 bytes for the 32,768-point anchor basis.
+Compressed Nova already serializes its complete final state and returns it only
+after successful verification. The new receipt therefore does not duplicate a
+545-byte root outside the proof. It converts the verified state root into the
+native codec and discharges it with `decide()`. At 100 anchors, the non-proof
+portion is 22,469 bytes. The new envelope and canonical Nova codec are not
+implemented consensus formats yet. The existing `69 + 192*N` envelope requires
+a new version rather than a silent reinterpretation.
 
 The typed native setup path reconstructs the exact setup record, verifies its
 V4 reduction, promotes the pending claim to the construction basis,

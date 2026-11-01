@@ -16,8 +16,8 @@ A future receipt may be accepted only when all three checks succeed:
 1. the setup reference resolves to one immutable, previously verified setup
    record and its canonical construction-basis seed claim;
 2. the compressed Nova proof verifies the exact number of homogeneous anchor
-   steps from that seed, ending at the payload-derived manifest and serialized
-   root pending claim; and
+   steps from that seed and returns a final manifest and index matching the
+   payload-derived values; and
 3. native `accumulation::decide` discharges that exact root claim against the
    fixed anchor-escrow basis.
 
@@ -79,8 +79,9 @@ is derived by absorbing the manifest domain and version, construction statement
 digest, resolved setup-record digest, seed root, and payload count. Each step
 absorbs the prior manifest, zero-based index, exact statement binding, V4
 precommitment, coefficient commitment, and anchored offset used by that leaf.
-Final verification requires the expected step count, manifest, index, and
-545-byte root; no intermediate state is an acceptance result.
+Final verification requires the expected step count, manifest, and index. It
+then decodes the root carried by the verified final state and passes it directly
+to the native decision. No intermediate state is an acceptance result.
 
 The secq commitment group has the secp256k1 coordinate field as its R1CS scalar
 field. Secp256k1 point arithmetic is therefore native in the parent. BP++
@@ -124,7 +125,7 @@ ciphertext and its 32-byte nonzero V4 precommitment. The verifier derives the
 leaf's expected coefficient commitment and anchored offset from that
 precommitment and the exact resolved statement, while the recurrence manifest
 binds those same constrained values. This gives a 224-byte entry before the
-fixed receipt header, root claim, and compressed parent proof.
+fixed receipt header and compressed parent proof.
 
 The native candidate Poseidon permutation is reproducible from the pinned
 parameter generator and cross-language vectors. Its exact Secq R1CS gadget uses
@@ -272,26 +273,27 @@ dimensions fixed by the receipt version, the minimal root-claim data is:
 point:33 || scale:32 || factors:15*32
 ```
 
-That is 545 bytes before versioning and framing. It is additional to the Nova
-proof unless the final 32,768-term decision is moved inside the recurrence.
-Moving that decision inside removes the public claim but makes every parent
-proof pay for the linear generator work. The initial production format should
-keep the explicit claim and benchmark the native decision.
+That is 545 bytes in the native root codec. Nova already serializes its complete
+final state and returns it after verification, so the receipt must not duplicate
+those 545 bytes outside the compressed proof. The verifier converts the 18 root
+state fields into the native codec and runs the linear decision. Moving that
+decision inside the recurrence would instead make every parent proof pay for
+the linear generator work.
 
 The earlier nonrecursive secq backend had a compact logarithmic proof formula,
 but it did not solve flat-circuit memory and is not the selected parent
 backend. The current candidate receipt budget is:
 
 ```text
-69 + 224 * anchor_count + 545 + canonical_nova_proof_bytes
+69 + 224 * anchor_count + canonical_nova_proof_bytes
 ```
 
 The 69-byte header and 224-byte entries are a codec target, not an implemented
-consensus format. At 100 anchors, the non-proof portion is 23,014 bytes. Adding
+consensus format. At 100 anchors, the non-proof portion is 22,469 bytes. Adding
 the tiny probe's 10,660-byte noncanonical proof-object measurement would give
-33,674 bytes, but the production proof can be sized only after the exact
-recurrence and canonical Nova codec exist. The explicit 545-byte root remains
-mandatory unless the linear final decision moves inside the parent.
+33,129 bytes, but that probe has a one-field rather than 20-field state and does
+not predict production size. The production proof can be sized only after the
+exact recurrence and canonical Nova codec exist.
 
 ## Standalone secq verifier randomization
 

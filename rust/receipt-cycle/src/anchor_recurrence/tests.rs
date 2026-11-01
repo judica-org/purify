@@ -13,6 +13,7 @@ use crate::construction_manifest::{
 };
 use crate::direct_nova::{direct_nova_raw_metrics, DirectNovaTemplate};
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
+use crate::nova_session::DirectNovaSuite;
 use crate::parent_relation::{
     add_point_values, derive_candidate_folded_generator, CandidatePendingClaimWitness,
     CandidatePolynomialTermWitness, ConstrainedPendingClaim, EncodedSecpPoint, PointValue,
@@ -27,6 +28,10 @@ const BASIS: [u8; 32] = [0x73; 32];
 const PRODUCTION_DIRECT_NOVA_RELATION_ID: [u8; 32] = [
     0x53, 0x0d, 0xc1, 0x8d, 0x9b, 0xa3, 0x76, 0x9c, 0x16, 0xa1, 0x3a, 0xc4, 0xac, 0x7d, 0x8a, 0x87,
     0xf6, 0x28, 0x98, 0x98, 0xc4, 0x03, 0x6d, 0xa6, 0xa1, 0x8b, 0xe8, 0xee, 0x0d, 0x87, 0xc1, 0xda,
+];
+const PRODUCTION_NOVA_PP_DIGEST: [u8; 32] = [
+    0xc2, 0xf5, 0x2a, 0xae, 0x32, 0x39, 0xdb, 0x04, 0xa7, 0x3a, 0x5f, 0xc3, 0xb1, 0x57, 0xfa, 0x85,
+    0x85, 0xff, 0x20, 0x3d, 0x6e, 0x36, 0xee, 0x82, 0x3c, 0x29, 0x7d, 0xf8, 0x29, 0xcf, 0xc8, 0x00,
 ];
 const PRODUCTION_DIRECT_NOVA_VARIABLES: usize = 1_851_594;
 const PRODUCTION_DIRECT_NOVA_CONSTRAINTS: usize = 1_962_058;
@@ -623,6 +628,53 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
         .bind_relation(matching)
         .expect("matching production direct Nova step");
     assert_eq!(second.relation_id(), relation_id);
+}
+
+#[test]
+#[ignore = "run explicitly in release mode; constructs production Nova setup"]
+fn production_public_anchor_nova_setup_is_exact() {
+    eprintln!("production_nova_setup: deriving fixture");
+    let fixture = fixture_for_shape(
+        production_anchor_shape(),
+        0x31,
+        1,
+        generator(),
+        SecpEncodedPointWitness::identity(),
+        generator(),
+    );
+    eprintln!("production_nova_setup: building recurrence");
+    let relation = build_anchor_recurrence_relation(
+        &fixture.state,
+        fixture.statement,
+        &fixture.witness,
+        &fixture.reduction,
+        &fixture.proof,
+    )
+    .expect("production anchor recurrence");
+
+    eprintln!("production_nova_setup: constructing transparent parameters");
+    let suite = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup(relation)
+        .expect("production direct Nova suite");
+    let metadata = suite.metadata();
+    assert_eq!(
+        metadata.relation_id.bytes(),
+        &PRODUCTION_DIRECT_NOVA_RELATION_ID
+    );
+    assert_eq!(metadata.public_parameter_digest, PRODUCTION_NOVA_PP_DIGEST);
+    assert_eq!(
+        (metadata.primary_constraints, metadata.primary_variables),
+        (1_975_624, 1_865_190)
+    );
+    assert_eq!(
+        (metadata.secondary_constraints, metadata.secondary_variables),
+        (10_787, 10_769)
+    );
+    assert_eq!(metadata.proof_length, 12_466);
+    assert_eq!(metadata.codec_sequence_count, 125);
+    eprintln!(
+        "production_nova_setup_pp_digest={:02x?} metadata={metadata:#?}",
+        metadata.public_parameter_digest
+    );
 }
 
 #[test]

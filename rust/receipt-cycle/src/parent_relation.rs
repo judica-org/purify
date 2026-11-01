@@ -8,9 +8,16 @@
 use bulletproofs_cycle::Cycle;
 use ff::Field;
 use golden_halo2curves::Secq256k1Cycle;
+use num_bigint::BigUint;
+use num_traits::Zero;
 
+use crate::algebraic_transcript::BuilderTranscript;
 use crate::relation_builder::{Builder, Expression};
-use crate::secp_scalar::{allocate_canonical_scalar, SecpScalarVar, SecpScalarWitness};
+use crate::secp_scalar::{
+    add_scalars, allocate_canonical_scalar, constant_scalar, constrain_scalar_equal,
+    embedded_integer, invert_scalar, multiply_scalars, select_challenge_lanes, subtract_scalars,
+    SecpScalarVar, SecpScalarWitness,
+};
 use crate::{ReceiptCycleError, Scalar};
 
 /// Canonical affine witness for the native secp256k1 base field.
@@ -50,6 +57,66 @@ pub struct SecpEncodedPointWitness {
     pub encoded: [u8; 33],
     /// Canonical little-endian affine y opening, or zero for the identity.
     pub y: [u8; 32],
+}
+
+/// One compact public coefficient term in a candidate pending claim.
+///
+/// It represents `scale * X^offset * product(1 + factor[j] *
+/// X^(2^j))`. The candidate step relation fixes the term shape in its
+/// regenerated circuit and treats only the canonical scalar values as
+/// private witnesses.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidatePolynomialTermWitness {
+    /// Canonical term scale modulo the secp256k1 group order.
+    pub scale: SecpScalarWitness,
+    /// Public monomial offset fixed by the claim shape.
+    pub offset: usize,
+    /// Canonical compact tensor factors.
+    pub factors: Vec<SecpScalarWitness>,
+}
+
+/// One candidate accumulation input claim.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidatePendingClaimWitness {
+    /// Exact native `PointBytes` claim point and its y opening.
+    pub point: SecpEncodedPointWitness,
+    /// One to three compact public coefficient terms.
+    pub polynomial: Vec<CandidatePolynomialTermWitness>,
+}
+
+/// The logarithmic public IPA fields for one candidate accumulation step.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateStepProofWitness {
+    /// Ordered left round points.
+    pub left: Vec<SecpEncodedPointWitness>,
+    /// Ordered right round points.
+    pub right: Vec<SecpEncodedPointWitness>,
+    /// Canonical terminal coefficient scalar.
+    pub terminal_scalar: SecpScalarWitness,
+    /// Exact folded-generator point returned as the next obligation.
+    pub folded_generator: SecpEncodedPointWitness,
+}
+
+/// Verifier-supplied opening base for the candidate step relation.
+///
+/// The point is baked into the regenerated circuit and must be finite. This
+/// type does not prove the required transcript-bound hash-to-curve derivation.
+/// A caller-selected point, even when finite, is not a sound opening base.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateOpeningBase {
+    /// Exact public point and its deterministic affine y opening.
+    pub point: SecpEncodedPointWitness,
+}
+
+/// Public next-claim constants for one candidate accumulation step.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateRootClaim {
+    /// Exact folded-generator point and its deterministic affine y opening.
+    pub point: SecpEncodedPointWitness,
+    /// Compact polynomial scale.
+    pub scale: SecpScalarWitness,
+    /// Compact polynomial factors in low-bit-first order.
+    pub factors: Vec<SecpScalarWitness>,
 }
 
 impl SecpEncodedPointWitness {
@@ -105,6 +172,15 @@ const SECP_FIELD_MODULUS_BE: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2f,
 ];
+
+const SECP_ORDER_BE: [u8; 32] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+    0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+];
+
+const CANDIDATE_STEP_DOMAIN: &[u8] = b"Purify/BPPP/CandidateAccumStep/v1";
+const MAX_CANDIDATE_CLAIMS: usize = 1024;
+const MAX_CANDIDATE_ROUNDS: usize = 24;
 
 fn field_modulus_bit(index: usize) -> bool {
     let byte = SECP_FIELD_MODULUS_BE[31 - index / 8];
@@ -451,6 +527,394 @@ fn msm_points(
     Ok(accumulator)
 }
 
+fn secp_order() -> BigUint {
+    BigUint::from_bytes_be(&SECP_ORDER_BE)
+}
+
+fn scalar_witness(value: &BigUint) -> Result<SecpScalarWitness, ReceiptCycleError> {
+    let bytes = value.to_bytes_be();
+    if bytes.len() > 32 {
+        return Err(ReceiptCycleError::Malformed("candidate scalar width"));
+    }
+    let mut encoded = [0; 32];
+    encoded[32 - bytes.len()..].copy_from_slice(&bytes);
+    Ok(SecpScalarWitness::from_bytes_be(encoded))
+}
+
+fn scalar_expression_value(value: &BigUint) -> Result<Scalar, ReceiptCycleError> {
+    let bytes = value.to_bytes_le();
+    if bytes.len() > 32 {
+        return Err(ReceiptCycleError::Malformed("candidate scalar width"));
+    }
+    let mut encoded = [0; 32];
+    encoded[..bytes.len()].copy_from_slice(&bytes);
+    Secq256k1Cycle::scalar_from_canonical(&encoded)
+        .ok_or(ReceiptCycleError::Malformed("candidate scalar embedding"))
+}
+
+fn derived_add(
+    builder: &mut Builder,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let value = (left.integer() + right.integer()) % secp_order();
+    add_scalars(builder, left, right, scalar_witness(&value)?)
+}
+
+fn derived_subtract(
+    builder: &mut Builder,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let order = secp_order();
+    let value = (left.integer() + &order - right.integer()) % &order;
+    subtract_scalars(builder, left, right, scalar_witness(&value)?)
+}
+
+fn derived_multiply(
+    builder: &mut Builder,
+    left: &SecpScalarVar,
+    right: &SecpScalarVar,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let value = (left.integer() * right.integer()) % secp_order();
+    multiply_scalars(builder, left, right, scalar_witness(&value)?)
+}
+
+fn derived_inverse(
+    builder: &mut Builder,
+    value: &SecpScalarVar,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let order = secp_order();
+    let inverse = if value.integer().is_zero() {
+        BigUint::zero()
+    } else {
+        value
+            .integer()
+            .modpow(&(&order - BigUint::from(2u64)), &order)
+    };
+    invert_scalar(builder, value, scalar_witness(&inverse)?)
+}
+
+fn derived_power(
+    builder: &mut Builder,
+    base: &SecpScalarVar,
+    mut exponent: usize,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let mut result = constant_scalar(1);
+    let mut power = base.clone();
+    while exponent != 0 {
+        if exponent & 1 != 0 {
+            result = derived_multiply(builder, &result, &power)?;
+        }
+        exponent >>= 1;
+        if exponent != 0 {
+            power = derived_multiply(builder, &power, &power)?;
+        }
+    }
+    Ok(result)
+}
+
+fn constant_byte_words(bytes: &[u8]) -> Vec<Expression> {
+    bytes
+        .chunks(31)
+        .map(|word| {
+            let value = word.iter().fold(Scalar::ZERO, |value, byte| {
+                value * Scalar::from(256) + Scalar::from(u64::from(*byte))
+            });
+            Expression::constant(value)
+        })
+        .collect()
+}
+
+fn append_constant_bytes(
+    transcript: &mut BuilderTranscript,
+    builder: &mut Builder,
+    bytes: &[u8],
+) -> Result<(), ReceiptCycleError> {
+    let words = constant_byte_words(bytes);
+    transcript.append_byte_words(builder, bytes.len(), &words)
+}
+
+fn append_scalar(transcript: &mut BuilderTranscript, builder: &mut Builder, value: &SecpScalarVar) {
+    transcript.append_scalar(builder, embedded_integer(value));
+}
+
+fn append_encoded_point(
+    transcript: &mut BuilderTranscript,
+    builder: &mut Builder,
+    point: &EncodedSecpPoint,
+) {
+    transcript.append_point(builder, point.prefix.clone(), point.point.x.clone());
+}
+
+fn append_computed_point(
+    transcript: &mut BuilderTranscript,
+    builder: &mut Builder,
+    point: &SecpPoint,
+) {
+    let y_bits = canonical_field_bits(builder, &point.y);
+    let active = Expression::constant(Scalar::ONE).sub(&point.identity);
+    let finite_prefix = Expression::constant(Scalar::from(2)).add(&y_bits[0]);
+    let prefix = builder.multiply(&active, &finite_prefix);
+    transcript.append_point(builder, prefix, point.x.clone());
+}
+
+fn append_challenge(
+    transcript: &mut BuilderTranscript,
+    builder: &mut Builder,
+    round: u64,
+) -> SecpScalarVar {
+    let lanes = transcript.challenge(builder, round);
+    let challenge = select_challenge_lanes(builder, &lanes[0], &lanes[1]);
+    append_scalar(transcript, builder, &challenge);
+    challenge
+}
+
+fn constrain_scalar_constant(
+    builder: &mut Builder,
+    actual: &SecpScalarVar,
+    expected: SecpScalarWitness,
+) -> Result<(), ReceiptCycleError> {
+    let expected = allocate_canonical_scalar(builder, expected)?;
+    let constant = Expression::constant(scalar_expression_value(expected.integer())?);
+    builder.constrain_equal(&embedded_integer(&expected), &constant);
+    constrain_scalar_equal(builder, actual, &expected);
+    Ok(())
+}
+
+fn allocate_encoded_point_constant(
+    builder: &mut Builder,
+    expected: SecpEncodedPointWitness,
+) -> Result<EncodedSecpPoint, ReceiptCycleError> {
+    let expected = allocate_encoded_point(builder, expected)?;
+    let constant = |value| Expression::constant(value);
+    builder.constrain_equal(&expected.point.x, &constant(expected.point.witness.x));
+    builder.constrain_equal(&expected.point.y, &constant(expected.point.witness.y));
+    let identity = if expected.point.witness.identity {
+        Scalar::ONE
+    } else {
+        Scalar::ZERO
+    };
+    builder.constrain_equal(&expected.point.identity, &constant(identity));
+    builder.constrain_equal(&expected.prefix, &constant(expected.prefix.value()));
+    Ok(expected)
+}
+
+fn constrain_encoded_point_constant(
+    builder: &mut Builder,
+    actual: &EncodedSecpPoint,
+    expected: SecpEncodedPointWitness,
+) -> Result<(), ReceiptCycleError> {
+    let expected = allocate_encoded_point_constant(builder, expected)?;
+    builder.constrain_equal(&actual.point.x, &expected.point.x);
+    builder.constrain_equal(&actual.point.y, &expected.point.y);
+    builder.constrain_equal(&actual.point.identity, &expected.point.identity);
+    builder.constrain_equal(&actual.prefix, &expected.prefix);
+    Ok(())
+}
+
+struct CandidateTerm {
+    scale: SecpScalarVar,
+    offset: usize,
+    factors: Vec<SecpScalarVar>,
+}
+
+struct CandidateClaim {
+    point: EncodedSecpPoint,
+    polynomial: Vec<CandidateTerm>,
+}
+
+struct CandidateDerivedRoot {
+    point: EncodedSecpPoint,
+    scale: SecpScalarVar,
+    factors: Vec<SecpScalarVar>,
+}
+
+fn candidate_step_shape(
+    claims: &[CandidatePendingClaimWitness],
+    proof: &CandidateStepProofWitness,
+    root: Option<&CandidateRootClaim>,
+) -> Result<(usize, usize), ReceiptCycleError> {
+    if claims.is_empty() || claims.len() > MAX_CANDIDATE_CLAIMS {
+        return Err(ReceiptCycleError::Malformed("candidate claim count"));
+    }
+    let rounds = proof.left.len();
+    if rounds == 0
+        || rounds > MAX_CANDIDATE_ROUNDS
+        || proof.right.len() != rounds
+        || root.is_some_and(|root| root.factors.len() != rounds)
+    {
+        return Err(ReceiptCycleError::Malformed("candidate step rounds"));
+    }
+    let dimension = 1usize
+        .checked_shl(rounds as u32)
+        .ok_or(ReceiptCycleError::Malformed("candidate step dimension"))?;
+    for claim in claims {
+        if claim.polynomial.is_empty() || claim.polynomial.len() > 3 {
+            return Err(ReceiptCycleError::Malformed("candidate polynomial terms"));
+        }
+        for term in &claim.polynomial {
+            if term.factors.len() > rounds {
+                return Err(ReceiptCycleError::Malformed("candidate polynomial factors"));
+            }
+            let width = 1usize
+                .checked_shl(term.factors.len() as u32)
+                .ok_or(ReceiptCycleError::Malformed("candidate polynomial width"))?;
+            if term.offset > dimension.saturating_sub(width) {
+                return Err(ReceiptCycleError::Malformed("candidate polynomial degree"));
+            }
+        }
+    }
+    Ok((rounds, dimension))
+}
+
+fn allocate_candidate_claims(
+    builder: &mut Builder,
+    transcript: &mut BuilderTranscript,
+    claims: &[CandidatePendingClaimWitness],
+) -> Result<Vec<CandidateClaim>, ReceiptCycleError> {
+    transcript.append_u64(builder, claims.len() as u64);
+    let mut allocated = Vec::with_capacity(claims.len());
+    for claim in claims {
+        let point = allocate_encoded_point(builder, claim.point)?;
+        append_encoded_point(transcript, builder, &point);
+        transcript.append_u64(builder, claim.polynomial.len() as u64);
+        let mut polynomial = Vec::with_capacity(claim.polynomial.len());
+        for term in &claim.polynomial {
+            let scale = allocate_canonical_scalar(builder, term.scale)?;
+            append_scalar(transcript, builder, &scale);
+            transcript.append_u64(builder, term.offset as u64);
+            transcript.append_u64(builder, term.factors.len() as u64);
+            let mut factors = Vec::with_capacity(term.factors.len());
+            for &factor in &term.factors {
+                let factor = allocate_canonical_scalar(builder, factor)?;
+                append_scalar(transcript, builder, &factor);
+                factors.push(factor);
+            }
+            polynomial.push(CandidateTerm {
+                scale,
+                offset: term.offset,
+                factors,
+            });
+        }
+        allocated.push(CandidateClaim { point, polynomial });
+    }
+    Ok(allocated)
+}
+
+fn evaluate_candidate_term(
+    builder: &mut Builder,
+    term: &CandidateTerm,
+    x: &SecpScalarVar,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let x_offset = derived_power(builder, x, term.offset)?;
+    let mut value = derived_multiply(builder, &term.scale, &x_offset)?;
+    let mut x_power = x.clone();
+    for factor in &term.factors {
+        let product = derived_multiply(builder, factor, &x_power)?;
+        let one_plus_product = derived_add(builder, &constant_scalar(1), &product)?;
+        value = derived_multiply(builder, &value, &one_plus_product)?;
+        x_power = derived_multiply(builder, &x_power, &x_power)?;
+    }
+    Ok(value)
+}
+
+fn install_candidate_step(
+    builder: &mut Builder,
+    basis_digest: [u8; 32],
+    opening_base: CandidateOpeningBase,
+    claims: &[CandidatePendingClaimWitness],
+    proof: &CandidateStepProofWitness,
+) -> Result<CandidateDerivedRoot, ReceiptCycleError> {
+    let (rounds, _) = candidate_step_shape(claims, proof, None)?;
+    let mut transcript = BuilderTranscript::new();
+    append_constant_bytes(&mut transcript, builder, CANDIDATE_STEP_DOMAIN)?;
+    append_constant_bytes(&mut transcript, builder, &basis_digest)?;
+    transcript.append_u64(builder, rounds as u64);
+    let claims = allocate_candidate_claims(builder, &mut transcript, claims)?;
+
+    let beta = append_challenge(&mut transcript, builder, 0);
+    let mut claim_weight = constant_scalar(1);
+    let mut commitment_points = Vec::with_capacity(claims.len());
+    let mut commitment_scalars = Vec::with_capacity(claims.len());
+    for claim in &claims {
+        commitment_points.push(claim.point.point.clone());
+        commitment_scalars.push(claim_weight.clone());
+        claim_weight = derived_multiply(builder, &claim_weight, &beta)?;
+    }
+    let commitment = msm_points(builder, &commitment_points, &commitment_scalars)?;
+    append_computed_point(&mut transcript, builder, &commitment);
+
+    let x = append_challenge(&mut transcript, builder, 1);
+    let mut y = constant_scalar(0);
+    claim_weight = constant_scalar(1);
+    for claim in &claims {
+        let mut evaluation = constant_scalar(0);
+        for term in &claim.polynomial {
+            let term = evaluate_candidate_term(builder, term, &x)?;
+            evaluation = derived_add(builder, &evaluation, &term)?;
+        }
+        let weighted = derived_multiply(builder, &claim_weight, &evaluation)?;
+        y = derived_add(builder, &y, &weighted)?;
+        claim_weight = derived_multiply(builder, &claim_weight, &beta)?;
+    }
+    append_scalar(&mut transcript, builder, &y);
+
+    let opening_base = allocate_encoded_point_constant(builder, opening_base.point)?;
+    builder.constrain_zero(opening_base.point.identity.clone());
+    append_encoded_point(&mut transcript, builder, &opening_base);
+
+    let mut equation_points = vec![commitment];
+    let mut equation_scalars = vec![constant_scalar(1)];
+    let mut folded_scale = constant_scalar(1);
+    let mut folded_factors = vec![constant_scalar(0); rounds];
+    for round in 0..rounds {
+        let left = allocate_encoded_point(builder, proof.left[round])?;
+        let right = allocate_encoded_point(builder, proof.right[round])?;
+        append_encoded_point(&mut transcript, builder, &left);
+        append_encoded_point(&mut transcript, builder, &right);
+        let challenge = append_challenge(&mut transcript, builder, 2 + round as u64);
+        let inverse = derived_inverse(builder, &challenge)?;
+        let squared = derived_multiply(builder, &challenge, &challenge)?;
+        let inverse_squared = derived_multiply(builder, &inverse, &inverse)?;
+        folded_scale = derived_multiply(builder, &folded_scale, &inverse)?;
+        folded_factors[rounds - 1 - round] = squared.clone();
+        equation_points.push(left.point);
+        equation_scalars.push(squared);
+        equation_points.push(right.point);
+        equation_scalars.push(inverse_squared);
+    }
+
+    let terminal = allocate_canonical_scalar(builder, proof.terminal_scalar)?;
+    let mut b_final = folded_scale.clone();
+    let mut x_power = x;
+    for factor in &folded_factors {
+        let product = derived_multiply(builder, factor, &x_power)?;
+        let one_plus_product = derived_add(builder, &constant_scalar(1), &product)?;
+        b_final = derived_multiply(builder, &b_final, &one_plus_product)?;
+        x_power = derived_multiply(builder, &x_power, &x_power)?;
+    }
+    let terminal_evaluation = derived_multiply(builder, &terminal, &b_final)?;
+    let opening_scalar = derived_subtract(builder, &y, &terminal_evaluation)?;
+    let negative_terminal = derived_subtract(builder, &constant_scalar(0), &terminal)?;
+    equation_points.push(opening_base.point);
+    equation_scalars.push(opening_scalar);
+
+    let folded_generator = allocate_encoded_point(builder, proof.folded_generator)?;
+    equation_points.push(folded_generator.point.clone());
+    equation_scalars.push(negative_terminal);
+    let residual = msm_points(builder, &equation_points, &equation_scalars)?;
+    builder.constrain_zero(residual.x);
+    builder.constrain_zero(residual.y);
+    builder.constrain_equal(&residual.identity, &Expression::constant(Scalar::ONE));
+
+    Ok(CandidateDerivedRoot {
+        point: folded_generator,
+        scale: folded_scale,
+        factors: folded_factors,
+    })
+}
+
 /// Builds the canonical compressed-point relation used by parent transcripts.
 ///
 /// The private y coordinate must open a non-identity secp256k1 point and its
@@ -551,6 +1015,55 @@ pub fn build_secp_msm_relation(
     builder.finish()
 }
 
+/// Builds one complete candidate accumulation-step transition relation.
+///
+/// The relation binds the fixed basis digest, ordered compact claims, typed
+/// Poseidon batching and evaluation challenges, every IPA round, the short
+/// secp256k1 MSM equation, and the exact next root claim. The opening base and
+/// root are verifier-supplied constants baked into the regenerated circuit.
+///
+/// This remains a migration primitive, not receipt acceptance. In particular,
+/// the caller must derive `opening_base` with the frozen transcript-bound
+/// algebraic hash-to-curve map. Supplying any merely finite point is
+/// insufficient, even though this relation rejects the identity.
+pub fn build_candidate_accumulation_step_relation(
+    basis_digest: [u8; 32],
+    opening_base: CandidateOpeningBase,
+    claims: &[CandidatePendingClaimWitness],
+    proof: &CandidateStepProofWitness,
+    root: &CandidateRootClaim,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    candidate_step_shape(claims, proof, Some(root))?;
+    let mut builder = Builder::default();
+    let derived = install_candidate_step(&mut builder, basis_digest, opening_base, claims, proof)?;
+    constrain_encoded_point_constant(&mut builder, &derived.point, root.point)?;
+    constrain_scalar_constant(&mut builder, &derived.scale, root.scale)?;
+    for (actual, &expected) in derived.factors.iter().zip(&root.factors) {
+        constrain_scalar_constant(&mut builder, actual, expected)?;
+    }
+    builder.finish()
+}
+
+#[cfg(test)]
+fn derive_candidate_root_witness(
+    basis_digest: [u8; 32],
+    opening_base: CandidateOpeningBase,
+    claims: &[CandidatePendingClaimWitness],
+    proof: &CandidateStepProofWitness,
+) -> Result<CandidateRootClaim, ReceiptCycleError> {
+    let mut builder = Builder::default();
+    let derived = install_candidate_step(&mut builder, basis_digest, opening_base, claims, proof)?;
+    Ok(CandidateRootClaim {
+        point: proof.folded_generator,
+        scale: scalar_witness(derived.scale.integer())?,
+        factors: derived
+            .factors
+            .iter()
+            .map(|factor| scalar_witness(factor.integer()))
+            .collect::<Result<_, _>>()?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,6 +1101,14 @@ mod tests {
             y: from_be_hex("388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e672"),
             identity: false,
         }
+    }
+
+    fn order_minus_one() -> SecpScalarWitness {
+        SecpScalarWitness::from_bytes_be([
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+            0xd0, 0x36, 0x41, 0x40,
+        ])
     }
 
     fn negate(point: SecpAffineWitness) -> SecpAffineWitness {
@@ -678,6 +1199,35 @@ mod tests {
         assert_eq!(proof.len(), proof_wire_len(&circuit)?);
         let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("gate count")) as usize;
         Ok((circuit, gates, proof.len()))
+    }
+
+    fn candidate_step_fixture() -> (
+        [u8; 32],
+        CandidateOpeningBase,
+        Vec<CandidatePendingClaimWitness>,
+        CandidateStepProofWitness,
+        CandidateRootClaim,
+    ) {
+        let basis_digest = [0x42; 32];
+        let generator = encoded(generator(), 0x02);
+        let opening_base = CandidateOpeningBase { point: generator };
+        let claims = vec![CandidatePendingClaimWitness {
+            point: generator,
+            polynomial: vec![CandidatePolynomialTermWitness {
+                scale: order_minus_one(),
+                offset: 0,
+                factors: vec![],
+            }],
+        }];
+        let proof = CandidateStepProofWitness {
+            left: vec![SecpEncodedPointWitness::identity()],
+            right: vec![SecpEncodedPointWitness::identity()],
+            terminal_scalar: SecpScalarWitness::from_u64(0),
+            folded_generator: SecpEncodedPointWitness::identity(),
+        };
+        let root = derive_candidate_root_witness(basis_digest, opening_base, &claims, &proof)
+            .expect("candidate root witness");
+        (basis_digest, opening_base, claims, proof, root)
     }
 
     #[test]
@@ -931,5 +1481,137 @@ mod tests {
         let (second_circuit, _) = build_secp_msm_relation(&second, SecpAffineWitness::identity())
             .expect("second circuit");
         assert_eq!(first_circuit, second_circuit);
+    }
+
+    #[test]
+    fn candidate_step_rejects_invalid_public_shapes() {
+        let (basis, opening, claims, proof, root) = candidate_step_fixture();
+        assert!(
+            build_candidate_accumulation_step_relation(basis, opening, &[], &proof, &root,)
+                .is_err()
+        );
+
+        let excessive_claims = vec![claims[0].clone(); MAX_CANDIDATE_CLAIMS + 1];
+        assert!(build_candidate_accumulation_step_relation(
+            basis,
+            opening,
+            &excessive_claims,
+            &proof,
+            &root,
+        )
+        .is_err());
+
+        let mut missing_right = proof.clone();
+        missing_right.right.clear();
+        assert!(build_candidate_accumulation_step_relation(
+            basis,
+            opening,
+            &claims,
+            &missing_right,
+            &root,
+        )
+        .is_err());
+
+        let mut excessive_degree = claims.clone();
+        excessive_degree[0].polynomial[0].offset = 2;
+        assert!(build_candidate_accumulation_step_relation(
+            basis,
+            opening,
+            &excessive_degree,
+            &proof,
+            &root,
+        )
+        .is_err());
+
+        let mut wrong_root_shape = root.clone();
+        wrong_root_shape.factors.clear();
+        assert!(build_candidate_accumulation_step_relation(
+            basis,
+            opening,
+            &claims,
+            &proof,
+            &wrong_root_shape,
+        )
+        .is_err());
+    }
+
+    #[test]
+    #[ignore = "run explicitly in release mode; candidate step proof is large"]
+    fn candidate_step_binds_transition_and_public_constants() {
+        let (basis, opening, claims, proof, root) = candidate_step_fixture();
+        let (circuit, assignment) =
+            build_candidate_accumulation_step_relation(basis, opening, &claims, &proof, &root)
+                .expect("candidate step relation");
+        let statement = b"candidate accumulation step";
+        let accepted = prove(&circuit, &assignment, statement, [0x83; 32]).expect("proof");
+        verify(&circuit, statement, &accepted).expect("candidate step verification");
+
+        let mut changed_claims = claims.clone();
+        changed_claims[0].point = encoded(twice_generator(), 0x02);
+        let (same_circuit, false_assignment) = build_candidate_accumulation_step_relation(
+            basis,
+            opening,
+            &changed_claims,
+            &proof,
+            &root,
+        )
+        .expect("changed private claim");
+        assert_eq!(same_circuit, circuit);
+        let rejected = prove(&circuit, &false_assignment, statement, [0x84; 32])
+            .expect("false transition proof");
+        assert!(verify(&circuit, statement, &rejected).is_err());
+
+        let mut changed_root = root.clone();
+        let changed_factor = (BigUint::from_bytes_be(&changed_root.factors[0].bytes)
+            + BigUint::from(1u64))
+            % secp_order();
+        changed_root.factors[0] = scalar_witness(&changed_factor).expect("changed factor");
+        let (changed_root_circuit, _) = build_candidate_accumulation_step_relation(
+            basis,
+            opening,
+            &claims,
+            &proof,
+            &changed_root,
+        )
+        .expect("changed public root");
+        assert_ne!(changed_root_circuit, circuit);
+        assert!(verify(&changed_root_circuit, statement, &accepted).is_err());
+
+        let changed_opening = CandidateOpeningBase {
+            point: encoded(twice_generator(), 0x02),
+        };
+        let (changed_opening_circuit, _) = build_candidate_accumulation_step_relation(
+            basis,
+            changed_opening,
+            &claims,
+            &proof,
+            &root,
+        )
+        .expect("changed public opening base");
+        assert_ne!(changed_opening_circuit, circuit);
+        assert!(verify(&changed_opening_circuit, statement, &accepted).is_err());
+
+        let mut changed_basis = basis;
+        changed_basis[0] ^= 1;
+        let (changed_basis_circuit, _) = build_candidate_accumulation_step_relation(
+            changed_basis,
+            opening,
+            &claims,
+            &proof,
+            &root,
+        )
+        .expect("changed public basis");
+        assert_ne!(changed_basis_circuit, circuit);
+        assert!(verify(&changed_basis_circuit, statement, &accepted).is_err());
+
+        let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("gate count"));
+        eprintln!(
+            "candidate_accumulation_step_gates={gates} proof_bytes={}",
+            accepted.len()
+        );
+        assert_eq!(
+            accepted.len(),
+            proof_wire_len(&circuit).expect("proof size")
+        );
     }
 }

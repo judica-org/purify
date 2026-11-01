@@ -249,7 +249,7 @@ fn allocate_point(builder: &mut Builder, value: PointValue) -> SecpPoint {
     }
 }
 
-fn canonical_field_bits(builder: &mut Builder, value: &Expression) -> Vec<Expression> {
+pub(crate) fn canonical_field_bits(builder: &mut Builder, value: &Expression) -> Vec<Expression> {
     let encoded = Secq256k1Cycle::scalar_to_canonical(&value.value());
     let mut bits = Vec::with_capacity(256);
     let mut reconstructed = Expression::constant(Scalar::ZERO);

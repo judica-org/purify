@@ -237,8 +237,26 @@ pub(crate) fn build_anchor_recurrence_relation(
     reduction_proof: &CandidateNormReductionProofWitness,
     step_proof: &CandidateStepProofWitness,
 ) -> Result<StatefulRelation, ReceiptCycleError> {
-    build_anchor_recurrence_relation_inner(
+    build_anchor_recurrence_relation_with_builder(
         Builder::default(),
+        state,
+        statement,
+        transcript_witness,
+        reduction_proof,
+        step_proof,
+    )
+}
+
+pub(crate) fn build_anchor_recurrence_relation_with_builder(
+    builder: Builder,
+    state: &AnchorRecurrenceStateWitness,
+    statement: ManifestBoundAnchorLeafStatementV4,
+    transcript_witness: &CircuitProofTranscriptWitnessV4,
+    reduction_proof: &CandidateNormReductionProofWitness,
+    step_proof: &CandidateStepProofWitness,
+) -> Result<StatefulRelation, ReceiptCycleError> {
+    build_anchor_recurrence_relation_inner(
+        builder,
         state,
         statement,
         transcript_witness,

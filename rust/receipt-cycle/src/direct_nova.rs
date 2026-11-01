@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     anchor_recurrence::ANCHOR_RECURRENCE_STATE_ARITY,
     relation_builder::{
-        emit_circuit, validate_operations, GateOperationShape, RelationShape, StateWire,
+        emit_circuit, validate_operations, Builder, GateOperationShape, RelationShape, StateWire,
         StatefulRelation,
     },
     Assignment, Circuit, ReceiptCycleError, Scalar, Term, WireKind, MAX_CONSTRAINTS, MAX_GATES,
@@ -129,9 +129,18 @@ impl<const ARITY: usize> DirectNovaTemplate<ARITY> {
         relation: StatefulRelation,
     ) -> Result<DirectNovaStep<ARITY>, ReceiptCycleError> {
         let StatefulRelation { shape, assignment } = relation;
-        self.validate_source(&shape)?;
+        // Pointer equality refers to the immutable source Arc already
+        // validated by this template. It skips only the duplicate structural
+        // comparison; bind_assignment still checks every witness constraint.
+        if !Arc::ptr_eq(&shape, &self.shape.source) {
+            self.validate_source(&shape)?;
+        }
         drop(shape);
         self.shape.bind_assignment(assignment)
+    }
+
+    pub(crate) fn matching_builder(&self) -> Builder {
+        Builder::matching(Arc::clone(&self.shape.source))
     }
 
     fn validate_source(&self, candidate: &RelationShape) -> Result<(), ReceiptCycleError> {
@@ -958,7 +967,14 @@ mod tests {
     );
 
     fn fixture(input_value: u64, interleaved_semantic: bool) -> StatefulRelation {
-        let mut builder = Builder::default();
+        fixture_with_builder(Builder::default(), input_value, interleaved_semantic)
+    }
+
+    fn fixture_with_builder(
+        mut builder: Builder,
+        input_value: u64,
+        interleaved_semantic: bool,
+    ) -> StatefulRelation {
         let input = builder.allocate_state(Scalar::from(input_value));
         let condition = builder.allocate_boolean(true);
         if interleaved_semantic {
@@ -1328,6 +1344,22 @@ mod tests {
 
         assert!(discarded_source.upgrade().is_none());
         assert!(Arc::ptr_eq(&template.shape, &second.shape));
+        assert!(Arc::ptr_eq(&first.shape, &second.shape));
+        assert_eq!(first.relation_id(), second.relation_id());
+        assert_ne!(first.input_state(), second.input_state());
+        assert_ne!(first.output_state(), second.output_state());
+    }
+
+    #[test]
+    fn template_streams_matching_witnesses_into_the_trusted_shape() {
+        let (template, first) = DirectNovaTemplate::<1>::from_relation(fixture(3, false))
+            .expect("direct Nova template");
+        let later_relation = fixture_with_builder(template.matching_builder(), 9, false);
+        assert!(Arc::ptr_eq(&later_relation.shape, &template.shape.source));
+
+        let second = template
+            .bind_relation(later_relation)
+            .expect("matching direct Nova relation");
         assert!(Arc::ptr_eq(&first.shape, &second.shape));
         assert_eq!(first.relation_id(), second.relation_id());
         assert_ne!(first.input_state(), second.input_state());

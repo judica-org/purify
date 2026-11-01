@@ -11,7 +11,7 @@ use crate::algebraic_circuit_transcript::{
 use crate::construction_manifest::{
     derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestStepInput,
 };
-use crate::direct_nova::direct_nova_raw_metrics;
+use crate::direct_nova::{direct_nova_raw_metrics, DirectNovaTemplate};
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
 use crate::parent_relation::{
     add_point_values, derive_candidate_folded_generator, CandidatePendingClaimWitness,
@@ -499,7 +499,7 @@ fn production_nova_076_pre_pp_forecast_is_exact() {
 }
 
 #[test]
-#[ignore = "run explicitly in release mode; builds one production recurrence"]
+#[ignore = "run explicitly in release mode; builds two production recurrences"]
 fn production_public_anchor_recurrence_reports_direct_shape() {
     eprintln!("production_shape_metrics: deriving fixture");
     let fixture = fixture_for_shape(
@@ -533,7 +533,6 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
     .expect("production anchor recurrence");
     let StatefulRelation { shape, assignment } = relation;
     assert!(structured_relation_satisfied(&shape.circuit, &assignment));
-    drop(assignment);
 
     eprintln!("production_shape_metrics: measuring direct lowering");
     let metrics = direct_nova_raw_metrics::<ANCHOR_RECURRENCE_STATE_ARITY>(&shape)
@@ -599,6 +598,31 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
         metrics.direct_rounds,
         metrics.direct_power_of_two_bucket.ilog2()
     );
+
+    eprintln!("production_shape_metrics: selecting trusted template");
+    let (template, first) =
+        DirectNovaTemplate::<ANCHOR_RECURRENCE_STATE_ARITY>::from_relation(StatefulRelation {
+            shape,
+            assignment,
+        })
+        .expect("production direct Nova template");
+    let relation_id = first.relation_id();
+    drop(first);
+
+    eprintln!("production_shape_metrics: building matching recurrence");
+    let matching = build_anchor_recurrence_relation_with_builder(
+        template.matching_builder(),
+        &fixture.state,
+        fixture.statement,
+        &fixture.witness,
+        &fixture.reduction,
+        &fixture.proof,
+    )
+    .expect("matching production anchor recurrence");
+    let second = template
+        .bind_relation(matching)
+        .expect("matching production direct Nova step");
+    assert_eq!(second.relation_id(), relation_id);
 }
 
 #[test]

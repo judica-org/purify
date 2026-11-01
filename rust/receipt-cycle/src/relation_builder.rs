@@ -145,8 +145,7 @@ pub(crate) struct StatefulRelation {
 }
 
 impl Builder {
-    #[cfg(test)]
-    fn matching(shape: Arc<RelationShape>) -> Self {
+    pub(crate) fn matching(shape: Arc<RelationShape>) -> Self {
         Self {
             expected: Some(ExpectedRelation {
                 shape,

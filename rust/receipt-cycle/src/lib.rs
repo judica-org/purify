@@ -23,6 +23,7 @@ mod ffi;
 mod gadgets;
 pub mod parent_relation;
 mod relation_builder;
+pub mod secp_scalar;
 
 pub(crate) type Scalar = <Secq256k1Cycle as Cycle>::Scalar;
 

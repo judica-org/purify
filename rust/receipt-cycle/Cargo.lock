@@ -332,6 +332,8 @@ dependencies = [
  "ff",
  "golden-halo2curves",
  "merlin",
+ "num-bigint",
+ "num-traits",
  "rand_chacha",
  "rand_core",
  "sha2",

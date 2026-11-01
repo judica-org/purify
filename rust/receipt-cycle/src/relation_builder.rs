@@ -263,7 +263,7 @@ impl Builder {
     }
 }
 
-fn validate_operations(
+pub(crate) fn validate_operations(
     operations: &[GateOperationShape],
     circuit: &Circuit,
 ) -> Result<(), ReceiptCycleError> {
@@ -450,7 +450,7 @@ fn append_scalar(out: &mut Vec<u8>, value: Scalar) {
     out.extend_from_slice(&Secq256k1Cycle::scalar_to_canonical(&value));
 }
 
-fn emit_circuit(circuit: &Circuit, mut emit: impl FnMut(&[u8])) {
+pub(crate) fn emit_circuit(circuit: &Circuit, mut emit: impl FnMut(&[u8])) {
     emit(&[CIRCUIT_VERSION]);
     emit(&(circuit.gate_count as u32).to_le_bytes());
     emit(&(circuit.constraints.len() as u32).to_le_bytes());

@@ -29,6 +29,9 @@ mod algebraic_transcript;
 mod anchor_recurrence;
 #[allow(dead_code)]
 mod construction_manifest;
+// This is an internal candidate lowering, not a receipt acceptance API.
+#[allow(dead_code)]
+mod direct_nova;
 mod ffi;
 // This is an internal proof-codec foundation, not a receipt parser.
 #[allow(dead_code)]

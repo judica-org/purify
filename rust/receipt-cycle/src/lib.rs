@@ -19,6 +19,7 @@ use rand_core::SeedableRng;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+#[allow(dead_code)]
 mod algebraic_transcript;
 mod ffi;
 mod gadgets;

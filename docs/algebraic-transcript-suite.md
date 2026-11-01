@@ -101,7 +101,18 @@ header = (type << 64) | auxiliary
 ```
 
 `type` is a fixed 32-bit suite constant and `auxiliary` is a 64-bit length,
-counter, or canonical encoding flag. Candidate item encodings are:
+counter, or canonical encoding flag. The candidate type constants are:
+
+| Item | Type | ASCII |
+|---|---:|---|
+| Coordinate-field element | `0x4649454c` | `FIEL` |
+| secp256k1 scalar | `0x5343414c` | `SCAL` |
+| BPPP point pair | `0x50414952` | `PAIR` |
+| Byte string | `0x42595445` | `BYTE` |
+| `u64` | `0x55363420` | `U64 ` |
+| Challenge request | `0x4348414c` | `CHAL` |
+
+Candidate item encodings are:
 
 - A BPPP point pair absorbs a header whose auxiliary value is the canonical
   two-bit parity byte, followed by the two coordinate-field x values. An all
@@ -115,9 +126,14 @@ counter, or canonical encoding flag. Candidate item encodings are:
   extended with message bytes; the explicit byte length distinguishes it.
 - A `u64` can be carried entirely in the auxiliary part of a `u64` header.
 
-These exact type constants still need to be frozen with the first complete
-transcript implementation. They must not become accepted wire behavior before
-that review.
+The canonical relation builder implements these headers and the typed duplex
+operations. Its probe covers a field element, scalar, point pair, 33-byte
+string, `u64`, and challenge request. Seven permutations plus nine private
+allocations use 1,857 gates and produce a 1,151-byte standalone backend proof.
+Native and constrained outputs agree; changed witnesses and outputs reject.
+Item type, byte length, item boundary, point parity, and challenge index all
+change the squeeze. This remains candidate behavior and must not become an
+accepted wire format before the complete migration review.
 
 To derive a challenge, clone the current sponge, absorb a suite-specific
 challenge header with the round index in `auxiliary`, then append field padding

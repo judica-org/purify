@@ -277,6 +277,51 @@ void test_setup_and_recovery(TestContext& ctx) {
                        construction_accumulator->anchors().basis(),
                        *parsed_construction_root, secp.get()),
               "final MSM discharges the parsed construction root");
+
+    auto false_setup_bytes = *encoded_proof;
+    std::array<unsigned char, 32> false_terminal_n_bytes{};
+    std::copy_n(false_setup_bytes.end() - 64,
+                false_terminal_n_bytes.size(),
+                false_terminal_n_bytes.begin());
+    auto false_terminal_n =
+        FieldElement::try_from_bytes32(false_terminal_n_bytes);
+    expect_ok(ctx, false_terminal_n,
+              "setup terminal norm scalar is canonical");
+    if (!false_terminal_n) return;
+    false_terminal_n_bytes =
+        (*false_terminal_n + FieldElement::one()).to_bytes_be();
+    std::copy(false_terminal_n_bytes.begin(),
+              false_terminal_n_bytes.end(),
+              false_setup_bytes.end() - 64);
+    auto false_setup =
+        purify::accountable::RecoveryRootSetupProof::deserialize(
+            false_setup_bytes, secp.get());
+    expect_ok(ctx, false_setup,
+              "changed setup inner proof remains canonical");
+    if (!false_setup) return;
+    auto false_setup_prepared = setup_accumulator->prepare(
+        *bound_roster, root->public_key, *false_setup, secp.get());
+    expect_ok(ctx, false_setup_prepared,
+              "changed setup proof remains a pending obligation");
+    if (!false_setup_prepared) return;
+    auto false_setup_reduction =
+        purify::bppp::accumulation::prove_norm_reduction(
+            setup_accumulator->basis(), *false_setup_prepared,
+            secp.get());
+    expect_ok(ctx, false_setup_reduction,
+              "changed setup proof has a coefficient opening");
+    if (!false_setup_reduction) return;
+    auto false_promoted_setup =
+        construction_accumulator->verify_setup_reduction(
+            *bound_roster, root->public_key, *false_setup,
+            *false_setup_reduction, secp.get());
+    expect_ok(ctx, false_promoted_setup,
+              "short verifier keeps the changed setup proof pending");
+    if (!false_promoted_setup) return;
+    ctx.expect(!purify::bppp::accumulation::decide(
+                   construction_accumulator->anchors().basis(),
+                   *false_promoted_setup, secp.get()),
+               "basis promotion preserves a false setup obligation");
     auto changed_encoding = *encoded_proof;
     changed_encoding[0] ^= 1;
     expect_error(ctx,

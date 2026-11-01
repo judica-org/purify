@@ -131,6 +131,14 @@ verifier must discharge it with `decide()`. The present concrete target is:
 69 + 192*N + 545 + size(final_parent_proof)
 ```
 
+The canonical envelope now implements that concatenation exactly, with no
+additional length or wrapper fields. The payload entry count determines the
+`69 + 192*N` prefix, the receipt version fixes the 545-byte root, and all
+remaining bytes are the parent proof. Parsing validates payload and root-claim
+syntax and bounds the proof transport; it is not receipt acceptance. The
+purpose parent verifier must bind the exact envelope and the native verifier
+must still decide the parsed root.
+
 The native path now prepares the exact 1,007-byte setup proof on its fixed
 8,192-point basis, verifies its coefficient-opening reduction, and promotes
 the still-pending obligation into the exact prefix of the construction basis.

@@ -127,10 +127,10 @@ Published escrow cannot be revoked cryptographically by leaving a coalition.
 
 ## Size target
 
-The legacy V3 setup record is 1,007 bytes, alongside a 64-byte public
+The V4 setup record is 1,007 bytes, alongside a 64-byte public
 recipient, for 1,071 bytes when the coalition point is already registered.
 Each fixed anchor-escrow record is 1,265 bytes: one version byte, a
-192-byte ciphertext and a 1,072-byte proof payload. These are comparison
+192-byte ciphertext and a 1,072-byte V4 proof payload. These are comparison
 sizes, not V4 parent measurements. The superseded initial goal assumed a final
 proof could replace every setup and escrow proof while retaining only the
 ciphertexts:
@@ -140,11 +140,11 @@ ciphertexts:
 ```
 
 Here `N` counts independently encrypted recovery roots, not necessarily
-anchors. The existing pre-Nova payload codec is `69 + 192*N` bytes: one version
-byte, the 64-byte recovery root, a four-byte entry count, and the ciphertexts.
-It does not carry the per-anchor V4 precommitment needed to derive the expected
-coefficient commitment and anchored offset, so it is not the selected receipt
-codec.
+anchors. The version-2 payload codec is `69 + 224*N` bytes: one version byte,
+the 64-byte recovery root, a four-byte entry count, and one 224-byte entry per
+anchor. Each entry appends the validated V4 circuit precommitment needed to
+derive the expected coefficient commitment and anchored offset to its
+ciphertext.
 
 Registry resolution is historical and one-to-one: a recovery root cannot be
 reassigned after publication, and one setup-record digest cannot alias another
@@ -173,9 +173,11 @@ Compressed Nova already serializes its complete final state and returns it only
 after successful verification. The new receipt therefore does not duplicate a
 545-byte root outside the proof. It converts the verified state root into the
 native codec and discharges it with `decide()`. At 100 anchors, the non-proof
-portion is 22,469 bytes. The new envelope and canonical Nova codec are not
-implemented consensus formats yet. The existing `69 + 192*N` envelope requires
-a new version rather than a silent reinterpretation.
+portion is 22,469 bytes. The canonical Nova envelope is not an implemented
+consensus format yet. The transitional envelope still appends the obsolete
+545-byte root and an opaque parent proof to the version-2 payload; a later
+version removes that duplicated root only when Nova verification returns the
+authenticated final state.
 
 The typed native setup path reconstructs the exact setup record, verifies its
 V4 reduction, promotes the pending claim to the construction basis,

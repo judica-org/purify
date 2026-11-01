@@ -65,7 +65,8 @@ ConstructionReceiptAssembly::verify_anchor_reduction(
         auto pending,
         accumulator.verify_anchor_reduction(
             setup_, roster, resolved.anchor_root,
-            resolved.context_digest, record, reduction,
+            resolved.context_digest, record,
+            payload_.entries()[index].circuit_precommitment, reduction,
             secp_context, cache),
         "construction_assembly:anchor_reduction");
     anchor_claims_[index] = pending;

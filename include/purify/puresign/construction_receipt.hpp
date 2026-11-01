@@ -46,9 +46,10 @@ private:
     ResolvedConstructionSetupDigestBytes digest_{};
 };
 
-/** @brief One ordered anchor ciphertext in a construction receipt. */
+/** @brief One ordered anchor ciphertext and its exact V4 precommitment. */
 struct ConstructionReceiptEntry {
     AnchorEscrowCiphertext ciphertext{};
+    bppp::ScalarBytes circuit_precommitment{};
 };
 
 /**
@@ -63,9 +64,12 @@ struct ConstructionReceiptEntry {
  */
 class ConstructionReceiptPayload {
 public:
-    static constexpr unsigned char kSerializationVersion = 1;
+    static constexpr unsigned char kSerializationVersion = 2;
     static constexpr std::size_t kFixedHeaderSize = 1 + 64 + 4;
-    static constexpr std::size_t kEntrySize = 192;
+    static constexpr std::size_t kEntrySize =
+        AnchorEscrowCiphertext::kSerializedSize +
+        bppp::ScalarBytes{}.size();
+    static_assert(kEntrySize == 224);
 
     [[nodiscard]] static Result<ConstructionReceiptPayload> create(
         UInt512 recovery_root,

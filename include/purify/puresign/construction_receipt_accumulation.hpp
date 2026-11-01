@@ -101,6 +101,7 @@ public:
         const UInt512& advertised_anchor_root,
         const AnchorEscrowContextDigest& context_digest,
         const AnchorEscrowRecord& record,
+        const bppp::ScalarBytes& expected_circuit_precommitment,
         const bppp::accumulation::AlgebraicNormReductionProof& reduction,
         purify_secp_context* secp_context,
         bppp::ExperimentalCircuitBackend* cache = nullptr) const;

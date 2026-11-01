@@ -19,7 +19,7 @@ namespace purify::accountable {
 namespace {
 
 const TaggedHash kConstructionReceiptStatementHash(
-    "Purify/Accountable/ConstructionReceiptStatement/v1");
+    "Purify/Accountable/ConstructionReceiptStatement/v2");
 
 bool same_roster(const NonceHostBoundSigningRoster& left,
                  const NonceHostBoundSigningRoster& right) {
@@ -76,6 +76,20 @@ Status validate_ciphertext(const AnchorEscrowCiphertext& ciphertext) {
     return {};
 }
 
+Status validate_circuit_precommitment(
+    const bppp::ScalarBytes& circuit_precommitment) {
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& scalar,
+        FieldElement::try_from_bytes32(circuit_precommitment),
+        "construction_receipt:circuit_precommitment");
+    if (scalar.is_zero()) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "construction_receipt:circuit_precommitment_zero");
+    }
+    return {};
+}
+
 Status validate_entries(
     std::span<const ConstructionReceiptEntry> entries) {
     if (entries.empty()) {
@@ -89,6 +103,10 @@ Status validate_entries(
     for (const ConstructionReceiptEntry& entry : entries) {
         PURIFY_RETURN_IF_ERROR(validate_ciphertext(entry.ciphertext),
                                "construction_receipt:ciphertext");
+        PURIFY_RETURN_IF_ERROR(
+            validate_circuit_precommitment(
+                entry.circuit_precommitment),
+            "construction_receipt:circuit_precommitment");
     }
     return {};
 }
@@ -196,6 +214,7 @@ Bytes ConstructionReceiptPayload::serialize() const {
     append_u32_be(encoded, static_cast<std::uint32_t>(entries_.size()));
     for (const ConstructionReceiptEntry& entry : entries_) {
         append_ciphertext(encoded, entry.ciphertext);
+        append_array(encoded, entry.circuit_precommitment);
     }
     assert(encoded.size() == serialized_size());
     return encoded;
@@ -246,6 +265,15 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::deserialize(
                                 parse_ciphertext(encoded_ciphertext),
                                 "construction_receipt:ciphertext");
         offset += AnchorEscrowCiphertext::kSerializedSize;
+        std::copy_n(
+            encoded.begin() + offset,
+            entry.circuit_precommitment.size(),
+            entry.circuit_precommitment.begin());
+        offset += entry.circuit_precommitment.size();
+        PURIFY_RETURN_IF_ERROR(
+            validate_circuit_precommitment(
+                entry.circuit_precommitment),
+            "construction_receipt:circuit_precommitment");
         entries.push_back(std::move(entry));
     }
     assert(offset == encoded.size());
@@ -340,6 +368,7 @@ ConstructionReceiptAccumulator::verify_anchor_reduction(
     const UInt512& advertised_anchor_root,
     const AnchorEscrowContextDigest& context_digest,
     const AnchorEscrowRecord& record,
+    const bppp::ScalarBytes& expected_circuit_precommitment,
     const bppp::accumulation::AlgebraicNormReductionProof& reduction,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) const {
@@ -354,6 +383,11 @@ ConstructionReceiptAccumulator::verify_anchor_reduction(
         anchors_.prepare(roster, advertised_anchor_root,
                          context_digest, record, secp_context, cache),
         "construction_accumulation:prepare_anchor");
+    if (prepared.precommitment() != expected_circuit_precommitment) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "construction_accumulation:anchor_precommitment");
+    }
     return bppp::accumulation::verify_algebraic_norm_reduction(
         anchors_.basis(), prepared.norm(), reduction, secp_context);
 }

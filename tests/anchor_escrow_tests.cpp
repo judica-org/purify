@@ -269,7 +269,8 @@ void test_anchor_escrow(TestContext& ctx) {
               "exact setup reduction promotes to the anchor basis");
     if (!promoted_setup) return;
     std::vector<purify::accountable::ConstructionReceiptEntry>
-        receipt_entries{{parsed->ciphertext()}};
+        receipt_entries{{parsed->ciphertext(),
+                         prepared->precommitment()}};
     auto receipt_payload =
         purify::accountable::ConstructionReceiptPayload::create(
             fixture->roster.recovery_root(),
@@ -296,6 +297,54 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, expected_statement,
               "typed assembly statement digest creates");
     if (!expected_statement) return;
+
+    auto mismatched_circuit_precommitment =
+        FieldElement::one().to_bytes_be();
+    if (mismatched_circuit_precommitment ==
+        prepared->precommitment()) {
+        mismatched_circuit_precommitment =
+            FieldElement::from_u64(2).to_bytes_be();
+    }
+    expect_error(
+        ctx,
+        construction_accumulator->verify_anchor_reduction(
+            *promoted_setup, fixture->roster, anchor->public_key, context,
+            *parsed, mismatched_circuit_precommitment, *reduction,
+            secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "construction rejects a substituted circuit precommitment");
+    auto mismatched_setup =
+        construction_accumulator->verify_setup_reduction(
+            fixture->roster, fixture->roster.recovery_root(),
+            fixture->setup_proof, *setup_reduction, secp.get());
+    expect_ok(ctx, mismatched_setup,
+              "mismatch assembly setup promotes");
+    if (!mismatched_setup) return;
+    std::vector<purify::accountable::ConstructionReceiptEntry>
+        mismatched_entries{{parsed->ciphertext(),
+                            mismatched_circuit_precommitment}};
+    auto mismatched_payload =
+        purify::accountable::ConstructionReceiptPayload::create(
+            fixture->roster.recovery_root(),
+            std::move(mismatched_entries));
+    expect_ok(ctx, mismatched_payload,
+              "mismatched precommitment payload remains canonical");
+    if (!mismatched_payload) return;
+    auto mismatched_assembly =
+        purify::accountable::ConstructionReceiptAssembly::create(
+            std::move(*mismatched_setup),
+            std::move(*mismatched_payload), *setup_digest, {resolved});
+    expect_ok(ctx, mismatched_assembly,
+              "mismatched precommitment assembly constructs");
+    if (!mismatched_assembly) return;
+    expect_error(
+        ctx,
+        mismatched_assembly->verify_anchor_reduction(
+            0, *construction_accumulator, fixture->roster, *parsed,
+            *reduction, secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "assembly passes its exact circuit precommitment to verification");
+
     auto assembly =
         purify::accountable::ConstructionReceiptAssembly::create(
             std::move(*promoted_setup), std::move(*receipt_payload),
@@ -497,7 +546,9 @@ void test_anchor_escrow(TestContext& ctx) {
     ctx.expect(
         !construction_accumulator->verify_anchor_reduction(
             assembly->setup(), fixture->roster, anchor->public_key,
-            changed_context, *record, *reduction, secp.get()),
+            changed_context, *record,
+            prepared->precommitment(),
+            *reduction, secp.get()),
         "construction leaf authenticates the exact anchor statement");
     expect_error(
         ctx,
@@ -729,7 +780,9 @@ void test_anchor_escrow(TestContext& ctx) {
         construction_accumulator->verify_anchor_reduction(
             assembly->setup(), other_fixture->roster,
             anchor->public_key,
-            context, *parsed, *reduction, secp.get()),
+            context, *parsed, prepared->precommitment(),
+            *reduction,
+            secp.get()),
         purify::ErrorCode::BindingMismatch,
         "one construction cannot mix setup and anchor rosters");
     expect_rejected(

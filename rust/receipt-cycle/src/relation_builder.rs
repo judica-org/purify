@@ -1,6 +1,6 @@
 //! Canonical circuit and assignment construction for parent relations.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use bulletproofs_cycle::Cycle;
 use ff::Field;
@@ -123,12 +123,17 @@ impl StateVariable {
 // The recursive backend consumes this transport in the next integration
 // patch; the candidate recurrence is intentionally not an acceptance API.
 #[allow(dead_code)]
-pub(crate) struct StatefulRelation {
+pub(crate) struct RelationShape {
     pub(crate) circuit: Circuit,
-    pub(crate) assignment: Assignment,
     pub(crate) operations: Vec<GateOperationShape>,
     pub(crate) inputs: Vec<StateWire>,
     pub(crate) outputs: Vec<StateWire>,
+}
+
+#[allow(dead_code)]
+pub(crate) struct StatefulRelation {
+    pub(crate) shape: Arc<RelationShape>,
+    pub(crate) assignment: Assignment,
 }
 
 impl Builder {
@@ -248,11 +253,13 @@ impl Builder {
         let output_wires = outputs.iter().map(|state| state.wire).collect();
         let (circuit, assignment, operations) = self.finish_structured()?;
         Ok(StatefulRelation {
-            circuit,
+            shape: Arc::new(RelationShape {
+                circuit,
+                operations,
+                inputs: input_wires,
+                outputs: output_wires,
+            }),
             assignment,
-            operations,
-            inputs: input_wires,
-            outputs: output_wires,
         })
     }
 }
@@ -536,14 +543,17 @@ mod tests {
 
         let (builder, _, _) = product_relation(3, false);
         let (circuit, assignment) = builder.finish().expect("canonical relation");
-        assert_eq!(relation.inputs, input_wires);
-        assert_eq!(relation.outputs, output_wires);
-        assert_eq!(relation.circuit, Circuit::parse(&circuit).expect("circuit"));
+        assert_eq!(relation.shape.inputs, input_wires);
+        assert_eq!(relation.shape.outputs, output_wires);
+        assert_eq!(
+            relation.shape.circuit,
+            Circuit::parse(&circuit).expect("circuit")
+        );
         assert_eq!(
             relation.assignment,
             Assignment::parse(&assignment).expect("assignment")
         );
-        assert_eq!(encode_circuit(&relation.circuit), circuit);
+        assert_eq!(encode_circuit(&relation.shape.circuit), circuit);
         assert_eq!(encode_assignment(&relation.assignment), assignment);
     }
 
@@ -552,19 +562,19 @@ mod tests {
         let first = finish_product(3, false);
         let second = finish_product(9, false);
 
-        assert_eq!(first.operations, second.operations);
-        assert_eq!(first.circuit, second.circuit);
+        assert_eq!(first.shape.operations, second.shape.operations);
+        assert_eq!(first.shape.circuit, second.shape.circuit);
         assert_ne!(first.assignment, second.assignment);
         assert_eq!(
-            encode_circuit(&first.circuit),
-            encode_circuit(&second.circuit)
+            encode_circuit(&first.shape.circuit),
+            encode_circuit(&second.shape.circuit)
         );
         assert_ne!(
             encode_assignment(&first.assignment),
             encode_assignment(&second.assignment)
         );
         assert!(matches!(
-            first.operations.as_slice(),
+            first.shape.operations.as_slice(),
             [
                 GateOperationShape::AllocatedValue { unit_constraint: 0 },
                 GateOperationShape::Product {
@@ -577,8 +587,11 @@ mod tests {
 
         let true_relation = finish_boolean(true);
         let false_relation = finish_boolean(false);
-        assert_eq!(true_relation.operations, false_relation.operations);
-        assert_eq!(true_relation.circuit, false_relation.circuit);
+        assert_eq!(
+            true_relation.shape.operations,
+            false_relation.shape.operations
+        );
+        assert_eq!(true_relation.shape.circuit, false_relation.shape.circuit);
         assert_ne!(true_relation.assignment, false_relation.assignment);
     }
 
@@ -587,9 +600,12 @@ mod tests {
         let normal = finish_product(3, false);
         let swapped = finish_product(3, true);
 
-        assert_eq!(normal.operations.len(), swapped.operations.len());
-        assert_eq!(normal.operations, swapped.operations);
-        assert_ne!(normal.circuit, swapped.circuit);
+        assert_eq!(
+            normal.shape.operations.len(),
+            swapped.shape.operations.len()
+        );
+        assert_eq!(normal.shape.operations, swapped.shape.operations);
+        assert_ne!(normal.shape.circuit, swapped.shape.circuit);
     }
 
     #[test]

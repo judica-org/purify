@@ -413,35 +413,41 @@ fn recurrence_matrix_binds_state_order_and_anchor_substitution() {
     let second = fixture(0x32, 2, twice, generator, twice);
 
     let first_relation = build_fixture(&first);
-    assert_eq!(first_relation.inputs.len(), ANCHOR_RECURRENCE_STATE_ARITY);
-    assert_eq!(first_relation.outputs.len(), ANCHOR_RECURRENCE_STATE_ARITY);
+    assert_eq!(
+        first_relation.shape.inputs.len(),
+        ANCHOR_RECURRENCE_STATE_ARITY
+    );
+    assert_eq!(
+        first_relation.shape.outputs.len(),
+        ANCHOR_RECURRENCE_STATE_ARITY
+    );
     assert!(structured_relation_satisfied(
-        &first_relation.circuit,
+        &first_relation.shape.circuit,
         &first_relation.assignment
     ));
     for wire in [
-        first_relation.inputs[0],
-        first_relation.inputs[18],
-        first_relation.inputs[19],
-        first_relation.outputs[18],
+        first_relation.shape.inputs[0],
+        first_relation.shape.inputs[18],
+        first_relation.shape.inputs[19],
+        first_relation.shape.outputs[18],
     ] {
         let changed = change_state_wire(&first_relation.assignment, wire);
         assert!(!structured_relation_satisfied(
-            &first_relation.circuit,
+            &first_relation.shape.circuit,
             &changed
         ));
     }
 
     let second_relation = build_fixture(&second);
-    assert_eq!(first_relation.inputs, second_relation.inputs);
-    assert_eq!(first_relation.outputs, second_relation.outputs);
-    assert_eq!(first_relation.circuit, second_relation.circuit);
+    assert_eq!(first_relation.shape.inputs, second_relation.shape.inputs);
+    assert_eq!(first_relation.shape.outputs, second_relation.shape.outputs);
+    assert_eq!(first_relation.shape.circuit, second_relation.shape.circuit);
     assert_ne!(first_relation.assignment, second_relation.assignment);
     assert!(structured_relation_satisfied(
-        &second_relation.circuit,
+        &second_relation.shape.circuit,
         &second_relation.assignment
     ));
-    let expected_circuit_digest = circuit_digest(&second_relation.circuit);
+    let expected_circuit_digest = circuit_digest(&second_relation.shape.circuit);
     drop(first_relation);
     drop(second_relation);
 
@@ -451,11 +457,11 @@ fn recurrence_matrix_binds_state_order_and_anchor_substitution() {
     };
     let substituted_relation = build_fixture(&substituted);
     assert_eq!(
-        circuit_digest(&substituted_relation.circuit),
+        circuit_digest(&substituted_relation.shape.circuit),
         expected_circuit_digest
     );
     assert!(!structured_relation_satisfied(
-        &substituted_relation.circuit,
+        &substituted_relation.shape.circuit,
         &substituted_relation.assignment
     ));
     drop(substituted_relation);
@@ -468,11 +474,11 @@ fn recurrence_matrix_binds_state_order_and_anchor_substitution() {
     };
     let wrong_order_relation = build_fixture(&wrong_order);
     assert_eq!(
-        circuit_digest(&wrong_order_relation.circuit),
+        circuit_digest(&wrong_order_relation.shape.circuit),
         expected_circuit_digest
     );
     assert!(!structured_relation_satisfied(
-        &wrong_order_relation.circuit,
+        &wrong_order_relation.shape.circuit,
         &wrong_order_relation.assignment
     ));
     drop(wrong_order_relation);

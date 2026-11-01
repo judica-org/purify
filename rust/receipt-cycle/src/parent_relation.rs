@@ -474,6 +474,19 @@ fn select_point(
     }
 }
 
+fn constant_identity_point() -> SecpPoint {
+    SecpPoint {
+        x: Expression::constant(Scalar::ZERO),
+        y: Expression::constant(Scalar::ZERO),
+        identity: Expression::constant(Scalar::ONE),
+        witness: PointValue {
+            x: Scalar::ZERO,
+            y: Scalar::ZERO,
+            identity: true,
+        },
+    }
+}
+
 pub(crate) fn scale_point(
     builder: &mut Builder,
     point: &SecpPoint,
@@ -498,7 +511,8 @@ pub(crate) fn scale_point(
     accumulator
 }
 
-fn msm_points(
+#[cfg(test)]
+fn msm_points_bitwise(
     builder: &mut Builder,
     points: &[SecpPoint],
     scalars: &[SecpScalarVar],
@@ -919,6 +933,130 @@ fn install_candidate_step(
     })
 }
 
+fn precompute_window(
+    builder: &mut Builder,
+    point: &SecpPoint,
+    window_bits: usize,
+) -> Vec<SecpPoint> {
+    let table_size = 1usize << window_bits;
+    let mut table = Vec::with_capacity(table_size);
+    table.push(constant_identity_point());
+    table.push(point.clone());
+    while table.len() != table_size {
+        let next = add_points(builder, table.last().expect("nonempty table"), point);
+        // The cofactor-one group has no nontrivial order below this table.
+        // Pinning the identity class lets the mux derive its identity bit
+        // without selecting every table identity through extra gates.
+        builder.constrain_equal(&next.identity, &point.identity);
+        table.push(next);
+    }
+    table
+}
+
+fn select_window_expression(
+    builder: &mut Builder,
+    bits: &[Expression],
+    values: impl IntoIterator<Item = Expression>,
+) -> Expression {
+    let mut level = values.into_iter().collect::<Vec<_>>();
+    for bit in bits {
+        let (pairs, remainder) = level.as_chunks::<2>();
+        assert!(remainder.is_empty());
+        let next = pairs
+            .iter()
+            .map(|pair| {
+                let difference = pair[1].clone().sub(&pair[0]);
+                pair[0].clone().add(&builder.multiply(bit, &difference))
+            })
+            .collect();
+        level = next;
+    }
+    assert_eq!(level.len(), 1);
+    level.pop().expect("one selected expression")
+}
+
+fn select_window_point(
+    builder: &mut Builder,
+    bits: &[Expression],
+    table: &[SecpPoint],
+    source_identity: &Expression,
+) -> SecpPoint {
+    assert_eq!(table.len(), 1usize << bits.len());
+    let x = select_window_expression(builder, bits, table.iter().map(|point| point.x.clone()));
+    let y = select_window_expression(builder, bits, table.iter().map(|point| point.y.clone()));
+    let one = Expression::constant(Scalar::ONE);
+    let mut digit_is_zero = one.clone().sub(&bits[0]);
+    for bit in &bits[1..] {
+        digit_is_zero = builder.multiply(&digit_is_zero, &one.clone().sub(bit));
+    }
+    let both = builder.multiply(source_identity, &digit_is_zero);
+    let identity = source_identity.clone().add(&digit_is_zero).sub(&both);
+    let digit = bits.iter().enumerate().fold(0usize, |value, (index, bit)| {
+        let selected = if bit.value() == Scalar::ONE { 1 } else { 0 };
+        value | (selected << index)
+    });
+    SecpPoint {
+        x,
+        y,
+        identity,
+        witness: table[digit].witness,
+    }
+}
+
+fn msm_points_windowed<const WINDOW_BITS: usize>(
+    builder: &mut Builder,
+    points: &[SecpPoint],
+    scalars: &[SecpScalarVar],
+) -> Result<SecpPoint, ReceiptCycleError> {
+    if WINDOW_BITS == 0 || WINDOW_BITS > 4 {
+        return Err(ReceiptCycleError::Malformed("secp MSM window width"));
+    }
+    if points.is_empty() || points.len() != scalars.len() {
+        return Err(ReceiptCycleError::Malformed("secp MSM shape"));
+    }
+    let bit_count = scalars[0].bits.len();
+    if bit_count == 0 || scalars.iter().any(|scalar| scalar.bits.len() != bit_count) {
+        return Err(ReceiptCycleError::Malformed("secp MSM scalar width"));
+    }
+
+    let tables = points
+        .iter()
+        .map(|point| precompute_window(builder, point, WINDOW_BITS))
+        .collect::<Vec<_>>();
+    let window_count = bit_count.div_ceil(WINDOW_BITS);
+    let mut accumulator = constant_identity_point();
+    for window in (0..window_count).rev() {
+        if window + 1 != window_count {
+            for _ in 0..WINDOW_BITS {
+                accumulator = add_points(builder, &accumulator, &accumulator);
+            }
+        }
+        let offset = window * WINDOW_BITS;
+        for ((table, point), scalar) in tables.iter().zip(points).zip(scalars) {
+            let active_bits = WINDOW_BITS.min(bit_count - offset);
+            let bits = (0..active_bits)
+                .map(|index| scalar.bits[offset + index].clone())
+                .collect::<Vec<_>>();
+            let selected = select_window_point(
+                builder,
+                &bits,
+                &table[..1usize << active_bits],
+                &point.identity,
+            );
+            accumulator = add_points(builder, &accumulator, &selected);
+        }
+    }
+    Ok(accumulator)
+}
+
+fn msm_points(
+    builder: &mut Builder,
+    points: &[SecpPoint],
+    scalars: &[SecpScalarVar],
+) -> Result<SecpPoint, ReceiptCycleError> {
+    msm_points_windowed::<3>(builder, points, scalars)
+}
+
 /// Builds the canonical compressed-point relation used by parent transcripts.
 ///
 /// The private y coordinate must open a non-identity secp256k1 point and its
@@ -993,11 +1131,16 @@ pub fn build_secp_scalar_multiplication_relation(
 /// Builds one shared variable-base secp256k1 MSM relation.
 ///
 /// The public term count fixes the circuit shape. All scalars are canonical
-/// modulo the secp256k1 group order. One MSB-first accumulator shares the 255
-/// doublings across every term instead of repeating them per scalar.
-pub fn build_secp_msm_relation(
+/// modulo the secp256k1 group order. One MSB-first windowed accumulator shares
+/// every inter-window doubling across all terms.
+fn build_secp_msm_relation_with(
     terms: &[(SecpAffineWitness, SecpScalarWitness)],
     expected: SecpAffineWitness,
+    msm: impl FnOnce(
+        &mut Builder,
+        &[SecpPoint],
+        &[SecpScalarVar],
+    ) -> Result<SecpPoint, ReceiptCycleError>,
 ) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
     const MAX_PARENT_MSM_TERMS: usize = 64;
     if terms.is_empty() || terms.len() > MAX_PARENT_MSM_TERMS {
@@ -1012,7 +1155,7 @@ pub fn build_secp_msm_relation(
         scalars.push(allocate_canonical_scalar(&mut builder, scalar)?);
     }
     let expected = allocate_point(&mut builder, parse_point(expected)?);
-    let result = msm_points(&mut builder, &points, &scalars)?;
+    let result = msm(&mut builder, &points, &scalars)?;
     builder.constrain_equal(&result.x, &expected.x);
     builder.constrain_equal(&result.y, &expected.y);
     builder.constrain_equal(&result.identity, &expected.identity);
@@ -1066,6 +1209,14 @@ fn derive_candidate_root_witness(
             .map(|factor| scalar_witness(factor.integer()))
             .collect::<Result<_, _>>()?,
     })
+}
+
+/// Builds one shared three-bit-window variable-base secp256k1 MSM relation.
+pub fn build_secp_msm_relation(
+    terms: &[(SecpAffineWitness, SecpScalarWitness)],
+    expected: SecpAffineWitness,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    build_secp_msm_relation_with(terms, expected, msm_points)
 }
 
 #[cfg(test)]
@@ -1122,6 +1273,14 @@ mod tests {
             y: Secq256k1Cycle::scalar_to_canonical(&-value.y),
             identity: false,
         }
+    }
+
+    fn maximum_scalar() -> SecpScalarWitness {
+        SecpScalarWitness::from_bytes_be([
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+            0xd0, 0x36, 0x41, 0x40,
+        ])
     }
 
     fn compressed(point: SecpAffineWitness, odd: bool) -> SecpCompressedWitness {
@@ -1232,6 +1391,33 @@ mod tests {
         let root = derive_candidate_root_witness(basis_digest, opening_base, &claims, &proof)
             .expect("candidate root witness");
         (basis_digest, opening_base, claims, proof, root)
+    }
+
+    fn prove_bitwise_msm_relation(
+        terms: &[(SecpAffineWitness, SecpScalarWitness)],
+        expected: SecpAffineWitness,
+    ) -> Result<(Vec<u8>, usize, usize), ReceiptCycleError> {
+        let (circuit, assignment) =
+            build_secp_msm_relation_with(terms, expected, msm_points_bitwise)?;
+        let statement = b"bitwise secp MSM comparison";
+        let proof = prove(&circuit, &assignment, statement, [0x83; 32])?;
+        verify(&circuit, statement, &proof)?;
+        assert_eq!(proof.len(), proof_wire_len(&circuit)?);
+        let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("gate count")) as usize;
+        Ok((circuit, gates, proof.len()))
+    }
+
+    fn window_gate_count<const WINDOW_BITS: usize>(term_count: usize) -> usize {
+        let terms = vec![(generator(), SecpScalarWitness::from_u64(0)); term_count];
+        let (circuit, _) = build_secp_msm_relation_with(
+            &terms,
+            SecpAffineWitness::identity(),
+            msm_points_windowed::<WINDOW_BITS>,
+        )
+        .expect("windowed circuit");
+        crate::Circuit::parse(&circuit)
+            .expect("windowed circuit parse")
+            .gate_count
     }
 
     #[test]
@@ -1382,12 +1568,8 @@ mod tests {
             twice_generator(),
         )
         .expect("doubling scalar");
-        let maximum = SecpScalarWitness::from_bytes_be([
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
-            0xd0, 0x36, 0x41, 0x40,
-        ]);
-        prove_scale_relation(generator(), maximum, negate(generator())).expect("order minus one");
+        prove_scale_relation(generator(), maximum_scalar(), negate(generator()))
+            .expect("order minus one");
         eprintln!("receipt_secp_scalar_mul_gates={gates} proof_bytes={proof_bytes}");
         assert_eq!(gates, 23_280);
         assert_eq!(proof_bytes, 1_415);
@@ -1454,8 +1636,42 @@ mod tests {
         prove_msm_relation(&zero_terms, SecpAffineWitness::identity()).expect("shared zero");
 
         eprintln!("receipt_secp_two_term_msm_gates={gates} proof_bytes={proof_bytes}");
-        assert_eq!(gates, 35_577);
-        assert_eq!(proof_bytes, 1_481);
+        assert_eq!(gates, 22_824);
+        assert_eq!(proof_bytes, 1_415);
+    }
+
+    #[test]
+    fn windowed_msm_matches_bitwise_at_group_boundaries() {
+        let generator = generator();
+        let terms = [
+            (generator, maximum_scalar()),
+            (SecpAffineWitness::identity(), maximum_scalar()),
+            (generator, SecpScalarWitness::from_u64(0)),
+            (negate(generator), SecpScalarWitness::from_u64(1)),
+        ];
+        let expected = negate(twice_generator());
+        let (_, windowed_gates, _) =
+            prove_msm_relation(&terms, expected).expect("windowed boundary MSM");
+        let (_, bitwise_gates, _) =
+            prove_bitwise_msm_relation(&terms, expected).expect("bitwise boundary MSM");
+        assert!(windowed_gates < bitwise_gates);
+    }
+
+    #[test]
+    #[ignore = "large circuit cost measurement"]
+    fn windowed_msm_gate_budget() {
+        let two_bit_32 = window_gate_count::<2>(32);
+        let three_bit_32 = window_gate_count::<3>(32);
+        let four_bit_32 = window_gate_count::<4>(32);
+        let three_bit_64 = window_gate_count::<3>(64);
+        eprintln!(
+            "receipt_secp_window_msm_gates_32=w2:{},w3:{},w4:{} w3_64:{}",
+            two_bit_32, three_bit_32, four_bit_32, three_bit_64
+        );
+        assert_eq!(two_bit_32, 239_251);
+        assert_eq!(three_bit_32, 200_574);
+        assert_eq!(four_bit_32, 204_477);
+        assert_eq!(three_bit_64, 390_174);
     }
 
     #[test]

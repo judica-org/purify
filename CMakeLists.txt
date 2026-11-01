@@ -536,6 +536,7 @@ if(PURIFY_BUILD_TESTS)
         tests/companion_scalar_escrow_helpers.cpp
         tests/construction_receipt_helpers.cpp
         tests/construction_receipt_tests.cpp
+        tests/construction_receipt_codec_tests.cpp
         tests/receipt_sha256_tests.cpp
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
@@ -579,6 +580,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(anchor_escrow)
     purify_add_cpp_suite_test(companion_scalar_escrow)
     purify_add_cpp_suite_test(construction_receipt)
+    purify_add_cpp_suite_test(construction_receipt_codec)
     purify_add_cpp_suite_test(receipt_sha256)
 
     # These proof experiments saturate sanitizer runners. Keep their work

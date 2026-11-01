@@ -114,6 +114,32 @@ This is deliberately not an accepted transcript suite: native prover
 integration and cross-suite rejection must land together before the SHA format
 can be replaced.
 
+The candidate parent relation now composes those foundations through one
+complete public accumulation transition. It fixes the basis digest and claim
+shape in the regenerated circuit, absorbs every ordered claim point and compact
+polynomial, selects `beta`, constrains the batched claim MSM, selects `x`, and
+constrains the compact polynomial evaluation `y`. It then absorbs a fixed
+opening base, derives every IPA round challenge, checks the complete short MSM
+equation, and binds the resulting folded point, scale, and factors to root-claim
+circuit constants. Identity round points remain valid; the opening base is
+required to be finite. Shapes are capped at 1,024 claims and 24 rounds. The
+claim cap covers the setup plus the required 100-anchor construction while
+bounding host allocation; the round cap follows the current backend limit.
+The one-claim, one-round end-to-end probe uses 140,295 gates and a 1,613-byte
+transparent proof. This is a composition check, not a production 15-round or
+100-anchor size estimate.
+
+This transition uses the separate
+`Purify/BPPP/CandidateAccumStep/v1` Poseidon transcript. It is not compatible
+with the current SHA transcript and is not accepted by native receipt code.
+Most importantly, its opening base is a verifier-supplied circuit constant: the
+relation does not yet prove that this point is the output of the exact
+transcript-bound algebraic hash-to-curve map. Allowing the prover or verifier to
+choose an arbitrary finite point, including a known-discrete-log multiple of a
+basis point, would destroy the opening argument. The candidate type cannot feed
+an acceptance API until that derivation, native transcript migration, child
+reductions, and final decision binding are all composed end to end.
+
 ## Why the final MSM stays native
 
 Directly checking every child's fixed-generator norm equation in the parent

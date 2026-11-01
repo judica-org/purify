@@ -807,6 +807,47 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
     verifier
         .verify_exact(&z0, 1, &z1, &proof)
         .expect("exact compressed native-profile proof");
+
+    if let Some(path) = std::env::var_os("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT") {
+        let path = std::path::PathBuf::from(path);
+        let mut artifact = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create new native-profile verifier artifact");
+        let descriptor = verifier
+            .write_artifact(&mut artifact)
+            .expect("write native-profile verifier artifact");
+        artifact
+            .sync_all()
+            .expect("sync native-profile verifier artifact");
+        let digest = descriptor.digest();
+        let digest_hex = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        eprintln!(
+            "native_profile_nova: artifact path={} bytes={} digest={digest_hex}",
+            path.display(),
+            descriptor.encoded_length(),
+        );
+        drop(artifact);
+        drop(verifier);
+
+        let artifact = std::fs::read(&path).expect("read native-profile verifier artifact");
+        let loaded = crate::nova_session::SelectedDirectNovaVerifier::<
+            ANCHOR_RECURRENCE_STATE_ARITY,
+        >::from_artifact(
+            &artifact,
+            &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+            &descriptor,
+        )
+        .expect("reload native-profile verifier artifact");
+        loaded
+            .verify_exact(&z0, 1, &z1, &proof)
+            .expect("loaded verifier accepts native-profile proof");
+    }
     eprintln!(
         "native_profile_nova: compressed verify complete in {:.3}s; total {:.3}s; proof_bytes={}",
         verify_started.elapsed().as_secs_f64(),

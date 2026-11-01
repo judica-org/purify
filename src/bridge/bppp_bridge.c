@@ -2603,6 +2603,55 @@ int purify_point_add(purify_secp_context* context,
     return ok;
 }
 
+int purify_point_add_allow_infinity(
+    purify_secp_context* context, const unsigned char lhs33[33],
+    const unsigned char rhs33[33], unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_ge lhs_ge, rhs_ge, result_ge;
+    secp256k1_gej lhs_j, rhs_j, result_j;
+    static const unsigned char infinity33[33] = {0};
+    int lhs_infinity;
+    int rhs_infinity;
+    int ok = 0;
+
+    if (ctx == NULL || lhs33 == NULL || rhs33 == NULL || out33 == NULL) {
+        return 0;
+    }
+    purify_bridge_secure_clear(out33, 33);
+    lhs_infinity = purify_bridge_memeq_const(lhs33, infinity33, 33);
+    rhs_infinity = purify_bridge_memeq_const(rhs33, infinity33, 33);
+    if ((!lhs_infinity && !purify_parse_point_as_ge(lhs33, &lhs_ge)) ||
+        (!rhs_infinity && !purify_parse_point_as_ge(rhs33, &rhs_ge))) {
+        goto cleanup;
+    }
+    if (lhs_infinity) {
+        secp256k1_gej_set_infinity(&lhs_j);
+    } else {
+        secp256k1_gej_set_ge(&lhs_j, &lhs_ge);
+    }
+    if (rhs_infinity) {
+        secp256k1_gej_set_infinity(&rhs_j);
+    } else {
+        secp256k1_gej_set_ge(&rhs_j, &rhs_ge);
+    }
+    secp256k1_gej_add_var(&result_j, &lhs_j, &rhs_j, NULL);
+    if (secp256k1_gej_is_infinity(&result_j)) {
+        ok = 1;
+    } else {
+        secp256k1_ge_set_gej(&result_ge, &result_j);
+        ok = purify_serialize_point(out33, &result_ge);
+    }
+
+cleanup:
+    purify_bridge_secure_clear(&lhs_ge, sizeof(lhs_ge));
+    purify_bridge_secure_clear(&rhs_ge, sizeof(rhs_ge));
+    purify_bridge_secure_clear(&result_ge, sizeof(result_ge));
+    purify_bridge_secure_clear(&lhs_j, sizeof(lhs_j));
+    purify_bridge_secure_clear(&rhs_j, sizeof(rhs_j));
+    purify_bridge_secure_clear(&result_j, sizeof(result_j));
+    return ok;
+}
+
 int purify_point_subtract_allow_infinity(
     purify_secp_context* context, const unsigned char lhs33[33],
     const unsigned char rhs33[33], unsigned char out33[33]) {

@@ -99,6 +99,10 @@ int purify_point_add(purify_secp_context* context,
                      const unsigned char lhs33[33], const unsigned char rhs33[33],
                      unsigned char out33[33]);
 
+int purify_point_add_allow_infinity(
+    purify_secp_context* context, const unsigned char lhs33[33],
+    const unsigned char rhs33[33], unsigned char out33[33]);
+
 int purify_point_subtract_allow_infinity(
     purify_secp_context* context, const unsigned char lhs33[33],
     const unsigned char rhs33[33], unsigned char out33[33]);

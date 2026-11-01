@@ -1149,6 +1149,22 @@ Result<PointBytes> point_add(const PointBytes &lhs,
   return out;
 }
 
+Result<PointBytes> point_add_allow_infinity(
+    const PointBytes &lhs, const PointBytes &rhs,
+    purify_secp_context *secp_context) {
+  PointBytes out{};
+  PURIFY_RETURN_IF_ERROR(
+      require_secp_context(secp_context,
+                           "point_add_allow_infinity:secp_context"),
+      "point_add_allow_infinity:secp_context");
+  if (!require_ok(purify_point_add_allow_infinity(
+          secp_context, lhs.data(), rhs.data(), out.data()))) {
+    return unexpected_error(ErrorCode::BackendRejectedInput,
+                            "point_add_allow_infinity:backend");
+  }
+  return out;
+}
+
 Result<PointBytes> point_subtract_allow_infinity(
     const PointBytes &lhs, const PointBytes &rhs,
     purify_secp_context *secp_context) {
@@ -1472,27 +1488,67 @@ validate_public_commitments(std::span<const PointBytes> public_commitments,
   return {};
 }
 
-Result<PointBytes> add_scaled_points(const PointBytes &base_commitment,
-                                     std::span<const PointBytes> points,
-                                     std::span<const FieldElement> scalars,
-                                     purify_secp_context *secp_context) {
+Result<PointBytes> add_scaled_points_allow_infinity(
+    const PointBytes &base_commitment,
+    std::span<const PointBytes> points,
+    std::span<const FieldElement> scalars,
+    purify_secp_context *secp_context) {
   if (points.size() != scalars.size()) {
     return unexpected_error(ErrorCode::SizeMismatch,
-                            "add_scaled_points:size_mismatch");
+                            "add_scaled_points_allow_infinity:size");
   }
-
   PointBytes out = base_commitment;
   for (std::size_t i = 0; i < points.size(); ++i) {
     if (scalars[i].is_zero()) {
       continue;
     }
-    PURIFY_ASSIGN_OR_RETURN(const auto &scaled, point_scale(points[i], scalars[i], secp_context),
-                            "add_scaled_points:scale");
-    PURIFY_ASSIGN_OR_RETURN(const auto &combined, point_add(out, scaled, secp_context),
-                            "add_scaled_points:add");
-    out = combined;
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto &scaled,
+        point_scale(points[i], scalars[i], secp_context),
+        "add_scaled_points_allow_infinity:scale");
+    PURIFY_ASSIGN_OR_RETURN(
+        out, point_add_allow_infinity(out, scaled, secp_context),
+        "add_scaled_points_allow_infinity:add");
   }
   return out;
+}
+
+Result<PointBytes> circuit_anchored_offset_v4(
+    const CircuitNormArgPublicData &public_data,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context) {
+  if (public_commitments.size() !=
+      public_data.public_commitment_coeffs.size()) {
+    return unexpected_error(ErrorCode::SizeMismatch,
+                            "circuit_anchored_offset_v4:public_size");
+  }
+
+  std::vector<PointBytes> points;
+  std::vector<FieldElement> scalars;
+  points.reserve(public_data.plus_shift.size() * 2 +
+                 public_commitments.size() + 1);
+  scalars.reserve(points.capacity());
+  for (std::size_t i = 0; i < public_data.plus_shift.size(); ++i) {
+    points.push_back(public_data.raw_generator_points[2 * i]);
+    scalars.push_back(public_data.plus_shift[i]);
+    points.push_back(public_data.raw_generator_points[2 * i + 1]);
+    scalars.push_back(public_data.minus_shift[i]);
+  }
+  if (!public_data.target.is_zero()) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto target,
+        point_from_scalar_base(public_data.target, secp_context),
+        "circuit_anchored_offset_v4:target");
+    points.push_back(std::move(target));
+    scalars.push_back(FieldElement::one());
+  }
+  for (std::size_t i = 0; i < public_commitments.size(); ++i) {
+    points.push_back(public_commitments[i]);
+    scalars.push_back(
+        public_data.public_commitment_coeffs[i].negate());
+  }
+  return add_scaled_points_allow_infinity(
+      PointBytes{}, points, scalars, secp_context);
 }
 
 Result<PointBytes>
@@ -1500,40 +1556,21 @@ anchor_zk_a_commitment(const PointBytes &a_witness_commitment,
                        const CircuitNormArgPublicData &public_data,
                        std::span<const PointBytes> public_commitments,
                        purify_secp_context *secp_context) {
-  if (public_commitments.size() !=
-      public_data.public_commitment_coeffs.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "anchor_zk_a_commitment:public_commitment_size");
-  }
-
-  std::vector<PointBytes> shift_generators;
-  std::vector<FieldElement> shifts;
-  shift_generators.reserve(public_data.plus_shift.size() * 2);
-  shifts.reserve(public_data.plus_shift.size() * 2);
-  for (std::size_t i = 0; i < public_data.plus_shift.size(); ++i) {
-    shift_generators.push_back(public_data.raw_generator_points[2 * i]);
-    shifts.push_back(public_data.plus_shift[i]);
-    shift_generators.push_back(public_data.raw_generator_points[2 * i + 1]);
-    shifts.push_back(public_data.minus_shift[i]);
-  }
   PURIFY_ASSIGN_OR_RETURN(
-      auto shifted,
-      add_scaled_points(a_witness_commitment, shift_generators, shifts,
-                        secp_context),
-      "anchor_zk_a_commitment:shifts");
+      const auto &offset,
+      circuit_anchored_offset_v4(public_data, public_commitments,
+                                 secp_context),
+      "anchor_zk_a_commitment:offset");
   PURIFY_ASSIGN_OR_RETURN(
-      auto anchored, offset_commitment(shifted, public_data.target, secp_context),
-      "anchor_zk_a_commitment:target");
-  if (public_commitments.empty()) {
-    return anchored;
+      const auto &anchored,
+      point_add_allow_infinity(a_witness_commitment, offset,
+                               secp_context),
+      "anchor_zk_a_commitment:add");
+  if (anchored == PointBytes{}) {
+    return unexpected_error(ErrorCode::BackendRejectedInput,
+                            "anchor_zk_a_commitment:identity");
   }
-
-  std::vector<FieldElement> negated_coeffs;
-  negated_coeffs.reserve(public_data.public_commitment_coeffs.size());
-  for (const FieldElement &coeff : public_data.public_commitment_coeffs) {
-    negated_coeffs.push_back(coeff.negate());
-  }
-  return add_scaled_points(anchored, public_commitments, negated_coeffs, secp_context);
+  return anchored;
 }
 
 Result<PointBytes> coefficient_commitment_v4(

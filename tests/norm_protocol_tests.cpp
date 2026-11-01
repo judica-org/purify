@@ -75,6 +75,36 @@ void check_secret_msm_zero_terms(TestContext& ctx) {
                    secp.get(), base.data(), 1, base_point.data()) != 0,
                "base generator converts to a point");
 
+    PointBytes identity{};
+    PointBytes negative_base = base_point;
+    negative_base[0] = static_cast<unsigned char>(
+        negative_base[0] == 0x02 ? 0x03 : 0x02);
+    PointBytes public_sum{};
+    ctx.expect(
+        purify_point_add_allow_infinity(
+            secp.get(), identity.data(), identity.data(),
+            public_sum.data()) != 0 &&
+            public_sum == identity,
+        "public point addition preserves the identity");
+    ctx.expect(
+        purify_point_add_allow_infinity(
+            secp.get(), identity.data(), base_point.data(),
+            public_sum.data()) != 0 &&
+            public_sum == base_point,
+        "public point addition accepts an identity left operand");
+    ctx.expect(
+        purify_point_add_allow_infinity(
+            secp.get(), base_point.data(), identity.data(),
+            public_sum.data()) != 0 &&
+            public_sum == base_point,
+        "public point addition accepts an identity right operand");
+    ctx.expect(
+        purify_point_add_allow_infinity(
+            secp.get(), base_point.data(), negative_base.data(),
+            public_sum.data()) != 0 &&
+            public_sum == identity,
+        "public point addition encodes cancellation canonically");
+
     PointBytes result{};
     ctx.expect(purify_point_scale(
                    secp.get(), base_point.data(), one.data(), result.data()) != 0

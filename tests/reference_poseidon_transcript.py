@@ -309,6 +309,19 @@ def check_vectors():
         assert [int(words[i], 16) for i in (3, 4)] == ordinary
         assert [int(words[i], 16) for i in (5, 6)] == opening
 
+    bytes32_lines = [
+        line.split() for line in path.read_text(encoding="ascii").splitlines()
+        if line.startswith("bytes32 ")
+    ]
+    assert len(bytes32_lines) == 2
+    for words in bytes32_lines:
+        assert len(words) == 4
+        value = bytes.fromhex(words[1])
+        assert len(value) == 32
+        transcript = Transcript()
+        transcript.append_bytes(value)
+        assert [int(words[i], 16) for i in (2, 3)] == transcript.challenge(0)
+
 
 if __name__ == "__main__":
     check_vectors()

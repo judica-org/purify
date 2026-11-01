@@ -92,6 +92,50 @@ pub(crate) struct BuilderTranscript {
     rate_index: usize,
 }
 
+/// One canonical 32-byte value allocated without placing its contents in the
+/// relation matrix.
+///
+/// Transcript byte strings use 31-byte big-endian field words. Allocating the
+/// original bytes as bits both fixes that encoding and keeps different digest
+/// values in the assignment rather than in constraint coefficients.
+#[derive(Clone)]
+pub(crate) struct ConstrainedBytes32 {
+    words: [Expression; 2],
+}
+
+impl ConstrainedBytes32 {
+    pub(crate) fn allocate(builder: &mut Builder, bytes: [u8; 32]) -> Self {
+        let mut words = Vec::with_capacity(2);
+        for chunk in bytes.chunks(31) {
+            let mut word = Expression::constant(Scalar::ZERO);
+            for &byte in chunk {
+                let mut constrained_byte = Expression::constant(Scalar::ZERO);
+                let mut coefficient = Scalar::ONE;
+                for bit in 0..8 {
+                    let allocated = builder.allocate_boolean(byte & (1 << bit) != 0);
+                    constrained_byte = constrained_byte.add(&allocated.scale(coefficient));
+                    coefficient = coefficient + coefficient;
+                }
+                word = word.scale(Scalar::from(256)).add(&constrained_byte);
+            }
+            words.push(word);
+        }
+        Self {
+            words: words
+                .try_into()
+                .expect("a 32-byte value has two transcript words"),
+        }
+    }
+
+    pub(crate) fn append_to(
+        &self,
+        transcript: &mut BuilderTranscript,
+        builder: &mut Builder,
+    ) -> Result<(), ReceiptCycleError> {
+        transcript.append_byte_words(builder, 32, &self.words)
+    }
+}
+
 impl BuilderTranscript {
     pub(crate) fn new() -> Self {
         Self {
@@ -177,6 +221,14 @@ impl BuilderTranscript {
             self.absorb(builder, word.clone());
         }
         Ok(())
+    }
+
+    pub(crate) fn append_bytes32(
+        &mut self,
+        builder: &mut Builder,
+        bytes: &ConstrainedBytes32,
+    ) -> Result<(), ReceiptCycleError> {
+        bytes.append_to(self, builder)
     }
 
     pub(crate) fn append_u64(&mut self, builder: &mut Builder, value: u64) {
@@ -489,6 +541,22 @@ mod tests {
         builder.finish()
     }
 
+    fn build_bytes32_relation(
+        bytes: [u8; 32],
+        expected: [Scalar; 2],
+    ) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+        let mut builder = Builder::default();
+        let bytes = ConstrainedBytes32::allocate(&mut builder, bytes);
+        let expected = expected.map(|value| builder.allocate(value));
+        let mut transcript = BuilderTranscript::new();
+        transcript.append_bytes32(&mut builder, &bytes)?;
+        let challenge = transcript.challenge(&mut builder, 0);
+        for index in 0..challenge.len() {
+            builder.constrain_equal(&challenge[index], &expected[index]);
+        }
+        builder.finish()
+    }
+
     fn build_relation(
         input: [Scalar; WIDTH],
         expected: [Scalar; WIDTH],
@@ -636,6 +704,29 @@ mod tests {
                 [expected(words[5]), expected(words[6])]
             );
         }
+    }
+
+    #[test]
+    fn constrained_bytes32_match_reference_vectors_with_fixed_matrix() {
+        let vectors = include_str!("../tests/vectors/algebraic_transcript_v1.txt");
+        let mut relations = Vec::new();
+        for line in vectors.lines().filter(|line| line.starts_with("bytes32 ")) {
+            let words: Vec<_> = line.split_ascii_whitespace().collect();
+            assert_eq!(words.len(), 4);
+            let bytes = decode_hex::<32>(words[1]);
+            let expected = [
+                integer_from_be(&decode_hex::<32>(words[2])),
+                integer_from_be(&decode_hex::<32>(words[3])),
+            ];
+
+            let mut native = NativeTranscript::new();
+            native.append_bytes(&bytes);
+            assert_eq!(native.challenge(0), expected);
+            relations.push(build_bytes32_relation(bytes, expected).expect("bytes32 relation"));
+        }
+        assert_eq!(relations.len(), 2);
+        assert_eq!(relations[0].0, relations[1].0);
+        assert_ne!(relations[0].1, relations[1].1);
     }
 
     #[test]

@@ -235,14 +235,15 @@ void test_setup_and_recovery(TestContext& ctx) {
     expect_ok(ctx, promoted_setup,
               "exact setup reduction promotes to the construction basis");
     if (!promoted_setup) return;
+    const auto& promoted_claim = promoted_setup->claim();
     const auto same_polynomial = [&] {
-        if (promoted_setup->polynomial().size() !=
+        if (promoted_claim.polynomial().size() !=
             setup_pending->polynomial().size()) {
             return false;
         }
         for (std::size_t i = 0;
              i < setup_pending->polynomial().size(); ++i) {
-            const auto& promoted = promoted_setup->polynomial()[i];
+            const auto& promoted = promoted_claim.polynomial()[i];
             const auto& setup = setup_pending->polynomial()[i];
             if (promoted.scale != setup.scale ||
                 promoted.offset != setup.offset ||
@@ -253,19 +254,19 @@ void test_setup_and_recovery(TestContext& ctx) {
         return true;
     };
     ctx.expect(
-        promoted_setup->point() == setup_pending->point() &&
+        promoted_claim.point() == setup_pending->point() &&
             same_polynomial() &&
-            promoted_setup->basis_digest() ==
+            promoted_claim.basis_digest() ==
                 construction_accumulator->anchors().basis().digest() &&
-            promoted_setup->basis_digest() !=
+            promoted_claim.basis_digest() !=
                 setup_accumulator->basis().digest(),
         "promotion changes only the authenticated basis digest");
     expect_ok(ctx, purify::bppp::accumulation::decide(
                        construction_accumulator->anchors().basis(),
-                       *promoted_setup, secp.get()),
+                       promoted_claim, secp.get()),
               "construction basis preserves the setup obligation");
     const std::span<const purify::bppp::accumulation::PendingClaim>
-        promoted_claims(&*promoted_setup, 1);
+        promoted_claims(&promoted_claim, 1);
     auto construction_step = purify::bppp::accumulation::prove_step(
         construction_accumulator->anchors().basis(), promoted_claims,
         secp.get());
@@ -345,7 +346,7 @@ void test_setup_and_recovery(TestContext& ctx) {
     if (!false_promoted_setup) return;
     ctx.expect(!purify::bppp::accumulation::decide(
                    construction_accumulator->anchors().basis(),
-                   *false_promoted_setup, secp.get()),
+                   false_promoted_setup->claim(), secp.get()),
                "basis promotion preserves a false setup obligation");
     auto changed_encoding = *encoded_proof;
     changed_encoding[0] ^= 1;

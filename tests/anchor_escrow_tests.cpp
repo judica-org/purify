@@ -204,16 +204,6 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, reduction,
               "anchor escrow coefficient opening proves");
     if (!reduction) return;
-    auto pending = construction_accumulator->verify_anchor_reduction(
-        fixture->roster, anchor->public_key, context, *parsed,
-        *reduction, secp.get());
-    expect_ok(ctx, pending,
-              "exact anchor reduction yields a pending obligation");
-    if (!pending) return;
-    expect_ok(ctx, purify::bppp::accumulation::decide(
-                       accumulator->basis(), *pending, secp.get()),
-              "final MSM discharges the honest anchor escrow obligation");
-
     auto setup_prepared = construction_accumulator->setup().prepare(
         fixture->roster, fixture->roster.recovery_root(),
         fixture->setup_proof, secp.get());
@@ -234,7 +224,17 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, promoted_setup,
               "exact setup reduction promotes to the anchor basis");
     if (!promoted_setup) return;
-    const std::array construction_leaves{*promoted_setup, *pending};
+    auto pending = construction_accumulator->verify_anchor_reduction(
+        *promoted_setup, fixture->roster, anchor->public_key, context,
+        *parsed, *reduction, secp.get());
+    expect_ok(ctx, pending,
+              "exact anchor reduction yields a pending obligation");
+    if (!pending) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       accumulator->basis(), *pending, secp.get()),
+              "final MSM discharges the honest anchor escrow obligation");
+    const std::array construction_leaves{
+        promoted_setup->claim(), *pending};
     auto construction_step = purify::bppp::accumulation::prove_step(
         accumulator->basis(), construction_leaves, secp.get());
     expect_ok(ctx, construction_step,
@@ -347,8 +347,8 @@ void test_anchor_escrow(TestContext& ctx) {
                "anchor reduction cannot move to another context");
     ctx.expect(
         !construction_accumulator->verify_anchor_reduction(
-            fixture->roster, anchor->public_key, changed_context,
-            *record, *reduction, secp.get()),
+            *promoted_setup, fixture->roster, anchor->public_key,
+            changed_context, *record, *reduction, secp.get()),
         "construction leaf authenticates the exact anchor statement");
     expect_error(
         ctx,
@@ -486,6 +486,13 @@ void test_anchor_escrow(TestContext& ctx) {
             fixture->roster, fixture->roster.recovery_root(),
             other_fixture->setup_proof, *setup_reduction, secp.get()),
         "construction promotion rejects another setup proof");
+    expect_error(
+        ctx,
+        construction_accumulator->verify_anchor_reduction(
+            *promoted_setup, other_fixture->roster, anchor->public_key,
+            context, *parsed, *reduction, secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "one construction cannot mix setup and anchor rosters");
     expect_rejected(
         ctx,
         purify::accountable::verify_anchor_escrow(

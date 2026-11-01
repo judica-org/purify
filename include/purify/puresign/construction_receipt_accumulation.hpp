@@ -13,6 +13,40 @@
 
 namespace purify::accountable {
 
+/** Pending setup obligation bound to one exact coalition roster and root. */
+class PendingConstructionSetup {
+public:
+    PendingConstructionSetup(const PendingConstructionSetup&) = delete;
+    PendingConstructionSetup& operator=(const PendingConstructionSetup&) =
+        delete;
+    PendingConstructionSetup(PendingConstructionSetup&&) noexcept = default;
+    PendingConstructionSetup& operator=(
+        PendingConstructionSetup&&) noexcept = default;
+
+    [[nodiscard]] const bppp::accumulation::PendingClaim& claim()
+        const noexcept {
+        return claim_;
+    }
+
+    [[nodiscard]] const UInt512& recovery_root() const noexcept {
+        return recovery_root_;
+    }
+
+private:
+    PendingConstructionSetup(NonceHostBoundSigningRoster roster,
+                             UInt512 recovery_root,
+                             bppp::accumulation::PendingClaim claim)
+        : roster_(std::move(roster)),
+          recovery_root_(recovery_root),
+          claim_(std::move(claim)) {}
+
+    NonceHostBoundSigningRoster roster_;
+    UInt512 recovery_root_;
+    bppp::accumulation::PendingClaim claim_;
+
+    friend class ConstructionReceiptAccumulator;
+};
+
 /**
  * The fixed accumulation bases for one coalition construction receipt.
  *
@@ -51,7 +85,7 @@ public:
         return anchors_;
     }
 
-    [[nodiscard]] Result<bppp::accumulation::PendingClaim>
+    [[nodiscard]] Result<PendingConstructionSetup>
     verify_setup_reduction(
         const NonceHostBoundSigningRoster& roster,
         const UInt512& recovery_root,
@@ -62,6 +96,7 @@ public:
 
     [[nodiscard]] Result<bppp::accumulation::PendingClaim>
     verify_anchor_reduction(
+        const PendingConstructionSetup& setup,
         const RecoveryBoundSigningRoster& roster,
         const UInt512& advertised_anchor_root,
         const AnchorEscrowContextDigest& context_digest,

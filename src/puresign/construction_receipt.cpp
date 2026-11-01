@@ -21,6 +21,29 @@ namespace {
 const TaggedHash kConstructionReceiptStatementHash(
     "Purify/Accountable/ConstructionReceiptStatement/v1");
 
+bool same_roster(const NonceHostBoundSigningRoster& left,
+                 const NonceHostBoundSigningRoster& right) {
+    const auto left_members = left.members();
+    const auto right_members = right.members();
+    return left.signing_key() == right.signing_key() &&
+           left.key_list_hash() == right.key_list_hash() &&
+           left.aggregate_was_negated() ==
+               right.aggregate_was_negated() &&
+           left.coalition_core_digest() ==
+               right.coalition_core_digest() &&
+           left.nonce_host_commitment() ==
+               right.nonce_host_commitment() &&
+           left_members.size() == right_members.size() &&
+           std::equal(
+               left_members.begin(), left_members.end(),
+               right_members.begin(),
+               [](const SigningRosterMember& lhs,
+                  const SigningRosterMember& rhs) {
+                   return lhs.public_key == rhs.public_key &&
+                          lhs.coefficient == rhs.coefficient;
+               });
+}
+
 Status validate_public_root(const UInt512& encoded, const char* label) {
     PURIFY_ASSIGN_OR_RETURN(const auto& coords, unpack_public(encoded), label);
     PURIFY_ASSIGN_OR_RETURN(const auto& first_x,
@@ -270,7 +293,7 @@ ConstructionReceiptAccumulator::create(
                                           std::move(anchors));
 }
 
-Result<bppp::accumulation::PendingClaim>
+Result<PendingConstructionSetup>
 ConstructionReceiptAccumulator::verify_setup_reduction(
     const NonceHostBoundSigningRoster& roster,
     const UInt512& recovery_root,
@@ -288,11 +311,16 @@ ConstructionReceiptAccumulator::verify_setup_reduction(
         bppp::accumulation::verify_norm_reduction(
             setup_.basis(), prepared, reduction, secp_context),
         "construction_accumulation:reduce_setup");
-    return promote_setup_claim(pending);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto promoted, promote_setup_claim(pending),
+        "construction_accumulation:promote_setup");
+    return PendingConstructionSetup(roster, recovery_root,
+                                    std::move(promoted));
 }
 
 Result<bppp::accumulation::PendingClaim>
 ConstructionReceiptAccumulator::verify_anchor_reduction(
+    const PendingConstructionSetup& setup,
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,
     const AnchorEscrowContextDigest& context_digest,
@@ -300,6 +328,12 @@ ConstructionReceiptAccumulator::verify_anchor_reduction(
     const bppp::accumulation::NormReductionProof& reduction,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) const {
+    if (setup.recovery_root_ != roster.recovery_root() ||
+        !same_roster(setup.roster_, roster)) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "construction_accumulation:setup_anchor_roster");
+    }
     PURIFY_ASSIGN_OR_RETURN(
         const auto& prepared,
         anchors_.prepare(roster, advertised_anchor_root,

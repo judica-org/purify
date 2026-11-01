@@ -27,6 +27,7 @@ void run_construction_receipt_tests(TestContext& ctx);
 void run_construction_receipt_codec_tests(TestContext& ctx);
 void run_receipt_sha256_tests(TestContext& ctx);
 void run_coordinate_field_tests(TestContext& ctx);
+void run_poseidon_tests(TestContext& ctx);
 void run_aggregate_nonce_tests(TestContext& ctx);
 void run_aggregate_nonce_100_tests(TestContext& ctx);
 void run_nonce_batch_tests(TestContext& ctx);
@@ -42,7 +43,7 @@ struct SuiteSpec {
     SuiteFn run;
 };
 
-constexpr std::array<SuiteSpec, 22> kSuites{{
+constexpr std::array<SuiteSpec, 23> kSuites{{
     {"core", &run_purify_tests},
     {"puresign", &run_puresign_tests},
     {"legacy_bulletproof", &run_legacy_bulletproof_tests},
@@ -60,6 +61,7 @@ constexpr std::array<SuiteSpec, 22> kSuites{{
     {"construction_receipt_codec", &run_construction_receipt_codec_tests},
     {"receipt_sha256", &run_receipt_sha256_tests},
     {"coordinate_field", &run_coordinate_field_tests},
+    {"poseidon", &run_poseidon_tests},
     {"aggregate_nonce", &run_aggregate_nonce_tests},
     {"aggregate_nonce_100", &run_aggregate_nonce_100_tests},
     {"nonce_batch", &run_nonce_batch_tests},

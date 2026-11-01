@@ -326,6 +326,7 @@ add_library(purify
     src/puresign/slash_adaptor.cpp
     src/puresign/recovery_root.cpp
     src/puresign/anchor_escrow.cpp
+    src/puresign/construction_receipt.cpp
     src/protocol/bppp.cpp
     src/protocol/accumulation.cpp
     src/bridge/bppp_bridge.c
@@ -421,6 +422,7 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/slash_adaptor.cpp
         src/puresign/recovery_root.cpp
         src/puresign/anchor_escrow.cpp
+        src/puresign/construction_receipt.cpp
         src/protocol/bppp.cpp
         src/protocol/accumulation.cpp
         src/bridge/bppp_bridge.c

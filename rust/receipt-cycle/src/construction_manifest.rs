@@ -42,7 +42,8 @@ impl ConstructionRoot {
         let encoded: [u8; CONSTRUCTION_ROOT_BYTES] = encoded
             .try_into()
             .map_err(|_| ReceiptCycleError::Malformed("construction root size"))?;
-        let point = decode_root_point(encoded[..33].try_into().expect("fixed point slice"))?;
+        let point =
+            SecpEncodedPointWitness::parse(encoded[..33].try_into().expect("fixed point slice"))?;
         let scale = parse_root_scalar(encoded[33..65].try_into().expect("fixed root scale slice"))?;
         let mut factors = Vec::with_capacity(CONSTRUCTION_ROOT_ROUNDS);
         for index in 0..CONSTRUCTION_ROOT_ROUNDS {
@@ -333,34 +334,6 @@ pub(crate) fn derive_step_manifest(
     );
     transcript.append_point(input.anchored_offset.encoded[0], anchored_offset.x);
     Ok(field_to_be(transcript.challenge(0)[0]))
-}
-
-fn decode_root_point(encoded: [u8; 33]) -> Result<SecpEncodedPointWitness, ReceiptCycleError> {
-    if encoded == [0; 33] {
-        return Ok(SecpEncodedPointWitness::identity());
-    }
-    if encoded[0] != 2 && encoded[0] != 3 {
-        return Err(ReceiptCycleError::Malformed(
-            "construction root point prefix",
-        ));
-    }
-    let x = coordinate_field_value(encoded[1..].try_into().expect("fixed x slice"))?;
-    let rhs = x.square() * x + Scalar::from(7);
-    let mut y = Option::<Scalar>::from(rhs.sqrt())
-        .ok_or(ReceiptCycleError::Malformed("construction root point"))?;
-    let want_odd = encoded[0] & 1;
-    if Secq256k1Cycle::scalar_to_canonical(&y)[0] & 1 != want_odd {
-        y = -y;
-    }
-    let y = Secq256k1Cycle::scalar_to_canonical(&y);
-    if y[0] & 1 != want_odd {
-        return Err(ReceiptCycleError::Malformed(
-            "construction root point parity",
-        ));
-    }
-    let point = SecpEncodedPointWitness { encoded, y };
-    encoded_point_value(point)?;
-    Ok(point)
 }
 
 fn parse_root_scalar(bytes: [u8; 32]) -> Result<SecpScalarWitness, ReceiptCycleError> {

@@ -374,6 +374,23 @@ fn step_input_rejects_noncanonical_fields_points_and_precommitments() {
 }
 
 #[test]
+fn manifest_anchor_derives_point_openings_from_public_encodings() {
+    let coefficient =
+        SecpEncodedPointWitness::parse(generator().encoded).expect("coefficient commitment");
+    let mut odd_encoding = generator().encoded;
+    odd_encoding[0] = 3;
+    let offset = SecpEncodedPointWitness::parse(odd_encoding).expect("anchored offset");
+
+    ConstructionManifestAnchor::new(
+        [0x41; 32],
+        SecpScalarWitness::from_u64(7),
+        coefficient,
+        offset,
+    )
+    .expect("manifest anchor from canonical public points");
+}
+
+#[test]
 fn step_index_is_zero_based_and_overflow_checked() {
     let seed = manifest_seed(1);
     let anchor = anchor(0x11, generator(), SecpEncodedPointWitness::identity());

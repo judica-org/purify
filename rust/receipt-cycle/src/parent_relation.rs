@@ -117,6 +117,41 @@ impl SecpEncodedPointWitness {
             y: [0; 32],
         }
     }
+
+    /// Parses one canonical native accumulation-point encoding.
+    ///
+    /// The public encoding determines the unique affine y opening. Callers
+    /// must never accept a separate prover-supplied y coordinate for the same
+    /// point.
+    pub(crate) fn parse(encoded: [u8; 33]) -> Result<Self, ReceiptCycleError> {
+        if encoded == [0; 33] {
+            return Ok(Self::identity());
+        }
+        if encoded[0] != 2 && encoded[0] != 3 {
+            return Err(ReceiptCycleError::Malformed("encoded secp point prefix"));
+        }
+
+        let mut x_bytes: [u8; 32] = encoded[1..].try_into().expect("fixed encoded secp x slice");
+        x_bytes.reverse();
+        let x = Secq256k1Cycle::scalar_from_canonical(&x_bytes)
+            .ok_or(ReceiptCycleError::Malformed("noncanonical encoded secp x"))?;
+        let rhs = x.square() * x + Scalar::from(7);
+        let mut y = Option::<Scalar>::from(rhs.sqrt()).ok_or(ReceiptCycleError::Malformed(
+            "encoded secp point not on curve",
+        ))?;
+        let expected_parity = encoded[0] & 1;
+        if Secq256k1Cycle::scalar_to_canonical(&y)[0] & 1 != expected_parity {
+            y = -y;
+        }
+        let y = Secq256k1Cycle::scalar_to_canonical(&y);
+        if y[0] & 1 != expected_parity {
+            return Err(ReceiptCycleError::Malformed("encoded secp point parity"));
+        }
+
+        let witness = Self { encoded, y };
+        encoded_point_value(witness)?;
+        Ok(witness)
+    }
 }
 
 impl SecpAffineWitness {
@@ -2006,6 +2041,52 @@ mod tests {
             524
         );
         assert_eq!(proof_bytes, 1085);
+    }
+
+    #[test]
+    fn encoded_point_parser_derives_the_unique_affine_opening() {
+        let g = generator();
+        let even = encoded(g, 0x02);
+        let odd = encoded(negate(g), 0x03);
+
+        assert_eq!(
+            SecpEncodedPointWitness::parse([0; 33]).expect("encoded identity"),
+            SecpEncodedPointWitness::identity()
+        );
+        assert_eq!(
+            SecpEncodedPointWitness::parse(even.encoded).expect("even generator"),
+            even
+        );
+        assert_eq!(
+            SecpEncodedPointWitness::parse(odd.encoded).expect("odd generator"),
+            odd
+        );
+    }
+
+    #[test]
+    fn encoded_point_parser_rejects_noncanonical_public_bytes() {
+        let generator = encoded(generator(), 0x02).encoded;
+
+        let mut malformed_identity = generator;
+        malformed_identity[0] = 0;
+        assert!(SecpEncodedPointWitness::parse(malformed_identity).is_err());
+
+        let mut invalid_prefix = generator;
+        invalid_prefix[0] = 4;
+        assert!(SecpEncodedPointWitness::parse(invalid_prefix).is_err());
+
+        let mut noncanonical_x = generator;
+        noncanonical_x[1..].copy_from_slice(&[
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+            0xff, 0xff, 0xfc, 0x2f,
+        ]);
+        assert!(SecpEncodedPointWitness::parse(noncanonical_x).is_err());
+
+        // x = 0 is canonical, but x^3 + 7 is a nonsquare modulo secp256k1 p.
+        let mut nonsquare_x = generator;
+        nonsquare_x[1..].fill(0);
+        assert!(SecpEncodedPointWitness::parse(nonsquare_x).is_err());
     }
 
     #[test]

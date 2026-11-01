@@ -152,10 +152,11 @@ struct EncodedPointValue {
     odd: bool,
 }
 
-struct EncodedSecpPoint {
-    point: SecpPoint,
-    prefix: Expression,
-    odd: Expression,
+#[derive(Clone)]
+pub(crate) struct EncodedSecpPoint {
+    pub(crate) point: SecpPoint,
+    pub(crate) prefix: Expression,
+    pub(crate) odd: Expression,
 }
 
 const SECP_FIELD_MODULUS_BE: [u8; 32] = [
@@ -293,7 +294,7 @@ fn allocate_compressed_point(
     Ok(point)
 }
 
-fn allocate_encoded_point(
+pub(crate) fn allocate_encoded_point(
     builder: &mut Builder,
     witness: SecpEncodedPointWitness,
 ) -> Result<EncodedSecpPoint, ReceiptCycleError> {
@@ -568,7 +569,7 @@ fn scalar_expression_value(value: &BigUint) -> Result<Scalar, ReceiptCycleError>
         .ok_or(ReceiptCycleError::Malformed("candidate scalar embedding"))
 }
 
-fn derived_add(
+pub(crate) fn derived_add(
     builder: &mut Builder,
     left: &SecpScalarVar,
     right: &SecpScalarVar,
@@ -577,7 +578,7 @@ fn derived_add(
     add_scalars(builder, left, right, scalar_witness(&value)?)
 }
 
-fn derived_subtract(
+pub(crate) fn derived_subtract(
     builder: &mut Builder,
     left: &SecpScalarVar,
     right: &SecpScalarVar,
@@ -587,7 +588,7 @@ fn derived_subtract(
     subtract_scalars(builder, left, right, scalar_witness(&value)?)
 }
 
-fn derived_multiply(
+pub(crate) fn derived_multiply(
     builder: &mut Builder,
     left: &SecpScalarVar,
     right: &SecpScalarVar,
@@ -596,7 +597,7 @@ fn derived_multiply(
     multiply_scalars(builder, left, right, scalar_witness(&value)?)
 }
 
-fn derived_inverse(
+pub(crate) fn derived_inverse(
     builder: &mut Builder,
     value: &SecpScalarVar,
 ) -> Result<SecpScalarVar, ReceiptCycleError> {
@@ -642,7 +643,7 @@ fn constant_byte_words(bytes: &[u8]) -> Vec<Expression> {
         .collect()
 }
 
-fn append_constant_bytes(
+pub(crate) fn append_constant_bytes(
     transcript: &mut BuilderTranscript,
     builder: &mut Builder,
     bytes: &[u8],
@@ -651,11 +652,15 @@ fn append_constant_bytes(
     transcript.append_byte_words(builder, bytes.len(), &words)
 }
 
-fn append_scalar(transcript: &mut BuilderTranscript, builder: &mut Builder, value: &SecpScalarVar) {
+pub(crate) fn append_scalar(
+    transcript: &mut BuilderTranscript,
+    builder: &mut Builder,
+    value: &SecpScalarVar,
+) {
     transcript.append_scalar(builder, embedded_integer(value));
 }
 
-fn append_encoded_point(
+pub(crate) fn append_encoded_point(
     transcript: &mut BuilderTranscript,
     builder: &mut Builder,
     point: &EncodedSecpPoint,
@@ -663,19 +668,29 @@ fn append_encoded_point(
     transcript.append_point(builder, point.prefix.clone(), point.point.x.clone());
 }
 
-fn append_computed_point(
-    transcript: &mut BuilderTranscript,
-    builder: &mut Builder,
-    point: &SecpPoint,
-) {
+pub(crate) fn encode_computed_point(builder: &mut Builder, point: &SecpPoint) -> EncodedSecpPoint {
     let y_bits = canonical_field_bits(builder, &point.y);
     let active = Expression::constant(Scalar::ONE).sub(&point.identity);
     let finite_prefix = Expression::constant(Scalar::from(2)).add(&y_bits[0]);
     let prefix = builder.multiply(&active, &finite_prefix);
-    transcript.append_point(builder, prefix, point.x.clone());
+    EncodedSecpPoint {
+        point: point.clone(),
+        prefix,
+        odd: y_bits[0].clone(),
+    }
 }
 
-fn append_challenge(
+pub(crate) fn append_computed_point(
+    transcript: &mut BuilderTranscript,
+    builder: &mut Builder,
+    point: &SecpPoint,
+) -> EncodedSecpPoint {
+    let encoded = encode_computed_point(builder, point);
+    append_encoded_point(transcript, builder, &encoded);
+    encoded
+}
+
+pub(crate) fn append_challenge(
     transcript: &mut BuilderTranscript,
     builder: &mut Builder,
     round: u64,
@@ -686,7 +701,7 @@ fn append_challenge(
     challenge
 }
 
-fn constrain_scalar_constant(
+pub(crate) fn constrain_scalar_constant(
     builder: &mut Builder,
     actual: &SecpScalarVar,
     expected: SecpScalarWitness,
@@ -716,7 +731,7 @@ fn allocate_encoded_point_constant(
     Ok(expected)
 }
 
-fn constrain_encoded_point_constant(
+pub(crate) fn constrain_encoded_point_constant(
     builder: &mut Builder,
     actual: &EncodedSecpPoint,
     expected: SecpEncodedPointWitness,
@@ -729,21 +744,23 @@ fn constrain_encoded_point_constant(
     Ok(())
 }
 
-struct CandidateTerm {
-    scale: SecpScalarVar,
-    offset: usize,
-    factors: Vec<SecpScalarVar>,
+#[derive(Clone)]
+pub(crate) struct ConstrainedPolynomialTerm {
+    pub(crate) scale: SecpScalarVar,
+    pub(crate) offset: usize,
+    pub(crate) factors: Vec<SecpScalarVar>,
 }
 
-struct CandidateClaim {
-    point: EncodedSecpPoint,
-    polynomial: Vec<CandidateTerm>,
+#[derive(Clone)]
+pub(crate) struct ConstrainedPendingClaim {
+    pub(crate) point: EncodedSecpPoint,
+    pub(crate) polynomial: Vec<ConstrainedPolynomialTerm>,
 }
 
-struct CandidateDerivedRoot {
-    point: EncodedSecpPoint,
-    scale: SecpScalarVar,
-    factors: Vec<SecpScalarVar>,
+pub(crate) struct CandidateDerivedRoot {
+    pub(crate) point: EncodedSecpPoint,
+    pub(crate) scale: SecpScalarVar,
+    pub(crate) factors: Vec<SecpScalarVar>,
     #[cfg(test)]
     equation_residual: PointValue,
 }
@@ -788,41 +805,61 @@ fn candidate_step_shape(
 
 fn allocate_candidate_claims(
     builder: &mut Builder,
-    transcript: &mut BuilderTranscript,
     claims: &[CandidatePendingClaimWitness],
-) -> Result<Vec<CandidateClaim>, ReceiptCycleError> {
-    transcript.append_u64(builder, claims.len() as u64);
+) -> Result<Vec<ConstrainedPendingClaim>, ReceiptCycleError> {
     let mut allocated = Vec::with_capacity(claims.len());
     for claim in claims {
         let point = allocate_encoded_point(builder, claim.point)?;
-        append_encoded_point(transcript, builder, &point);
-        transcript.append_u64(builder, claim.polynomial.len() as u64);
         let mut polynomial = Vec::with_capacity(claim.polynomial.len());
         for term in &claim.polynomial {
             let scale = allocate_canonical_scalar(builder, term.scale)?;
-            append_scalar(transcript, builder, &scale);
-            transcript.append_u64(builder, term.offset as u64);
-            transcript.append_u64(builder, term.factors.len() as u64);
             let mut factors = Vec::with_capacity(term.factors.len());
             for &factor in &term.factors {
                 let factor = allocate_canonical_scalar(builder, factor)?;
-                append_scalar(transcript, builder, &factor);
                 factors.push(factor);
             }
-            polynomial.push(CandidateTerm {
+            polynomial.push(ConstrainedPolynomialTerm {
                 scale,
                 offset: term.offset,
                 factors,
             });
         }
-        allocated.push(CandidateClaim { point, polynomial });
+        allocated.push(ConstrainedPendingClaim { point, polynomial });
     }
     Ok(allocated)
 }
 
+pub(crate) fn append_constrained_polynomial(
+    transcript: &mut BuilderTranscript,
+    builder: &mut Builder,
+    polynomial: &[ConstrainedPolynomialTerm],
+) {
+    transcript.append_u64(builder, polynomial.len() as u64);
+    for term in polynomial {
+        append_scalar(transcript, builder, &term.scale);
+        transcript.append_u64(builder, term.offset as u64);
+        transcript.append_u64(builder, term.factors.len() as u64);
+        for factor in &term.factors {
+            append_scalar(transcript, builder, factor);
+        }
+    }
+}
+
+fn append_constrained_claims(
+    transcript: &mut BuilderTranscript,
+    builder: &mut Builder,
+    claims: &[ConstrainedPendingClaim],
+) {
+    transcript.append_u64(builder, claims.len() as u64);
+    for claim in claims {
+        append_encoded_point(transcript, builder, &claim.point);
+        append_constrained_polynomial(transcript, builder, &claim.polynomial);
+    }
+}
+
 fn evaluate_candidate_term(
     builder: &mut Builder,
-    term: &CandidateTerm,
+    term: &ConstrainedPolynomialTerm,
     x: &SecpScalarVar,
 ) -> Result<SecpScalarVar, ReceiptCycleError> {
     let x_offset = derived_power(builder, x, term.offset)?;
@@ -860,18 +897,73 @@ fn install_candidate_step_for_role(
     claims: &[CandidatePendingClaimWitness],
     proof: &CandidateStepProofWitness,
 ) -> Result<CandidateDerivedRoot, ReceiptCycleError> {
-    let (rounds, _) = candidate_step_shape(claims, proof, None)?;
+    candidate_step_shape(claims, proof, None)?;
+    let claims = allocate_candidate_claims(builder, claims)?;
+    install_constrained_step_for_role(builder, basis_digest, opening_base_role, &claims, proof)
+}
+
+#[allow(dead_code)]
+pub(crate) fn install_constrained_candidate_step(
+    builder: &mut Builder,
+    basis_digest: [u8; 32],
+    claims: &[ConstrainedPendingClaim],
+    proof: &CandidateStepProofWitness,
+) -> Result<CandidateDerivedRoot, ReceiptCycleError> {
+    install_constrained_step_for_role(
+        builder,
+        basis_digest,
+        ACCUMULATION_OPENING_BASE_ROLE,
+        claims,
+        proof,
+    )
+}
+
+fn install_constrained_step_for_role(
+    builder: &mut Builder,
+    basis_digest: [u8; 32],
+    opening_base_role: u64,
+    claims: &[ConstrainedPendingClaim],
+    proof: &CandidateStepProofWitness,
+) -> Result<CandidateDerivedRoot, ReceiptCycleError> {
+    let rounds = proof.left.len();
+    if claims.is_empty()
+        || claims.len() > MAX_CANDIDATE_CLAIMS
+        || rounds == 0
+        || rounds > MAX_CANDIDATE_ROUNDS
+        || proof.right.len() != rounds
+    {
+        return Err(ReceiptCycleError::Malformed("candidate step shape"));
+    }
+    let dimension = 1usize
+        .checked_shl(rounds as u32)
+        .ok_or(ReceiptCycleError::Malformed("candidate step dimension"))?;
+    for claim in claims {
+        if claim.polynomial.is_empty() || claim.polynomial.len() > 3 {
+            return Err(ReceiptCycleError::Malformed("candidate polynomial terms"));
+        }
+        for term in &claim.polynomial {
+            if term.factors.len() > rounds {
+                return Err(ReceiptCycleError::Malformed("candidate polynomial factors"));
+            }
+            let width = 1usize
+                .checked_shl(term.factors.len() as u32)
+                .ok_or(ReceiptCycleError::Malformed("candidate polynomial width"))?;
+            if term.offset > dimension.saturating_sub(width) {
+                return Err(ReceiptCycleError::Malformed("candidate polynomial degree"));
+            }
+        }
+    }
     let mut transcript = BuilderTranscript::new();
     append_constant_bytes(&mut transcript, builder, CANDIDATE_STEP_DOMAIN)?;
     append_constant_bytes(&mut transcript, builder, &basis_digest)?;
     transcript.append_u64(builder, rounds as u64);
-    let claims = allocate_candidate_claims(builder, &mut transcript, claims)?;
+    append_constrained_claims(&mut transcript, builder, claims);
 
     let beta = append_challenge(&mut transcript, builder, 0);
     let mut claim_weight = constant_scalar(1);
     let mut commitment_points = Vec::with_capacity(claims.len());
     let mut commitment_scalars = Vec::with_capacity(claims.len());
-    for claim in &claims {
+    for claim in claims {
         commitment_points.push(claim.point.point.clone());
         commitment_scalars.push(claim_weight.clone());
         claim_weight = derived_multiply(builder, &claim_weight, &beta)?;
@@ -882,7 +974,7 @@ fn install_candidate_step_for_role(
     let x = append_challenge(&mut transcript, builder, 1);
     let mut y = constant_scalar(0);
     claim_weight = constant_scalar(1);
-    for claim in &claims {
+    for claim in claims {
         let mut evaluation = constant_scalar(0);
         for term in &claim.polynomial {
             let term = evaluate_candidate_term(builder, term, &x)?;
@@ -1069,7 +1161,7 @@ fn msm_points_windowed<const WINDOW_BITS: usize>(
     Ok(accumulator)
 }
 
-fn msm_points(
+pub(crate) fn msm_points(
     builder: &mut Builder,
     points: &[SecpPoint],
     scalars: &[SecpScalarVar],

@@ -1,0 +1,20 @@
+[package]
+name = "purify-receipt-cycle"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+bulletproofs-cycle = { version = "=0.4.1" }
+ff = { version = "0.13", default-features = false }
+golden-halo2curves = { version = "=0.4.1" }
+merlin = { version = "3", default-features = false }
+rand_chacha = "0.3"
+rand_core = "0.6"
+sha2 = "0.10"
+thiserror = "2"

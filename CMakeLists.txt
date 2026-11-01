@@ -352,6 +352,10 @@ if(PURIFY_BUILD_RECEIPT_CYCLE)
     set(PURIFY_RECEIPT_CYCLE_TARGET_DIR
         "${CMAKE_CURRENT_BINARY_DIR}/receipt-cycle-target"
     )
+    file(GLOB_RECURSE PURIFY_RECEIPT_CYCLE_SOURCES
+        CONFIGURE_DEPENDS
+        "${PURIFY_RECEIPT_CYCLE_DIR}/src/*.rs"
+    )
     set(PURIFY_RECEIPT_CYCLE_CARGO_ARGS build --locked --release)
     set(PURIFY_RECEIPT_CYCLE_ARCHIVE_DIR
         "${PURIFY_RECEIPT_CYCLE_TARGET_DIR}/release"
@@ -384,8 +388,7 @@ if(PURIFY_BUILD_RECEIPT_CYCLE)
             "${PURIFY_RECEIPT_CYCLE_DIR}/Cargo.lock"
             "${PURIFY_RECEIPT_CYCLE_DIR}/Cargo.toml"
             "${PURIFY_RECEIPT_CYCLE_DIR}/rust-toolchain.toml"
-            "${PURIFY_RECEIPT_CYCLE_DIR}/src/ffi.rs"
-            "${PURIFY_RECEIPT_CYCLE_DIR}/src/lib.rs"
+            ${PURIFY_RECEIPT_CYCLE_SOURCES}
         WORKING_DIRECTORY "${PURIFY_RECEIPT_CYCLE_DIR}"
         COMMENT "Building transparent Secq256k1 receipt backend"
         VERBATIM

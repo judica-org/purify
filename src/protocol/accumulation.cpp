@@ -4,11 +4,36 @@
 
 #include "purify/accumulation.hpp"
 
+#include "algebraic_circuit_accumulation.hpp"
 #include "algebraic_transcript.hpp"
 #include "bppp_bridge.h"
 #include "bppp_internal.hpp"
 
 namespace purify::bppp::accumulation {
+
+namespace internal {
+
+struct AlgebraicPreparedNormAccess {
+    static AlgebraicPreparedNorm create(
+        Digest basis_digest, FieldElement prepared_binding,
+        std::vector<ScalarBytes> c_vec,
+        PointBytes coefficient_commitment, PointBytes residual,
+        std::array<PolynomialTerm, 2> polynomial) {
+        return AlgebraicPreparedNorm(
+            basis_digest, prepared_binding, std::move(c_vec),
+            coefficient_commitment, residual, std::move(polynomial));
+    }
+};
+
+struct PreparedCircuitZkNormArgV4AdapterAccess {
+    static std::vector<ScalarBytes> take_coefficients(
+        candidate::PreparedCircuitZkNormArgV4&& prepared) {
+        return std::move(prepared.norm_.c_vec);
+    }
+};
+
+} // namespace internal
+
 namespace {
 
 const TaggedHash kBasisHash("Purify/BPPP/NormAccumBasisV2");
@@ -1431,6 +1456,232 @@ prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
         components.residual, std::move(components.polynomial));
 }
 
+Result<AlgebraicPreparedNorm>
+prepare_v4_circuit_norm_for_algebraic_reduction(
+    const Basis& basis, candidate::PreparedCircuitZkNormArgV4 prepared,
+    purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(context, "accumulation:v4_context"),
+        "accumulation:v4_context");
+    PURIFY_RETURN_IF_ERROR(
+        validate_basis(basis), "accumulation:v4_basis");
+    PURIFY_RETURN_IF_ERROR(
+        validate_algebraic_dimension(basis.dimension()),
+        "accumulation:v4_dimension");
+
+    const auto& shape = prepared.shape();
+    const auto& transcript_input = prepared.transcript_input();
+    const auto& transcript = prepared.transcript();
+    const auto& norm = prepared.norm();
+    const auto rounds = shape.round_count();
+    std::size_t generator_count = 0;
+    if (!checked_add_size(shape.n_vec_len(), shape.l_vec_len(),
+                          generator_count)) {
+        return unexpected_error(
+            ErrorCode::Overflow,
+            "accumulation:v4_generator_count");
+    }
+    // The V4 transcript binds this raw digest. Exact generator equality
+    // bridges it to the purpose owner's selected semantic basis.
+    if (shape.n_vec_len() != basis.n_vec_len() ||
+        shape.l_vec_len() != basis.l_vec_len() ||
+        prepared.raw_generators().size() != generator_count ||
+        prepared.raw_generators() != basis.norm_generators()) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "accumulation:v4_raw_basis");
+    }
+    const auto raw_generator_digest =
+        generator_digest(prepared.raw_generators());
+    if (transcript_input.raw_generator_digest != raw_generator_digest ||
+        generator_digest(basis.norm_generators()) != raw_generator_digest) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "accumulation:v4_raw_basis_digest");
+    }
+    if (norm.n_vec_len != shape.n_vec_len() ||
+        norm.generators.size() != generator_count ||
+        norm.c_vec.size() != shape.l_vec_len() ||
+        norm.rho != transcript.rho.scalar.to_bytes_be() ||
+        norm.commitment != transcript_input.combined_commitment ||
+        transcript_input.rounds.size() != rounds ||
+        transcript.gammas.size() != rounds) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "accumulation:v4_prepared_shape");
+    }
+    if (!std::equal(
+            norm.generators.begin() +
+                static_cast<std::ptrdiff_t>(shape.n_vec_len()),
+            norm.generators.end(),
+            prepared.raw_generators().begin() +
+                static_cast<std::ptrdiff_t>(shape.n_vec_len()))) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "accumulation:v4_linear_basis");
+    }
+
+    std::size_t round_bytes = 0;
+    std::size_t expected_proof_size = 0;
+    if (!checked_mul_size(rounds,
+                          sizeof(candidate::PackedPointPairV4),
+                          round_bytes) ||
+        !checked_add_size(round_bytes, 2 * sizeof(ScalarBytes),
+                          expected_proof_size)) {
+        return unexpected_error(
+            ErrorCode::Overflow,
+            "accumulation:v4_proof_size");
+    }
+    if (norm.proof.size() != expected_proof_size) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "accumulation:v4_proof_size");
+    }
+    for (std::size_t i = 0; i < rounds; ++i) {
+        const auto offset = i * sizeof(candidate::PackedPointPairV4);
+        if (!std::equal(
+                transcript_input.rounds[i].begin(),
+                transcript_input.rounds[i].end(),
+                norm.proof.begin() +
+                    static_cast<std::ptrdiff_t>(offset))) {
+            return unexpected_error(
+                ErrorCode::InternalMismatch,
+                "accumulation:v4_round_payload");
+        }
+    }
+    if (!std::equal(
+            transcript_input.terminal_n.begin(),
+            transcript_input.terminal_n.end(),
+            norm.proof.begin() +
+                static_cast<std::ptrdiff_t>(round_bytes)) ||
+        !std::equal(
+            transcript_input.terminal_l.begin(),
+            transcript_input.terminal_l.end(),
+            norm.proof.begin() + static_cast<std::ptrdiff_t>(
+                                     round_bytes + sizeof(ScalarBytes)))) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "accumulation:v4_terminal_payload");
+    }
+
+    if (transcript.rho.scalar.is_zero() ||
+        transcript.mul_scale.scalar.is_zero() ||
+        transcript.mul_ratio.scalar.is_zero() ||
+        transcript.prepared_binding.scalar.is_zero() ||
+        std::any_of(
+            transcript.gammas.begin(), transcript.gammas.end(),
+            [](const candidate::CircuitChallengeV4& gamma) {
+                return gamma.scalar.is_zero();
+            })) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "accumulation:v4_zero_challenge");
+    }
+
+    std::vector<ScalarBytes> encoded_gammas;
+    encoded_gammas.reserve(rounds);
+    for (const auto& gamma : transcript.gammas) {
+        encoded_gammas.push_back(gamma.scalar.to_bytes_be());
+    }
+    ScalarBytes terminal_n_bytes{};
+    ScalarBytes terminal_l_bytes{};
+    PointBytes residual{};
+    // This reconstructs the pending short equation with authenticated V4
+    // challenges. It is not norm-proof acceptance.
+    if (purify_bppp_prepare_norm_arg_claim_with_challenges(
+            context, norm.rho.data(),
+            reinterpret_cast<const unsigned char*>(
+                norm.generators.data()),
+            norm.generators.size(),
+            reinterpret_cast<const unsigned char*>(norm.c_vec.data()),
+            norm.c_vec.size(), norm.n_vec_len, norm.commitment.data(),
+            norm.proof.data(), norm.proof.size(),
+            reinterpret_cast<const unsigned char*>(
+                encoded_gammas.data()),
+            encoded_gammas.size(), terminal_n_bytes.data(),
+            terminal_l_bytes.data(), residual.data()) == 0) {
+        return unexpected_error(
+            ErrorCode::BackendRejectedInput,
+            "accumulation:v4_inner_norm");
+    }
+    if (terminal_n_bytes != transcript_input.terminal_n ||
+        terminal_l_bytes != transcript_input.terminal_l ||
+        residual != prepared.pending_norm_residual()) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "accumulation:v4_prepared_norm");
+    }
+
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& terminal_n,
+        FieldElement::try_from_bytes32(terminal_n_bytes),
+        "accumulation:v4_terminal_n");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& terminal_l,
+        FieldElement::try_from_bytes32(terminal_l_bytes),
+        "accumulation:v4_terminal_l");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& sqrt_minus_one,
+        detail::canonical_sqrt_minus_one(),
+        "accumulation:v4_sqrt_minus_one");
+
+    // These are the two compact terms installed by the constrained V4 leaf.
+    PolynomialTerm g{
+        terminal_n *
+            pow_size(transcript.rho.scalar, shape.n_vec_len()) *
+            transcript.mul_scale.scalar.inverse(),
+        0,
+        {}};
+    PolynomialTerm h{terminal_l, shape.n_vec_len(), {}};
+    g.factors.reserve(rounds);
+    h.factors.reserve(rounds);
+    auto ratio_inverse_power =
+        transcript.mul_ratio.scalar.inverse();
+    for (std::size_t i = 0; i < rounds; ++i) {
+        const auto& gamma = transcript.gammas[i].scalar;
+        if (i == 0) {
+            g.factors.push_back(gamma * sqrt_minus_one.inverse());
+        } else {
+            g.factors.push_back(gamma * ratio_inverse_power);
+            ratio_inverse_power =
+                ratio_inverse_power * ratio_inverse_power;
+        }
+        h.factors.push_back(gamma);
+    }
+
+    std::vector<FieldElement> coefficients;
+    coefficients.reserve(norm.c_vec.size());
+    for (const auto& encoded : norm.c_vec) {
+        PURIFY_ASSIGN_OR_RETURN(
+            auto coefficient,
+            FieldElement::try_from_bytes32(encoded),
+            "accumulation:v4_coefficient");
+        coefficients.push_back(std::move(coefficient));
+    }
+    const auto coefficient_basis =
+        std::span(basis.points())
+            .subspan(basis.n_vec_len(), basis.l_vec_len());
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto coefficient_commitment,
+        msm(coefficient_basis, coefficients, context),
+        "accumulation:v4_coefficient_commitment");
+    if (coefficient_commitment !=
+        transcript_input.coefficient_commitment) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "accumulation:v4_coefficient_binding");
+    }
+
+    const auto prepared_binding =
+        transcript.prepared_binding.scalar;
+    auto c_vec =
+        internal::PreparedCircuitZkNormArgV4AdapterAccess::
+            take_coefficients(std::move(prepared));
+    return internal::AlgebraicPreparedNormAccess::create(
+        basis.digest(), prepared_binding, std::move(c_vec),
+        coefficient_commitment, residual,
+        std::array<PolynomialTerm, 2>{std::move(g), std::move(h)});
+}
 
 Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const PreparedNorm& norm,
                                                purify_secp_context* context) {

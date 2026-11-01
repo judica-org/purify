@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "../src/protocol/algebraic_circuit_accumulation.hpp"
 #include "purify/accumulation.hpp"
 #include "accumulation_test_access.hpp"
 #include "test_harness.hpp"
@@ -23,6 +24,7 @@ using purify::bppp::ScalarBytes;
 using purify_test::TestContext;
 using purify_test::expect_ok;
 namespace accum = purify::bppp::accumulation;
+namespace candidate = purify::bppp::candidate;
 
 enum class ZeroFamily { Neither, Norm, Linear };
 
@@ -887,6 +889,282 @@ void check_generic_v3_circuit_adapter(TestContext& ctx,
         first.statement_binding));
 }
 
+void check_v4_algebraic_circuit_adapter(
+    TestContext& ctx, purify_secp_context* secp) {
+    NativeBulletproofCircuit circuit(2, 1, 0);
+    const auto constraint =
+        circuit.add_constraint(FieldElement::zero());
+    circuit.add_output_term(
+        0, constraint, FieldElement::one());
+    circuit.add_commitment_term(
+        0, constraint, FieldElement::from_int(-1));
+
+    purify::BulletproofAssignmentData assignment;
+    assignment.left = {
+        FieldElement::from_int(3), FieldElement::from_int(5)};
+    assignment.right = {
+        FieldElement::from_int(4), FieldElement::from_int(6)};
+    assignment.output = {
+        FieldElement::from_int(12), FieldElement::from_int(30)};
+    assignment.commitments = {FieldElement::from_int(12)};
+    ScalarBytes prover_seed{};
+    prover_seed.fill(0x64);
+    const auto binding =
+        purify::bytes_from_ascii("test/v4-algebraic-adapter/v1");
+
+    auto basis = accum::Basis::create(
+        4, 4, "test/v4-algebraic-circuit/v1", secp);
+    expect_ok(ctx, basis, "V4 algebraic raw basis creates");
+    if (!basis) return;
+    auto publication = candidate::prove_circuit_zk_norm_arg_v4(
+        circuit, assignment, prover_seed, secp, binding);
+    expect_ok(ctx, publication, "V4 hidden proof publishes");
+    if (!publication) return;
+    auto prepared = candidate::prepare_circuit_zk_norm_arg_v4(
+        circuit, *publication, secp, binding);
+    expect_ok(ctx, prepared,
+              "V4 hidden outer statement prepares");
+    if (!prepared || !prepared->has_value()) {
+        ctx.expect(false,
+                   "V4 hidden preparation returns a pending norm");
+        return;
+    }
+    const auto standalone = candidate::verify_circuit_zk_norm_arg_v4(
+        circuit, *publication, secp, binding);
+    ctx.expect(standalone && *standalone,
+               "V4 full verification remains a separate path");
+
+    auto other_basis = accum::Basis::create(
+        4, 4, "test/v4-algebraic-circuit/other", secp);
+    expect_ok(ctx, other_basis,
+              "V4 alternative semantic basis creates");
+    if (!other_basis) return;
+    auto other_algebraic =
+        accum::prepare_v4_circuit_norm_for_algebraic_reduction(
+            *other_basis, **prepared, secp);
+    expect_ok(ctx, other_algebraic,
+              "purpose owner can select another semantic digest over shared raw points");
+    if (!other_algebraic) return;
+    auto wrong_shape = accum::Basis::create(
+        8, 4, "test/v4-algebraic-circuit/v1", secp);
+    expect_ok(ctx, wrong_shape,
+              "V4 alternative raw-basis shape creates");
+    if (!wrong_shape) return;
+    expect_error(
+        ctx,
+        accum::prepare_v4_circuit_norm_for_algebraic_reduction(
+            *wrong_shape, **prepared, secp),
+        purify::ErrorCode::BindingMismatch,
+        "V4 adapter rejects raw-basis shape substitution");
+
+    const auto expected_binding =
+        (**prepared).transcript().prepared_binding.scalar;
+    const auto expected_commitment =
+        (**prepared).transcript_input().coefficient_commitment;
+    const auto expected_residual =
+        (**prepared).pending_norm_residual();
+    const auto expected_coefficients =
+        (**prepared).norm().c_vec;
+    const auto& prepared_transcript = (**prepared).transcript();
+    const auto& prepared_input = (**prepared).transcript_input();
+    auto terminal_n = FieldElement::try_from_bytes32(
+        prepared_input.terminal_n);
+    auto terminal_l = FieldElement::try_from_bytes32(
+        prepared_input.terminal_l);
+    auto sqrt_minus_one_inverse = FieldElement::try_from_bytes32(
+        purify::UInt256::from_hex(
+            "8f52b651807a8b13549be5bd4c5db0dbe4779cc31afbd9d6"
+            "1915afdbdcba81c9")
+            .to_bytes_be());
+    expect_ok(ctx, terminal_n, "V4 terminal n is canonical");
+    expect_ok(ctx, terminal_l, "V4 terminal l is canonical");
+    expect_ok(ctx, sqrt_minus_one_inverse,
+              "Rust leaf square-root inverse is canonical");
+    if (!terminal_n || !terminal_l || !sqrt_minus_one_inverse) return;
+    auto rho_to_n = FieldElement::one();
+    for (std::size_t i = 0; i < 4; ++i) {
+        rho_to_n = rho_to_n * prepared_transcript.rho.scalar;
+    }
+    const auto expected_g_scale =
+        *terminal_n * rho_to_n *
+        prepared_transcript.mul_scale.scalar.inverse();
+    std::vector<FieldElement> expected_g_factors;
+    std::vector<FieldElement> expected_h_factors;
+    expected_g_factors.reserve(prepared_transcript.gammas.size());
+    expected_h_factors.reserve(prepared_transcript.gammas.size());
+    auto ratio_inverse_power =
+        prepared_transcript.mul_ratio.scalar.inverse();
+    for (std::size_t i = 0;
+         i < prepared_transcript.gammas.size(); ++i) {
+        const auto gamma = prepared_transcript.gammas[i].scalar;
+        expected_g_factors.push_back(
+            i == 0 ? gamma * *sqrt_minus_one_inverse
+                   : gamma * ratio_inverse_power);
+        if (i != 0) {
+            ratio_inverse_power =
+                ratio_inverse_power * ratio_inverse_power;
+        }
+        expected_h_factors.push_back(gamma);
+    }
+    auto algebraic =
+        accum::prepare_v4_circuit_norm_for_algebraic_reduction(
+            *basis, std::move(**prepared), secp);
+    expect_ok(ctx, algebraic,
+              "V4 pending norm maps to algebraic reduction data");
+    if (!algebraic) return;
+    ctx.expect(algebraic->prepared_binding() == expected_binding &&
+                   algebraic->coefficient_commitment() ==
+                       expected_commitment &&
+                   algebraic->residual() == expected_residual &&
+                   algebraic->c_vec() == expected_coefficients,
+               "V4 adapter retains authenticated binding, coefficients, and points");
+    const auto& polynomial = algebraic->polynomial();
+    ctx.expect(
+        polynomial[0].scale == expected_g_scale &&
+            polynomial[0].offset == 0 &&
+            polynomial[0].factors == expected_g_factors &&
+            polynomial[1].scale == *terminal_l &&
+            polynomial[1].offset == 4 &&
+            polynomial[1].factors == expected_h_factors,
+        "V4 adapter matches both compact Rust leaf polynomial terms");
+
+    auto reduction = accum::prove_algebraic_norm_reduction(
+        *basis, *algebraic, secp);
+    expect_ok(ctx, reduction,
+              "V4 algebraic coefficient reduction proves");
+    if (!reduction) return;
+    auto claim = accum::verify_algebraic_norm_reduction(
+        *basis, *algebraic, *reduction, secp);
+    expect_ok(ctx, claim,
+              "V4 algebraic coefficient reduction verifies");
+    if (!claim) return;
+    expect_ok(ctx, accum::decide(*basis, *claim, secp),
+              "V4 hidden pending norm reaches mandatory decision");
+    ctx.expect(
+        !accum::verify_algebraic_norm_reduction(
+            *other_basis, *other_algebraic, *reduction, secp),
+        "fixed V4 reduction rejects changing the caller-selected semantic digest");
+
+    const auto wrong_binding =
+        purify::bytes_from_ascii("test/v4-algebraic-adapter/wrong");
+    auto changed_binding = candidate::prepare_circuit_zk_norm_arg_v4(
+        circuit, *publication, secp, wrong_binding);
+    ctx.expect(changed_binding && !changed_binding->has_value(),
+               "V4 preparation rejects binding substitution");
+
+    auto changed_circuit = circuit;
+    const auto changed_constraint =
+        changed_circuit.add_constraint(FieldElement::one());
+    changed_circuit.add_left_term(
+        0, changed_constraint, FieldElement::one());
+    auto changed_coefficients =
+        candidate::prepare_circuit_zk_norm_arg_v4(
+            changed_circuit, *publication, secp, binding);
+    ctx.expect(changed_coefficients &&
+                   !changed_coefficients->has_value(),
+               "V4 preparation rejects coefficient-circuit substitution");
+
+    purify::BulletproofAssignmentData second_assignment;
+    second_assignment.left = {
+        FieldElement::from_int(7), FieldElement::from_int(8)};
+    second_assignment.right = {
+        FieldElement::from_int(2), FieldElement::from_int(3)};
+    second_assignment.output = {
+        FieldElement::from_int(14), FieldElement::from_int(24)};
+    second_assignment.commitments = {FieldElement::from_int(14)};
+    ScalarBytes second_seed{};
+    second_seed.fill(0x65);
+    auto second_publication =
+        candidate::prove_circuit_zk_norm_arg_v4(
+            circuit, second_assignment, second_seed, secp, binding);
+    expect_ok(ctx, second_publication,
+              "second V4 gamma source publishes");
+    if (!second_publication) return;
+    auto changed_gamma = *publication;
+    std::copy_n(
+        second_publication->proof.norm_proof.begin(),
+        sizeof(candidate::PackedPointPairV4),
+        changed_gamma.proof.norm_proof.begin());
+    auto changed_gamma_prepared =
+        candidate::prepare_circuit_zk_norm_arg_v4(
+            circuit, changed_gamma, secp, binding);
+    expect_ok(ctx, changed_gamma_prepared,
+              "changed V4 round remains a pending inner obligation");
+    if (!changed_gamma_prepared ||
+        !changed_gamma_prepared->has_value()) {
+        ctx.expect(false,
+                   "changed V4 round has canonical proof encodings");
+        return;
+    }
+    ctx.expect(
+        (**changed_gamma_prepared).transcript().gammas[0].scalar !=
+            expected_h_factors[0],
+        "V4 round substitution changes its explicit gamma");
+    auto changed_gamma_algebraic =
+        accum::prepare_v4_circuit_norm_for_algebraic_reduction(
+            *basis, std::move(**changed_gamma_prepared), secp);
+    expect_ok(ctx, changed_gamma_algebraic,
+              "V4 adapter binds the substituted explicit gamma");
+    if (!changed_gamma_algebraic) return;
+    auto changed_gamma_reduction =
+        accum::prove_algebraic_norm_reduction(
+            *basis, *changed_gamma_algebraic, secp);
+    expect_ok(ctx, changed_gamma_reduction,
+              "changed-gamma coefficient opening proves");
+    if (!changed_gamma_reduction) return;
+    auto changed_gamma_claim =
+        accum::verify_algebraic_norm_reduction(
+            *basis, *changed_gamma_algebraic,
+            *changed_gamma_reduction, secp);
+    expect_ok(ctx, changed_gamma_claim,
+              "changed-gamma reduction remains pending");
+    if (!changed_gamma_claim) return;
+    ctx.expect(!accum::decide(
+                   *basis, *changed_gamma_claim, secp),
+               "mandatory decision rejects gamma substitution");
+
+    auto public_point = scalar_point(
+        assignment.commitments[0], secp);
+    expect_ok(ctx, public_point,
+              "V4 public commitment point derives");
+    if (!public_point) return;
+    const std::array<PointBytes, 1> public_points{*public_point};
+    auto public_publication =
+        candidate::prove_circuit_zk_norm_arg_v4_with_public_commitments(
+            circuit, assignment, prover_seed, public_points, secp,
+            binding);
+    expect_ok(ctx, public_publication, "V4 public proof publishes");
+    if (!public_publication) return;
+    auto public_prepared = candidate::
+        prepare_circuit_zk_norm_arg_v4_with_public_commitments(
+            circuit, *public_publication, public_points, secp, binding);
+    expect_ok(ctx, public_prepared,
+              "V4 public outer statement prepares");
+    if (!public_prepared || !public_prepared->has_value()) {
+        ctx.expect(false,
+                   "V4 public preparation returns a pending norm");
+        return;
+    }
+    auto public_algebraic =
+        accum::prepare_v4_circuit_norm_for_algebraic_reduction(
+            *basis, std::move(**public_prepared), secp);
+    expect_ok(ctx, public_algebraic,
+              "V4 public pending norm maps to algebraic data");
+    if (!public_algebraic) return;
+    auto public_reduction = accum::prove_algebraic_norm_reduction(
+        *basis, *public_algebraic, secp);
+    expect_ok(ctx, public_reduction,
+              "V4 public coefficient reduction proves");
+    if (!public_reduction) return;
+    auto public_claim = accum::verify_algebraic_norm_reduction(
+        *basis, *public_algebraic, *public_reduction, secp);
+    expect_ok(ctx, public_claim,
+              "V4 public coefficient reduction verifies");
+    if (!public_claim) return;
+    expect_ok(ctx, accum::decide(*basis, *public_claim, secp),
+              "V4 public pending norm reaches mandatory decision");
+}
+
 void check_zero_families(TestContext& ctx, purify_secp_context* secp) {
     auto basis = accum::Basis::create(4, 4,
                                       "test/zero-family/v1", secp);
@@ -1309,6 +1587,7 @@ void run_norm_accumulation_tests(TestContext& ctx) {
     check_bindings_and_encodings(ctx, secp.get());
     check_v3_circuit_adapter(ctx, secp.get());
     check_generic_v3_circuit_adapter(ctx, secp.get());
+    check_v4_algebraic_circuit_adapter(ctx, secp.get());
     check_zero_families(ctx, secp.get());
     check_reference_vector(ctx, secp.get());
     check_algebraic_suite(ctx, secp.get());

@@ -13,10 +13,11 @@ and integers use the typed frames in `AlgebraicTranscript`.
 The coefficient reduction accepts only `AlgebraicPreparedNorm`. Its
 `prepared_binding` is a canonical nonzero scalar that the production V4
 relation must emit; the SHA digest carried by `PreparedNorm` is not part of
-this suite. The staged `bind_algebraic_prepared_norm` factory only constructs
-a short-reduction statement. It does not authenticate a caller-supplied
-binding to a V4 child proof, so an eventual acceptance API must call it only
-after V4 verification and will replace or hide that raw factory.
+this suite. Production code can construct this type only from the typed V4
+prepared-proof adapter. That adapter authenticates the exact raw-generator
+bridge and prepares its pending norm obligation; the purpose-owned caller
+selects the `Basis` semantic digest. It does not accept the child proof.
+Acceptance requires reduction verification followed by `decide()`.
 
 ## Opening base
 

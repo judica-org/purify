@@ -3,6 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include "purify/puresign/recovery_root.hpp"
+#include "purify/puresign/recovery_root_accumulation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -462,6 +463,46 @@ Result<RecoveryRootSetupProof> prove_recovery_root_setup(
             cache),
         "recovery_root:prove_circuit");
     return RecoveryRootSetupProof(std::move(proof));
+}
+
+Result<RecoveryRootSetupAccumulator>
+RecoveryRootSetupAccumulator::create(
+    purify_secp_context* secp_context) {
+    static_assert(RecoveryRootSetupProof::kInnerProofSize == 65 * 12 + 64);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto basis,
+        bppp::accumulation::Basis::create(
+            kNormVectorLength, kNormVectorLength,
+            "Purify/Accountable/RecoveryRootSetupAccumulation/v1",
+            secp_context),
+        "recovery_root_accumulation:basis");
+    return RecoveryRootSetupAccumulator(std::move(basis));
+}
+
+Result<bppp::accumulation::PreparedNorm>
+RecoveryRootSetupAccumulator::prepare(
+    const NonceHostBoundSigningRoster& roster,
+    const UInt512& recovery_root,
+    const RecoveryRootSetupProof& proof,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) const {
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(secp_context,
+                             "recovery_root_accumulation:prepare"),
+        "recovery_root_accumulation:prepare");
+    PURIFY_RETURN_IF_ERROR(proof.validate_encoding(secp_context),
+                           "recovery_root_accumulation:proof");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& circuit, public_setup_circuit(recovery_root),
+        "recovery_root_accumulation:circuit");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& binding, setup_binding(roster, recovery_root),
+        "recovery_root_accumulation:binding");
+    const std::array<PointBytes, 1> outputs{roster_point(roster)};
+    return bppp::accumulation::
+        prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+            basis_, circuit, proof.circuit_proof_, outputs,
+            secp_context, binding, cache);
 }
 
 Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(

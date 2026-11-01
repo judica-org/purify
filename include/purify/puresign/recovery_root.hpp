@@ -13,6 +13,8 @@
 
 namespace purify::accountable {
 
+class RecoveryRootSetupAccumulator;
+
 /** Transparent proof linking the aggregate signing scalar to a recovery root. */
 class RecoveryRootSetupProof {
 public:
@@ -50,6 +52,7 @@ private:
     friend Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
         NonceHostBoundSigningRoster, const UInt512&,
         const RecoveryRootSetupProof&, purify_secp_context*);
+    friend class RecoveryRootSetupAccumulator;
 };
 
 /** Derive the canonical companion-curve recovery key from an extracted q. */

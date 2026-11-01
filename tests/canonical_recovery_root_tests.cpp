@@ -191,6 +191,41 @@ void test_setup_and_recovery(TestContext& ctx) {
     auto reencoded_proof = parsed_proof->serialize(secp.get());
     ctx.expect(reencoded_proof && *reencoded_proof == *encoded_proof,
                "setup proof encoding round-trips exactly");
+    auto setup_accumulator = purify::accountable::
+        RecoveryRootSetupAccumulator::create(secp.get());
+    expect_ok(ctx, setup_accumulator,
+              "recovery-root setup fixed accumulation basis creates");
+    if (!setup_accumulator) return;
+    ctx.expect(
+        setup_accumulator->basis().n_vec_len() ==
+                purify::accountable::RecoveryRootSetupAccumulator::
+                    kNormVectorLength &&
+            setup_accumulator->basis().l_vec_len() ==
+                purify::accountable::RecoveryRootSetupAccumulator::
+                    kNormVectorLength,
+        "recovery-root setup accumulation fixes both norm dimensions");
+    auto setup_prepared = setup_accumulator->prepare(
+        *bound_roster, root->public_key, *parsed_proof, secp.get());
+    expect_ok(ctx, setup_prepared,
+              "typed adapter prepares the exact setup statement");
+    if (!setup_prepared) return;
+    auto setup_reduction =
+        purify::bppp::accumulation::prove_norm_reduction(
+            setup_accumulator->basis(), *setup_prepared, secp.get());
+    expect_ok(ctx, setup_reduction,
+              "recovery-root setup coefficient opening proves");
+    if (!setup_reduction) return;
+    auto setup_pending =
+        purify::bppp::accumulation::verify_norm_reduction(
+            setup_accumulator->basis(), *setup_prepared,
+            *setup_reduction, secp.get());
+    expect_ok(ctx, setup_pending,
+              "recovery-root setup reduction stays pending");
+    if (!setup_pending) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       setup_accumulator->basis(), *setup_pending,
+                       secp.get()),
+              "final MSM discharges the honest setup obligation");
     auto changed_encoding = *encoded_proof;
     changed_encoding[0] ^= 1;
     expect_error(ctx,
@@ -326,6 +361,13 @@ void test_setup_and_recovery(TestContext& ctx) {
                    *bound_roster, other_root->public_key,
                    *proof, secp.get()),
                "unchanged setup proof rejects another recovery root");
+    expect_error(
+        ctx,
+        setup_accumulator->prepare(
+            *bound_roster, other_root->public_key, *parsed_proof,
+            secp.get()),
+        purify::ErrorCode::EquationMismatch,
+        "typed adapter rejects a setup proof for another recovery root");
     auto changed_members = member_keys;
     auto changed_member = secp_point(
         FieldElement::from_u64(5), secp.get());

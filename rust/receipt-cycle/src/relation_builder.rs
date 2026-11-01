@@ -88,13 +88,11 @@ pub(crate) struct StateWire {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub(crate) struct StateVariable {
     expression: Expression,
     wire: StateWire,
 }
 
-#[allow(dead_code)]
 impl StateVariable {
     pub(crate) fn expression(&self) -> &Expression {
         &self.expression
@@ -127,7 +125,6 @@ impl Builder {
         Expression::variable(WireKind::Left, index, value)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn allocate_state(&mut self, value: Scalar) -> StateVariable {
         let index = self.gates.len();
         let expression = self.allocate(value);
@@ -140,7 +137,6 @@ impl Builder {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn expose_state(&mut self, value: &Expression) -> StateVariable {
         let state = self.allocate_state(value.value());
         self.constrain_equal(state.expression(), value);
@@ -192,7 +188,6 @@ impl Builder {
         Ok((encode_circuit(&circuit), encode_assignment(&assignment)))
     }
 
-    #[allow(dead_code)]
     pub(crate) fn finish_stateful(
         self,
         inputs: &[StateVariable],

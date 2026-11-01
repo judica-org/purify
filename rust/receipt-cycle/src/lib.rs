@@ -25,6 +25,8 @@ mod algebraic_circuit_norm_leaf;
 mod algebraic_circuit_transcript;
 #[allow(dead_code)]
 mod algebraic_transcript;
+#[allow(dead_code)]
+mod anchor_recurrence;
 mod ffi;
 mod gadgets;
 // This is an internal candidate component, not a receipt acceptance API.

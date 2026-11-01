@@ -24,7 +24,10 @@ namespace purify::accountable {
  */
 class ConstructionReceiptEnvelope {
 public:
-    static constexpr std::size_t kMaximumParentProofSize = 4096;
+    /** One-phase Secq proof at the backend's 2^24 multiplier limit. */
+    static constexpr std::size_t kMaximumParentProofSize =
+        425 + 66 * 24;
+    static_assert(kMaximumParentProofSize == 2009);
 
     [[nodiscard]] static Result<ConstructionReceiptEnvelope> create(
         ConstructionReceiptPayload payload,

@@ -248,6 +248,15 @@ pub(crate) struct DirectNovaSuite<const ARITY: usize> {
     template: DirectNovaTemplate<ARITY>,
     public_params: DirectPublicParams<ARITY>,
     prover_key: DirectProverKey<ARITY>,
+    verifier: DirectNovaVerifier<ARITY>,
+}
+
+/// Verification-only state for one fixed direct Nova suite.
+///
+/// This deliberately contains no relation template, public parameters, or
+/// prover key. Converting a suite into this type is a one-way release of all
+/// proving capability.
+pub(crate) struct DirectNovaVerifier<const ARITY: usize> {
     verifier_key: DirectVerifierKey<ARITY>,
     proof_shape: NovaCompressedProofShape,
     metadata: DirectNovaSuiteMetadata,
@@ -439,6 +448,12 @@ pub(crate) struct SelectedDirectNovaSuite<const ARITY: usize> {
     inner: DirectNovaSuite<ARITY>,
 }
 
+/// A verification-only context promoted through one exact local profile.
+pub(crate) struct SelectedDirectNovaVerifier<const ARITY: usize> {
+    expected: &'static ExpectedDirectNovaSuite,
+    inner: DirectNovaVerifier<ARITY>,
+}
+
 impl<const ARITY: usize> DirectNovaSuite<ARITY> {
     /// Builds an unselected suite for internal qualification and test tools.
     /// Receipt acceptance must use `setup_exact` instead.
@@ -459,7 +474,7 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
         let (template, trusted_step) = DirectNovaTemplate::from_relation(trusted_relation)?;
         expected.precheck_relation(trusted_step.relation_id())?;
         let suite = Self::setup_prepared(template, trusted_step)?;
-        expected.validate::<ARITY>(&suite.metadata, &suite.proof_shape)?;
+        expected.validate::<ARITY>(&suite.verifier.metadata, &suite.verifier.proof_shape)?;
         Ok(SelectedDirectNovaSuite {
             expected,
             inner: suite,
@@ -521,16 +536,18 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
             template,
             public_params,
             prover_key,
-            verifier_key,
-            proof_shape,
-            metadata,
-            pool,
-            operation: Mutex::new(()),
+            verifier: DirectNovaVerifier {
+                verifier_key,
+                proof_shape,
+                metadata,
+                pool,
+                operation: Mutex::new(()),
+            },
         })
     }
 
     pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
-        self.metadata
+        self.verifier.metadata()
     }
 
     pub(crate) fn start(
@@ -552,6 +569,46 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
             completed_steps: 0,
             recursive: None,
         })
+    }
+
+    /// Verifies the proof against the exact initial state and external step
+    /// count, returning its authenticated recurrence output.
+    pub(crate) fn verify_final(
+        &self,
+        initial_state: &[DirectNovaScalar; ARITY],
+        expected_steps: usize,
+        proof: &[u8],
+    ) -> Result<[DirectNovaScalar; ARITY], DirectNovaSessionError> {
+        self.verifier
+            .verify_final(initial_state, expected_steps, proof)
+    }
+
+    pub(crate) fn verify_exact(
+        &self,
+        initial_state: &[DirectNovaScalar; ARITY],
+        expected_steps: usize,
+        expected_final_state: &[DirectNovaScalar; ARITY],
+        proof: &[u8],
+    ) -> Result<(), DirectNovaSessionError> {
+        self.verifier
+            .verify_exact(initial_state, expected_steps, expected_final_state, proof)
+    }
+
+    fn serialized<T: Send>(
+        &self,
+        operation: impl FnOnce() -> Result<T, DirectNovaSessionError> + Send,
+    ) -> Result<T, DirectNovaSessionError> {
+        self.verifier.serialized(operation)
+    }
+
+    fn into_verifier(self) -> DirectNovaVerifier<ARITY> {
+        self.verifier
+    }
+}
+
+impl<const ARITY: usize> DirectNovaVerifier<ARITY> {
+    pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
+        self.metadata
     }
 
     /// Verifies the proof against the exact initial state and external step
@@ -631,6 +688,53 @@ impl<const ARITY: usize> SelectedDirectNovaSuite<ARITY> {
         expected_steps: usize,
     ) -> Result<DirectNovaProverSession<'_, ARITY>, DirectNovaSessionError> {
         self.inner.start(initial_state, expected_steps)
+    }
+
+    /// Permanently releases every proving component while retaining the
+    /// exact selected verifier.
+    pub(crate) fn into_verifier(self) -> SelectedDirectNovaVerifier<ARITY> {
+        SelectedDirectNovaVerifier {
+            expected: self.expected,
+            inner: self.inner.into_verifier(),
+        }
+    }
+
+    /// Authenticates the recurrence output under this selected suite.
+    ///
+    /// The returned state is not construction-receipt acceptance: the
+    /// construction wrapper must still bind its verifier-derived suffix and
+    /// complete the native final accumulation decision.
+    pub(crate) fn verify_final(
+        &self,
+        initial_state: &[DirectNovaScalar; ARITY],
+        expected_steps: usize,
+        proof: &[u8],
+    ) -> Result<[DirectNovaScalar; ARITY], DirectNovaSessionError> {
+        self.inner
+            .verify_final(initial_state, expected_steps, proof)
+    }
+
+    /// Verifies only the caller's exact statement. The proof supplies neither
+    /// suite metadata nor its own recursive step count.
+    pub(crate) fn verify_exact(
+        &self,
+        initial_state: &[DirectNovaScalar; ARITY],
+        expected_steps: usize,
+        expected_final_state: &[DirectNovaScalar; ARITY],
+        proof: &[u8],
+    ) -> Result<(), DirectNovaSessionError> {
+        self.inner
+            .verify_exact(initial_state, expected_steps, expected_final_state, proof)
+    }
+}
+
+impl<const ARITY: usize> SelectedDirectNovaVerifier<ARITY> {
+    pub(crate) const fn expected(&self) -> &'static ExpectedDirectNovaSuite {
+        self.expected
+    }
+
+    pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
+        self.inner.metadata()
     }
 
     /// Authenticates the recurrence output under this selected suite.
@@ -747,6 +851,7 @@ impl<const ARITY: usize> DirectNovaProverSession<'_, ARITY> {
             )?;
             Ok(self
                 .suite
+                .verifier
                 .proof_shape
                 .as_fixed_serde_shape()
                 .encode(&compressed)?)
@@ -1308,49 +1413,6 @@ mod tests {
         assert_eq!(metadata.proof_length, 10_436);
         assert_eq!(metadata.codec_sequence_count, 104);
 
-        let session = selected
-            .start(z0, 2)
-            .expect("two-step session")
-            .add_relation(relation(source_z0))
-            .expect("first fold")
-            .add_relation(relation(source_z1))
-            .expect("second fold");
-        let proof = session.finish().expect("compress two-step proof");
-        assert_eq!(proof.len(), metadata.proof_length);
-        assert_eq!(
-            selected
-                .verify_final(&z0, 2, &proof)
-                .expect("authenticate final state"),
-            z2
-        );
-        selected
-            .verify_exact(&z0, 2, &z2, &proof)
-            .expect("verify canonical proof");
-
-        let mut short = proof.clone();
-        short.pop();
-        assert!(matches!(
-            selected.verify_final(&z0, 2, &short),
-            Err(DirectNovaSessionError::ProofLength { .. })
-        ));
-        let malformed = vec![0xff; proof.len()];
-        assert!(selected.verify_final(&z0, 2, &malformed).is_err());
-        assert!(matches!(
-            selected.verify_final(&z0, 0, &proof),
-            Err(DirectNovaSessionError::StepCount {
-                expected: 1,
-                actual: 0
-            })
-        ));
-
-        let mut wrong_final = z2;
-        wrong_final[0] += DirectNovaScalar::ONE;
-        assert!(matches!(
-            selected.verify_exact(&z0, 2, &wrong_final, &proof),
-            Err(DirectNovaSessionError::FinalState)
-        ));
-        assert!(selected.verify_exact(&z0, 1, &z1, &proof).is_err());
-
         let incomplete = selected.start(z0, 2).expect("incomplete session");
         assert!(matches!(
             incomplete.finish(),
@@ -1368,5 +1430,51 @@ mod tests {
             discontinuous,
             Err(DirectNovaSessionError::StateContinuity)
         ));
+
+        let session = selected
+            .start(z0, 2)
+            .expect("two-step session")
+            .add_relation(relation(source_z0))
+            .expect("first fold")
+            .add_relation(relation(source_z1))
+            .expect("second fold");
+        let proof = session.finish().expect("compress two-step proof");
+        assert_eq!(proof.len(), metadata.proof_length);
+        let verifier = selected.into_verifier();
+        assert_eq!(verifier.expected(), &TINY_EXPECTED_SUITE);
+        assert_eq!(verifier.metadata(), metadata);
+        assert_eq!(
+            verifier
+                .verify_final(&z0, 2, &proof)
+                .expect("authenticate final state"),
+            z2
+        );
+        verifier
+            .verify_exact(&z0, 2, &z2, &proof)
+            .expect("verify canonical proof");
+
+        let mut short = proof.clone();
+        short.pop();
+        assert!(matches!(
+            verifier.verify_final(&z0, 2, &short),
+            Err(DirectNovaSessionError::ProofLength { .. })
+        ));
+        let malformed = vec![0xff; proof.len()];
+        assert!(verifier.verify_final(&z0, 2, &malformed).is_err());
+        assert!(matches!(
+            verifier.verify_final(&z0, 0, &proof),
+            Err(DirectNovaSessionError::StepCount {
+                expected: 1,
+                actual: 0
+            })
+        ));
+
+        let mut wrong_final = z2;
+        wrong_final[0] += DirectNovaScalar::ONE;
+        assert!(matches!(
+            verifier.verify_exact(&z0, 2, &wrong_final, &proof),
+            Err(DirectNovaSessionError::FinalState)
+        ));
+        assert!(verifier.verify_exact(&z0, 1, &z1, &proof).is_err());
     }
 }

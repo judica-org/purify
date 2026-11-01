@@ -539,40 +539,18 @@ ConstructionReceiptAccumulator::promote_setup_claim(
 
 Result<ConstructionReceiptEnvelope> ConstructionReceiptEnvelope::create(
     ConstructionReceiptPayload payload,
-    Bytes root_claim,
-    Bytes parent_proof,
-    const ConstructionReceiptAccumulator& accumulator,
-    purify_secp_context* secp_context) {
-    if (root_claim.size() !=
-        ConstructionReceiptAccumulator::kRootClaimSerializedSize) {
-        return unexpected_error(
-            ErrorCode::InvalidFixedSize,
-            "construction_envelope:root_claim_size");
-    }
-    if (parent_proof.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput,
+    Bytes parent_proof) {
+    if (parent_proof.size() != kParentProofSize) {
+        return unexpected_error(ErrorCode::InvalidFixedSize,
                                 "construction_envelope:parent_proof");
     }
-    if (parent_proof.size() > kMaximumParentProofSize) {
-        return unexpected_error(ErrorCode::UnexpectedSize,
-                                "construction_envelope:parent_proof");
-    }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& pending,
-        bppp::accumulation::parse_root_claim(
-            accumulator.anchors().basis(), root_claim, secp_context),
-        "construction_envelope:root_claim");
-    (void)pending;
-    return ConstructionReceiptEnvelope(
-        std::move(payload), std::move(root_claim),
-        std::move(parent_proof));
+    return ConstructionReceiptEnvelope(std::move(payload),
+                                       std::move(parent_proof));
 }
 
 Result<ConstructionReceiptEnvelope>
 ConstructionReceiptEnvelope::deserialize(
-    std::span<const unsigned char> encoded,
-    const ConstructionReceiptAccumulator& accumulator,
-    purify_secp_context* secp_context) {
+    std::span<const unsigned char> encoded) {
     constexpr std::size_t count_offset = 65;
     constexpr std::size_t count_size = 4;
     if (encoded.size() < ConstructionReceiptPayload::kFixedHeaderSize) {
@@ -586,12 +564,10 @@ ConstructionReceiptEnvelope::deserialize(
         const std::size_t payload_size,
         encoded_size_for_count(entry_count),
         "construction_envelope:payload_size");
-    std::size_t proof_offset = 0;
-    if (!checked_add_size(
-            payload_size,
-            ConstructionReceiptAccumulator::kRootClaimSerializedSize,
-            proof_offset) ||
-        encoded.size() <= proof_offset) {
+    std::size_t encoded_size = 0;
+    if (!checked_add_size(payload_size, kParentProofSize,
+                          encoded_size) ||
+        encoded.size() != encoded_size) {
         return unexpected_error(ErrorCode::InvalidFixedSize,
                                 "construction_envelope:encoded_size");
     }
@@ -600,18 +576,13 @@ ConstructionReceiptEnvelope::deserialize(
         ConstructionReceiptPayload::deserialize(
             encoded.first(payload_size)),
         "construction_envelope:payload");
-    Bytes root_claim(
-        encoded.begin() + payload_size,
-        encoded.begin() + proof_offset);
-    Bytes parent_proof(encoded.begin() + proof_offset, encoded.end());
-    return create(std::move(payload), std::move(root_claim),
-                  std::move(parent_proof), accumulator, secp_context);
+    Bytes parent_proof(encoded.begin() + payload_size, encoded.end());
+    return create(std::move(payload), std::move(parent_proof));
 }
 
 Bytes ConstructionReceiptEnvelope::serialize() const {
     Bytes encoded = payload_.serialize();
     encoded.reserve(serialized_size());
-    encoded.insert(encoded.end(), root_claim_.begin(), root_claim_.end());
     encoded.insert(encoded.end(), parent_proof_.begin(),
                    parent_proof_.end());
     assert(encoded.size() == serialized_size());
@@ -619,8 +590,7 @@ Bytes ConstructionReceiptEnvelope::serialize() const {
 }
 
 std::size_t ConstructionReceiptEnvelope::serialized_size() const noexcept {
-    return payload_.serialized_size() + root_claim_.size() +
-           parent_proof_.size();
+    return payload_.serialized_size() + parent_proof_.size();
 }
 
 }  // namespace purify::accountable

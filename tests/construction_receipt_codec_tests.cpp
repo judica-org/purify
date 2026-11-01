@@ -21,7 +21,6 @@ using purify::Result;
 using purify::UInt512;
 using purify::accountable::AnchorReference;
 using purify::accountable::AnchorPunishmentPublicKey;
-using purify::accountable::ConstructionReceiptAccumulator;
 using purify::accountable::ConstructionReceiptEntry;
 using purify::accountable::ConstructionReceiptEnvelope;
 using purify::accountable::ConstructionReceiptPayload;
@@ -401,76 +400,67 @@ void test_parent_envelope_layout_and_syntax(TestContext& ctx) {
     auto payload = make_payload(*fixture);
     expect_ok(ctx, payload, "envelope payload constructs");
     if (!payload) return;
-    auto secp = purify::make_secp_context();
-    ctx.expect(static_cast<bool>(secp),
-               "envelope secp context constructs");
-    if (!secp) return;
-    auto accumulator = ConstructionReceiptAccumulator::create(secp.get());
-    expect_ok(ctx, accumulator,
-              "envelope fixed construction basis creates");
-    if (!accumulator) return;
-
-    Bytes root_claim(
-        ConstructionReceiptAccumulator::kRootClaimSerializedSize, 0);
-    Bytes parent_proof(1019, 0xa5);
+    static_assert(ConstructionReceiptEnvelope::kParentProofSize == 12'466);
+    Bytes parent_proof(
+        ConstructionReceiptEnvelope::kParentProofSize, 0xa5);
     auto envelope = ConstructionReceiptEnvelope::create(
-        *payload, root_claim, parent_proof, *accumulator, secp.get());
+        *payload, parent_proof);
     expect_ok(ctx, envelope, "canonical parent envelope constructs");
     if (!envelope) return;
     const Bytes encoded = envelope->serialize();
     const std::size_t expected_size =
-        69 + 224 * fixture->entries.size() + 545 +
-        parent_proof.size();
+        69 + 224 * fixture->entries.size() + parent_proof.size();
     ctx.expect(envelope->serialized_size() == expected_size &&
                    encoded.size() == expected_size,
-               "envelope is exactly 69 + 224*N + 545 + proof bytes");
+               "envelope is exactly 69 + 224*N + 12,466 bytes");
     const Bytes payload_bytes = payload->serialize();
     ctx.expect(std::equal(payload_bytes.begin(), payload_bytes.end(),
                           encoded.begin()),
                "envelope starts with the canonical public payload");
-    auto decoded = ConstructionReceiptEnvelope::deserialize(
-        encoded, *accumulator, secp.get());
+    auto decoded = ConstructionReceiptEnvelope::deserialize(encoded);
     expect_ok(ctx, decoded, "canonical parent envelope decodes");
     if (!decoded) return;
     ctx.expect(decoded->serialize() == encoded &&
-                   decoded->root_claim() == root_claim &&
                    decoded->parent_proof() == parent_proof,
                "parent envelope round-trips exactly");
 
-    auto missing_proof = encoded;
-    missing_proof.resize(payload->serialized_size() +
-                         root_claim.size());
+    auto truncated = encoded;
+    truncated.pop_back();
     expect_error(ctx,
-                 ConstructionReceiptEnvelope::deserialize(
-                     missing_proof, *accumulator, secp.get()),
+                 ConstructionReceiptEnvelope::deserialize(truncated),
                  purify::ErrorCode::InvalidFixedSize,
-                 "an envelope without a parent proof is rejected");
+                 "a truncated fixed-size parent proof is rejected");
 
-    auto noncanonical_root = encoded;
-    std::fill_n(
-        noncanonical_root.begin() + payload->serialized_size() + 33,
-        32, 0xff);
+    auto trailing = encoded;
+    trailing.push_back(0);
     expect_error(ctx,
-                 ConstructionReceiptEnvelope::deserialize(
-                     noncanonical_root, *accumulator, secp.get()),
-                 purify::ErrorCode::RangeViolation,
-                 "a noncanonical root-claim scalar is rejected");
+                 ConstructionReceiptEnvelope::deserialize(trailing),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "trailing parent-proof bytes are rejected");
 
-    expect_error(
-        ctx,
-        ConstructionReceiptEnvelope::create(
-            *payload, root_claim,
-            Bytes(ConstructionReceiptEnvelope::kMaximumParentProofSize + 1,
-                  0x5a),
-            *accumulator, secp.get()),
-        purify::ErrorCode::UnexpectedSize,
-        "an oversized parent proof is rejected before publication");
+    auto short_proof = parent_proof;
+    short_proof.pop_back();
     expect_error(ctx,
                  ConstructionReceiptEnvelope::create(
-                     *payload, root_claim, parent_proof,
-                     *accumulator, nullptr),
-                 purify::ErrorCode::MissingValue,
-                 "root syntax validation requires a secp context");
+                     *payload, std::move(short_proof)),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "a short parent proof is rejected before publication");
+
+    auto long_proof = parent_proof;
+    long_proof.push_back(0);
+    expect_error(ctx,
+                 ConstructionReceiptEnvelope::create(
+                     *payload, std::move(long_proof)),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "a long parent proof is rejected before publication");
+
+    Bytes legacy = payload_bytes;
+    legacy.insert(legacy.end(), 545, 0);
+    legacy.insert(legacy.end(), 1019, 0xa5);
+    expect_error(ctx,
+                 ConstructionReceiptEnvelope::deserialize(legacy),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "the legacy root-plus-variable-proof envelope is rejected");
 }
 
 void test_statement_digest_binds_all_inputs(TestContext& ctx) {

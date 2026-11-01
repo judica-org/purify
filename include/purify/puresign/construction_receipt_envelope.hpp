@@ -9,37 +9,30 @@
 #include <utility>
 
 #include "purify/puresign/construction_receipt.hpp"
-#include "purify/puresign/construction_receipt_accumulation.hpp"
 
 namespace purify::accountable {
 
 /**
  * Canonical transport for one candidate construction receipt.
  *
- * Encoding is payload || root_claim || parent_proof with no additional
- * framing. The payload entry count fixes its size, the receipt version fixes
- * the root size, and the remaining bytes are the parent proof. Parsing only
- * establishes canonical transport. Acceptance still requires the exact
- * purpose parent verifier and a successful final accumulation decision.
+ * Encoding is payload || parent_proof with no additional framing. The payload
+ * entry count fixes its size and the selected native-profile Nova suite fixes
+ * the proof size. Parsing only establishes canonical transport. Acceptance
+ * still requires exact Rust proof verification and use of its authenticated
+ * returned root, followed by native parsing and the final accumulation
+ * decision.
  */
 class ConstructionReceiptEnvelope {
 public:
-    /** One-phase Secq proof at the backend's 2^24 multiplier limit. */
-    static constexpr std::size_t kMaximumParentProofSize =
-        425 + 66 * 24;
-    static_assert(kMaximumParentProofSize == 2009);
+    /** Exact canonical proof size of the selected native-profile Nova suite. */
+    static constexpr std::size_t kParentProofSize = 12'466;
 
     [[nodiscard]] static Result<ConstructionReceiptEnvelope> create(
         ConstructionReceiptPayload payload,
-        Bytes root_claim,
-        Bytes parent_proof,
-        const ConstructionReceiptAccumulator& accumulator,
-        purify_secp_context* secp_context);
+        Bytes parent_proof);
 
     [[nodiscard]] static Result<ConstructionReceiptEnvelope> deserialize(
-        std::span<const unsigned char> encoded,
-        const ConstructionReceiptAccumulator& accumulator,
-        purify_secp_context* secp_context);
+        std::span<const unsigned char> encoded);
 
     [[nodiscard]] Bytes serialize() const;
     [[nodiscard]] std::size_t serialized_size() const noexcept;
@@ -48,24 +41,17 @@ public:
         return payload_;
     }
 
-    [[nodiscard]] const Bytes& root_claim() const noexcept {
-        return root_claim_;
-    }
-
     [[nodiscard]] const Bytes& parent_proof() const noexcept {
         return parent_proof_;
     }
 
 private:
     ConstructionReceiptEnvelope(ConstructionReceiptPayload payload,
-                                Bytes root_claim,
                                 Bytes parent_proof)
         : payload_(std::move(payload)),
-          root_claim_(std::move(root_claim)),
           parent_proof_(std::move(parent_proof)) {}
 
     ConstructionReceiptPayload payload_;
-    Bytes root_claim_;
     Bytes parent_proof_;
 };
 

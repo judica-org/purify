@@ -98,6 +98,27 @@ construction payload + root pending claim + one secq parent proof
 
 rather than treating the root obligation as an implicit or trusted value.
 
+## Deterministic verification randomization
+
+The secq backend combines independent verification equations with a random
+scalar before its final MSM. That scalar is a verifier soundness challenge; it
+is not secret prover randomness. Bitcoin consensus verification must not vary
+with operating-system entropy.
+
+The backend therefore seeds its verifier RNG with a domain-separated SHA-256
+hash of the complete canonical circuit, statement, and proof, including length
+framing. The Bulletproof library mixes that seed into its already proof-bound
+Merlin transcript before sampling the equation coefficient. Every node derives
+the same coefficient, while an altered circuit, statement, or proof derives a
+different one. This is an intentional Fiat-Shamir transformation and relies on
+the random-oracle model.
+
+This construction currently verifies one equation bundle. A future batch
+verifier must hash the complete ordered batch before deriving any coefficient.
+It must not derive one coefficient and then accept later, adaptively selected
+equations. Replacing the deterministic seed with `OsRng` would make consensus
+acceptance depend on local state and is prohibited.
+
 ## Required negative tests
 
 Before activation, end-to-end tests must reject at least:

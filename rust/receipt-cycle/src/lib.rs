@@ -246,7 +246,16 @@ fn proof_transcript(circuit: &[u8], statement: &[u8]) -> Transcript {
     transcript
 }
 
-fn verifier_rng(circuit: &[u8], statement: &[u8], proof: &[u8]) -> ChaCha20Rng {
+/// Deterministic entropy for combining one proof's verification equations.
+///
+/// The Bulletproof verifier uses this RNG after its Merlin transcript has
+/// fixed the proof in order to combine independent group equations with a
+/// random scalar. Consensus verification cannot depend on operating-system
+/// entropy, so the external seed is a domain-separated hash of the complete
+/// verification instance. This is Fiat-Shamir equation randomization, not
+/// prover randomness. A future batch verifier must instead bind the complete
+/// ordered batch before deriving any equation coefficient.
+fn deterministic_verifier_rng(circuit: &[u8], statement: &[u8], proof: &[u8]) -> ChaCha20Rng {
     let mut hash = Sha256::new();
     hash.update(VERIFIER_RNG_DOMAIN);
     hash.update((circuit.len() as u64).to_le_bytes());
@@ -353,7 +362,7 @@ pub fn verify(
         });
     }
     install_constraints(&mut verifier, &circuit, &gates);
-    let mut rng = verifier_rng(circuit_bytes, statement, proof_bytes);
+    let mut rng = deterministic_verifier_rng(circuit_bytes, statement, proof_bytes);
     verifier.verify(&proof, &pc_gens, &bp_gens, &mut rng)?;
     Ok(())
 }
@@ -361,6 +370,7 @@ pub fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand_core::RngCore;
 
     fn scalar(value: u64) -> Scalar {
         Scalar::from(value)
@@ -452,5 +462,25 @@ mod tests {
             prove(&circuit, &bad_assignment, b"statement", [7; 32]),
             Err(ReceiptCycleError::Malformed("assignment length"))
         ));
+    }
+
+    #[test]
+    fn verifier_equation_randomization_is_deterministic_and_bound() {
+        let circuit = multiplication_circuit(12);
+        let statement = b"consensus receipt";
+        let proof = vec![0x5a; 425];
+        let mut first = deterministic_verifier_rng(&circuit, statement, &proof);
+        let mut second = deterministic_verifier_rng(&circuit, statement, &proof);
+        assert_eq!(first.next_u64(), second.next_u64());
+
+        let mut changed_proof = proof.clone();
+        changed_proof[0] ^= 1;
+        let mut changed = deterministic_verifier_rng(&circuit, statement, &changed_proof);
+        let mut original = deterministic_verifier_rng(&circuit, statement, &proof);
+        assert_ne!(original.next_u64(), changed.next_u64());
+
+        let mut changed_statement = deterministic_verifier_rng(&circuit, b"other receipt", &proof);
+        let mut original = deterministic_verifier_rng(&circuit, statement, &proof);
+        assert_ne!(original.next_u64(), changed_statement.next_u64());
     }
 }

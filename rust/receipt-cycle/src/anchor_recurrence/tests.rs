@@ -740,28 +740,12 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
     )
     .expect("full-scale fixture anchor recurrence");
 
-    let setup_started = std::time::Instant::now();
-    eprintln!("native_profile_nova: constructing transparent parameters");
-    let selected = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup_exact(
-        relation,
-        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
-    )
-    .expect("qualified full-scale direct Nova suite");
-    eprintln!(
-        "native_profile_nova: setup complete in {:.3}s",
-        setup_started.elapsed().as_secs_f64()
-    );
-    assert_eq!(
-        selected.expected(),
-        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE
-    );
-    let metadata = selected.metadata();
-    assert_eq!(metadata.proof_length, 12_466);
-    assert_eq!(metadata.codec_sequence_count, 125);
-
+    let (template, trusted_step) =
+        DirectNovaTemplate::<ANCHOR_RECURRENCE_STATE_ARITY>::from_relation(relation)
+            .expect("full-scale direct Nova template");
     eprintln!("native_profile_nova: building matching recurrence");
     let matching = build_anchor_recurrence_relation_with_builder(
-        selected.matching_builder(),
+        template.matching_builder(),
         &fixture.state,
         fixture.statement,
         &fixture.witness,
@@ -775,6 +759,31 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         &source_z1[CONSTRUCTION_ROOT_STATE_ARITY..],
         expected_suffix.as_slice()
     );
+    let matching_step = template
+        .bind_relation(matching)
+        .expect("matching full-scale direct Nova step");
+    drop(template);
+
+    let setup_started = std::time::Instant::now();
+    eprintln!("native_profile_nova: constructing transparent parameters");
+    let selected = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup_exact(
+        &trusted_step,
+        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+    )
+    .expect("qualified full-scale direct Nova suite");
+    drop(trusted_step);
+    eprintln!(
+        "native_profile_nova: setup complete in {:.3}s",
+        setup_started.elapsed().as_secs_f64()
+    );
+    assert_eq!(
+        selected.expected(),
+        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE
+    );
+    let metadata = selected.metadata();
+    assert_eq!(metadata.proof_length, 12_466);
+    assert_eq!(metadata.codec_sequence_count, 125);
+
     let z0 = source_state_to_nova(source_z0).expect("Nova z0");
     let z1 = source_state_to_nova(source_z1).expect("Nova z1");
 
@@ -783,7 +792,7 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
     let session = selected
         .start(z0, 1)
         .expect("one-step native-profile session")
-        .add_relation(matching)
+        .add_step(matching_step)
         .expect("native-profile recurrence fold");
     eprintln!(
         "native_profile_nova: fold complete in {:.3}s",

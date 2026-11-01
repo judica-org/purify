@@ -22,14 +22,12 @@ use thiserror::Error;
 use crate::{
     direct_nova::{
         DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine, DirectNovaStep,
-        DirectNovaTemplate, DirectRelationId, DIRECT_LOWERING_VERSION,
-        DIRECT_RELATION_ENCODING_VERSION,
+        DirectRelationId, DIRECT_LOWERING_VERSION, DIRECT_RELATION_ENCODING_VERSION,
     },
     fixed_serde::{
         FixedSerdeError, NovaCompressedProofShape, NovaR1csDimensions,
         NOVA_COMPRESSED_PROOF_CODEC_VERSION,
     },
-    relation_builder::{Builder, StatefulRelation},
     ReceiptCycleError,
 };
 
@@ -152,6 +150,8 @@ pub(crate) enum DirectNovaSessionError {
     SuiteIdentity(&'static str),
     #[error("direct Nova selected suite mismatch: {0}")]
     SuiteMismatch(&'static str),
+    #[error("direct Nova step relation mismatch")]
+    StepRelation,
     #[error("direct Nova state continuity mismatch")]
     StateContinuity,
     #[error("direct Nova verified final state mismatch")]
@@ -259,7 +259,6 @@ fn direct_nova_thread_pool() -> Result<ThreadPool, DirectNovaSessionError> {
 }
 
 pub(crate) struct DirectNovaSuite<const ARITY: usize> {
-    template: DirectNovaTemplate<ARITY>,
     public_params: DirectPublicParams<ARITY>,
     prover_key: DirectProverKey<ARITY>,
     verifier: DirectNovaVerifier<ARITY>,
@@ -501,21 +500,19 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
     /// Receipt acceptance must use `setup_exact` instead.
     #[cfg(test)]
     pub(crate) fn setup(
-        trusted_relation: StatefulRelation,
+        trusted_step: &DirectNovaStep<ARITY>,
     ) -> Result<Self, DirectNovaSessionError> {
-        let (template, trusted_step) = DirectNovaTemplate::from_relation(trusted_relation)?;
-        Self::setup_prepared(template, trusted_step)
+        Self::setup_prepared(trusted_step)
     }
 
     /// Builds a suite only after its relation and complete resulting metadata
     /// match one local profile. There is no alternate or fallback profile.
     pub(crate) fn setup_exact(
-        trusted_relation: StatefulRelation,
+        trusted_step: &DirectNovaStep<ARITY>,
         expected: &'static ExpectedDirectNovaSuite,
     ) -> Result<SelectedDirectNovaSuite<ARITY>, DirectNovaSessionError> {
-        let (template, trusted_step) = DirectNovaTemplate::from_relation(trusted_relation)?;
         expected.precheck_relation(trusted_step.relation_id())?;
-        let suite = Self::setup_prepared(template, trusted_step)?;
+        let suite = Self::setup_prepared(trusted_step)?;
         expected.validate::<ARITY>(&suite.verifier.metadata, &suite.verifier.proof_shape)?;
         Ok(SelectedDirectNovaSuite {
             expected,
@@ -524,8 +521,7 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
     }
 
     fn setup_prepared(
-        template: DirectNovaTemplate<ARITY>,
-        trusted_step: DirectNovaStep<ARITY>,
+        trusted_step: &DirectNovaStep<ARITY>,
     ) -> Result<Self, DirectNovaSessionError> {
         let relation_id = trusted_step.relation_id();
         let pool = direct_nova_thread_pool()?;
@@ -533,7 +529,7 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
         let (public_params, prover_key, verifier_key, proof_shape, metadata) =
             pool.install(|| -> Result<_, DirectNovaSessionError> {
                 let public_params = DirectPublicParams::<ARITY>::setup(
-                    &trusted_step,
+                    trusted_step,
                     &*PrimarySnark::ck_floor(),
                     &*SecondarySnark::ck_floor(),
                 )?;
@@ -571,7 +567,6 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
             })?;
 
         Ok(Self {
-            template,
             public_params,
             prover_key,
             verifier: DirectNovaVerifier {
@@ -706,11 +701,6 @@ impl<const ARITY: usize> SelectedDirectNovaSuite<ARITY> {
         self.inner.metadata()
     }
 
-    /// Starts a witness builder from the suite's selected immutable shape.
-    pub(crate) fn matching_builder(&self) -> Builder {
-        self.inner.template.matching_builder()
-    }
-
     pub(crate) fn start(
         &self,
         initial_state: [DirectNovaScalar; ARITY],
@@ -779,9 +769,9 @@ pub(crate) struct DirectNovaProverSession<'suite, const ARITY: usize> {
 impl<const ARITY: usize> DirectNovaProverSession<'_, ARITY> {
     /// Consumes the session on both success and failure, so a partially
     /// mutated Nova proof can never be retried as if the fold were atomic.
-    pub(crate) fn add_relation(
+    pub(crate) fn add_step(
         mut self,
-        relation: StatefulRelation,
+        step: DirectNovaStep<ARITY>,
     ) -> Result<Self, DirectNovaSessionError> {
         if self.completed_steps >= self.expected_steps {
             return Err(DirectNovaSessionError::StepCount {
@@ -789,7 +779,9 @@ impl<const ARITY: usize> DirectNovaProverSession<'_, ARITY> {
                 actual: self.completed_steps + 1,
             });
         }
-        let step = self.suite.template.bind_relation(relation)?;
+        if step.relation_id() != self.suite.verifier.metadata.relation_id {
+            return Err(DirectNovaSessionError::StepRelation);
+        }
         if step.input_state() != &self.current_state {
             return Err(DirectNovaSessionError::StateContinuity);
         }
@@ -871,8 +863,8 @@ mod tests {
     };
     use super::*;
     use crate::{
-        direct_nova::direct_nova_raw_metrics,
-        relation_builder::{Builder, Expression, StateVariable},
+        direct_nova::{direct_nova_raw_metrics, DirectNovaTemplate},
+        relation_builder::{Builder, Expression, StateVariable, StatefulRelation},
         Scalar,
     };
 
@@ -1220,7 +1212,9 @@ mod tests {
         assert_eq!(raw.direct_variables, shape.direct_variables);
         assert_eq!(raw.direct_nnz_upper_bound, shape.direct_nnz);
 
-        let suite = DirectNovaSuite::<TEST_ARITY>::setup(relation)
+        let (_, trusted_step) = DirectNovaTemplate::<TEST_ARITY>::from_relation(relation)
+            .expect("synthetic direct Nova template");
+        let suite = DirectNovaSuite::<TEST_ARITY>::setup(&trusted_step)
             .expect("synthetic direct Nova qualification suite");
         let metadata = suite.metadata();
         assert_eq!(
@@ -1377,11 +1371,11 @@ mod tests {
 
     #[test]
     fn exact_suite_prechecks_relation_before_parameter_setup() {
+        let (_, trusted_step) =
+            DirectNovaTemplate::<TEST_ARITY>::from_relation(relation(source_state(3)))
+                .expect("direct Nova template");
         assert!(matches!(
-            DirectNovaSuite::<TEST_ARITY>::setup_exact(
-                relation(source_state(3)),
-                &TEST_WRONG_RELATION_SUITE,
-            ),
+            DirectNovaSuite::<TEST_ARITY>::setup_exact(&trusted_step, &TEST_WRONG_RELATION_SUITE),
             Err(DirectNovaSessionError::SuiteMismatch("relation ID"))
         ));
     }
@@ -1396,8 +1390,15 @@ mod tests {
         let z1 = nova_state(source_z1);
         let z2 = nova_state(source_z2);
 
+        let (template, first_step) =
+            DirectNovaTemplate::<TEST_ARITY>::from_relation(relation(source_z0))
+                .expect("tiny direct Nova template");
+        let second_step = template
+            .bind_relation(relation(source_z1))
+            .expect("second tiny direct Nova step");
+        drop(template);
         let selected =
-            DirectNovaSuite::<TEST_ARITY>::setup_exact(relation(source_z0), &TINY_EXPECTED_SUITE)
+            DirectNovaSuite::<TEST_ARITY>::setup_exact(&first_step, &TINY_EXPECTED_SUITE)
                 .expect("selected tiny direct Nova suite");
         assert_eq!(selected.expected(), &TINY_EXPECTED_SUITE);
         let metadata = selected.metadata();
@@ -1429,7 +1430,7 @@ mod tests {
         let discontinuous = selected
             .start(z0, 2)
             .expect("discontinuous session")
-            .add_relation(relation(source_z1));
+            .add_step(second_step.clone());
         assert!(matches!(
             discontinuous,
             Err(DirectNovaSessionError::StateContinuity)
@@ -1438,9 +1439,9 @@ mod tests {
         let session = selected
             .start(z0, 2)
             .expect("two-step session")
-            .add_relation(relation(source_z0))
+            .add_step(first_step)
             .expect("first fold")
-            .add_relation(relation(source_z1))
+            .add_step(second_step)
             .expect("second fold");
         let proof = session.finish().expect("compress two-step proof");
         assert_eq!(proof.len(), metadata.proof_length);

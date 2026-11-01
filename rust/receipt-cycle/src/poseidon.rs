@@ -266,7 +266,7 @@ pub(crate) fn permute(mut state: [Scalar; WIDTH]) -> [Scalar; WIDTH] {
         for (index, value) in state.iter_mut().enumerate() {
             *value += parameters.round_constants[round * WIDTH + index];
         }
-        let full = round < FULL_ROUNDS / 2 || round >= FULL_ROUNDS / 2 + PARTIAL_ROUNDS;
+        let full = !(FULL_ROUNDS / 2..FULL_ROUNDS / 2 + PARTIAL_ROUNDS).contains(&round);
         if full {
             state = state.map(pow5);
         } else {

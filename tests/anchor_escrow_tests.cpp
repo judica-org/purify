@@ -10,7 +10,7 @@
 
 #include "purify.hpp"
 #include "purify/puresign/anchor_escrow.hpp"
-#include "purify/puresign/construction_receipt_accumulation.hpp"
+#include "purify/puresign/construction_receipt_assembly.hpp"
 #include "../src/puresign/anchor_escrow_internal.hpp"
 #include "purify_test_helpers.hpp"
 
@@ -224,24 +224,97 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, promoted_setup,
               "exact setup reduction promotes to the anchor basis");
     if (!promoted_setup) return;
-    auto pending = construction_accumulator->verify_anchor_reduction(
-        *promoted_setup, fixture->roster, anchor->public_key, context,
-        *parsed, *reduction, secp.get());
+    std::vector<purify::accountable::ConstructionReceiptEntry>
+        receipt_entries{{parsed->ciphertext()}};
+    auto receipt_payload =
+        purify::accountable::ConstructionReceiptPayload::create(
+            fixture->roster.recovery_root(),
+            std::move(receipt_entries));
+    expect_ok(ctx, receipt_payload,
+              "one-anchor construction payload creates");
+    if (!receipt_payload) return;
+    purify::accountable::ResolvedConstructionReceiptEntry resolved;
+    resolved.anchor_reference.fill(0x71);
+    resolved.anchor_root = anchor->public_key;
+    resolved.context_digest = context;
+    auto assembly =
+        purify::accountable::ConstructionReceiptAssembly::create(
+            std::move(*promoted_setup), std::move(*receipt_payload),
+            {resolved});
+    expect_ok(ctx, assembly,
+              "typed construction assembly binds the exact manifest");
+    if (!assembly) return;
+    expect_error(ctx, assembly->ordered_leaves(),
+                 purify::ErrorCode::MissingValue,
+                 "incomplete manifests cannot produce ordered leaves");
+    expect_error(
+        ctx,
+        assembly->verify_anchor_reduction(
+            1, *construction_accumulator, fixture->roster, *parsed,
+            *reduction, secp.get()),
+        purify::ErrorCode::IndexOutOfRange,
+        "anchor leaves cannot be added beyond the manifest");
+
+    auto changed_manifest_record_bytes = *encoded;
+    std::array<unsigned char, 32> changed_manifest_mask{};
+    std::copy_n(changed_manifest_record_bytes.begin() + 65,
+                changed_manifest_mask.size(),
+                changed_manifest_mask.begin());
+    auto changed_manifest_scalar =
+        FieldElement::try_from_bytes32(changed_manifest_mask);
+    expect_ok(ctx, changed_manifest_scalar,
+              "manifest substitution scalar is canonical");
+    if (!changed_manifest_scalar) return;
+    changed_manifest_mask =
+        (*changed_manifest_scalar + FieldElement::one()).to_bytes_be();
+    std::copy(changed_manifest_mask.begin(), changed_manifest_mask.end(),
+              changed_manifest_record_bytes.begin() + 65);
+    auto changed_manifest_record =
+        purify::accountable::AnchorEscrowRecord::deserialize(
+            changed_manifest_record_bytes, secp.get());
+    expect_ok(ctx, changed_manifest_record,
+              "manifest substitution record remains canonical");
+    if (!changed_manifest_record) return;
+    expect_error(
+        ctx,
+        assembly->verify_anchor_reduction(
+            0, *construction_accumulator, fixture->roster,
+            *changed_manifest_record, *reduction, secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "a leaf cannot substitute another payload ciphertext");
+
+    auto pending = assembly->verify_anchor_reduction(
+        0, *construction_accumulator, fixture->roster, *parsed,
+        *reduction, secp.get());
     expect_ok(ctx, pending,
               "exact anchor reduction yields a pending obligation");
     if (!pending) return;
+    expect_error(
+        ctx,
+        assembly->verify_anchor_reduction(
+            0, *construction_accumulator, fixture->roster, *parsed,
+            *reduction, secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "one manifest index cannot be proven twice");
     expect_ok(ctx, purify::bppp::accumulation::decide(
                        accumulator->basis(), *pending, secp.get()),
               "final MSM discharges the honest anchor escrow obligation");
-    const std::array construction_leaves{
-        promoted_setup->claim(), *pending};
+    auto construction_leaves = assembly->ordered_leaves();
+    expect_ok(ctx, construction_leaves,
+              "complete manifest yields setup-first ordered leaves");
+    if (!construction_leaves) return;
+    ctx.expect(construction_leaves->size() == 2 &&
+                   (*construction_leaves)[0].point() ==
+                       assembly->setup().claim().point() &&
+                   (*construction_leaves)[1].point() == pending->point(),
+               "ordered leaves preserve setup and payload order");
     auto construction_step = purify::bppp::accumulation::prove_step(
-        accumulator->basis(), construction_leaves, secp.get());
+        accumulator->basis(), *construction_leaves, secp.get());
     expect_ok(ctx, construction_step,
               "setup and anchor obligations fold into one root");
     if (!construction_step) return;
     auto construction_root = purify::bppp::accumulation::verify_step(
-        accumulator->basis(), construction_leaves,
+        accumulator->basis(), *construction_leaves,
         *construction_step, secp.get());
     expect_ok(ctx, construction_root,
               "combined construction root remains pending");
@@ -347,7 +420,7 @@ void test_anchor_escrow(TestContext& ctx) {
                "anchor reduction cannot move to another context");
     ctx.expect(
         !construction_accumulator->verify_anchor_reduction(
-            *promoted_setup, fixture->roster, anchor->public_key,
+            assembly->setup(), fixture->roster, anchor->public_key,
             changed_context, *record, *reduction, secp.get()),
         "construction leaf authenticates the exact anchor statement");
     expect_error(
@@ -489,7 +562,8 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_error(
         ctx,
         construction_accumulator->verify_anchor_reduction(
-            *promoted_setup, other_fixture->roster, anchor->public_key,
+            assembly->setup(), other_fixture->roster,
+            anchor->public_key,
             context, *parsed, *reduction, secp.get()),
         purify::ErrorCode::BindingMismatch,
         "one construction cannot mix setup and anchor rosters");

@@ -39,6 +39,29 @@ pub struct SecpCompressedWitness {
     pub odd: bool,
 }
 
+/// Exact 33-byte accumulation-proof point and its affine y opening.
+///
+/// `encoded` is either the unique all-zero identity or a compressed SEC1
+/// point `02/03 || x` with a big-endian x coordinate. `y` is canonical
+/// little-endian field data and is not part of the public point encoding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SecpEncodedPointWitness {
+    /// The exact native accumulation `PointBytes` value.
+    pub encoded: [u8; 33],
+    /// Canonical little-endian affine y opening, or zero for the identity.
+    pub y: [u8; 32],
+}
+
+impl SecpEncodedPointWitness {
+    /// Returns the unique all-zero accumulation identity encoding.
+    pub const fn identity() -> Self {
+        Self {
+            encoded: [0; 33],
+            y: [0; 32],
+        }
+    }
+}
+
 impl SecpAffineWitness {
     /// Returns the unique identity witness.
     pub const fn identity() -> Self {
@@ -63,6 +86,19 @@ struct PointValue {
     x: Scalar,
     y: Scalar,
     identity: bool,
+}
+
+#[derive(Clone, Copy)]
+struct EncodedPointValue {
+    point: PointValue,
+    prefix: u8,
+    odd: bool,
+}
+
+struct EncodedSecpPoint {
+    point: SecpPoint,
+    prefix: Expression,
+    odd: Expression,
 }
 
 const SECP_FIELD_MODULUS_BE: [u8; 32] = [
@@ -92,6 +128,28 @@ fn parse_compressed_point(witness: SecpCompressedWitness) -> Result<PointValue, 
         x: witness.x,
         y: witness.y,
         identity: false,
+    })
+}
+
+fn parse_encoded_point(
+    witness: SecpEncodedPointWitness,
+) -> Result<EncodedPointValue, ReceiptCycleError> {
+    let mut x_bytes = [0; 32];
+    x_bytes.copy_from_slice(&witness.encoded[1..]);
+    x_bytes.reverse();
+    let x = Secq256k1Cycle::scalar_from_canonical(&x_bytes)
+        .ok_or(ReceiptCycleError::Malformed("noncanonical encoded secp x"))?;
+    let y = Secq256k1Cycle::scalar_from_canonical(&witness.y)
+        .ok_or(ReceiptCycleError::Malformed("noncanonical encoded secp y"))?;
+    let prefix = witness.encoded[0];
+    Ok(EncodedPointValue {
+        point: PointValue {
+            x,
+            y,
+            identity: prefix == 0,
+        },
+        prefix,
+        odd: prefix & 1 != 0,
     })
 }
 
@@ -167,6 +225,25 @@ fn allocate_compressed_point(
     let odd = builder.allocate_boolean(witness.odd);
     builder.constrain_equal(&odd, &y_bits[0]);
     Ok(point)
+}
+
+fn allocate_encoded_point(
+    builder: &mut Builder,
+    witness: SecpEncodedPointWitness,
+) -> Result<EncodedSecpPoint, ReceiptCycleError> {
+    let value = parse_encoded_point(witness)?;
+    let point = allocate_point(builder, value.point);
+    let y_bits = canonical_field_bits(builder, &point.y);
+    let odd = builder.allocate_boolean(value.odd);
+    builder.constrain_equal(&odd, &y_bits[0]);
+
+    let prefix = builder.allocate(Scalar::from(u64::from(value.prefix)));
+    let active = Expression::constant(Scalar::ONE).sub(&point.identity);
+    let finite_prefix = Expression::constant(Scalar::from(2)).add(&odd);
+    let expected_prefix = builder.multiply(&active, &finite_prefix);
+    builder.constrain_equal(&prefix, &expected_prefix);
+
+    Ok(EncodedSecpPoint { point, prefix, odd })
 }
 
 fn inverse_or_zero(value: Scalar) -> Scalar {
@@ -387,6 +464,20 @@ pub fn build_secp_compressed_point_relation(
     builder.finish()
 }
 
+/// Builds the exact accumulation-proof point decoding relation.
+///
+/// This accepts only the unique all-zero identity or a finite compressed SEC1
+/// point. The y opening and prefix parity are constrained without changing the
+/// circuit shape between identity and finite encodings.
+pub fn build_secp_encoded_point_relation(
+    witness: SecpEncodedPointWitness,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    let mut builder = Builder::default();
+    let encoded = allocate_encoded_point(&mut builder, witness)?;
+    let _ = (encoded.point, encoded.prefix, encoded.odd);
+    builder.finish()
+}
+
 /// Builds a native-field secp256k1 addition relation.
 ///
 /// This narrow constructor exists so the complete exceptional-case group
@@ -517,12 +608,36 @@ mod tests {
         }
     }
 
+    fn encoded(point: SecpAffineWitness, prefix: u8) -> SecpEncodedPointWitness {
+        assert!(!point.identity);
+        let mut encoded = [0; 33];
+        encoded[0] = prefix;
+        let mut x = point.x;
+        x.reverse();
+        encoded[1..].copy_from_slice(&x);
+        SecpEncodedPointWitness {
+            encoded,
+            y: point.y,
+        }
+    }
+
     fn prove_compressed_point(witness: SecpCompressedWitness) -> Result<(), ReceiptCycleError> {
         let (circuit, assignment) = build_secp_compressed_point_relation(witness)?;
         let statement = b"secp compressed-point foundation";
         let proof = prove(&circuit, &assignment, statement, [0x92; 32])?;
         assert_eq!(proof.len(), proof_wire_len(&circuit)?);
         verify(&circuit, statement, &proof)
+    }
+
+    fn prove_encoded_point(
+        witness: SecpEncodedPointWitness,
+    ) -> Result<(Vec<u8>, usize), ReceiptCycleError> {
+        let (circuit, assignment) = build_secp_encoded_point_relation(witness)?;
+        let statement = b"secp encoded-point foundation";
+        let proof = prove(&circuit, &assignment, statement, [0x93; 32])?;
+        assert_eq!(proof.len(), proof_wire_len(&circuit)?);
+        verify(&circuit, statement, &proof)?;
+        Ok((circuit, proof.len()))
     }
 
     fn prove_relation(
@@ -609,6 +724,60 @@ mod tests {
         let mut noncanonical = compressed(generator(), false);
         noncanonical.y = [0xff; 32];
         assert!(build_secp_compressed_point_relation(noncanonical).is_err());
+    }
+
+    #[test]
+    fn encoded_point_accepts_identity_and_finite_sec1() {
+        let identity = SecpEncodedPointWitness::identity();
+        let g = generator();
+        let generator = encoded(g, 0x02);
+        let odd_generator = encoded(negate(g), 0x03);
+
+        let (identity_circuit, proof_bytes) =
+            prove_encoded_point(identity).expect("encoded identity");
+        prove_encoded_point(generator).expect("encoded finite point");
+
+        let (generator_circuit, _) =
+            build_secp_encoded_point_relation(generator).expect("finite circuit");
+        let (odd_circuit, _) =
+            build_secp_encoded_point_relation(odd_generator).expect("odd circuit");
+        assert_eq!(identity_circuit, generator_circuit);
+        assert_eq!(identity_circuit, odd_circuit);
+        assert_eq!(
+            crate::Circuit::parse(&identity_circuit)
+                .expect("circuit")
+                .gate_count,
+            524
+        );
+        assert_eq!(proof_bytes, 1085);
+    }
+
+    #[test]
+    fn encoded_point_rejects_noncanonical_forms() {
+        let generator = generator();
+
+        let mut zero_prefix_hybrid = encoded(generator, 0x00);
+        assert!(prove_encoded_point(zero_prefix_hybrid).is_err());
+        zero_prefix_hybrid.encoded[1] ^= 1;
+        assert!(prove_encoded_point(zero_prefix_hybrid).is_err());
+
+        let invalid_prefix = encoded(generator, 0x04);
+        assert!(prove_encoded_point(invalid_prefix).is_err());
+
+        let wrong_parity = encoded(generator, 0x03);
+        assert!(prove_encoded_point(wrong_parity).is_err());
+
+        let mut off_curve = encoded(generator, 0x02);
+        off_curve.y[0] ^= 1;
+        assert!(prove_encoded_point(off_curve).is_err());
+
+        let mut noncanonical_x = encoded(generator, 0x02);
+        noncanonical_x.encoded[1..].fill(0xff);
+        assert!(build_secp_encoded_point_relation(noncanonical_x).is_err());
+
+        let mut noncanonical_y = encoded(generator, 0x02);
+        noncanonical_y.y = [0xff; 32];
+        assert!(build_secp_encoded_point_relation(noncanonical_y).is_err());
     }
 
     #[test]

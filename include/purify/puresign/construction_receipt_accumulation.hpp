@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <bit>
 #include <cstddef>
 #include <utility>
 
@@ -16,15 +17,19 @@ namespace purify::accountable {
  * The fixed accumulation bases for one coalition construction receipt.
  *
  * Setup proofs use a smaller production circuit than anchor escrow proofs.
- * promote_setup_claim() embeds their pending obligations into the prefix of
- * the anchor basis. This is only a basis transition: the setup reduction and
- * every later transition remain mandatory parts of the authenticated receipt
- * ancestry, and the final claim must still pass decide().
+ * verify_setup_reduction() authenticates the exact setup statement and embeds
+ * its pending obligation into the prefix of the anchor basis. This is only a
+ * basis transition: the setup reduction and every later transition remain
+ * mandatory parts of the authenticated receipt ancestry, and the final claim
+ * must still pass decide().
  */
 class ConstructionReceiptAccumulator {
 public:
+    static constexpr std::size_t kRootClaimRounds = std::bit_width(
+        2 * AnchorEscrowAccumulator::kNormVectorLength) - 1;
     static constexpr std::size_t kRootClaimSerializedSize =
-        33 + 32 + 15 * 32;
+        33 + 32 + kRootClaimRounds * 32;
+    static_assert(kRootClaimSerializedSize == 545);
 
     ConstructionReceiptAccumulator(const ConstructionReceiptAccumulator&) =
         delete;
@@ -46,21 +51,24 @@ public:
         return anchors_;
     }
 
-    /**
-     * Rebind a pending setup claim to the larger construction basis.
-     *
-     * The deterministic target generators must have the complete setup basis
-     * as an exact prefix. No proof obligation is discharged by this method.
-     */
     [[nodiscard]] Result<bppp::accumulation::PendingClaim>
-    promote_setup_claim(
-        const bppp::accumulation::PendingClaim& setup_claim) const;
+    verify_setup_reduction(
+        const NonceHostBoundSigningRoster& roster,
+        const UInt512& recovery_root,
+        const RecoveryRootSetupProof& setup_proof,
+        const bppp::accumulation::NormReductionProof& reduction,
+        purify_secp_context* secp_context,
+        bppp::ExperimentalCircuitBackend* cache = nullptr) const;
 
 private:
     ConstructionReceiptAccumulator(
         RecoveryRootSetupAccumulator setup,
         AnchorEscrowAccumulator anchors)
         : setup_(std::move(setup)), anchors_(std::move(anchors)) {}
+
+    [[nodiscard]] Result<bppp::accumulation::PendingClaim>
+    promote_setup_claim(
+        const bppp::accumulation::PendingClaim& setup_claim) const;
 
     RecoveryRootSetupAccumulator setup_;
     AnchorEscrowAccumulator anchors_;

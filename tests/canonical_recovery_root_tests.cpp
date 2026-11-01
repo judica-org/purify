@@ -229,9 +229,11 @@ void test_setup_and_recovery(TestContext& ctx) {
                        secp.get()),
               "final MSM discharges the honest setup obligation");
     auto promoted_setup =
-        construction_accumulator->promote_setup_claim(*setup_pending);
+        construction_accumulator->verify_setup_reduction(
+            *bound_roster, root->public_key, *parsed_proof,
+            *setup_reduction, secp.get());
     expect_ok(ctx, promoted_setup,
-              "pending setup claim promotes to the construction basis");
+              "exact setup reduction promotes to the construction basis");
     if (!promoted_setup) return;
     expect_ok(ctx, purify::bppp::accumulation::decide(
                        construction_accumulator->anchors().basis(),
@@ -417,6 +419,13 @@ void test_setup_and_recovery(TestContext& ctx) {
             secp.get()),
         purify::ErrorCode::EquationMismatch,
         "typed adapter rejects a setup proof for another recovery root");
+    expect_error(
+        ctx,
+        construction_accumulator->verify_setup_reduction(
+            *bound_roster, other_root->public_key, *parsed_proof,
+            *setup_reduction, secp.get()),
+        purify::ErrorCode::EquationMismatch,
+        "construction promotion authenticates the exact setup statement");
     auto changed_members = member_keys;
     auto changed_member = secp_point(
         FieldElement::from_u64(5), secp.get());

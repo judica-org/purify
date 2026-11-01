@@ -264,6 +264,27 @@ ConstructionReceiptAccumulator::create(
 }
 
 Result<bppp::accumulation::PendingClaim>
+ConstructionReceiptAccumulator::verify_setup_reduction(
+    const NonceHostBoundSigningRoster& roster,
+    const UInt512& recovery_root,
+    const RecoveryRootSetupProof& setup_proof,
+    const bppp::accumulation::NormReductionProof& reduction,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) const {
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& prepared,
+        setup_.prepare(roster, recovery_root, setup_proof,
+                       secp_context, cache),
+        "construction_accumulation:prepare_setup");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& pending,
+        bppp::accumulation::verify_norm_reduction(
+            setup_.basis(), prepared, reduction, secp_context),
+        "construction_accumulation:reduce_setup");
+    return promote_setup_claim(pending);
+}
+
+Result<bppp::accumulation::PendingClaim>
 ConstructionReceiptAccumulator::promote_setup_claim(
     const bppp::accumulation::PendingClaim& setup_claim) const {
     const auto& source = setup_.basis();

@@ -102,7 +102,7 @@ private:
 };
 
 /**
- * Verified norm components paired with an explicit algebraic statement
+ * Prepared obligation components paired with an explicit algebraic statement
  * binding. This type alone does not authenticate provenance from a V4 child.
  * It contains no SHA transcript digest.
  */

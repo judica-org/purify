@@ -28,6 +28,9 @@ mod algebraic_transcript;
 #[allow(dead_code)]
 mod anchor_recurrence;
 mod ffi;
+// This is an internal proof-codec foundation, not a receipt parser.
+#[allow(dead_code)]
+mod fixed_serde;
 mod gadgets;
 // This is an internal candidate component, not a receipt acceptance API.
 #[allow(dead_code)]

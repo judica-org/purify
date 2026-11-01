@@ -20,8 +20,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 mod ffi;
+pub mod parent_relation;
 
-type Scalar = <Secq256k1Cycle as Cycle>::Scalar;
+pub(crate) type Scalar = <Secq256k1Cycle as Cycle>::Scalar;
 
 const CIRCUIT_VERSION: u8 = 1;
 const ASSIGNMENT_VERSION: u8 = 1;
@@ -46,7 +47,7 @@ pub enum ReceiptCycleError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum WireKind {
+pub(crate) enum WireKind {
     One = 0,
     Left = 1,
     Right = 2,
@@ -54,20 +55,20 @@ enum WireKind {
 }
 
 #[derive(Clone, Debug)]
-struct Term {
+pub(crate) struct Term {
     kind: WireKind,
     index: usize,
     coefficient: Scalar,
 }
 
 #[derive(Clone, Debug)]
-struct Circuit {
+pub(crate) struct Circuit {
     gate_count: usize,
     constraints: Vec<Vec<Term>>,
 }
 
 #[derive(Clone, Debug)]
-struct Assignment {
+pub(crate) struct Assignment {
     gates: Vec<(Scalar, Scalar)>,
 }
 

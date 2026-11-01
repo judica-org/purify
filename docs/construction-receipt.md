@@ -131,6 +131,16 @@ verifier must discharge it with `decide()`. The present concrete target is:
 69 + 192*N + 545 + size(final_parent_proof)
 ```
 
+The native path now prepares the exact 1,007-byte setup proof on its fixed
+8,192-point basis, verifies its coefficient-opening reduction, and promotes
+the still-pending obligation into the exact prefix of the construction basis.
+Promotion is not exposed for generic claims: the public method reconstructs
+the roster, recovery root, setup proof, and reduction before changing bases.
+An honest promoted setup claim has been folded, encoded as the 545-byte root,
+parsed, and discharged by the final MSM. The recursive parent must still prove
+that same setup preparation, reduction, promotion, and every anchor transition;
+the native test alone is not a compressed receipt.
+
 Consents and existing anchor leaves remain contextual data. Moving the final
 basis decision inside the parent could remove the 545 bytes, but would add the
 linear fixed-basis work to the parent relation.

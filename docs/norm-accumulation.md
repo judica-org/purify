@@ -417,9 +417,11 @@ the final step SHA256 is
 Remaining work for construction receipts is specific: independently review the
 V3 leaf argument; authenticate the frontend's coefficient derivation; constrain
 partial verification and accumulation transitions in a recursive proof; bind
-exact registry coverage; and enforce the final accumulator decision. Encryption
-privacy, distributed proving and signing security remain their own protocol
-obligations.
+exact registry coverage; and enforce the final accumulator decision. The native
+adapter now prepares and reduces the exact setup proof and safely zero-extends
+that pending claim into the anchor basis, but the recursive relation must still
+authenticate that promotion. Encryption privacy, distributed proving and
+signing security remain their own protocol obligations.
 
 Publishing a coefficient seed and binding it to the child transcript remains
 a possible byte/preprocessing tradeoff. It requires a sound outer transcript

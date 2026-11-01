@@ -13,8 +13,9 @@ can disappear after the final receipt is published.
 
 A construction receipt is accepted only when both checks succeed:
 
-1. the secq parent proof verifies for the exact construction payload, resolved
-   anchor statements, and serialized root pending claim; and
+1. the secq parent proof verifies for the exact construction payload, setup
+   statement, resolved anchor statements, and serialized root pending claim;
+   and
 2. native `accumulation::decide` discharges that exact root claim against the
    fixed anchor-escrow basis.
 
@@ -22,16 +23,29 @@ Neither check is optional. A pending claim does not authenticate its ancestry,
 and a parent proof which does not bind the decided claim proves a different
 statement.
 
-Coalition setup is authenticated once by the registry and selected by the
-payload's recovery root. The parent reconstructs each anchor statement from
-that registered setup, the deterministic ordered anchor reference and resolved
-root, the context, and the on-chain ciphertext. Registry authentication is
-outside the proof system but is part of application acceptance.
+The coalition setup proof is one private parent witness selected by the
+payload's recovery root. The parent authenticates it once, reduces its norm
+obligation on the fixed 8,192-point setup basis, and constrains its exact
+zero-extension into the 32,768-point construction basis. It then reconstructs
+each anchor statement from that setup, the deterministic ordered anchor
+reference and resolved root, the context, and the on-chain ciphertext.
+Registry policy still determines which manifest is authorized, but it does not
+replace setup-proof verification.
 
 ## Constrained relation
 
-For every anchor child, the parent performs the following operations in its
-arithmetic relation:
+The parent first performs the following setup operations in its arithmetic
+relation:
+
+1. Parse the fixed setup proof and reconstruct its exact circuit, public
+   signing-key output, recovery root, roster, and transcript binding.
+2. Verify its V3 transcript and coefficient-opening reduction on the fixed
+   setup basis. The result remains a pending claim.
+3. Constrain that claim's point and polynomial to be unchanged when the setup
+   basis digest is replaced by the construction basis digest. Every polynomial
+   term must remain within the complete setup-basis prefix.
+
+For every anchor child, it then performs the following operations:
 
 1. Parse the fixed V3 proof payload and validate every scalar and secp256k1
    point encoding.
@@ -44,8 +58,9 @@ arithmetic relation:
 5. Reconstruct the exact coefficient commitment obligation and verify the
    public coefficient-opening reduction. This produces one leaf
    `PendingClaim`; it does not accept the child by itself.
-6. Verify every ordered accumulation transition over those leaf claims. The
-   final transition produces the root claim bound into the parent statement.
+6. Verify every ordered accumulation transition over the promoted setup claim
+   and all anchor leaf claims. The final transition produces the root claim
+   bound into the parent statement.
 
 The secq commitment group has the secp256k1 coordinate field as its R1CS scalar
 field. Secp256k1 point arithmetic is therefore native in the parent. BP++
@@ -55,9 +70,12 @@ constrained unless the child proof suite is explicitly replaced.
 
 The first complete group gadget constrains the secp256k1 curve equation, a
 unique identity encoding, and addition for distinct points, doubling, inverses,
-and both identity cases. Its circuit shape is independent of the private branch.
-Point decompression, transcript hashing, non-native scalar arithmetic, and the
-V3/reduction/step relations remain before an acceptance API can be exposed.
+and both identity cases. Its circuit shape is independent of the private
+branch. The scalar foundation constrains canonical four-limb values modulo the
+secp256k1 group order and modular add, subtract, multiply, and inverse.
+Point decompression, wide transcript reduction, transcript hashing, and the
+complete V3/reduction/promotion/step relations remain before an acceptance API
+can be exposed.
 
 The exact secq SHA-256 gadget costs 30,952 multipliers per compression block,
 plus eight multipliers per private input byte. Replaying the current V3
@@ -142,6 +160,9 @@ Before activation, end-to-end tests must reject at least:
 - a valid proof moved to a different ordered manifest;
 - a removed, duplicated, reordered, or substituted child;
 - a changed coefficient opening or accumulation transition;
+- a generic or vacuous setup-basis claim substituted for the typed setup
+  reduction;
+- a changed setup-to-construction basis promotion;
 - a parent proof rebound to another root claim; and
 - a valid parent proof followed by a false final native decision.
 

@@ -659,6 +659,14 @@ mod tests {
         SecpScalarWitness::from_bytes_be(bytes)
     }
 
+    fn coordinate(value: &BigUint) -> CoordinateFieldWitness {
+        let encoded = value.to_bytes_be();
+        assert!(encoded.len() <= 32);
+        let mut bytes = [0u8; 32];
+        bytes[32 - encoded.len()..].copy_from_slice(&encoded);
+        CoordinateFieldWitness::from_bytes_be(bytes)
+    }
+
     fn gate_count(circuit: &[u8]) -> u32 {
         u32::from_le_bytes(circuit[1..5].try_into().expect("gate count"))
     }
@@ -845,4 +853,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn challenge_selection_uses_the_first_valid_lane() {
+        let (first, gates) = accepts(
+            build_challenge_selection_relation(
+                CoordinateFieldWitness::from_u64(5),
+                CoordinateFieldWitness::from_u64(7),
+                SecpScalarWitness::from_u64(5),
+            ),
+            0x71,
+        );
+        let (zero_fallback, zero_gates) = accepts(
+            build_challenge_selection_relation(
+                CoordinateFieldWitness::from_u64(0),
+                CoordinateFieldWitness::from_u64(7),
+                SecpScalarWitness::from_u64(7),
+            ),
+            0x72,
+        );
+        let order = order_n();
+        let (order_fallback, order_gates) = accepts(
+            build_challenge_selection_relation(
+                coordinate(&order),
+                CoordinateFieldWitness::from_u64(9),
+                SecpScalarWitness::from_u64(9),
+            ),
+            0x73,
+        );
+        assert_eq!(first, zero_fallback);
+        assert_eq!(first, order_fallback);
+        assert_eq!(gates, zero_gates);
+        assert_eq!(gates, order_gates);
+        assert_eq!(gates, 2_317);
+        assert_eq!(proof_wire_len(&first).expect("challenge proof size"), 1_217);
+    }
+
+    #[test]
+    fn challenge_selection_rejects_invalid_or_changed_outputs() {
+        let order = order_n();
+        rejects(
+            build_challenge_selection_relation(
+                CoordinateFieldWitness::from_u64(0),
+                coordinate(&order),
+                SecpScalarWitness::from_u64(1),
+            ),
+            0x74,
+        );
+        rejects(
+            build_challenge_selection_relation(
+                CoordinateFieldWitness::from_u64(5),
+                CoordinateFieldWitness::from_u64(7),
+                SecpScalarWitness::from_u64(7),
+            ),
+            0x75,
+        );
+        let field = BigUint::from_bytes_be(&FIELD_P_BE);
+        assert!(build_challenge_selection_relation(
+            coordinate(&field),
+            CoordinateFieldWitness::from_u64(7),
+            SecpScalarWitness::from_u64(7),
+        )
+        .is_err());
+    }
 }

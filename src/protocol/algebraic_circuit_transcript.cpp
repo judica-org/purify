@@ -151,6 +151,16 @@ Status validate_public_mode(const CircuitTranscriptShapeV4 &shape,
 
 } // namespace
 
+Status validate_packed_point_pair_v4(
+    const PackedPointPairV4 &encoded,
+    purify_secp_context *secp_context) {
+  PURIFY_ASSIGN_OR_RETURN(const auto parsed,
+                          parse_pair(encoded, secp_context),
+                          "circuit_v4:validate_pair");
+  (void)parsed;
+  return {};
+}
+
 Result<CircuitTranscriptShapeV4>
 CircuitTranscriptShapeV4::create(CircuitCommitmentModeV4 mode,
                                  std::size_t gate_count,

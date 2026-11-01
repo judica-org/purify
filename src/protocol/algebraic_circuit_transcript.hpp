@@ -84,6 +84,11 @@ struct CircuitPrecommitmentResultV4 {
 
 using PackedPointPairV4 = std::array<unsigned char, 65>;
 
+/** Validate one canonical packed V4 norm-round point pair. */
+[[nodiscard]] Status validate_packed_point_pair_v4(
+    const PackedPointPairV4 &encoded,
+    purify_secp_context *secp_context);
+
 /** All proof fields consumed after the public precommitment digest. */
 struct CircuitProofTranscriptInputV4 {
   TranscriptDigest raw_generator_digest{};

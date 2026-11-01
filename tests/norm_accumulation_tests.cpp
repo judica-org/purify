@@ -964,6 +964,50 @@ void check_v4_algebraic_circuit_adapter(
     ctx.expect(standalone && *standalone,
                "V4 full verification remains a separate path");
 
+    auto reconstructed =
+        candidate::reconstruct_circuit_zk_norm_arg_publication_v4(
+            circuit, publication->proof, secp, binding);
+    expect_ok(ctx, reconstructed,
+              "V4 hidden proof fields reconstruct their publication");
+    if (!reconstructed) return;
+    ctx.expect(reconstructed->precommitment.bytes() ==
+                   publication->precommitment.bytes(),
+               "V4 hidden reconstruction derives the exact precommitment");
+    auto malformed_round = publication->proof;
+    malformed_round.norm_proof[0] = 4;
+    ctx.expect(
+        !candidate::validate_circuit_zk_norm_arg_proof_v4_encoding(
+            circuit, malformed_round, secp),
+        "V4 fixed-round validation rejects a noncanonical parity byte");
+    auto hidden_dlog = publication->proof;
+    hidden_dlog.public_commitment_dlog_response.back() = 1;
+    ctx.expect(
+        !candidate::validate_circuit_zk_norm_arg_proof_v4_encoding(
+            circuit, hidden_dlog, secp),
+        "V4 hidden encoding rejects public DLog material");
+    auto changed_raw = publication->proof;
+    changed_raw.raw_commitment = publication->proof.mask_commitment;
+    auto changed_raw_publication =
+        candidate::reconstruct_circuit_zk_norm_arg_publication_v4(
+            circuit, std::move(changed_raw), secp, binding);
+    expect_ok(ctx, changed_raw_publication,
+              "V4 changed raw point remains canonical");
+    if (!changed_raw_publication) return;
+    ctx.expect(changed_raw_publication->precommitment.bytes() !=
+                   publication->precommitment.bytes(),
+               "V4 precommitment binds the raw point");
+    const auto changed_statement =
+        purify::bytes_from_ascii("test/v4-algebraic-adapter/changed");
+    auto changed_statement_publication =
+        candidate::reconstruct_circuit_zk_norm_arg_publication_v4(
+            circuit, publication->proof, secp, changed_statement);
+    expect_ok(ctx, changed_statement_publication,
+              "V4 changed statement reconstructs canonically");
+    if (!changed_statement_publication) return;
+    ctx.expect(changed_statement_publication->precommitment.bytes() !=
+                   publication->precommitment.bytes(),
+               "V4 precommitment binds the exact statement");
+
     auto other_basis = accum::Basis::create(
         8, 8, "test/v4-algebraic-circuit/other", secp);
     expect_ok(ctx, other_basis,
@@ -1186,6 +1230,33 @@ void check_v4_algebraic_circuit_adapter(
                    "V4 public preparation returns a pending norm");
         return;
     }
+    auto reconstructed_public = candidate::
+        reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+            circuit, public_publication->proof, public_points, secp,
+            binding);
+    expect_ok(ctx, reconstructed_public,
+              "V4 public proof fields reconstruct their publication");
+    if (!reconstructed_public) return;
+    ctx.expect(reconstructed_public->precommitment.bytes() ==
+                   public_publication->precommitment.bytes(),
+               "V4 public reconstruction derives the exact precommitment");
+    auto changed_public_point = scalar_point(
+        assignment.commitments[0] + FieldElement::one(), secp);
+    expect_ok(ctx, changed_public_point,
+              "V4 changed public output point derives");
+    if (!changed_public_point) return;
+    const std::array<PointBytes, 1> changed_public_points{
+        *changed_public_point};
+    auto changed_public_output = candidate::
+        reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+            circuit, public_publication->proof, changed_public_points,
+            secp, binding);
+    expect_ok(ctx, changed_public_output,
+              "V4 changed public output reconstructs canonically");
+    if (!changed_public_output) return;
+    ctx.expect(changed_public_output->precommitment.bytes() !=
+                   public_publication->precommitment.bytes(),
+               "V4 precommitment binds the exact public output");
     auto public_algebraic =
         accum::prepare_v4_circuit_norm_for_algebraic_reduction(
             *basis, std::move(**public_prepared), secp);

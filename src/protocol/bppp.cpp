@@ -2810,6 +2810,146 @@ Status validate_circuit_proof_v4_inputs(
   return {};
 }
 
+Status validate_finite_point_v4(const PointBytes &point,
+                                purify_secp_context *secp_context,
+                                const char *label) {
+  std::array<unsigned char, 32> xonly{};
+  int parity = 0;
+  if (purify_bip340_xonly_from_point(
+          secp_context, point.data(), xonly.data(), &parity) == 0) {
+    return unexpected_error(ErrorCode::BackendRejectedInput, label);
+  }
+  return {};
+}
+
+Status validate_circuit_zk_norm_arg_proof_v4_fixed_encoding_impl(
+    const candidate::CircuitZkNormArgProofV4 &proof,
+    candidate::CircuitCommitmentModeV4 mode, std::size_t round_count,
+    purify_secp_context *secp_context) {
+  PURIFY_RETURN_IF_ERROR(
+      require_secp_context(secp_context,
+                           "circuit_proof_v4_encoding:context"),
+      "circuit_proof_v4_encoding:context");
+  PURIFY_RETURN_IF_ERROR(
+      validate_finite_point_v4(proof.raw_commitment, secp_context,
+                               "circuit_proof_v4_encoding:raw"),
+      "circuit_proof_v4_encoding:raw");
+  PURIFY_RETURN_IF_ERROR(
+      validate_finite_point_v4(proof.mask_commitment, secp_context,
+                               "circuit_proof_v4_encoding:mask"),
+      "circuit_proof_v4_encoding:mask");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto t2, FieldElement::try_from_bytes32(proof.t2),
+      "circuit_proof_v4_encoding:t2");
+  (void)t2;
+
+  if (mode == candidate::CircuitCommitmentModeV4::Public) {
+    if (purify_bip340_validate_xonly_pubkey(
+            secp_context,
+            proof.public_commitment_dlog_nonce.data()) == 0) {
+      return unexpected_error(
+          ErrorCode::BackendRejectedInput,
+          "circuit_proof_v4_encoding:dlog_nonce");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto response,
+        FieldElement::try_from_bytes32(
+            proof.public_commitment_dlog_response),
+        "circuit_proof_v4_encoding:dlog_response");
+    if (response.is_zero()) {
+      return unexpected_error(
+          ErrorCode::RangeViolation,
+          "circuit_proof_v4_encoding:dlog_response");
+    }
+  } else if (mode != candidate::CircuitCommitmentModeV4::Hidden) {
+    return unexpected_error(ErrorCode::UnsupportedSymbol,
+                            "circuit_proof_v4_encoding:mode");
+  } else if (!std::all_of(
+                 proof.public_commitment_dlog_nonce.begin(),
+                 proof.public_commitment_dlog_nonce.end(),
+                 [](unsigned char byte) { return byte == 0; }) ||
+             !std::all_of(
+                 proof.public_commitment_dlog_response.begin(),
+                 proof.public_commitment_dlog_response.end(),
+                 [](unsigned char byte) { return byte == 0; })) {
+    return unexpected_error(ErrorCode::BindingMismatch,
+                            "circuit_proof_v4_encoding:hidden_dlog");
+  }
+
+  ScalarBytes terminal_n{};
+  ScalarBytes terminal_l{};
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto rounds,
+      parse_norm_rounds_v4(proof.norm_proof, round_count,
+                           terminal_n, terminal_l),
+      "circuit_proof_v4_encoding:rounds");
+  for (const auto &round : rounds) {
+    PURIFY_RETURN_IF_ERROR(
+        candidate::validate_packed_point_pair_v4(round, secp_context),
+        "circuit_proof_v4_encoding:round");
+  }
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto terminal_n_scalar,
+      FieldElement::try_from_bytes32(terminal_n),
+      "circuit_proof_v4_encoding:terminal_n");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto terminal_l_scalar,
+      FieldElement::try_from_bytes32(terminal_l),
+      "circuit_proof_v4_encoding:terminal_l");
+  (void)terminal_n_scalar;
+  (void)terminal_l_scalar;
+  return {};
+}
+
+Status validate_circuit_zk_norm_arg_proof_v4_encoding_impl(
+    const NativeBulletproofCircuit &circuit,
+    const candidate::CircuitZkNormArgProofV4 &proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context, bool externalize_commitments) {
+  PURIFY_RETURN_IF_ERROR(
+      validate_circuit_proof_v4_inputs(
+          circuit, public_commitments, secp_context,
+          externalize_commitments),
+      "circuit_proof_v4_encoding:inputs");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto shape,
+      circuit_shape_v4(circuit, externalize_commitments),
+      "circuit_proof_v4_encoding:shape");
+  return validate_circuit_zk_norm_arg_proof_v4_fixed_encoding_impl(
+      proof, shape.mode(), shape.round_count(), secp_context);
+}
+
+Result<candidate::CircuitZkNormArgPublicationV4>
+reconstruct_circuit_zk_norm_arg_publication_v4_impl(
+    const NativeBulletproofCircuit &circuit,
+    candidate::CircuitZkNormArgProofV4 proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding,
+    bool externalize_commitments) {
+  PURIFY_RETURN_IF_ERROR(
+      validate_circuit_zk_norm_arg_proof_v4_encoding_impl(
+          circuit, proof, public_commitments, secp_context,
+          externalize_commitments),
+      "reconstruct_circuit_proof_v4:encoding");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto shape,
+      circuit_shape_v4(circuit, externalize_commitments),
+      "reconstruct_circuit_proof_v4:shape");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto binding_digest,
+      circuit_binding_digest_v4(circuit, statement_binding),
+      "reconstruct_circuit_proof_v4:binding");
+  PURIFY_ASSIGN_OR_RETURN(
+      auto precommitment,
+      candidate::derive_circuit_precommitment_v4(
+          shape, binding_digest, public_commitments,
+          proof.raw_commitment, secp_context),
+      "reconstruct_circuit_proof_v4:precommitment");
+  return candidate::CircuitZkNormArgPublicationV4{
+      std::move(precommitment.digest), std::move(proof)};
+}
+
 Result<candidate::CircuitZkNormArgPublicationV4>
 prove_circuit_zk_norm_arg_v4_impl(
     const NativeBulletproofCircuit &circuit,
@@ -3190,6 +3330,56 @@ prove_circuit_zk_norm_arg_v4_impl(
 }
 
 } // namespace
+
+Status candidate::validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
+    const CircuitZkNormArgProofV4 &proof,
+    CircuitCommitmentModeV4 mode, std::size_t round_count,
+    purify_secp_context *secp_context) {
+  return validate_circuit_zk_norm_arg_proof_v4_fixed_encoding_impl(
+      proof, mode, round_count, secp_context);
+}
+
+Status candidate::validate_circuit_zk_norm_arg_proof_v4_encoding(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitZkNormArgProofV4 &proof,
+    purify_secp_context *secp_context) {
+  return validate_circuit_zk_norm_arg_proof_v4_encoding_impl(
+      circuit, proof, {}, secp_context, false);
+}
+
+Status candidate::
+validate_circuit_zk_norm_arg_proof_v4_encoding_with_public_commitments(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitZkNormArgProofV4 &proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context) {
+  return validate_circuit_zk_norm_arg_proof_v4_encoding_impl(
+      circuit, proof, public_commitments, secp_context, true);
+}
+
+Result<candidate::CircuitZkNormArgPublicationV4>
+candidate::reconstruct_circuit_zk_norm_arg_publication_v4(
+    const NativeBulletproofCircuit &circuit,
+    CircuitZkNormArgProofV4 proof,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding) {
+  return reconstruct_circuit_zk_norm_arg_publication_v4_impl(
+      circuit, std::move(proof), {}, secp_context, statement_binding,
+      false);
+}
+
+Result<candidate::CircuitZkNormArgPublicationV4>
+candidate::
+reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+    const NativeBulletproofCircuit &circuit,
+    CircuitZkNormArgProofV4 proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding) {
+  return reconstruct_circuit_zk_norm_arg_publication_v4_impl(
+      circuit, std::move(proof), public_commitments, secp_context,
+      statement_binding, true);
+}
 
 Result<std::optional<candidate::PreparedCircuitZkNormArgV4>>
 candidate::prepare_circuit_zk_norm_arg_v4_impl(

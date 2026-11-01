@@ -40,6 +40,43 @@ struct CircuitZkNormArgPublicationV4 {
   CircuitZkNormArgProofV4 proof;
 };
 
+/** Validate canonical proof fields for an exact V4 mode and round count. */
+[[nodiscard]] Status validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
+    const CircuitZkNormArgProofV4 &proof,
+    CircuitCommitmentModeV4 mode, std::size_t round_count,
+    purify_secp_context *secp_context);
+
+/** Validate a hidden-mode proof body's canonical fixed-shape encoding. */
+[[nodiscard]] Status validate_circuit_zk_norm_arg_proof_v4_encoding(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitZkNormArgProofV4 &proof,
+    purify_secp_context *secp_context);
+
+/** Validate a public-mode proof body's canonical fixed-shape encoding. */
+[[nodiscard]] Status
+validate_circuit_zk_norm_arg_proof_v4_encoding_with_public_commitments(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitZkNormArgProofV4 &proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context);
+
+/** Recompute the hidden proof's public precommitment from its fields. */
+[[nodiscard]] Result<CircuitZkNormArgPublicationV4>
+reconstruct_circuit_zk_norm_arg_publication_v4(
+    const NativeBulletproofCircuit &circuit,
+    CircuitZkNormArgProofV4 proof,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding);
+
+/** Recompute the public proof's precommitment from its fields. */
+[[nodiscard]] Result<CircuitZkNormArgPublicationV4>
+reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+    const NativeBulletproofCircuit &circuit,
+    CircuitZkNormArgProofV4 proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding);
+
 /**
  * Outer-authenticated V4 statement with a pending inner norm obligation.
  *

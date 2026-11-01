@@ -10,6 +10,7 @@ use ff::Field;
 use golden_halo2curves::Secq256k1Cycle;
 
 use crate::relation_builder::{Builder, Expression};
+use crate::secp_scalar::{allocate_canonical_scalar, SecpScalarVar, SecpScalarWitness};
 use crate::{ReceiptCycleError, Scalar};
 
 /// Canonical affine witness for the native secp256k1 base field.
@@ -295,6 +296,51 @@ fn add_points(builder: &mut Builder, left: &SecpPoint, right: &SecpPoint) -> Sec
     output
 }
 
+fn select_point(
+    builder: &mut Builder,
+    condition: &Expression,
+    when_false: &SecpPoint,
+    when_true: &SecpPoint,
+) -> SecpPoint {
+    let select = |builder: &mut Builder, when_false: &Expression, when_true: &Expression| {
+        let difference = when_true.clone().sub(when_false);
+        when_false
+            .clone()
+            .add(&builder.multiply(condition, &difference))
+    };
+    let witness = if condition.value() == Scalar::ONE {
+        when_true.witness
+    } else {
+        when_false.witness
+    };
+    SecpPoint {
+        x: select(builder, &when_false.x, &when_true.x),
+        y: select(builder, &when_false.y, &when_true.y),
+        identity: select(builder, &when_false.identity, &when_true.identity),
+        witness,
+    }
+}
+
+fn scale_point(builder: &mut Builder, point: &SecpPoint, scalar: &SecpScalarVar) -> SecpPoint {
+    let mut accumulator = allocate_point(
+        builder,
+        PointValue {
+            x: Scalar::ZERO,
+            y: Scalar::ZERO,
+            identity: true,
+        },
+    );
+    let mut addend = point.clone();
+    for (index, bit) in scalar.bits.iter().enumerate() {
+        let sum = add_points(builder, &accumulator, &addend);
+        accumulator = select_point(builder, bit, &accumulator, &sum);
+        if index + 1 != scalar.bits.len() {
+            addend = add_points(builder, &addend, &addend);
+        }
+    }
+    accumulator
+}
+
 /// Builds the canonical compressed-point relation used by parent transcripts.
 ///
 /// The private y coordinate must open a non-identity secp256k1 point and its
@@ -328,6 +374,27 @@ pub fn build_secp_addition_relation(
     builder.constrain_equal(&sum.x, &expected.x);
     builder.constrain_equal(&sum.y, &expected.y);
     builder.constrain_equal(&sum.identity, &expected.identity);
+    builder.finish()
+}
+
+/// Builds `scalar * point = expected` in the secp256k1 group.
+///
+/// The scalar is canonical modulo the secp256k1 group order. The complete
+/// point addition gadget covers zero, identity, doubling, inverse, and
+/// distinct-point branches without changing the circuit shape.
+pub fn build_secp_scalar_multiplication_relation(
+    point: SecpAffineWitness,
+    scalar: SecpScalarWitness,
+    expected: SecpAffineWitness,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    let mut builder = Builder::default();
+    let point = allocate_point(&mut builder, parse_point(point)?);
+    let scalar = allocate_canonical_scalar(&mut builder, scalar)?;
+    let expected = allocate_point(&mut builder, parse_point(expected)?);
+    let product = scale_point(&mut builder, &point, &scalar);
+    builder.constrain_equal(&product.x, &expected.x);
+    builder.constrain_equal(&product.y, &expected.y);
+    builder.constrain_equal(&product.identity, &expected.identity);
     builder.finish()
 }
 
@@ -408,6 +475,21 @@ mod tests {
         verify(&circuit, statement, &proof)
     }
 
+    fn prove_scale_relation(
+        point: SecpAffineWitness,
+        scalar: SecpScalarWitness,
+        expected: SecpAffineWitness,
+    ) -> Result<(Vec<u8>, usize, usize), ReceiptCycleError> {
+        let (circuit, assignment) =
+            build_secp_scalar_multiplication_relation(point, scalar, expected)?;
+        let statement = b"secp scalar multiplication foundation";
+        let proof = prove(&circuit, &assignment, statement, [0x81; 32])?;
+        verify(&circuit, statement, &proof)?;
+        assert_eq!(proof.len(), proof_wire_len(&circuit)?);
+        let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("gate count")) as usize;
+        Ok((circuit, gates, proof.len()))
+    }
+
     #[test]
     fn complete_addition_handles_double_inverse_and_identity() {
         let g = generator();
@@ -486,5 +568,70 @@ mod tests {
         let mut identity = SecpAffineWitness::identity();
         identity.x[0] = 1;
         assert!(prove_relation(identity, generator(), generator()).is_err());
+    }
+
+    #[test]
+    fn scalar_multiplication_handles_zero_two_and_order_boundary() {
+        let (_, gates, proof_bytes) = prove_scale_relation(
+            generator(),
+            SecpScalarWitness::from_u64(0),
+            SecpAffineWitness::identity(),
+        )
+        .expect("zero scalar");
+        prove_scale_relation(
+            generator(),
+            SecpScalarWitness::from_u64(2),
+            twice_generator(),
+        )
+        .expect("doubling scalar");
+        let maximum = SecpScalarWitness::from_bytes_be([
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+            0xd0, 0x36, 0x41, 0x40,
+        ]);
+        prove_scale_relation(generator(), maximum, negate(generator())).expect("order minus one");
+        eprintln!("receipt_secp_scalar_mul_gates={gates} proof_bytes={proof_bytes}");
+        assert_eq!(gates, 23_280);
+        assert_eq!(proof_bytes, 1_415);
+    }
+
+    #[test]
+    fn scalar_multiplication_shape_is_secret_independent() {
+        let (zero, _) = build_secp_scalar_multiplication_relation(
+            generator(),
+            SecpScalarWitness::from_u64(0),
+            SecpAffineWitness::identity(),
+        )
+        .expect("zero circuit");
+        let (one, _) = build_secp_scalar_multiplication_relation(
+            generator(),
+            SecpScalarWitness::from_u64(1),
+            generator(),
+        )
+        .expect("one circuit");
+        let (two, _) = build_secp_scalar_multiplication_relation(
+            generator(),
+            SecpScalarWitness::from_u64(2),
+            twice_generator(),
+        )
+        .expect("two circuit");
+        assert_eq!(zero, one);
+        assert_eq!(zero, two);
+    }
+
+    #[test]
+    fn scalar_multiplication_rejects_wrong_and_noncanonical_witnesses() {
+        assert!(prove_scale_relation(
+            generator(),
+            SecpScalarWitness::from_u64(2),
+            three_times_generator(),
+        )
+        .is_err());
+        let order = SecpScalarWitness::from_bytes_be([
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+            0xd0, 0x36, 0x41, 0x41,
+        ]);
+        assert!(prove_scale_relation(generator(), order, SecpAffineWitness::identity(),).is_err());
     }
 }

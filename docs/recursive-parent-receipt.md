@@ -59,6 +59,19 @@ and both identity cases. Its circuit shape is independent of the private branch.
 Point decompression, transcript hashing, non-native scalar arithmetic, and the
 V3/reduction/step relations remain before an acceptance API can be exposed.
 
+The exact secq SHA-256 gadget costs 30,952 multipliers per compression block,
+plus eight multipliers per private input byte. Replaying the current V3
+transcripts requires approximately 34 blocks per anchor, or about 1,052,368
+SHA multipliers per anchor before point, scalar, reduction, or transition
+constraints. This is a correct fallback relation, but it does not meet the
+hundred-member production budget. The child transcript suite therefore needs
+either a reviewed recursion-friendly replacement or a proof tree with a
+measured bounded fan-in before activation. The existing SHA-based proof format
+remains the only accepted format until a replacement has complete prover,
+verifier, cross-suite rejection, and security tests. Because the protocol is
+pre-release, that migration should replace the suite cleanly rather than add a
+permanent compatibility path.
+
 ## Why the final MSM stays native
 
 Directly checking every child's fixed-generator norm equation in the parent

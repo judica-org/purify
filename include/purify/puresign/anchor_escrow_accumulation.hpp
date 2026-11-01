@@ -75,6 +75,7 @@ public:
     [[nodiscard]] Result<PreparedAnchorEscrow> prepare(
         const RecoveryBoundSigningRoster& roster,
         const UInt512& advertised_anchor_root,
+        const AnchorPunishmentPublicKey& punishment_key,
         const AnchorEscrowContextDigest& context_digest,
         const AnchorEscrowRecord& record,
         purify_secp_context* secp_context,

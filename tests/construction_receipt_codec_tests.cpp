@@ -20,6 +20,7 @@ using purify::FieldElement;
 using purify::Result;
 using purify::UInt512;
 using purify::accountable::AnchorReference;
+using purify::accountable::AnchorPunishmentPublicKey;
 using purify::accountable::ConstructionReceiptAccumulator;
 using purify::accountable::ConstructionReceiptEntry;
 using purify::accountable::ConstructionReceiptEnvelope;
@@ -48,6 +49,25 @@ AnchorReference reference(unsigned char marker) {
     AnchorReference out{};
     out.fill(marker);
     return out;
+}
+
+Result<AnchorPunishmentPublicKey> punishment_key(unsigned char marker) {
+    auto secp = purify::make_secp_context();
+    if (!secp) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BackendRejectedInput,
+            "construction_receipt_codec_test:secp");
+    }
+    std::array<unsigned char, 32> scalar{};
+    scalar.back() = marker;
+    std::array<unsigned char, 32> xonly{};
+    if (purify_bip340_key_from_seckey(
+            secp.get(), scalar.data(), xonly.data()) == 0) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BackendRejectedInput,
+            "construction_receipt_codec_test:punishment_key");
+    }
+    return AnchorPunishmentPublicKey::create(xonly, secp.get());
 }
 
 Result<ResolvedConstructionSetupDigest> resolved_setup(
@@ -90,16 +110,21 @@ Result<ReceiptFixture> make_fixture() {
     fixture.entries[1].circuit_precommitment =
         FieldElement::from_u64(32).to_bytes_be();
 
-    fixture.resolved.resize(2);
-    for (std::size_t i = 0; i < fixture.resolved.size(); ++i) {
-        fixture.resolved[i].anchor_reference =
-            reference(static_cast<unsigned char>(0x41 + i));
+    fixture.resolved.reserve(2);
+    for (std::size_t i = 0; i < 2; ++i) {
         PURIFY_ASSIGN_OR_RETURN(
-            fixture.resolved[i].anchor_root,
+            auto root,
             public_root(static_cast<unsigned char>(6 + i)),
             "construction_receipt_codec_test:anchor_root");
-        fixture.resolved[i].context_digest.fill(
-            static_cast<unsigned char>(0x51 + i));
+        PURIFY_ASSIGN_OR_RETURN(
+            auto punishment,
+            punishment_key(static_cast<unsigned char>(9 + i)),
+            "construction_receipt_codec_test:punishment_key");
+        purify::accountable::AnchorEscrowContextDigest context{};
+        context.fill(static_cast<unsigned char>(0x51 + i));
+        fixture.resolved.emplace_back(
+            reference(static_cast<unsigned char>(0x41 + i)), root,
+            std::move(punishment), context);
     }
     return fixture;
 }
@@ -462,12 +487,14 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
         *payload, *setup, fixture->resolved);
     expect_ok(ctx, digest, "statement digest constructs");
     if (!digest) return;
+#if !PURIFY_USE_LEGACY_FIELD_HASHES
     ctx.expect(
         purify::UInt256::from_bytes_be(digest->data(), digest->size())
                 .to_hex() ==
-            "798903f35a97573437f42b0a499319d7"
-            "bdea52f6d236afa062cb9ecfc0fcfc59",
-        "statement digest matches the canonical tagged-hash vector");
+            "e888642f3a2f97f87f030c98b8b11e92"
+            "020f95d5ac361692f05c7b1f85fc55d2",
+        "statement digest matches the canonical V3 tagged-hash vector");
+#endif
     auto repeated =
         purify::accountable::construction_receipt_statement_digest(
             *payload, *setup, fixture->resolved);
@@ -534,6 +561,31 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
             *payload, *setup, duplicate_root),
         purify::ErrorCode::BindingMismatch,
         "distinct references cannot resolve the same anchor root");
+
+    auto duplicate_punishment = fixture->resolved;
+    duplicate_punishment[1].punishment_key =
+        duplicate_punishment[0].punishment_key;
+    expect_error(
+        ctx,
+        purify::accountable::construction_receipt_statement_digest(
+            *payload, *setup, duplicate_punishment),
+        purify::ErrorCode::BindingMismatch,
+        "distinct anchors cannot resolve the same punishment key");
+
+    auto changed_punishment = fixture->resolved;
+    auto replacement_punishment = punishment_key(0x2a);
+    expect_ok(ctx, replacement_punishment,
+              "replacement punishment key constructs");
+    if (!replacement_punishment) return;
+    changed_punishment[0].punishment_key = *replacement_punishment;
+    auto changed_punishment_digest =
+        purify::accountable::construction_receipt_statement_digest(
+            *payload, *setup, changed_punishment);
+    expect_ok(ctx, changed_punishment_digest,
+              "changed punishment statement constructs");
+    if (!changed_punishment_digest) return;
+    ctx.expect(*changed_punishment_digest != *digest,
+               "statement digest binds every punishment key");
 
     auto changed_root = public_root(8);
     expect_ok(ctx, changed_root, "changed recovery root constructs");

@@ -11,6 +11,7 @@
 #include <array>
 #include <cassert>
 #include <optional>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -26,15 +27,15 @@ using PointBytes = bppp::PointBytes;
 using PointPair = std::pair<JacobianPoint, JacobianPoint>;
 
 const TaggedHash kRandomnessStatementHash(
-    "Purify/Accountable/AnchorEscrowRandomnessStatement/v1");
+    "Purify/Accountable/AnchorEscrowRandomnessStatement/v2");
 const TaggedHash kRandomnessMasterHash(
-    "Purify/Accountable/AnchorEscrowRandomnessMaster/v1");
+    "Purify/Accountable/AnchorEscrowRandomnessMaster/v2");
 const TaggedHash kFirstEphemeralHash(
-    "Purify/Accountable/AnchorEscrowFirstEphemeral/v1");
+    "Purify/Accountable/AnchorEscrowFirstEphemeral/v2");
 const TaggedHash kSecondEphemeralHash(
-    "Purify/Accountable/AnchorEscrowSecondEphemeral/v1");
+    "Purify/Accountable/AnchorEscrowSecondEphemeral/v2");
 const TaggedHash kProofSeedHash(
-    "Purify/Accountable/AnchorEscrowProofSeed/v2");
+    "Purify/Accountable/AnchorEscrowProofSeed/v3");
 
 Status require_anchor_v3_hash_suite(const char* label) {
 #if PURIFY_USE_LEGACY_FIELD_HASHES
@@ -48,6 +49,15 @@ Status require_anchor_v3_hash_suite(const char* label) {
 const Bytes& anchor_punishment_evaluation_input() {
     static const Bytes input = bytes_from_ascii(
         "Purify/Accountable/AnchorPunishmentKey/v1");
+    return input;
+}
+
+Bytes evaluation_curve_input(std::string_view prefix) {
+    Bytes input;
+    const auto& message = anchor_punishment_evaluation_input();
+    input.reserve(prefix.size() + message.size());
+    input.insert(input.end(), prefix.begin(), prefix.end());
+    input.insert(input.end(), message.begin(), message.end());
     return input;
 }
 
@@ -124,6 +134,8 @@ private:
 struct EscrowOpening {
     const SecretKey& payload;
     std::array<const GeneratedKey*, 2> ephemeral;
+    const FieldElement& punishment_scalar;
+    bool negate_punishment_scalar;
 };
 
 struct PunishmentEvaluation {
@@ -151,6 +163,25 @@ struct PunishmentEvaluation {
         detail::secure_clear_bytes(&negated, sizeof(negated));
     }
 };
+
+PointBytes punishment_point(const AnchorPunishmentPublicKey& key) {
+    PointBytes out{};
+    out[0] = 0x02;
+    std::copy(key.xonly().begin(), key.xonly().end(), out.begin() + 1);
+    return out;
+}
+
+Result<PointPair> punishment_message_points() {
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& first,
+        hash_to_curve(evaluation_curve_input("Eval/1/"), curve1()),
+        "anchor_escrow:punishment_message_first");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& second,
+        hash_to_curve(evaluation_curve_input("Eval/2/"), curve2()),
+        "anchor_escrow:punishment_message_second");
+    return PointPair{first, second};
+}
 
 Result<PunishmentEvaluation> evaluate_punishment_key(
     const GeneratedKey& anchor_recovery_key,
@@ -360,6 +391,7 @@ Expr canonical_payload(Transcript& transcript, const std::vector<Expr>& bits,
 Result<CircuitMainResult> escrow_relation(
     Transcript& transcript, const UInt512& recipient,
     const AnchorEscrowCiphertext& ciphertext,
+    const PointPair& punishment_messages,
     const EscrowOpening* opening) {
     PURIFY_ASSIGN_OR_RETURN(
         const auto& receiver,
@@ -436,6 +468,21 @@ Result<CircuitMainResult> escrow_relation(
         curve1(), transcript, generator1(), first_bits);
     const Expr second_key = circuit_ec_multiply_x(
         curve2(), transcript, generator2(), second_bits);
+    const Expr punishment_first = circuit_ec_multiply_x(
+        curve1(), transcript, punishment_messages.first, first_bits);
+    const Expr punishment_second = circuit_ec_multiply_x(
+        curve2(), transcript, punishment_messages.second, second_bits);
+    const Expr raw_punishment = circuit_combine(
+        transcript, punishment_first, punishment_second);
+    auto negate_value =
+        opening == nullptr
+            ? std::optional<FieldElement>{}
+            : std::optional<FieldElement>(FieldElement::from_u64(
+                  opening->negate_punishment_scalar ? 1 : 0));
+    WipeObjectOnDestruction negate_value_guard(negate_value);
+    const Expr negate = transcript.boolean(transcript.secret(negate_value));
+    const Expr punishment =
+        raw_punishment - 2 * transcript.mul(negate, raw_punishment);
     for (std::size_t i = 0; i < ephemeral_bits.size(); ++i) {
         const auto& bits = ephemeral_bits[i];
         const Expr ephemeral_first = circuit_ec_multiply_x(
@@ -457,7 +504,8 @@ Result<CircuitMainResult> escrow_relation(
                 circuit_combine(transcript, shared_first, shared_second),
             Expr(ciphertext.masked_scalars[i]));
     }
-    return CircuitMainResult{Expr(1), first_key, second_key, 6 * 255};
+    return CircuitMainResult{punishment, first_key, second_key,
+                             6 * 255 + 1};
 }
 
 Result<NativeBulletproofCircuit> public_escrow_circuit(
@@ -467,8 +515,12 @@ Result<NativeBulletproofCircuit> public_escrow_circuit(
                            "anchor_escrow:anchor_root");
     Transcript transcript;
     PURIFY_ASSIGN_OR_RETURN(
+        const auto& punishment_messages, punishment_message_points(),
+        "anchor_escrow:public_punishment_messages");
+    PURIFY_ASSIGN_OR_RETURN(
         const auto& relation,
-        escrow_relation(transcript, recipient, ciphertext, nullptr),
+        escrow_relation(transcript, recipient, ciphertext,
+                        punishment_messages, nullptr),
         "anchor_escrow:relation");
     BulletproofTranscript bp;
     PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits),
@@ -486,8 +538,12 @@ Result<BulletproofAssignmentData> escrow_assignment(
     const EscrowOpening& opening) {
     Transcript transcript;
     PURIFY_ASSIGN_OR_RETURN(
+        const auto& punishment_messages, punishment_message_points(),
+        "anchor_escrow:witness_punishment_messages");
+    PURIFY_ASSIGN_OR_RETURN(
         const auto& relation,
-        escrow_relation(transcript, recipient, ciphertext, &opening),
+        escrow_relation(transcript, recipient, ciphertext,
+                        punishment_messages, &opening),
         "anchor_escrow:witness_relation");
     BulletproofTranscript bp;
     PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits),
@@ -496,7 +552,8 @@ Result<BulletproofAssignmentData> escrow_assignment(
         bp.add_pubkey_and_out(payload, relation.p1x, relation.p2x,
                               relation.out),
         "anchor_escrow:bind_witness");
-    return bp.assignment_data(transcript.varmap(), FieldElement::one());
+    return bp.assignment_data(transcript.varmap(),
+                              opening.punishment_scalar);
 }
 
 Bytes ciphertext_bytes(const AnchorEscrowCiphertext& ciphertext) {
@@ -523,6 +580,7 @@ PointBytes roster_point(const RecoveryBoundSigningRoster& roster) {
 Result<bppp::ScalarBytes> escrow_randomness_statement(
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest) {
     PURIFY_RETURN_IF_ERROR(require_roster(roster,
                                          "anchor_escrow:empty_roster"),
@@ -530,16 +588,18 @@ Result<bppp::ScalarBytes> escrow_randomness_statement(
     const auto recovery_root = roster.recovery_root().to_bytes_be();
     const auto anchor_root = advertised_anchor_root.to_bytes_be();
     const auto signing_key = roster_point(roster);
-    return kRandomnessStatementHash.digest_many<7>({
+    const auto punishment = punishment_point(punishment_key);
+    return kRandomnessStatementHash.digest_many<8>({
         signing_key, roster.key_list_hash(), roster.coalition_core_digest(),
         roster.nonce_host_commitment(), recovery_root, anchor_root,
-        context_digest,
+        punishment, context_digest,
     });
 }
 
 Result<Bytes> escrow_binding(
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
     const AnchorEscrowCiphertext& ciphertext) {
     PURIFY_RETURN_IF_ERROR(require_roster(roster,
@@ -549,25 +609,14 @@ Result<Bytes> escrow_binding(
     const auto anchor_root = advertised_anchor_root.to_bytes_be();
     const auto encrypted = ciphertext_bytes(ciphertext);
     const auto signing_key = roster_point(roster);
-    static const TaggedHash hash("Purify/Accountable/AnchorEscrow/v2");
-    const auto digest = hash.digest_many<8>({
+    const auto punishment = punishment_point(punishment_key);
+    static const TaggedHash hash("Purify/Accountable/AnchorEscrow/v3");
+    const auto digest = hash.digest_many<9>({
         signing_key, roster.key_list_hash(), roster.coalition_core_digest(),
         roster.nonce_host_commitment(), recovery_root, anchor_root, encrypted,
-        context_digest,
+        punishment, context_digest,
     });
     return Bytes(digest.begin(), digest.end());
-}
-
-bool has_zero_dlog(
-    const bppp::candidate::CircuitZkNormArgProofV4& proof) {
-    return std::all_of(
-               proof.public_commitment_dlog_nonce.begin(),
-               proof.public_commitment_dlog_nonce.end(),
-               [](unsigned char byte) { return byte == 0; }) &&
-           std::all_of(
-               proof.public_commitment_dlog_response.begin(),
-               proof.public_commitment_dlog_response.end(),
-               [](unsigned char byte) { return byte == 0; });
 }
 
 Result<GeneratedKey> decrypt_anchor(
@@ -621,6 +670,37 @@ Result<AnchorPunishmentKey> derive_anchor_punishment_key(
     return AnchorPunishmentKey(std::move(evaluated.key));
 }
 
+Result<AnchorEscrowCircuitShape>
+anchor_escrow_circuit_shape_for_testing(
+    const UInt512& recipient, const UInt512& anchor_root,
+    const AnchorEscrowCiphertext& ciphertext) {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v3_hash_suite("anchor_escrow:shape_hash_suite"),
+        "anchor_escrow:shape_hash_suite");
+    PURIFY_RETURN_IF_ERROR(
+        decode_root(anchor_root, "anchor_escrow:shape_anchor_root"),
+        "anchor_escrow:shape_anchor_root");
+    Transcript transcript;
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& punishment_messages, punishment_message_points(),
+        "anchor_escrow:shape_punishment_messages");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& relation,
+        escrow_relation(transcript, recipient, ciphertext,
+                        punishment_messages, nullptr),
+        "anchor_escrow:shape_relation");
+    const auto unpadded_gates = transcript.muls().size();
+    BulletproofTranscript bp;
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits),
+                           "anchor_escrow:shape_lower");
+    PURIFY_RETURN_IF_ERROR(
+        bp.add_pubkey_and_out(anchor_root, relation.p1x, relation.p2x,
+                              relation.out),
+        "anchor_escrow:shape_bind");
+    return AnchorEscrowCircuitShape{
+        unpadded_gates, bp.native_circuit().n_gates};
+}
+
 Status AnchorEscrowRecord::validate_encoding(
     purify_secp_context* secp_context) const {
     PURIFY_RETURN_IF_ERROR(
@@ -639,10 +719,12 @@ Status AnchorEscrowRecord::validate_encoding(
     static constexpr std::size_t kRoundCount = 14;
     static_assert(kNormProofSize == 65 * kRoundCount + 64);
     const bppp::candidate::CircuitZkNormArgProofV4 proof{
-        raw_commitment_, mask_commitment_, t2_, {}, {}, norm_proof_};
+        raw_commitment_, mask_commitment_, t2_,
+        public_commitment_dlog_nonce_,
+        public_commitment_dlog_response_, norm_proof_};
     return bppp::candidate::
         validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
-            proof, bppp::candidate::CircuitCommitmentModeV4::Hidden,
+            proof, bppp::candidate::CircuitCommitmentModeV4::Public,
             kRoundCount, secp_context);
 }
 
@@ -658,6 +740,10 @@ Result<Bytes> AnchorEscrowRecord::serialize(
     out.insert(out.end(), raw_commitment_.begin(), raw_commitment_.end());
     out.insert(out.end(), mask_commitment_.begin(), mask_commitment_.end());
     out.insert(out.end(), t2_.begin(), t2_.end());
+    out.insert(out.end(), public_commitment_dlog_nonce_.begin(),
+               public_commitment_dlog_nonce_.end());
+    out.insert(out.end(), public_commitment_dlog_response_.begin(),
+               public_commitment_dlog_response_.end());
     out.insert(out.end(), norm_proof_.begin(), norm_proof_.end());
     assert(out.size() == kSerializedSize);
     return out;
@@ -697,6 +783,14 @@ Result<AnchorEscrowRecord> AnchorEscrowRecord::deserialize(
     std::copy_n(encoded.begin() + offset, out.t2_.size(),
                 out.t2_.begin());
     offset += out.t2_.size();
+    std::copy_n(encoded.begin() + offset,
+                out.public_commitment_dlog_nonce_.size(),
+                out.public_commitment_dlog_nonce_.begin());
+    offset += out.public_commitment_dlog_nonce_.size();
+    std::copy_n(encoded.begin() + offset,
+                out.public_commitment_dlog_response_.size(),
+                out.public_commitment_dlog_response_.begin());
+    offset += out.public_commitment_dlog_response_.size();
     out.norm_proof_.assign(encoded.begin() + offset, encoded.end());
     PURIFY_RETURN_IF_ERROR(out.validate_encoding(secp_context),
                            "anchor_escrow:deserialize");
@@ -706,9 +800,13 @@ Result<AnchorEscrowRecord> AnchorEscrowRecord::deserialize(
 Result<AnchorEscrowRecord> create_anchor_escrow(
     const RecoveryBoundSigningRoster& roster,
     const GeneratedKey& anchor_recovery_key,
+    const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v3_hash_suite("anchor_escrow:create_hash_suite"),
+        "anchor_escrow:create_hash_suite");
     PURIFY_RETURN_IF_ERROR(
         require_secp_context(secp_context, "anchor_escrow:create"),
         "anchor_escrow:create");
@@ -716,17 +814,22 @@ Result<AnchorEscrowRecord> create_anchor_escrow(
     PURIFY_RETURN_IF_ERROR(fill_secure_random(auxiliary_randomness.value),
                            "anchor_escrow:auxiliary_randomness");
     return create_anchor_escrow_with_aux_randomness(
-        roster, anchor_recovery_key, context_digest,
+        roster, anchor_recovery_key, punishment_key, context_digest,
         auxiliary_randomness.value, secp_context, cache);
 }
 
 Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
     const RecoveryBoundSigningRoster& roster,
     const GeneratedKey& anchor_recovery_key,
+    const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
     const bppp::ScalarBytes& auxiliary_randomness,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v3_hash_suite(
+            "anchor_escrow:create_aux_hash_suite"),
+        "anchor_escrow:create_aux_hash_suite");
     PURIFY_RETURN_IF_ERROR(
         require_secp_context(secp_context, "anchor_escrow:create_aux"),
         "anchor_escrow:create_aux");
@@ -734,16 +837,18 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
                                          "anchor_escrow:empty_roster"),
                            "anchor_escrow:create_roster");
     PURIFY_ASSIGN_OR_RETURN(
-        const auto& derived_anchor, derive_key(anchor_recovery_key.secret),
-        "anchor_escrow:derive_anchor");
-    if (derived_anchor.public_key != anchor_recovery_key.public_key) {
+        auto punishment_evaluation,
+        evaluate_punishment_key(anchor_recovery_key, secp_context),
+        "anchor_escrow:evaluate_punishment");
+    if (punishment_evaluation.key.xonly_pubkey != punishment_key.xonly()) {
         return unexpected_error(ErrorCode::BindingMismatch,
-                                "anchor_escrow:anchor_keypair");
+                                "anchor_escrow:punishment_key");
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto& randomness_statement,
         escrow_randomness_statement(roster,
                                     anchor_recovery_key.public_key,
+                                    punishment_key,
                                     context_digest),
         "anchor_escrow:randomness_statement");
     auto packed_anchor = anchor_recovery_key.secret.packed().to_bytes_be();
@@ -777,10 +882,14 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
         return unexpected_error(ErrorCode::BindingMismatch,
                                 "anchor_escrow:duplicate_ephemeral");
     }
-    const EscrowOpening opening{
+    EscrowOpening opening{
         anchor_recovery_key.secret,
         {&first_ephemeral, &second_ephemeral},
+        punishment_evaluation.normalized_scalar,
+        punishment_evaluation.negated,
     };
+    WipeObjectOnDestruction opening_sign_guard(
+        opening.negate_punishment_scalar);
     PURIFY_ASSIGN_OR_RETURN(
         const auto& ciphertext,
         encrypt_anchor(roster.recovery_root(), opening),
@@ -800,7 +909,7 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
     PURIFY_ASSIGN_OR_RETURN(
         const auto& binding,
         escrow_binding(roster, anchor_recovery_key.public_key,
-                       context_digest, ciphertext),
+                       punishment_key, context_digest, ciphertext),
         "anchor_escrow:binding");
     SecretBytes32 prover_seed;
     {
@@ -809,21 +918,24 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
         WipeObjectOnDestruction digest_guard(digest);
         prover_seed.value = digest;
     }
+    const std::array<PointBytes, 1> outputs{
+        punishment_point(punishment_key)};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
-        bppp::candidate::prove_circuit_zk_norm_arg_v4(
-            circuit, assignment, prover_seed.value, secp_context, binding,
-            cache),
+        bppp::candidate::
+            prove_circuit_zk_norm_arg_v4_with_public_commitments(
+                circuit, assignment, prover_seed.value, outputs,
+                secp_context, binding, cache),
         "anchor_escrow:prove");
-    if (!has_zero_dlog(publication.proof)) {
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "anchor_escrow:unexpected_dlog");
-    }
     AnchorEscrowRecord record;
     record.ciphertext_ = ciphertext;
     record.raw_commitment_ = publication.proof.raw_commitment;
     record.mask_commitment_ = publication.proof.mask_commitment;
     record.t2_ = publication.proof.t2;
+    record.public_commitment_dlog_nonce_ =
+        publication.proof.public_commitment_dlog_nonce;
+    record.public_commitment_dlog_response_ =
+        publication.proof.public_commitment_dlog_response;
     record.norm_proof_ = std::move(publication.proof.norm_proof);
     PURIFY_RETURN_IF_ERROR(record.validate_encoding(secp_context),
                            "anchor_escrow:proof_encoding");
@@ -833,10 +945,14 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
 Result<bool> verify_anchor_escrow(
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
     const AnchorEscrowRecord& record,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v3_hash_suite("anchor_escrow:verify_hash_suite"),
+        "anchor_escrow:verify_hash_suite");
     PURIFY_RETURN_IF_ERROR(
         require_secp_context(secp_context, "anchor_escrow:verify"),
         "anchor_escrow:verify");
@@ -852,19 +968,24 @@ Result<bool> verify_anchor_escrow(
         "anchor_escrow:verify_circuit");
     PURIFY_ASSIGN_OR_RETURN(
         const auto& binding,
-        escrow_binding(roster, advertised_anchor_root, context_digest,
-                       record.ciphertext_),
+        escrow_binding(roster, advertised_anchor_root, punishment_key,
+                       context_digest, record.ciphertext_),
         "anchor_escrow:verify_binding");
+    const std::array<PointBytes, 1> outputs{
+        punishment_point(punishment_key)};
     bppp::candidate::CircuitZkNormArgProofV4 proof{
         record.raw_commitment_, record.mask_commitment_, record.t2_,
-        {}, {}, record.norm_proof_};
+        record.public_commitment_dlog_nonce_,
+        record.public_commitment_dlog_response_, record.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
-        bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4(
-            circuit, std::move(proof), secp_context, binding),
+        bppp::candidate::
+            reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+                circuit, std::move(proof), outputs, secp_context, binding),
         "anchor_escrow:publication");
-    return bppp::candidate::verify_circuit_zk_norm_arg_v4(
-        circuit, publication, secp_context, binding, cache);
+    return bppp::candidate::
+        verify_circuit_zk_norm_arg_v4_with_public_commitments(
+            circuit, publication, outputs, secp_context, binding, cache);
 }
 
 Result<AnchorEscrowAccumulator> AnchorEscrowAccumulator::create(
@@ -874,7 +995,7 @@ Result<AnchorEscrowAccumulator> AnchorEscrowAccumulator::create(
         auto basis,
         bppp::accumulation::Basis::create(
             kNormVectorLength, kNormVectorLength,
-            "Purify/Accountable/AnchorEscrowAccumulation/v2",
+            "Purify/Accountable/AnchorEscrowAccumulation/v3",
             secp_context),
         "anchor_escrow_accumulation:basis");
     return AnchorEscrowAccumulator(std::move(basis));
@@ -884,10 +1005,15 @@ Result<PreparedAnchorEscrow>
 AnchorEscrowAccumulator::prepare(
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
     const AnchorEscrowRecord& record,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) const {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v3_hash_suite(
+            "anchor_escrow_accumulation:prepare_hash_suite"),
+        "anchor_escrow_accumulation:prepare_hash_suite");
     PURIFY_RETURN_IF_ERROR(
         require_secp_context(secp_context,
                              "anchor_escrow_accumulation:prepare"),
@@ -904,23 +1030,29 @@ AnchorEscrowAccumulator::prepare(
         "anchor_escrow_accumulation:circuit");
     PURIFY_ASSIGN_OR_RETURN(
         const auto& binding,
-        escrow_binding(roster, advertised_anchor_root, context_digest,
-                       record.ciphertext_),
+        escrow_binding(roster, advertised_anchor_root, punishment_key,
+                       context_digest, record.ciphertext_),
         "anchor_escrow_accumulation:binding");
+    const std::array<PointBytes, 1> outputs{
+        punishment_point(punishment_key)};
     bppp::candidate::CircuitZkNormArgProofV4 proof{
         record.raw_commitment_, record.mask_commitment_, record.t2_,
-        {}, {}, record.norm_proof_};
+        record.public_commitment_dlog_nonce_,
+        record.public_commitment_dlog_response_, record.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
-        bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4(
-            circuit, std::move(proof), secp_context, binding),
+        bppp::candidate::
+            reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+                circuit, std::move(proof), outputs, secp_context, binding),
         "anchor_escrow_accumulation:publication");
     const auto circuit_precommitment =
         publication.precommitment.bytes();
     PURIFY_ASSIGN_OR_RETURN(
         auto prepared,
-        bppp::candidate::prepare_circuit_zk_norm_arg_v4(
-            circuit, publication, secp_context, binding, cache),
+        bppp::candidate::
+            prepare_circuit_zk_norm_arg_v4_with_public_commitments(
+                circuit, publication, outputs, secp_context, binding,
+                cache),
         "anchor_escrow_accumulation:outer");
     if (!prepared.has_value()) {
         return unexpected_error(ErrorCode::EquationMismatch,
@@ -935,14 +1067,18 @@ AnchorEscrowAccumulator::prepare(
     return PreparedAnchorEscrow(circuit_precommitment, std::move(norm));
 }
 
-Result<GeneratedKey> recover_escrowed_anchor(
+Result<AnchorPunishmentKey> recover_escrowed_anchor(
     const RecoveryBoundSigningRoster& roster,
     const FieldElement& exposed_signing_scalar,
     const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
     const AnchorEscrowRecord& record,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v3_hash_suite("anchor_escrow:recover_hash_suite"),
+        "anchor_escrow:recover_hash_suite");
     PURIFY_ASSIGN_OR_RETURN(
         const auto& recipient,
         recover_registered_root(roster, exposed_signing_scalar,
@@ -950,15 +1086,28 @@ Result<GeneratedKey> recover_escrowed_anchor(
         "anchor_escrow:recover_recipient");
     PURIFY_ASSIGN_OR_RETURN(
         const auto& accepted,
-        verify_anchor_escrow(roster, advertised_anchor_root, context_digest,
-                             record, secp_context, cache),
+        verify_anchor_escrow(roster, advertised_anchor_root,
+                             punishment_key, context_digest, record,
+                             secp_context, cache),
         "anchor_escrow:recover_verify");
     if (!accepted) {
         return unexpected_error(ErrorCode::EquationMismatch,
                                 "anchor_escrow:invalid_proof");
     }
-    return decrypt_anchor(recipient, advertised_anchor_root,
-                          record.ciphertext());
+    PURIFY_ASSIGN_OR_RETURN(
+        auto recovered_anchor,
+        decrypt_anchor(recipient, advertised_anchor_root,
+                       record.ciphertext()),
+        "anchor_escrow:recover_anchor");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto recovered_punishment,
+        derive_anchor_punishment_key(recovered_anchor, secp_context),
+        "anchor_escrow:recover_punishment");
+    if (recovered_punishment.public_key() != punishment_key) {
+        return unexpected_error(ErrorCode::BindingMismatch,
+                                "anchor_escrow:recovered_punishment_key");
+    }
+    return std::move(recovered_punishment);
 }
 
 } // namespace purify::accountable

@@ -19,7 +19,7 @@ namespace purify::accountable {
 namespace {
 
 const TaggedHash kConstructionReceiptStatementHash(
-    "Purify/Accountable/ConstructionReceiptStatement/v2");
+    "Purify/Accountable/ConstructionReceiptStatement/v3");
 
 bool same_roster(const NonceHostBoundSigningRoster& left,
                  const NonceHostBoundSigningRoster& right) {
@@ -293,7 +293,7 @@ construction_receipt_statement_digest(
     Bytes statement = payload.serialize();
     statement.reserve(statement.size() +
                       ResolvedConstructionSetupDigest::kSerializedSize +
-                      resolved_entries.size() * (32 + 64 + 32));
+                      resolved_entries.size() * (32 + 64 + 33 + 32));
     append_array(statement, resolved_setup.bytes());
     for (std::size_t i = 0; i < resolved_entries.size(); ++i) {
         const ResolvedConstructionReceiptEntry& resolved =
@@ -311,6 +311,12 @@ construction_receipt_statement_digest(
                     ErrorCode::BindingMismatch,
                     "construction_receipt:duplicate_anchor_root");
             }
+            if (resolved_entries[prior].punishment_key ==
+                resolved.punishment_key) {
+                return unexpected_error(
+                    ErrorCode::BindingMismatch,
+                    "construction_receipt:duplicate_punishment_key");
+            }
         }
         PURIFY_RETURN_IF_ERROR(
             validate_public_root(resolved.anchor_root,
@@ -318,6 +324,12 @@ construction_receipt_statement_digest(
             "construction_receipt:anchor_root");
         append_array(statement, resolved.anchor_reference);
         append_array(statement, resolved.anchor_root.to_bytes_be());
+        std::array<unsigned char, 33> punishment{};
+        punishment[0] = 0x02;
+        std::copy(resolved.punishment_key.xonly().begin(),
+                  resolved.punishment_key.xonly().end(),
+                  punishment.begin() + 1);
+        append_array(statement, punishment);
         append_array(statement, resolved.context_digest);
     }
     return kConstructionReceiptStatementHash.digest(statement);
@@ -453,6 +465,7 @@ ConstructionReceiptAccumulator::verify_anchor_reduction(
     const PendingConstructionSetup& setup,
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
     const AnchorEscrowRecord& record,
     const bppp::ScalarBytes& expected_circuit_precommitment,
@@ -468,7 +481,8 @@ ConstructionReceiptAccumulator::verify_anchor_reduction(
     PURIFY_ASSIGN_OR_RETURN(
         const auto& prepared,
         anchors_.prepare(roster, advertised_anchor_root,
-                         context_digest, record, secp_context, cache),
+                         punishment_key, context_digest, record,
+                         secp_context, cache),
         "construction_accumulation:prepare_anchor");
     if (prepared.circuit_precommitment() !=
         expected_circuit_precommitment) {

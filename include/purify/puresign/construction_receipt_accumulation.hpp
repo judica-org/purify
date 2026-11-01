@@ -170,6 +170,7 @@ public:
         const PendingConstructionSetup& setup,
         const RecoveryBoundSigningRoster& roster,
         const UInt512& advertised_anchor_root,
+        const AnchorPunishmentPublicKey& punishment_key,
         const AnchorEscrowContextDigest& context_digest,
         const AnchorEscrowRecord& record,
         const bppp::ScalarBytes& expected_circuit_precommitment,

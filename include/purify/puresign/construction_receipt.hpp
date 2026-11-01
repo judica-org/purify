@@ -106,19 +106,32 @@ private:
 
 /**
  * @brief Registry-resolved public inputs for one ordered anchor entry.
+ *
+ * Construction requires a validated punishment-key type so an unresolved or
+ * malformed x-only key cannot enter the authenticated receipt statement.
  */
 struct ResolvedConstructionReceiptEntry {
-    AnchorReference anchor_reference{};
-    UInt512 anchor_root{};
-    AnchorEscrowContextDigest context_digest{};
+    ResolvedConstructionReceiptEntry(
+        AnchorReference reference, UInt512 root,
+        AnchorPunishmentPublicKey punishment,
+        AnchorEscrowContextDigest context)
+        : anchor_reference(reference), anchor_root(root),
+          punishment_key(std::move(punishment)),
+          context_digest(context) {}
+
+    AnchorReference anchor_reference;
+    UInt512 anchor_root;
+    AnchorPunishmentPublicKey punishment_key;
+    AnchorEscrowContextDigest context_digest;
 };
 
 /**
  * @brief Bind a canonical payload to its ordered, resolved anchor inputs.
  *
  * The digest binds the exact serialized payload, its registry-resolved setup
- * record digest, then each unique anchor reference, exact anchor root, and
- * context digest in deterministic payload order. The registry must resolve a
+ * record digest, then each unique anchor reference, exact anchor root,
+ * punishment key, and context digest in deterministic payload order. The
+ * registry must resolve a
  * recovery root immutably and one-to-one to the exact setup record whose
  * digest is supplied here. This operation does not verify an escrow proof or
  * authenticate the registry lookup and referenced anchors.

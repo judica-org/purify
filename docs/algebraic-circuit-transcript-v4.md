@@ -112,8 +112,10 @@ equations. Reallocating the witness fields would create an unlinked copy and
 would not establish that the transcript authenticated the values checked by
 the equations.
 
-The shared fixture is
-`rust/receipt-cycle/tests/vectors/algebraic_circuit_v4.json`. It is generated
-and checked by the stdlib-only Python oracle
-`tests/reference_algebraic_circuit_v4.py`, and consumed independently by the
-native and constrained implementations.
+The shared public and hidden fixtures are
+`rust/receipt-cycle/tests/vectors/algebraic_circuit_v4.json` and
+`rust/receipt-cycle/tests/vectors/algebraic_circuit_v4_hidden.json`. They are
+generated and checked by the stdlib-only Python oracle
+`tests/reference_algebraic_circuit_v4.py`. The public fixture is consumed by
+the native and constrained implementations; the constrained implementation
+also checks the hidden fixture and its zero DLog branch.

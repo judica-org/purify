@@ -465,7 +465,7 @@ mod tests {
     use bulletproofs_cycle::Cycle;
     use golden_halo2curves::Secq256k1Cycle;
 
-    use crate::{proof_wire_len, prove, verify};
+    use crate::{proof_wire_len, prove, verify, Assignment, Circuit, WireKind};
 
     fn decode_hex_vec(value: &str) -> Vec<u8> {
         assert_eq!(value.len() & 1, 0);
@@ -538,9 +538,13 @@ mod tests {
     }
 
     fn nonce_hex(value: &str) -> SecpEncodedPointWitness {
+        let x = decode_hex::<32>(value);
+        if x == [0; 32] {
+            return SecpEncodedPointWitness::identity();
+        }
         let mut encoded = [0; 33];
         encoded[0] = 2;
-        encoded[1..].copy_from_slice(&decode_hex::<32>(value));
+        encoded[1..].copy_from_slice(&x);
         point_witness(encoded)
     }
 
@@ -573,14 +577,15 @@ mod tests {
         Secq256k1Cycle::scalar_from_canonical(&bytes).expect("canonical fixture scalar")
     }
 
-    fn fixture() -> (
+    fn fixture_from_json(
+        vector: &str,
+    ) -> (
         CircuitTranscriptShapeV4,
         [u8; 32],
         [u8; 32],
         CircuitProofTranscriptWitnessV4,
         CircuitTranscriptExpectedV4,
     ) {
-        let vector = include_str!("../tests/vectors/algebraic_circuit_v4.json");
         let shape = CircuitTranscriptShapeV4 {
             mode: match json_u64(vector, "mode") {
                 0 => CircuitCommitmentModeV4::Hidden,
@@ -639,18 +644,29 @@ mod tests {
         )
     }
 
-    #[test]
-    fn shared_vector_builds_one_secret_independent_shape() {
-        let (shape, binding, generators, witness, expected) = fixture();
-        let mut transcript_builder = Builder::default();
-        let result = install_transcript(
-            &mut transcript_builder,
-            shape,
-            binding,
-            generators,
-            &witness,
-        )
-        .expect("shared V4 transcript");
+    fn fixture() -> (
+        CircuitTranscriptShapeV4,
+        [u8; 32],
+        [u8; 32],
+        CircuitProofTranscriptWitnessV4,
+        CircuitTranscriptExpectedV4,
+    ) {
+        fixture_from_json(include_str!("../tests/vectors/algebraic_circuit_v4.json"))
+    }
+
+    fn hidden_fixture() -> (
+        CircuitTranscriptShapeV4,
+        [u8; 32],
+        [u8; 32],
+        CircuitProofTranscriptWitnessV4,
+        CircuitTranscriptExpectedV4,
+    ) {
+        fixture_from_json(include_str!(
+            "../tests/vectors/algebraic_circuit_v4_hidden.json"
+        ))
+    }
+
+    fn assert_expected(result: &CircuitTranscriptResultV4, expected: &CircuitTranscriptExpectedV4) {
         for (actual, expected) in [
             (&result.precommitment, expected.precommitment),
             (&result.rho, expected.rho),
@@ -667,6 +683,39 @@ mod tests {
         for (actual, &expected) in result.gammas.iter().zip(&expected.gammas) {
             assert_eq!(embedded_integer(actual).value(), scalar_value(expected));
         }
+    }
+
+    fn relation_satisfied(circuit: &[u8], assignment: &[u8]) -> bool {
+        let circuit = Circuit::parse(circuit).expect("test circuit");
+        let assignment = Assignment::parse(assignment).expect("test assignment");
+        circuit.constraints.iter().all(|constraint| {
+            constraint.iter().fold(Scalar::ZERO, |sum, term| {
+                let value = match term.kind {
+                    WireKind::One => Scalar::ONE,
+                    WireKind::Left => assignment.gates[term.index].0,
+                    WireKind::Right => assignment.gates[term.index].1,
+                    WireKind::Output => {
+                        assignment.gates[term.index].0 * assignment.gates[term.index].1
+                    }
+                };
+                sum + term.coefficient * value
+            }) == Scalar::ZERO
+        })
+    }
+
+    #[test]
+    fn shared_vector_builds_one_secret_independent_shape() {
+        let (shape, binding, generators, witness, expected) = fixture();
+        let mut transcript_builder = Builder::default();
+        let result = install_transcript(
+            &mut transcript_builder,
+            shape,
+            binding,
+            generators,
+            &witness,
+        )
+        .expect("shared V4 transcript");
+        assert_expected(&result, &expected);
         assert_eq!(
             result.public_commitments.len(),
             witness.public_commitments.len()
@@ -701,6 +750,59 @@ mod tests {
             proof_wire_len(&circuit).expect("V4 proof length"),
             proof_wire_len(&changed_circuit).expect("changed V4 proof length"),
         );
+    }
+
+    #[test]
+    fn hidden_shared_vector_replays_zero_dlog_branch() {
+        let (shape, binding, generators, witness, expected) = hidden_fixture();
+        assert_eq!(shape.mode, CircuitCommitmentModeV4::Hidden);
+        assert!(witness.public_commitments.is_empty());
+
+        let mut builder = Builder::default();
+        let result = install_transcript(&mut builder, shape, binding, generators, &witness)
+            .expect("hidden V4 transcript");
+        assert_expected(&result, &expected);
+        assert_eq!(
+            result.batched_public_commitment.point.identity.value(),
+            Scalar::ONE
+        );
+        assert_eq!(result.dlog_nonce.point.identity.value(), Scalar::ONE);
+        assert_eq!(
+            embedded_integer(&result.dlog_response).value(),
+            Scalar::ZERO
+        );
+        drop(result);
+        let (circuit, assignment) = builder.finish().expect("hidden V4 relation");
+        assert!(relation_satisfied(&circuit, &assignment));
+
+        let mut nonzero_response = witness.clone();
+        nonzero_response.dlog_response = SecpScalarWitness::from_u64(1);
+        let mut nonzero_builder = Builder::default();
+        let result = install_transcript(
+            &mut nonzero_builder,
+            shape,
+            binding,
+            generators,
+            &nonzero_response,
+        )
+        .expect("hidden nonzero response relation");
+        drop(result);
+        let (nonzero_circuit, nonzero_assignment) = nonzero_builder
+            .finish()
+            .expect("hidden nonzero response assignment");
+        assert_eq!(nonzero_circuit, circuit);
+        assert!(!relation_satisfied(&nonzero_circuit, &nonzero_assignment));
+
+        let mut malformed = witness;
+        malformed.dlog_nonce.y[0] = 1;
+        assert!(install_transcript(
+            &mut Builder::default(),
+            shape,
+            binding,
+            generators,
+            &malformed,
+        )
+        .is_err());
     }
 
     #[test]

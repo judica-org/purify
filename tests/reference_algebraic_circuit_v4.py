@@ -142,13 +142,17 @@ def hex32(value):
     return value.to_bytes(32, "big").hex()
 
 
-def make_vector():
+def make_vector(mode=1):
+    if mode not in (0, 1):
+        raise ValueError("V4 fixture mode")
     binding = bytes(range(0x10, 0x30))
     raw_generator_digest = bytes(range(0x80, 0xA0))
-    public_commitments = [multiply(1, GENERATOR), multiply(2, GENERATOR)]
+    public_commitments = (
+        [multiply(1, GENERATOR), multiply(2, GENERATOR)] if mode == 1 else []
+    )
     raw_commitment = multiply(3, GENERATOR)
     shape = {
-        "mode": 1,
+        "mode": mode,
         "gate_count": 8,
         "commitment_count": 2,
         "n_vec_len": 16,
@@ -184,14 +188,20 @@ def make_vector():
     append_point(proof, anchored_commitment)
 
     eta_lanes, eta = challenge(proof, 4)
-    batched_commitment = add(
-        public_commitments[0], multiply(eta, public_commitments[1])
+    batched_commitment = (
+        add(public_commitments[0], multiply(eta, public_commitments[1]))
+        if mode == 1
+        else IDENTITY
     )
     append_point(proof, batched_commitment)
-    nonce = multiply(7, GENERATOR)[0].to_bytes(32, "big")
+    nonce = (
+        multiply(7, GENERATOR)[0].to_bytes(32, "big")
+        if mode == 1
+        else bytes(32)
+    )
     proof.append_bytes(nonce)
     dlog_lanes, dlog_challenge = challenge(proof, 5)
-    dlog_response = 11
+    dlog_response = 11 if mode == 1 else 0
     proof.append_scalar(dlog_response)
 
     mask_commitment = multiply(9, GENERATOR)
@@ -273,17 +283,25 @@ def make_vector():
 
 
 def check_vector():
-    path = (
+    vector_dir = (
         Path(__file__).parents[1]
         / "rust"
         / "receipt-cycle"
         / "tests"
         / "vectors"
-        / "algebraic_circuit_v4.json"
     )
     expected = make_vector()
-    actual = json.loads(path.read_text(encoding="ascii"))
+    actual = json.loads(
+        (vector_dir / "algebraic_circuit_v4.json").read_text(encoding="ascii")
+    )
     assert actual == expected
+    hidden_expected = make_vector(0)
+    hidden_actual = json.loads(
+        (vector_dir / "algebraic_circuit_v4_hidden.json").read_text(
+            encoding="ascii"
+        )
+    )
+    assert hidden_actual == hidden_expected
 
     shape = {
         key: expected[key]

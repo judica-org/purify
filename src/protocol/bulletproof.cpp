@@ -8,6 +8,7 @@
  */
 
 #include "purify/bulletproof.hpp"
+#include "purify/secret.hpp"
 #include "bulletproof_internal.hpp"
 #include "bppp_bridge.h"
 

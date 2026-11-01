@@ -82,6 +82,11 @@ pub(crate) struct Builder {
 }
 
 impl Builder {
+    #[cfg(test)]
+    pub(crate) fn gate_count(&self) -> usize {
+        self.gates.len()
+    }
+
     pub(crate) fn allocate(&mut self, value: Scalar) -> Expression {
         let index = self.gates.len();
         self.gates.push((value, Scalar::ONE));

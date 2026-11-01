@@ -1719,6 +1719,51 @@ mod tests {
         (basis_digest, claims, proof, root)
     }
 
+    fn zero_polynomial_term(offset: usize, factor_count: usize) -> CandidatePolynomialTermWitness {
+        CandidatePolynomialTermWitness {
+            scale: SecpScalarWitness::from_u64(0),
+            offset,
+            factors: vec![SecpScalarWitness::from_u64(0); factor_count],
+        }
+    }
+
+    fn mixed_fanin_claims(
+        anchor_count: usize,
+        include_setup: bool,
+    ) -> Vec<CandidatePendingClaimWitness> {
+        let setup = CandidatePendingClaimWitness {
+            point: SecpEncodedPointWitness::identity(),
+            polynomial: vec![
+                zero_polynomial_term(0, 12),
+                zero_polynomial_term(4096, 12),
+                zero_polynomial_term(4096, 12),
+            ],
+        };
+        let anchor = CandidatePendingClaimWitness {
+            point: SecpEncodedPointWitness::identity(),
+            polynomial: vec![
+                zero_polynomial_term(0, 14),
+                zero_polynomial_term(16_384, 14),
+                zero_polynomial_term(16_384, 14),
+            ],
+        };
+        let mut claims = Vec::with_capacity(anchor_count + usize::from(include_setup));
+        if include_setup {
+            claims.push(setup);
+        }
+        claims.extend(std::iter::repeat_n(anchor, anchor_count));
+        claims
+    }
+
+    fn production_fanin_step_proof() -> CandidateStepProofWitness {
+        CandidateStepProofWitness {
+            left: vec![SecpEncodedPointWitness::identity(); 15],
+            right: vec![SecpEncodedPointWitness::identity(); 15],
+            terminal_scalar: SecpScalarWitness::from_u64(0),
+            folded_generator: SecpEncodedPointWitness::identity(),
+        }
+    }
+
     fn prove_bitwise_msm_relation(
         terms: &[(SecpAffineWitness, SecpScalarWitness)],
         expected: SecpAffineWitness,
@@ -2138,6 +2183,108 @@ mod tests {
             &wrong_root_shape,
         )
         .is_err());
+    }
+
+    fn measure_production_fanin_step(
+        anchor_count: usize,
+        include_setup: bool,
+    ) -> (usize, usize, usize) {
+        let basis = [0xb6; 32];
+        let claims = mixed_fanin_claims(anchor_count, include_setup);
+        let proof = production_fanin_step_proof();
+        assert_eq!(claims.len(), anchor_count + usize::from(include_setup));
+        assert_eq!(proof.left.len(), 15);
+        let root = derive_candidate_root_witness(basis, &claims, &proof)
+            .expect("mixed fan-in root witness");
+
+        // A composed step consumes leaf variables that already carry their
+        // point and scalar constraints. Allocate the identical claim inputs
+        // once by themselves, then subtract that deterministic prefix from a
+        // second builder containing the prefix plus the step. Builder gates
+        // are append-only, so this removes every duplicated claim allocation
+        // exactly. The delta intentionally retains all step-proof witnesses,
+        // transcript work, the short equation, and public root constraints.
+        let input_gates = {
+            let mut input_builder = Builder::default();
+            allocate_candidate_claims(&mut input_builder, &claims).expect("allocate mixed claims");
+            input_builder.gate_count()
+        };
+
+        let mut builder = Builder::default();
+        let constrained =
+            allocate_candidate_claims(&mut builder, &claims).expect("allocate mixed claims");
+        let derived = install_constrained_candidate_step(&mut builder, basis, &constrained, &proof)
+            .expect("mixed fan-in step");
+        constrain_encoded_point_constant(&mut builder, &derived.point, root.point)
+            .expect("mixed fan-in root point");
+        constrain_scalar_constant(&mut builder, &derived.scale, root.scale)
+            .expect("mixed fan-in root scale");
+        for (actual, &expected) in derived.factors.iter().zip(&root.factors) {
+            constrain_scalar_constant(&mut builder, actual, expected)
+                .expect("mixed fan-in root factor");
+        }
+        let total_gates = builder.gate_count();
+        let step_gates = total_gates
+            .checked_sub(input_gates)
+            .expect("step contains claim inputs");
+        eprintln!(
+            "fanin_step anchor_count={anchor_count} include_setup={include_setup} \
+             step_gates={step_gates} total_gates={total_gates} input_gates={input_gates}"
+        );
+        (step_gates, total_gates, input_gates)
+    }
+
+    #[test]
+    #[ignore = "run explicitly in release mode; fan-in step relation is large"]
+    fn fanin_sixteen_mixed_claim_step_reports_gate_delta() {
+        assert_eq!(
+            measure_production_fanin_step(16, true),
+            (7_610_694, 8_008_210, 397_516)
+        );
+    }
+
+    #[test]
+    #[ignore = "run explicitly in release mode; fan-in step relation is large"]
+    fn fanin_ten_mixed_claim_step_reports_gate_delta() {
+        assert_eq!(
+            measure_production_fanin_step(10, true),
+            (5_095_194, 5_351_326, 256_132)
+        );
+    }
+
+    #[test]
+    #[ignore = "run explicitly in release mode; fan-in step relation is large"]
+    fn fanin_eleven_mixed_claim_step_reports_gate_delta() {
+        assert_eq!(
+            measure_production_fanin_step(11, true),
+            (5_510_088, 5_789_784, 279_696)
+        );
+    }
+
+    #[test]
+    #[ignore = "run explicitly in release mode; fan-in step relation is large"]
+    fn fanin_eleven_anchor_only_step_reports_gate_delta() {
+        assert_eq!(
+            measure_production_fanin_step(11, false),
+            (5_150_996, 5_410_200, 259_204)
+        );
+    }
+
+    #[test]
+    fn baseline_production_fanin_budget_is_explicit() {
+        const MAX_GATES: usize = 1 << 24;
+        const ANCHOR_LEAF_GATES: usize = 949_880;
+        const SETUP_LEAF_GATES: usize = 854_293;
+        const FIRST_TEN_STEP_GATES: usize = 5_095_194;
+        const FIRST_ELEVEN_STEP_GATES: usize = 5_510_088;
+        const LATER_ELEVEN_STEP_GATES: usize = 5_150_996;
+        let first_ten = 10 * ANCHOR_LEAF_GATES + SETUP_LEAF_GATES + FIRST_TEN_STEP_GATES;
+        let first_eleven = 11 * ANCHOR_LEAF_GATES + SETUP_LEAF_GATES + FIRST_ELEVEN_STEP_GATES;
+        let later_eleven = 11 * ANCHOR_LEAF_GATES + LATER_ELEVEN_STEP_GATES;
+
+        assert_eq!(MAX_GATES - first_ten, 1_328_929);
+        assert_eq!(first_eleven - MAX_GATES, 35_845);
+        assert_eq!(MAX_GATES - later_eleven, 1_177_540);
     }
 
     #[test]

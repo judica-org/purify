@@ -11,7 +11,15 @@
 
 #include "algebraic_circuit_transcript.hpp"
 
+namespace purify::bppp::accumulation::internal {
+struct PreparedCircuitZkNormArgV4AdapterAccess;
+}
+
 namespace purify::bppp::candidate {
+
+namespace detail {
+struct PreparedCircuitZkNormArgV4Builder;
+}
 
 /**
  * V4 wire proof, intentionally distinct from the V3 proof.
@@ -40,7 +48,7 @@ struct CircuitZkNormArgPublicationV4 {
 };
 
 /**
- * Verified outer V4 statement with the remaining inner norm obligation.
+ * Outer-authenticated V4 statement with a pending inner norm obligation.
  *
  * `transcript_input` and `transcript` are the exact public witness and
  * challenges consumed by the recursive leaf relation. The pending residual
@@ -52,17 +60,78 @@ struct CircuitZkNormArgPublicationV4 {
  * anchored offset in `transcript_input` are likewise reconstructed here;
  * neither is accepted as a prover-supplied constant.
  */
-struct PreparedCircuitZkNormArgV4 {
-  CircuitPrecommitmentDigestV4 precommitment;
-  CircuitTranscriptShapeV4 shape;
-  TranscriptDigest circuit_binding_digest{};
-  PointBytes raw_commitment{};
-  std::vector<PointBytes> trusted_public_commitments;
-  std::vector<PointBytes> raw_generators;
-  CircuitProofTranscriptInputV4 transcript_input;
-  CircuitProofTranscriptResultV4 transcript;
-  NormArgProof norm;
-  PointBytes pending_norm_residual{};
+class PreparedCircuitZkNormArgV4 {
+public:
+  [[nodiscard]] const CircuitPrecommitmentDigestV4 &
+  precommitment() const noexcept {
+    return precommitment_;
+  }
+  [[nodiscard]] const CircuitTranscriptShapeV4 &shape() const noexcept {
+    return shape_;
+  }
+  [[nodiscard]] const TranscriptDigest &
+  circuit_binding_digest() const noexcept {
+    return circuit_binding_digest_;
+  }
+  [[nodiscard]] const PointBytes &raw_commitment() const noexcept {
+    return raw_commitment_;
+  }
+  [[nodiscard]] const std::vector<PointBytes> &
+  trusted_public_commitments() const noexcept {
+    return trusted_public_commitments_;
+  }
+  [[nodiscard]] const std::vector<PointBytes> &
+  raw_generators() const noexcept {
+    return raw_generators_;
+  }
+  [[nodiscard]] const CircuitProofTranscriptInputV4 &
+  transcript_input() const noexcept {
+    return transcript_input_;
+  }
+  [[nodiscard]] const CircuitProofTranscriptResultV4 &
+  transcript() const noexcept {
+    return transcript_;
+  }
+  [[nodiscard]] const NormArgProof &norm() const noexcept { return norm_; }
+  [[nodiscard]] const PointBytes &pending_norm_residual() const noexcept {
+    return pending_norm_residual_;
+  }
+
+private:
+  PreparedCircuitZkNormArgV4(
+      CircuitPrecommitmentDigestV4 precommitment,
+      CircuitTranscriptShapeV4 shape,
+      TranscriptDigest circuit_binding_digest,
+      PointBytes raw_commitment,
+      std::vector<PointBytes> trusted_public_commitments,
+      std::vector<PointBytes> raw_generators,
+      CircuitProofTranscriptInputV4 transcript_input,
+      CircuitProofTranscriptResultV4 transcript, NormArgProof norm,
+      PointBytes pending_norm_residual)
+      : precommitment_(std::move(precommitment)), shape_(std::move(shape)),
+        circuit_binding_digest_(circuit_binding_digest),
+        raw_commitment_(raw_commitment),
+        trusted_public_commitments_(
+            std::move(trusted_public_commitments)),
+        raw_generators_(std::move(raw_generators)),
+        transcript_input_(std::move(transcript_input)),
+        transcript_(std::move(transcript)), norm_(std::move(norm)),
+        pending_norm_residual_(pending_norm_residual) {}
+
+  CircuitPrecommitmentDigestV4 precommitment_;
+  CircuitTranscriptShapeV4 shape_;
+  TranscriptDigest circuit_binding_digest_{};
+  PointBytes raw_commitment_{};
+  std::vector<PointBytes> trusted_public_commitments_;
+  std::vector<PointBytes> raw_generators_;
+  CircuitProofTranscriptInputV4 transcript_input_;
+  CircuitProofTranscriptResultV4 transcript_;
+  NormArgProof norm_;
+  PointBytes pending_norm_residual_{};
+
+  friend struct detail::PreparedCircuitZkNormArgV4Builder;
+  friend struct accumulation::internal::
+      PreparedCircuitZkNormArgV4AdapterAccess;
 };
 
 /**

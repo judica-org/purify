@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "purify/accumulation.hpp"
+#include "accumulation_test_access.hpp"
 #include "test_harness.hpp"
 
 namespace {
@@ -941,15 +942,11 @@ void check_zero_families(TestContext& ctx, purify_secp_context* secp) {
                   "honest identity round preserves final decision");
 
         auto algebraic_prepared =
-            accum::bind_algebraic_prepared_norm(
-                *basis, std::move(*prepared),
-                FieldElement::from_int(29));
-        expect_ok(ctx, algebraic_prepared,
-                  "algebraic zero norm binds to its V4 scalar");
-        if (!algebraic_prepared) return;
+            accum::unsafe_bind_algebraic_prepared_norm_for_test(
+                *prepared, FieldElement::from_int(29));
         auto algebraic_reduction =
             accum::prove_algebraic_norm_reduction(
-                *basis, *algebraic_prepared, secp);
+                *basis, algebraic_prepared, secp);
         expect_ok(ctx, algebraic_reduction,
                   "algebraic zero coefficient opening proves");
         if (!algebraic_reduction) return;
@@ -979,7 +976,7 @@ void check_zero_families(TestContext& ctx, purify_secp_context* secp) {
         if (!algebraic_parsed) return;
         auto algebraic_claim =
             accum::verify_algebraic_norm_reduction(
-                *basis, *algebraic_prepared,
+                *basis, algebraic_prepared,
                 *algebraic_parsed, secp);
         expect_ok(ctx, algebraic_claim,
                   "algebraic zero reduction verifies");
@@ -1035,15 +1032,11 @@ void check_reference_vector(TestContext& ctx, purify_secp_context* secp) {
         "native accumulation encoding matches the independent Python vector");
 
     auto algebraic_prepared =
-        accum::bind_algebraic_prepared_norm(
-            *basis, std::move(*prepared),
-            FieldElement::from_int(23));
-    expect_ok(ctx, algebraic_prepared,
-              "algebraic reference norm binds its V4 scalar");
-    if (!algebraic_prepared) return;
+        accum::unsafe_bind_algebraic_prepared_norm_for_test(
+            *prepared, FieldElement::from_int(23));
     auto algebraic_reduction =
         accum::prove_algebraic_norm_reduction(
-            *basis, *algebraic_prepared, secp);
+            *basis, algebraic_prepared, secp);
     expect_ok(ctx, algebraic_reduction,
               "algebraic reference reduction proves");
     if (!algebraic_reduction) return;
@@ -1063,7 +1056,7 @@ void check_reference_vector(TestContext& ctx, purify_secp_context* secp) {
         "algebraic reduction matches the complete Python context");
     auto algebraic_claim =
         accum::verify_algebraic_norm_reduction(
-            *basis, *algebraic_prepared,
+            *basis, algebraic_prepared,
             *algebraic_reduction, secp);
     expect_ok(ctx, algebraic_claim,
               "algebraic reference reduction verifies");
@@ -1112,21 +1105,20 @@ void check_algebraic_suite(TestContext& ctx,
     expect_ok(ctx, prepared, "algebraic fixture norm prepares");
     if (!prepared) return;
 
-    expect_error(
-        ctx,
-        accum::bind_algebraic_prepared_norm(
-            *basis, *prepared, FieldElement::zero()),
-        purify::ErrorCode::RangeViolation,
-        "algebraic prepared binding rejects zero");
+    auto zero_binding =
+        accum::unsafe_bind_algebraic_prepared_norm_for_test(
+            *prepared, FieldElement::zero());
+    expect_error(ctx,
+                 accum::prove_algebraic_norm_reduction(
+                     *basis, zero_binding, secp),
+                 purify::ErrorCode::RangeViolation,
+                 "algebraic prepared binding rejects zero");
 
     auto algebraic_prepared =
-        accum::bind_algebraic_prepared_norm(
-            *basis, *prepared, FieldElement::from_int(41));
-    expect_ok(ctx, algebraic_prepared,
-              "algebraic norm binds its V4 scalar");
-    if (!algebraic_prepared) return;
+        accum::unsafe_bind_algebraic_prepared_norm_for_test(
+            *prepared, FieldElement::from_int(41));
     auto reduction = accum::prove_algebraic_norm_reduction(
-        *basis, *algebraic_prepared, secp);
+        *basis, algebraic_prepared, secp);
     expect_ok(ctx, reduction, "algebraic coefficient reduction proves");
     if (!reduction) return;
     auto reduction_bytes = accum::serialize_algebraic_norm_reduction(
@@ -1146,7 +1138,7 @@ void check_algebraic_suite(TestContext& ctx,
               "algebraic coefficient reduction parses");
     if (!parsed_reduction) return;
     auto claim = accum::verify_algebraic_norm_reduction(
-        *basis, *algebraic_prepared, *parsed_reduction, secp);
+        *basis, algebraic_prepared, *parsed_reduction, secp);
     expect_ok(ctx, claim,
               "algebraic coefficient reduction verifies");
     if (!claim) return;
@@ -1161,16 +1153,13 @@ void check_algebraic_suite(TestContext& ctx,
     changed_reduction.coefficient_evaluation =
         (*reduction_evaluation + FieldElement::one()).to_bytes_be();
     ctx.expect(!accum::verify_algebraic_norm_reduction(
-                   *basis, *algebraic_prepared, changed_reduction, secp),
+                   *basis, algebraic_prepared, changed_reduction, secp),
                "algebraic reduction rejects a changed coefficient evaluation");
     auto different_binding =
-        accum::bind_algebraic_prepared_norm(
-            *basis, *prepared, FieldElement::from_int(42));
-    expect_ok(ctx, different_binding,
-              "alternative algebraic binding constructs a statement");
-    if (!different_binding) return;
+        accum::unsafe_bind_algebraic_prepared_norm_for_test(
+            *prepared, FieldElement::from_int(42));
     ctx.expect(!accum::verify_algebraic_norm_reduction(
-                   *basis, *different_binding,
+                   *basis, different_binding,
                    *parsed_reduction, secp),
                "algebraic reduction binds the V4 scalar");
 
@@ -1197,30 +1186,24 @@ void check_algebraic_suite(TestContext& ctx,
     expect_ok(ctx, second_prepared,
               "second algebraic fixture norm prepares");
     if (!second_prepared) return;
-    auto second_same_binding = accum::bind_algebraic_prepared_norm(
-        *basis, *second_prepared, FieldElement::from_int(41));
-    expect_ok(ctx, second_same_binding,
-              "second norm accepts the same staged V4 binding");
-    if (!second_same_binding) return;
+    auto second_same_binding =
+        accum::unsafe_bind_algebraic_prepared_norm_for_test(
+            *second_prepared, FieldElement::from_int(41));
     ctx.expect(!accum::verify_algebraic_norm_reduction(
-                   *basis, *second_same_binding, *parsed_reduction, secp),
+                   *basis, second_same_binding, *parsed_reduction, secp),
                "algebraic reduction binds prepared components beyond the scalar");
     auto second_algebraic_prepared =
-        accum::bind_algebraic_prepared_norm(
-            *basis, std::move(*second_prepared),
-            FieldElement::from_int(43));
-    expect_ok(ctx, second_algebraic_prepared,
-              "second algebraic norm binds its V4 scalar");
-    if (!second_algebraic_prepared) return;
+        accum::unsafe_bind_algebraic_prepared_norm_for_test(
+            *second_prepared, FieldElement::from_int(43));
     auto second_reduction =
         accum::prove_algebraic_norm_reduction(
-            *basis, *second_algebraic_prepared, secp);
+            *basis, second_algebraic_prepared, secp);
     expect_ok(ctx, second_reduction,
               "second algebraic reduction proves");
     if (!second_reduction) return;
     auto second_claim =
         accum::verify_algebraic_norm_reduction(
-            *basis, *second_algebraic_prepared,
+            *basis, second_algebraic_prepared,
             *second_reduction, secp);
     expect_ok(ctx, second_claim,
               "second algebraic reduction verifies");

@@ -14,6 +14,11 @@ namespace purify::bppp::accumulation {
 
 using Digest = std::array<unsigned char, 32>;
 
+namespace internal {
+struct AlgebraicPreparedNormAccess;
+struct UnsafeAlgebraicPreparedNormTestAccess;
+}
+
 /** A public coefficient polynomial: scale * X^offset * product(1+factor[j]*X^(2^j)). */
 struct PolynomialTerm {
     FieldElement scale;
@@ -96,15 +101,13 @@ private:
         const ExperimentalCircuitZkNormArgProof&,
         std::span<const PointBytes>, purify_secp_context*,
         std::span<const unsigned char>, ExperimentalCircuitBackend*);
-    friend Result<AlgebraicPreparedNorm>
-    bind_algebraic_prepared_norm(
-        const Basis&, PreparedNorm, FieldElement);
 };
 
 /**
- * Prepared obligation components paired with an explicit algebraic statement
- * binding. This type alone does not authenticate provenance from a V4 child.
- * It contains no SHA transcript digest.
+ * A V4 pending norm obligation bridged to a caller-selected accumulation
+ * basis. Construction authenticates the exact raw points, not the basis's
+ * application semantic domain. The algebraic reduction must still verify,
+ * and its returned pending claim must pass decide().
  */
 class AlgebraicPreparedNorm {
 public:
@@ -143,9 +146,8 @@ private:
     PointBytes residual_{};
     std::array<PolynomialTerm, 2> polynomial_;
 
-    friend Result<AlgebraicPreparedNorm>
-    bind_algebraic_prepared_norm(
-        const Basis&, PreparedNorm, FieldElement);
+    friend struct internal::AlgebraicPreparedNormAccess;
+    friend struct internal::UnsafeAlgebraicPreparedNormTestAccess;
 };
 
 /**
@@ -283,16 +285,6 @@ prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
     purify_secp_context* context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitBackend* cache = nullptr);
-
-/**
- * Constructs a short-reduction statement from authenticated norm data and an
- * explicit scalar binding. This staged factory does not authenticate that
- * binding to a V4 child proof. Acceptance code must obtain the binding from
- * successful V4 verification before calling it.
- */
-Result<AlgebraicPreparedNorm> bind_algebraic_prepared_norm(
-    const Basis& basis, PreparedNorm prepared,
-    FieldElement prepared_binding);
 
 /** Constructs the tensor opening using only the prepared public c-vector and transcript. */
 Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const PreparedNorm& norm,

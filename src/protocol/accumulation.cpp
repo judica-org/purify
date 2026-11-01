@@ -1431,28 +1431,6 @@ prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
         components.residual, std::move(components.polynomial));
 }
 
-Result<AlgebraicPreparedNorm> bind_algebraic_prepared_norm(
-    const Basis& basis, PreparedNorm prepared,
-    FieldElement prepared_binding) {
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.dimension()),
-        "accumulation:algebraic_prepared_dimension");
-    PURIFY_RETURN_IF_ERROR(
-        validate_prepared(basis, prepared),
-        "accumulation:prepared");
-    if (prepared_binding.is_zero()) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "accumulation:algebraic_prepared_binding_zero");
-    }
-    return AlgebraicPreparedNorm(
-        prepared.basis_digest_, prepared_binding,
-        std::move(prepared.c_vec_),
-        prepared.coefficient_commitment_, prepared.residual_,
-        std::move(prepared.polynomial_));
-}
 
 Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const PreparedNorm& norm,
                                                purify_secp_context* context) {

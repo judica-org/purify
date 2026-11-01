@@ -643,19 +643,20 @@ void test_v4_native_circuit_proof(TestContext& ctx)
     ctx.expect(prepared.has_value() && prepared->has_value(),
                "V4 hidden proof prepares its recursive leaf witness");
     if (!prepared.has_value() || !prepared->has_value()) return;
-    ctx.expect((*prepared)->precommitment.bytes() ==
+    ctx.expect((*prepared)->precommitment().bytes() ==
                    publication->precommitment.bytes(),
                "V4 prepared proof retains the public precommitment");
-    ctx.expect((*prepared)->transcript_input.rounds.size() ==
-                   (*prepared)->transcript.gammas.size(),
+    ctx.expect((*prepared)->transcript_input().rounds.size() ==
+                   (*prepared)->transcript().gammas.size(),
                "V4 prepared proof exposes every authenticated norm round");
-    ctx.expect((*prepared)->norm.proof == publication->proof.norm_proof,
+    ctx.expect((*prepared)->norm().proof == publication->proof.norm_proof,
                "V4 prepared norm bytes are the exact transcript payload");
-    ctx.expect((*prepared)->trusted_public_commitments.empty(),
+    ctx.expect((*prepared)->trusted_public_commitments().empty(),
                "V4 hidden preparation exposes no public commitments");
-    ctx.expect(!(*prepared)->raw_generators.empty(),
+    ctx.expect(!(*prepared)->raw_generators().empty(),
                "V4 preparation exposes the authenticated raw basis");
-    ctx.expect(!(*prepared)->transcript.prepared_binding.scalar.is_zero(),
+    ctx.expect(
+        !(*prepared)->transcript().prepared_binding.scalar.is_zero(),
                "V4 terminal binding is a selected nonzero scalar");
 
     auto verified = candidate::verify_circuit_zk_norm_arg_v4(
@@ -796,7 +797,7 @@ void test_v4_native_circuit_proof(TestContext& ctx)
             circuit, *public_publication, public_points, context.get(),
             binding);
     ctx.expect(public_prepared.has_value() && public_prepared->has_value() &&
-                   (*public_prepared)->trusted_public_commitments ==
+                   (*public_prepared)->trusted_public_commitments() ==
                        std::vector<PointBytes>(public_points.begin(),
                                                public_points.end()),
                "V4 preparation retains trusted ordered public points");

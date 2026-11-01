@@ -2691,6 +2691,31 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
   return verify_norm_arg_with_cache(prepared->norm, secp_context, nullptr);
 }
 
+namespace candidate::detail {
+
+struct PreparedCircuitZkNormArgV4Builder {
+  static PreparedCircuitZkNormArgV4 create(
+      CircuitPrecommitmentDigestV4 precommitment,
+      CircuitTranscriptShapeV4 shape,
+      TranscriptDigest circuit_binding_digest,
+      PointBytes raw_commitment,
+      std::vector<PointBytes> trusted_public_commitments,
+      std::vector<PointBytes> raw_generators,
+      CircuitProofTranscriptInputV4 transcript_input,
+      CircuitProofTranscriptResultV4 transcript, NormArgProof norm,
+      PointBytes pending_norm_residual) {
+    return PreparedCircuitZkNormArgV4(
+        std::move(precommitment), std::move(shape),
+        circuit_binding_digest, raw_commitment,
+        std::move(trusted_public_commitments),
+        std::move(raw_generators), std::move(transcript_input),
+        std::move(transcript), std::move(norm),
+        pending_norm_residual);
+  }
+};
+
+} // namespace candidate::detail
+
 namespace {
 
 Result<candidate::CircuitTranscriptShapeV4> circuit_shape_v4(
@@ -3397,14 +3422,14 @@ prepare_circuit_zk_norm_arg_v4_impl(
                             "prepare_circuit_zk_norm_arg_v4:terminal");
   }
   return std::optional<candidate::PreparedCircuitZkNormArgV4>(
-      candidate::PreparedCircuitZkNormArgV4{
+      candidate::detail::PreparedCircuitZkNormArgV4Builder::create(
           publication.precommitment, shape, binding_digest,
           publication.proof.raw_commitment,
           std::vector<PointBytes>(public_commitments.begin(),
                                   public_commitments.end()),
           public_data->raw_generators,
           std::move(transcript_input),
-          std::move(transcript_result), std::move(norm), residual});
+          std::move(transcript_result), std::move(norm), residual));
 }
 
 } // namespace
@@ -3473,7 +3498,7 @@ Result<bool> candidate::verify_circuit_zk_norm_arg_v4(
                                      statement_binding, cache),
       "verify_circuit_zk_norm_arg_v4:prepare");
   return prepared.has_value() &&
-         verify_norm_arg_v4(prepared->norm, prepared->transcript.gammas,
+         verify_norm_arg_v4(prepared->norm(), prepared->transcript().gammas,
                             secp_context);
 }
 
@@ -3492,7 +3517,7 @@ candidate::verify_circuit_zk_norm_arg_v4_with_public_commitments(
           statement_binding, cache),
       "verify_circuit_zk_norm_arg_v4_public:prepare");
   return prepared.has_value() &&
-         verify_norm_arg_v4(prepared->norm, prepared->transcript.gammas,
+         verify_norm_arg_v4(prepared->norm(), prepared->transcript().gammas,
                             secp_context);
 }
 

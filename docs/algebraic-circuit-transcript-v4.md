@@ -1,7 +1,10 @@
 # Algebraic circuit transcript V4
 
-Status: transcript foundation only. This suite does not prove a circuit,
-verify a norm argument, or accept a construction receipt.
+Status: candidate native proof production, preparation, and verification
+and the matching constrained leaf are implemented. This suite does not
+accept a construction receipt by itself. The constrained leaf's reduced
+norm equation remains a pending fixed-basis obligation until the
+accumulator's final decision.
 
 V4 replaces every proof-dependent SHA-256 challenge in the masked circuit
 proof with the typed Poseidon transcript. It does not change secret padding,
@@ -90,20 +93,35 @@ point, nonce, and response must be exactly identity, zero bytes, and scalar
 zero. This keeps one transcript shape without treating the zero branch as an
 unframed omission.
 
-## Boundary
+## Implemented boundary
 
-The native state machine validates framing and returns challenges only. The
-Rust relation constrains the same typed replay and the public digest. Neither
-checks:
+The native V4 producer emits the proof fields in the order above.
+Preparation reconstructs the circuit-derived constants, replays every
+challenge, checks the public-mode Schnorr equation, and returns the
+authenticated inner norm obligation. Full native verification also
+discharges that norm argument. Preparation is deliberately not
+verification and is never receipt acceptance.
 
-- the anchored-commitment addition;
-- the batched Schnorr equation;
-- the masking commitment equation;
-- the inner norm folding equation; or
-- the coefficient reduction and final accumulator decision.
+The Rust leaf consumes the same allocated transcript variables and
+constrains:
 
-Those equations must consume the constrained values in one purpose-specific
-parent relation. No caller-supplied transcript result is proof acceptance.
+- the raw-plus-offset anchored commitment;
+- the public-mode batched Schnorr equation and nonzero response;
+- the masking and combined-commitment equation;
+- the explicit-gamma inner norm residual and compact polynomials; and
+- the coefficient-opening reduction into one pending claim.
+
+The hidden branch constrains the zero DLog fields. Both native modes use
+finite raw, mask, anchored, and combined commitments. Reconstructed
+coefficient commitments and anchored offsets may use the canonical
+identity. The constrained relation supports the corresponding algebraic
+identity fixtures, but the native producer intentionally exposes this
+finite subset.
+
+No caller-supplied transcript result is proof acceptance. A
+purpose-specific parent must bind the leaf's exact public constants,
+basis, and ordered manifest. It must authenticate every accumulation
+transition and expose the final claim to the mandatory native decision.
 
 The constrained installer retains the exact allocated ordered public
 commitments, raw and proof points, proof scalars, and round-point pairs. A
@@ -119,3 +137,12 @@ generated and checked by the stdlib-only Python oracle
 `tests/reference_algebraic_circuit_v4.py`. The public fixture is consumed by
 the native and constrained implementations; the constrained implementation
 also checks the hidden fixture and its zero DLog branch.
+
+The measured production-shape relations are 854,293 gates for the public
+setup leaf (`gate_count = 2,048`, 12 norm rounds) and 949,880 gates for
+a hidden anchor leaf (`gate_count = 8,192`, 14 norm rounds). Each lies
+in the backend's 1,745-byte proof-length bucket. These are leaf relation
+sizes, not a complete parent-proof size or an operational memory
+qualification. An actual small public-leaf prove and verify regression
+uses 309,133 gates and a 1,679-byte proof. It rejects a changed Schnorr
+response.

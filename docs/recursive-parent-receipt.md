@@ -45,7 +45,7 @@ relation:
 
 1. Parse the fixed setup proof and reconstruct its exact circuit, public
    signing-key output, recovery root, roster, and transcript binding.
-2. Verify its V3 transcript and coefficient-opening reduction on the fixed
+2. Constrain its V4 leaf and coefficient-opening reduction on the fixed
    setup basis. The result remains a pending claim.
 3. Constrain that claim's point and polynomial to be unchanged when the setup
    basis digest is replaced by the construction basis digest. Every polynomial
@@ -53,12 +53,12 @@ relation:
 
 For every anchor child, it then performs the following operations:
 
-1. Parse the fixed V3 proof payload and validate every scalar and secp256k1
-   point encoding.
+1. Parse the fixed V4 proof payload and validate every scalar and
+   secp256k1 point encoding.
 2. Reconstruct the exact anchor circuit and statement binding from public
    receipt data. No prover-supplied circuit digest or acceptance bit is used.
-3. Replay the V3 raw-precommitment, zero-knowledge, and inner norm Fiat-Shamir
-   transcripts, including canonical nonzero challenge sampling.
+3. Replay the V4 precommitment and typed Poseidon proof transcript,
+   including canonical two-lane nonzero challenge selection.
 4. Compute the inner norm residual point and its compact generator-weight
    polynomials from the terminal scalars and folding challenges.
 5. Reconstruct the exact coefficient commitment obligation and verify the
@@ -71,8 +71,8 @@ For every anchor child, it then performs the following operations:
 The secq commitment group has the secp256k1 coordinate field as its R1CS scalar
 field. Secp256k1 point arithmetic is therefore native in the parent. BP++
 scalars live modulo the secp256k1 group order and still require canonical
-non-native scalar arithmetic. Proof-dependent SHA-256 challenges also remain
-constrained unless the child proof suite is explicitly replaced.
+non-native scalar arithmetic. V4 proof-dependent challenges use the
+constrained typed Poseidon transcript rather than SHA-256.
 
 The first complete group gadget constrains the secp256k1 curve equation, a
 unique identity encoding, and addition for distinct points, doubling, inverses,
@@ -90,34 +90,29 @@ implemented three-bit variable-base relation constrains complete point tables,
 shares every inter-window doubling, and costs `10,974 + 5,925*T` gates for `T`
 terms. That is 200,574 gates for 32 terms and 390,174 for 64. The fixed
 two-lane transcript challenge selector uses
-2,317 gates and implements the documented unbiased nonzero reduction into the
-secp scalar field. End-to-end transcript integration and the complete
-V3/reduction/promotion/step relations remain before an acceptance API can be
-exposed.
+2,317 gates and implements the documented unbiased nonzero reduction
+into the secp scalar field. The V4 leaf, reduction, and step pieces are
+implemented. The complete ordered construction parent, promotion
+binding, root codec, and acceptance API remain.
 
-The exact secq SHA-256 gadget costs 30,952 multipliers per compression block,
-plus eight multipliers per private input byte. Replaying the current V3
-transcripts requires approximately 34 blocks per anchor, or about 1,052,368
-SHA multipliers per anchor before point, scalar, reduction, or transition
-constraints. This is a correct fallback relation, but it does not meet the
-hundred-member production budget. The child transcript suite therefore needs
-either a reviewed recursion-friendly replacement or a proof tree with a
-measured bounded fan-in before activation. The
-[fixed-fan-in batch statements](construction-receipt-batches.md) now define a
-canonical 16-entry partition boundary, but do not yet supply its parent proof.
-The existing SHA-based proof format remains the only accepted format until a
-replacement has complete prover, verifier, cross-suite rejection, and security
-tests. Because the protocol is pre-release, that migration should replace the
-suite cleanly rather than add a permanent compatibility path.
+The historical secq SHA-256 gadget costs 30,952 multipliers per
+compression block, plus eight multipliers per private input byte.
+Replaying V3 required approximately 34 blocks per anchor, or about
+1,052,368 SHA multipliers per anchor before point, scalar, reduction, or
+transition constraints. That fallback did not meet the hundred-member
+budget. V4 now has native and Rust typed Poseidon implementations, so
+these SHA counts are not V4 estimates.
+V4 is still not a construction receipt. The fixed-fan-in
+[batch statements](construction-receipt-batches.md) define a canonical
+16-entry partition boundary, but do not supply a parent proof.
 
 The native candidate Poseidon permutation is reproducible from the pinned
 parameter generator and cross-language vectors. Its exact Secq R1CS gadget uses
 264 multipliers and yields a 1,019-byte standalone proof. The canonical parent
 builder also implements typed field, scalar, point-pair, byte-string, `u64`,
 and clone-and-index challenge framing; its complete probe uses 1,857 gates.
-This is deliberately not an accepted transcript suite: native prover
-integration and cross-suite rejection must land together before the SHA format
-can be replaced.
+Native V4 production and cross-suite rejection now use this transcript.
+That implements the child suite, not construction-receipt acceptance.
 
 The candidate parent relation now composes those foundations through one
 complete public accumulation transition. It fixes the basis digest and claim
@@ -135,8 +130,9 @@ end-to-end probe uses 109,600 gates and a 1,547-byte transparent proof. This
 is a composition check, not a production 15-round or 100-anchor size estimate.
 
 This transition uses the separate
-`Purify/BPPP/CandidateAccumStep/v1` Poseidon transcript. It is not compatible
-with the current SHA transcript and is not accepted by native receipt code.
+`Purify/BPPP/CandidateAccumStep/v1` Poseidon transcript. Native
+algebraic steps use the matching typed transcript. This is still not
+receipt acceptance.
 
 The candidate [opening-base derivation](opening-base-v2.md) removes both fresh
 hash-to-curve evaluations from the constrained path. It derives two
@@ -146,9 +142,9 @@ scalar only after the opening claim is fixed, and constrains
 typed transcript, distinct proof types and codecs, and reject V1 encodings.
 The standalone relation is cross-checked against the vendored native map and
 is composed directly into the candidate step; no caller supplies an opening
-point. Native child-suite migration, the prepared-norm leaf relation, and
-final decision binding must still be composed before any acceptance API
-exists.
+point. The V4 leaf and typed native prepared-obligation adapter are
+implemented. The complete ordered parent and its binding to the final
+native decision remain before any acceptance API can exist.
 
 The candidate coefficient reduction consumes an internal
 `ConstrainedPreparedNorm`; there is no production constructor from raw claim
@@ -157,13 +153,19 @@ coefficient commitment, tensor weights, and claimed evaluation, derives the
 role-1 opening base, and constrains the complete short IPA equation. It then
 removes the coefficient evaluation from the norm residual and derives the
 fusion challenge only after both pending equations and polynomials are fixed.
-The resulting three-term pending claim feeds the accumulation-step installer
-as existing circuit variables, without reallocation. A child relation must
-still produce the constrained prepared norm and its algebraic binding; a
-caller-supplied prepared norm is not authenticated ancestry.
+The resulting three-term pending claim feeds the accumulation-step
+installer as existing circuit variables, without reallocation. The V4
+leaf now produces that constrained prepared norm and binding. The native
+adapter separately authenticates the exact prepared V4 bridge. Neither
+path is receipt acceptance.
 The shared one-reduction, one-claim, three-round-step probe uses 342,434 gates
 and a 1,679-byte transparent proof. Its accepted proof plus deliberate
 false-assignment proof completed in 110.85 seconds in the Release test run.
+
+The production-shape V4 public setup leaf is exactly 854,293 gates. A
+hidden anchor leaf is exactly 949,880 gates. Both fall in the backend's
+1,745-byte proof-length bucket. These are leaf relation sizes, not a
+complete parent-proof measurement.
 
 ## Why the final MSM stays native
 
@@ -230,7 +232,7 @@ acceptance depend on local state and is prohibited.
 Before activation, end-to-end tests must reject at least:
 
 - a changed setup, anchor reference, recovery root, context, or ciphertext;
-- a changed V3 proof point, scalar, round message, or proof length;
+- a changed V4 proof point, scalar, round message, or proof length;
 - a noncanonical scalar or point and every exceptional group case;
 - a valid proof moved to a different ordered manifest;
 - a removed, duplicated, reordered, or substituted child;

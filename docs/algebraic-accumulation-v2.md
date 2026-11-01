@@ -2,8 +2,15 @@
 
 This suite is a distinct typed protocol. It does not reinterpret version-1
 proofs. `AlgebraicStepProof` and `AlgebraicNormReductionProof` are separate
-C++ types, and their codecs require version byte `0x02`. The accepted SHA-256
-suite retains its existing types and version byte `0x01`.
+C++ types. Their codecs require version byte `0x02`. The older SHA-256
+suite retains separate types and version byte `0x01`; it is not a
+compatibility path for V4 receipts.
+
+This suite reduces authenticated obligations to one final native
+decision. It does not recursively prove their ancestry or turn
+independently published child proofs into one constant-size receipt.
+Native equation batching keeps the child proof payloads even when it
+shares a final multiscalar multiplication.
 
 All points are parsed as canonical compressed SEC1, or the unique 33-byte zero
 identity, before transcript absorption. Scalars are canonical secp256k1 group
@@ -11,13 +18,23 @@ scalars embedded into the coordinate field. Byte strings, scalars, points,
 and integers use the typed frames in `AlgebraicTranscript`.
 
 The coefficient reduction accepts only `AlgebraicPreparedNorm`. Its
-`prepared_binding` is a canonical nonzero scalar that the production V4
-relation must emit; the SHA digest carried by `PreparedNorm` is not part of
-this suite. Production code can construct this type only from the typed V4
-prepared-proof adapter. That adapter authenticates the exact raw-generator
-bridge and prepares its pending norm obligation; the purpose-owned caller
-selects the `Basis` semantic digest. It does not accept the child proof.
-Acceptance requires reduction verification followed by `decide()`.
+`prepared_binding` is the canonical nonzero scalar emitted by V4. The
+SHA digest carried by `PreparedNorm` is not part of this suite. There is
+no public factory which binds caller-supplied prepared components or a
+caller-selected V4 scalar.
+
+The internal V4 adapter consumes an opaque
+`PreparedCircuitZkNormArgV4`. It checks every raw generator and its
+transcript digest, replays the explicit-gamma residual, recomputes the
+coefficient commitment, and emits the two Rust compact polynomial terms.
+The purpose-owned caller selects the `Basis` semantic digest; V4 itself
+authenticates the raw points, not arbitrary application-domain text.
+
+Prepared objects may be reused. Safety comes from the exact bridge and
+the reduction transcript's semantic-digest binding, not single use.
+Outer preparation and adaptation are not acceptance. Successful
+reduction verification, every authenticated step, and final `decide()`
+remain mandatory.
 
 ## Opening base
 

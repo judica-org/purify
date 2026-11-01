@@ -2,9 +2,9 @@
 
 This is the next experiment after
 [companion scalar escrow](companion-scalar-escrow.md). It fixes the intended
-statement and public-data flow. The individual V3 setup and anchor-escrow
-proofs are implemented, but the compressed parent receipt is not. Enrollment
-also remains disabled pending independent review and application integration.
+statement and public-data flow. Native V4 leaves and their typed native
+accumulator adapter are implemented, but the compressed parent is not.
+Enrollment remains disabled pending review and application integration.
 
 Transparent setup is a hard requirement for the completed library: public
 parameters must not depend on a trusted ceremony or retained trapdoor. This
@@ -77,19 +77,21 @@ it; a prover-supplied precomputed result is not trusted.
 
 Use a reviewed composition argument, including its knowledge/extraction and
 random-oracle requirements. A parent cannot repair an unsound child relation.
-The V3 circuit wrapper repairs the two concrete defects found in the earlier
-wrapper: it commits the raw circuit coordinates before deriving the folding
-challenges, and it maps the reduced opening back to those committed coordinates
-with exact reciprocal generator scaling. Independent batched DLog proofs bind
+The V4 relation retains both soundness repairs. It commits the raw
+circuit coordinates before the folding challenges and maps the reduced
+opening back to those committed coordinates with exact reciprocal
+generator scaling. Its batched Schnorr equation binds
 every advertised public point to the scalar used by the circuit.
 
-The executable attack fixture now rejects the previously accepted adaptive
-folding forgery, and the setup and anchor relations bind their exact public
-outputs. Those checks are evidence for the intended relation, not a substitute
-for an independent proof of V3 knowledge soundness or zero knowledge. A parent
-must replay the complete V3 transcript and preserve its random-oracle and
-algebraic-group assumptions. Removing ZK from a parent whose witnesses are
-public does not remove those obligations. No production receipt or enrollment
+The executable attack fixture now rejects the previously accepted
+adaptive folding forgery. The public and hidden V4 relations bind their
+exact public outputs. Those checks are evidence for the intended
+relation. They are not a substitute for an independent V4
+knowledge-soundness or zero-knowledge proof. A parent must constrain the
+complete V4 typed Poseidon transcript and preserve its random-oracle and
+algebraic-group assumptions. Removing ZK from a parent whose witnesses
+are public does
+not remove those obligations. No production receipt or enrollment
 may rely on the reference assembler alone.
 
 Conditional recovery remains:
@@ -106,12 +108,13 @@ Published escrow cannot be revoked cryptographically by leaving a coalition.
 
 ## Size target
 
-The current V3 setup record is 1,007 bytes, alongside a 64-byte public
+The legacy V3 setup record is 1,007 bytes, alongside a 64-byte public
 recipient, for 1,071 bytes when the coalition point is already registered.
-Each fixed anchor-escrow record is 1,265 bytes: one version byte, a 192-byte
-ciphertext and a 1,072-byte proof payload. If a final parent proof replaces the
-setup and escrow proofs while retaining the ciphertext format, incremental data
-with an explicit recipient would be approximately:
+Each fixed anchor-escrow record is 1,265 bytes: one version byte, a
+192-byte ciphertext and a 1,072-byte proof payload. These are comparison
+sizes, not V4 parent measurements. If a final parent proof replaces the
+setup and escrow proofs while retaining the ciphertext format,
+incremental data with an explicit recipient would be approximately:
 
 ```
 64 + 192*N + size(final_proof)
@@ -151,9 +154,10 @@ syntax and bounds the proof transport; it is not receipt acceptance. The
 purpose parent verifier must bind the exact envelope and the native verifier
 must still decide the parsed root.
 
-The native path now prepares the exact 1,007-byte setup proof on its fixed
-8,192-point basis, verifies its coefficient-opening reduction, and promotes
-the still-pending obligation into the exact prefix of the construction basis.
+The legacy typed path prepares the exact 1,007-byte setup proof on its
+fixed 8,192-point basis and verifies its coefficient-opening reduction.
+It promotes the still-pending obligation into the exact prefix of the
+construction basis.
 Promotion is not exposed for generic claims: the public method reconstructs
 the roster, recovery root, setup proof, and reduction before changing bases.
 The typed native assembly owns that setup capability together with one payload,
@@ -166,6 +170,12 @@ An honest promoted setup claim has been folded, encoded as the 545-byte root,
 parsed, and discharged by the final MSM. The recursive parent must still prove
 that same setup preparation, reduction, promotion, and every anchor transition;
 the native test alone is not a compressed receipt.
+
+The integrated V4 adapter checks the raw-generator bridge, gamma
+residual, coefficient commitment, and compact polynomial terms. Focused
+hidden and public tests require reduction verification and final
+`decide()`. This authenticates a pending obligation, not its recursive
+ancestry.
 
 Consents and existing anchor leaves remain contextual data. Moving the final
 basis decision inside the parent could remove the 545 bytes, but would add the
@@ -202,7 +212,7 @@ assembler-supplied digest. That split was not a soundness repair. V3 fixes the
 raw witness before sampling its folding challenges, so its dependencies differ
 from the profiler below. Static generators and genuinely statement-fixed data
 can still be prehashed where a final verifier authenticates them, but the V2
-counts must not be used as a V3 recursive-verifier estimate.
+counts must not be used as a V4 recursive-verifier estimate.
 
 Source-derived SHA-256 compression counts for that obsolete wrapper,
 including challenge forks and the first outer challenge attempt, are:
@@ -214,9 +224,10 @@ including challenge forks and the first outer challenge attempt, are:
 
 For that wrapper, one setup plus two encryption children went from 75,554 to
 98 proof-dependent blocks; 100 encryption children go from 3,365,414 to 3,430.
-Those counts are not a claim that a V3 recursive receipt needs only 98 or
-3,430 blocks. They rely on the obsolete statement-only reduction coefficients
-and must be recomputed for V3. Public hashing moved; it did not disappear, and
+Those counts do not imply that a V4 receipt needs only 98 or 3,430
+blocks. They rely on the obsolete statement-only reduction
+coefficients and a superseded transcript. Public hashing moved; it did
+not disappear, and
 it remains part of full verifier cost. Tagged midstates were treated as
 constants. These are historical source-derived workloads, not measured parent
 gates or a final proof-size estimate.
@@ -269,8 +280,9 @@ completed BP++ circuit proofs. Adapting the accumulation route requires an exact
 reduction/accumulator relation, transcript, final decision procedure and security
 argument for that relation. The native
 [norm accumulator](norm-accumulation.md) now implements partial norm
-verification, public coefficient openings for varying `c`, V3 raw-basis
-mapping, accumulation transitions and a mandatory final decision. Its API
+verification, public coefficient openings for varying `c`, a typed V4
+raw-basis adapter, accumulation transitions and a mandatory final
+decision. Its API
 requires all child statements and transition transcripts. It does not implement
 their recursive authentication, and the concrete protocol still requires
 cryptographic review. The historical workload profiler does not model those
@@ -284,10 +296,11 @@ specified in the
 Before selecting a replacement backend on cost grounds, evaluate this route
 alongside direct recursive verification. Account separately for the recursive
 circuit, final verifier, public accumulator bytes and authenticated manifest.
-Curve cycles and a suitable transcript can reduce recursive arithmetic costs;
-the existing scalar-field circuit and SHA-256 choices do not define the only
-possible transparent implementation. An accumulator still needs sound child
-proofs and a parent which authenticates every V3 transition.
+Curve cycles and a suitable transcript can reduce recursive arithmetic
+costs. The scalar-field circuit and historical SHA-256 choices do not
+define the only possible transparent implementation. An accumulator
+still needs sound child
+proofs and a parent which authenticates every V4 leaf and transition.
 
 Anchor punishment-key derivation is also a design variable in this pre-release
 protocol. Public descriptors and hash-to-curve bases may be derived outside the
@@ -321,9 +334,10 @@ public recovery, custody and privacy guarantees before replacing it.
    using only public child packets.
 2. Completed as a historical cost study: profile verifier hashing and implement
    a constrained SHA-256 experiment with independently checked outputs.
-3. Completed for the individual leaves: replace the defective outer reduction
-   with V3 raw precommitment, random polynomial folding, exact output binding
-   and a typed raw-basis accumulation adapter.
+3. Completed for individual V4 leaves: native production and
+   verification, matching Rust relations, and the typed native
+   accumulator adapter.
+   Reduction verification and final `decide()` remain mandatory.
 4. Remaining: choose and review the parent relation/backend. Implement canonical
    child parsing, transcript replay and constrained curve verification; benchmark
    one setup plus two encryption children before scaling to 100.
@@ -336,9 +350,10 @@ reference assembler.
 
 ## Running the experiments
 
-The construction fixture shares the exact existing child verifiers through
-test-only helpers. It runs their V3 acceptance predicates; it is not the
-missing parent proof or an independent security argument. Its assembler accepts
+The construction fixture shares the legacy child verifiers through
+test-only helpers. It runs V3 predicates and does not exercise V4; it
+is not the missing parent proof or an independent security argument. Its
+assembler accepts
 the externally supplied ordered roots and public packets; its signature
 accepts no secret, witness assignment or callback to a participant. The tested
 mutations reject

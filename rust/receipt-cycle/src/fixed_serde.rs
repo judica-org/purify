@@ -325,6 +325,14 @@ impl NovaCompressedProofShape {
             sequence_lengths: &self.sequence_lengths,
         }
     }
+
+    pub(crate) const fn encoded_len(&self) -> usize {
+        self.encoded_len
+    }
+
+    pub(crate) fn sequence_count(&self) -> usize {
+        self.sequence_lengths.len()
+    }
 }
 
 struct Encoder<'a> {
@@ -790,7 +798,7 @@ impl<'de> de::Deserializer<'de> for &mut Decoder<'de, '_> {
 mod tests {
     use std::{fmt, marker::PhantomData};
 
-    use ff::Field;
+    use ff::{Field, PrimeField};
     use nova_snark::provider::{
         secp_secq::{secp256k1, secq256k1},
         traits::DlogGroup,
@@ -823,6 +831,21 @@ mod tests {
 
     #[derive(Debug)]
     struct UnknownLengthSequence;
+
+    fn modulus_encoding<F: PrimeField>() -> F::Repr {
+        let mut modulus = (-F::ONE).to_repr();
+        let mut carry = true;
+        for byte in modulus.as_mut() {
+            if !carry {
+                break;
+            }
+            let (sum, overflow) = byte.overflowing_add(1);
+            *byte = sum;
+            carry = overflow;
+        }
+        assert!(!carry);
+        modulus
+    }
 
     impl Serialize for UnknownLengthSequence {
         fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -1099,6 +1122,77 @@ mod tests {
         noncanonical_secq[..32].fill(0xff);
         assert!(matches!(
             shape.decode_canonical::<SecqLeaves>(&noncanonical_secq),
+            Err(FixedSerdeError::Value(_))
+        ));
+    }
+
+    #[test]
+    fn finite_secp_and_secq_points_round_trip() {
+        let shape = FixedSerdeShape::new(65, &[]).expect("shape");
+        let secp = SecpLeaves {
+            scalar: secp256k1::Scalar::ONE,
+            point: secp256k1::Point::gen(),
+        };
+        let secp_encoded = shape.encode(&secp).expect("secp encode");
+        assert_ne!(secp_encoded[32], 0x40);
+        assert_eq!(
+            shape
+                .decode_canonical::<SecpLeaves>(&secp_encoded)
+                .expect("secp decode"),
+            secp
+        );
+
+        let secq = SecqLeaves {
+            scalar: secq256k1::Scalar::ONE,
+            point: secq256k1::Point::gen(),
+        };
+        let secq_encoded = shape.encode(&secq).expect("secq encode");
+        assert_ne!(secq_encoded[32], 0x40);
+        assert_eq!(
+            shape
+                .decode_canonical::<SecqLeaves>(&secq_encoded)
+                .expect("secq decode"),
+            secq
+        );
+    }
+
+    #[test]
+    fn malformed_secq_parity_curve_and_modulus_reject() {
+        let shape = FixedSerdeShape::new(65, &[]).expect("shape");
+        let fixture = SecqLeaves {
+            scalar: secq256k1::Scalar::ONE,
+            point: secq256k1::Point::zero(),
+        };
+
+        let mut identity_with_parity = shape.encode(&fixture).expect("encode");
+        identity_with_parity[32] = 0xc0;
+        assert!(matches!(
+            shape.decode_canonical::<SecqLeaves>(&identity_with_parity),
+            Err(FixedSerdeError::Value(_))
+        ));
+
+        // On secq256k1, x=2 makes x^3+7=15, a quadratic nonresidue in
+        // its base field. It therefore cannot encode a finite curve point.
+        let mut off_curve = shape.encode(&fixture).expect("encode");
+        off_curve[32] = 0;
+        off_curve[33] = 2;
+        assert!(matches!(
+            shape.decode_canonical::<SecqLeaves>(&off_curve),
+            Err(FixedSerdeError::Value(_))
+        ));
+
+        let mut scalar_at_modulus = shape.encode(&fixture).expect("encode");
+        scalar_at_modulus[..32].copy_from_slice(modulus_encoding::<secq256k1::Scalar>().as_ref());
+        assert!(matches!(
+            shape.decode_canonical::<SecqLeaves>(&scalar_at_modulus),
+            Err(FixedSerdeError::Value(_))
+        ));
+
+        let mut point_x_at_modulus = shape.encode(&fixture).expect("encode");
+        point_x_at_modulus[32] = 0;
+        point_x_at_modulus[33..].copy_from_slice(modulus_encoding::<secq256k1::Base>().as_ref());
+        assert!(matches!(
+            shape.decode_canonical::<SecqLeaves>(&point_x_at_modulus),
             Err(FixedSerdeError::Value(_))
         ));
     }

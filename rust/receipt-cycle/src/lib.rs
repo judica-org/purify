@@ -34,6 +34,8 @@ mod ffi;
 #[allow(dead_code)]
 mod fixed_serde;
 mod gadgets;
+#[cfg(test)]
+mod nova_compressed_codec_tests;
 // This is an internal candidate component, not a receipt acceptance API.
 #[allow(dead_code)]
 mod norm_reduction;

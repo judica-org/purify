@@ -24,7 +24,8 @@ use crate::algebraic_circuit_transcript::{
 };
 use crate::algebraic_transcript::BuilderTranscript;
 use crate::construction_manifest::{
-    CONSTRUCTION_ROOT_ROUNDS, CONSTRUCTION_STATE_ARITY, CONSTRUCTION_STEP_MANIFEST_DOMAIN,
+    CONSTRUCTION_ROOT_ROUNDS, CONSTRUCTION_ROOT_STATE_ARITY, CONSTRUCTION_STATE_ARITY,
+    CONSTRUCTION_STEP_MANIFEST_DOMAIN,
 };
 use crate::norm_reduction::CandidateNormReductionProofWitness;
 use crate::parent_relation::{
@@ -52,6 +53,30 @@ pub(crate) struct AnchorRecurrenceStateWitness {
     pub(crate) index: u32,
 }
 
+impl AnchorRecurrenceStateWitness {
+    /// Returns the recurrence's exact public-state field order.
+    pub(crate) fn state_fields(
+        &self,
+    ) -> Result<[Scalar; ANCHOR_RECURRENCE_STATE_ARITY], ReceiptCycleError> {
+        if self.root.factors.len() != CONSTRUCTION_ROOT_ROUNDS {
+            return Err(ReceiptCycleError::Malformed(
+                "anchor recurrence root factors",
+            ));
+        }
+        let point = encoded_point_value(self.root.point)?;
+        let mut state = [Scalar::ZERO; ANCHOR_RECURRENCE_STATE_ARITY];
+        state[0] = Scalar::from(u64::from(self.root.point.encoded[0]));
+        state[1] = point.x;
+        state[2] = secp_scalar_value(self.root.scale)?;
+        for (index, factor) in self.root.factors.iter().enumerate() {
+            state[3 + index] = secp_scalar_value(*factor)?;
+        }
+        state[CONSTRUCTION_ROOT_STATE_ARITY] = outer_scalar(self.manifest)?;
+        state[CONSTRUCTION_ROOT_STATE_ARITY + 1] = Scalar::from(u64::from(self.index));
+        Ok(state)
+    }
+}
+
 fn outer_scalar(bytes: [u8; 32]) -> Result<Scalar, ReceiptCycleError> {
     coordinate_field_value(bytes)
 }
@@ -64,23 +89,10 @@ fn allocate_state_inputs(
     builder: &mut Builder,
     state: &AnchorRecurrenceStateWitness,
 ) -> Result<Vec<StateVariable>, ReceiptCycleError> {
-    if state.root.factors.len() != CONSTRUCTION_ROOT_ROUNDS {
-        return Err(ReceiptCycleError::Malformed(
-            "anchor recurrence root factors",
-        ));
-    }
-    let point = encoded_point_value(state.root.point)?;
-    let mut inputs = Vec::with_capacity(ANCHOR_RECURRENCE_STATE_ARITY);
-    inputs.push(builder.allocate_state(Scalar::from(u64::from(state.root.point.encoded[0]))));
-    inputs.push(builder.allocate_state(point.x));
-    inputs.push(builder.allocate_state(secp_scalar_value(state.root.scale)?));
-    for &factor in &state.root.factors {
-        inputs.push(builder.allocate_state(secp_scalar_value(factor)?));
-    }
-    inputs.push(builder.allocate_state(outer_scalar(state.manifest)?));
-    inputs.push(builder.allocate_state(Scalar::from(u64::from(state.index))));
-    debug_assert_eq!(inputs.len(), ANCHOR_RECURRENCE_STATE_ARITY);
-    Ok(inputs)
+    Ok(state
+        .state_fields()?
+        .map(|value| builder.allocate_state(value))
+        .into())
 }
 
 fn bind_state_scalar(

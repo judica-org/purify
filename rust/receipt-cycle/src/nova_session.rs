@@ -29,7 +29,7 @@ use crate::{
         FixedSerdeError, NovaCompressedProofShape, NovaR1csDimensions,
         NOVA_COMPRESSED_PROOF_CODEC_VERSION,
     },
-    relation_builder::StatefulRelation,
+    relation_builder::{Builder, StatefulRelation},
     ReceiptCycleError,
 };
 
@@ -604,6 +604,11 @@ impl<const ARITY: usize> SelectedDirectNovaSuite<ARITY> {
 
     pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
         self.inner.metadata()
+    }
+
+    /// Starts a witness builder from the suite's selected immutable shape.
+    pub(crate) fn matching_builder(&self) -> Builder {
+        self.inner.template.matching_builder()
     }
 
     pub(crate) fn start(

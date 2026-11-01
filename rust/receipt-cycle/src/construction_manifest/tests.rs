@@ -144,6 +144,10 @@ fn initial_state_is_fully_verifier_derived_and_starts_at_zero() {
     assert_eq!(witness.root, seed.root.claim());
 
     let fields = seed.initial_state_fields().expect("initial state fields");
+    assert_eq!(
+        witness.state_fields().expect("recurrence witness fields"),
+        fields
+    );
     assert_eq!(fields.len(), CONSTRUCTION_STATE_ARITY);
     assert_eq!(
         &fields[..CONSTRUCTION_ROOT_STATE_ARITY],

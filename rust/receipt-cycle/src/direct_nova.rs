@@ -39,6 +39,17 @@ pub(crate) type AnchorDirectNovaTemplate = DirectNovaTemplate<ANCHOR_RECURRENCE_
 pub(crate) type AnchorDirectNovaStep = DirectNovaStep<ANCHOR_RECURRENCE_STATE_ARITY>;
 type NovaScalar = DirectNovaScalar;
 
+/// Converts one complete source state into the primary Nova scalar field.
+pub(crate) fn source_state_to_nova<const ARITY: usize>(
+    source: [Scalar; ARITY],
+) -> Result<[DirectNovaScalar; ARITY], ReceiptCycleError> {
+    let mut state = [DirectNovaScalar::ZERO; ARITY];
+    for (target, value) in state.iter_mut().zip(source) {
+        *target = source_to_nova(value)?;
+    }
+    Ok(state)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DirectRelationId([u8; 32]);
 
@@ -1323,8 +1334,8 @@ mod tests {
             -Scalar::ONE,
             Scalar::random(&mut rng),
         ];
-        for value in values {
-            let nova = source_to_nova(value).expect("source to Nova");
+        let nova_values = source_state_to_nova(values).expect("source state to Nova");
+        for (value, nova) in values.into_iter().zip(nova_values) {
             let round_trip = nova_to_source(nova).expect("Nova to source");
             assert_eq!(round_trip, value);
             let source_bytes = Secq256k1Cycle::scalar_to_canonical(&value);

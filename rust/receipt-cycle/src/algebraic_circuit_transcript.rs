@@ -5,7 +5,7 @@
 
 use ff::Field;
 
-use crate::algebraic_transcript::BuilderTranscript;
+use crate::algebraic_transcript::{BuilderTranscript, ConstrainedBytes32};
 #[cfg(test)]
 use crate::parent_relation::constrain_scalar_constant;
 use crate::parent_relation::{
@@ -297,13 +297,16 @@ fn require_finite_even(builder: &mut Builder, point: &EncodedSecpPoint) {
     builder.constrain_zero(point.odd.clone());
 }
 
-pub(crate) fn install_transcript(
+fn install_transcript_with_binding<F>(
     builder: &mut Builder,
     shape: CircuitTranscriptShapeV4,
-    circuit_binding_digest: [u8; 32],
     raw_generator_digest: [u8; 32],
     witness: &CircuitProofTranscriptWitnessV4,
-) -> Result<CircuitTranscriptResultV4, ReceiptCycleError> {
+    append_binding: F,
+) -> Result<CircuitTranscriptResultV4, ReceiptCycleError>
+where
+    F: FnOnce(&mut BuilderTranscript, &mut Builder) -> Result<(), ReceiptCycleError>,
+{
     shape.validate()?;
     if witness.public_commitments.len() != shape.public_commitment_count()
         || witness.rounds.len() != shape.round_count()
@@ -313,7 +316,7 @@ pub(crate) fn install_transcript(
 
     let mut precommit = BuilderTranscript::new();
     append_constant_bytes(&mut precommit, builder, PRECOMMIT_DOMAIN)?;
-    append_constant_bytes(&mut precommit, builder, &circuit_binding_digest)?;
+    append_binding(&mut precommit, builder)?;
     append_shape(&mut precommit, builder, shape)?;
     let mut public_commitments = Vec::with_capacity(witness.public_commitments.len());
     for point in &witness.public_commitments {
@@ -418,6 +421,38 @@ pub(crate) fn install_transcript(
         gammas,
         prepared_binding,
     })
+}
+
+pub(crate) fn install_transcript(
+    builder: &mut Builder,
+    shape: CircuitTranscriptShapeV4,
+    circuit_binding_digest: [u8; 32],
+    raw_generator_digest: [u8; 32],
+    witness: &CircuitProofTranscriptWitnessV4,
+) -> Result<CircuitTranscriptResultV4, ReceiptCycleError> {
+    install_transcript_with_binding(
+        builder,
+        shape,
+        raw_generator_digest,
+        witness,
+        |transcript, builder| append_constant_bytes(transcript, builder, &circuit_binding_digest),
+    )
+}
+
+pub(crate) fn install_transcript_with_constrained_binding(
+    builder: &mut Builder,
+    shape: CircuitTranscriptShapeV4,
+    circuit_binding_digest: &ConstrainedBytes32,
+    raw_generator_digest: [u8; 32],
+    witness: &CircuitProofTranscriptWitnessV4,
+) -> Result<CircuitTranscriptResultV4, ReceiptCycleError> {
+    install_transcript_with_binding(
+        builder,
+        shape,
+        raw_generator_digest,
+        witness,
+        |transcript, builder| transcript.append_bytes32(builder, circuit_binding_digest),
+    )
 }
 
 #[cfg(test)]

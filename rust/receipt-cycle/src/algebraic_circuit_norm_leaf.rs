@@ -6,16 +6,17 @@
 //! expose a receipt-acceptance API.
 
 use crate::algebraic_circuit_transcript::{
-    install_transcript, CircuitCommitmentModeV4, CircuitProofTranscriptWitnessV4,
-    CircuitTranscriptResultV4, CircuitTranscriptShapeV4,
+    install_transcript, install_transcript_with_constrained_binding, CircuitCommitmentModeV4,
+    CircuitProofTranscriptWitnessV4, CircuitTranscriptResultV4, CircuitTranscriptShapeV4,
 };
+use crate::algebraic_transcript::ConstrainedBytes32;
 use crate::norm_reduction::{
     install_candidate_norm_reduction, CandidateNormReductionProofWitness, ConstrainedPreparedNorm,
 };
 use crate::parent_relation::{
     add_points, constrain_encoded_point_constant, derived_multiply, derived_subtract,
     encode_computed_point, encoded_point_value, msm_points, scale_constant_point,
-    standard_generator, ConstrainedPendingClaim, ConstrainedPolynomialTerm,
+    standard_generator, ConstrainedPendingClaim, ConstrainedPolynomialTerm, EncodedSecpPoint,
     SecpEncodedPointWitness, SecpPoint,
 };
 use crate::relation_builder::Builder;
@@ -60,6 +61,28 @@ pub(crate) struct CircuitNormLeafStatementV4 {
 pub(crate) struct PublicCircuitNormLeafStatementV4 {
     pub(crate) leaf: CircuitNormLeafStatementV4,
     pub(crate) public_commitments: Vec<SecpEncodedPointWitness>,
+}
+
+/// Varying public input for one production hidden-anchor leaf.
+///
+/// Shape and basis values still select one fixed relation. The binding digest
+/// is allocated as canonical bytes so its value lives only in the assignment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ManifestBoundAnchorLeafStatementV4 {
+    pub(crate) shape: CircuitTranscriptShapeV4,
+    pub(crate) circuit_binding_digest: [u8; 32],
+    pub(crate) raw_generator_digest: [u8; 32],
+    pub(crate) basis_digest: [u8; 32],
+}
+
+/// One hidden-anchor claim together with the exact variables that authenticate
+/// its verifier-precomputed public data in a construction manifest.
+pub(crate) struct ManifestBoundAnchorLeaf {
+    pub(crate) claim: ConstrainedPendingClaim,
+    pub(crate) circuit_binding_digest: ConstrainedBytes32,
+    pub(crate) precommitment: SecpScalarVar,
+    pub(crate) coefficient_commitment: EncodedSecpPoint,
+    pub(crate) anchored_offset: EncodedSecpPoint,
 }
 
 fn constrain_point_equal(builder: &mut Builder, left: &SecpPoint, right: &SecpPoint) {
@@ -271,7 +294,41 @@ fn prepare_norm(
     })
 }
 
-fn install_circuit_norm_leaf(
+fn finish_circuit_norm_leaf(
+    builder: &mut Builder,
+    shape: CircuitTranscriptShapeV4,
+    basis_digest: [u8; 32],
+    public_commitments: Option<&[SecpEncodedPointWitness]>,
+    transcript: &CircuitTranscriptResultV4,
+    reduction_proof: &CandidateNormReductionProofWitness,
+) -> Result<ConstrainedPendingClaim, ReceiptCycleError> {
+    match (shape.mode, public_commitments) {
+        (CircuitCommitmentModeV4::Hidden, None) => {}
+        (CircuitCommitmentModeV4::Public, Some(public_commitments)) => {
+            if public_commitments.len() != shape.commitment_count {
+                return Err(ReceiptCycleError::Malformed(
+                    "public V4 circuit norm statement commitments",
+                ));
+            }
+            constrain_public_dlog(builder, transcript, public_commitments)?;
+        }
+        _ => {
+            return Err(ReceiptCycleError::Malformed(
+                "V4 circuit norm statement mode",
+            ));
+        }
+    }
+    let prepared = prepare_norm(builder, shape, transcript)?;
+    install_candidate_norm_reduction(
+        builder,
+        basis_digest,
+        shape.n_vec_len,
+        &prepared,
+        reduction_proof,
+    )
+}
+
+fn install_constant_bound_circuit_norm_leaf(
     builder: &mut Builder,
     statement: CircuitNormLeafStatementV4,
     public_commitments: Option<&[SecpEncodedPointWitness]>,
@@ -286,28 +343,12 @@ fn install_circuit_norm_leaf(
         transcript_witness,
     )?;
     constrain_public_constants(builder, &transcript, statement.constants)?;
-    match (statement.shape.mode, public_commitments) {
-        (CircuitCommitmentModeV4::Hidden, None) => {}
-        (CircuitCommitmentModeV4::Public, Some(public_commitments)) => {
-            if public_commitments.len() != statement.shape.commitment_count {
-                return Err(ReceiptCycleError::Malformed(
-                    "public V4 circuit norm statement commitments",
-                ));
-            }
-            constrain_public_dlog(builder, &transcript, public_commitments)?;
-        }
-        _ => {
-            return Err(ReceiptCycleError::Malformed(
-                "V4 circuit norm statement mode",
-            ));
-        }
-    }
-    let prepared = prepare_norm(builder, statement.shape, &transcript)?;
-    install_candidate_norm_reduction(
+    finish_circuit_norm_leaf(
         builder,
+        statement.shape,
         statement.basis_digest,
-        statement.shape.n_vec_len,
-        &prepared,
+        public_commitments,
+        &transcript,
         reduction_proof,
     )
 }
@@ -325,7 +366,7 @@ pub(crate) fn install_hidden_circuit_norm_leaf(
             "hidden V4 circuit norm leaf mode",
         ));
     }
-    install_circuit_norm_leaf(
+    install_constant_bound_circuit_norm_leaf(
         builder,
         statement,
         None,
@@ -347,13 +388,59 @@ pub(crate) fn install_public_circuit_norm_leaf(
             "public V4 circuit norm leaf mode",
         ));
     }
-    install_circuit_norm_leaf(
+    install_constant_bound_circuit_norm_leaf(
         builder,
         statement.leaf,
         Some(&statement.public_commitments),
         transcript_witness,
         reduction_proof,
     )
+}
+
+/// Installs one production hidden-anchor leaf whose varying verifier constants
+/// must be consumed by the construction manifest.
+///
+/// There is deliberately no constructor returning only the pending claim from
+/// this path. The transcript-derived values used by the leaf equations are the
+/// same variables returned for manifest authentication.
+pub(crate) fn install_manifest_bound_anchor_leaf(
+    builder: &mut Builder,
+    statement: ManifestBoundAnchorLeafStatementV4,
+    transcript_witness: &CircuitProofTranscriptWitnessV4,
+    reduction_proof: &CandidateNormReductionProofWitness,
+) -> Result<ManifestBoundAnchorLeaf, ReceiptCycleError> {
+    if statement.shape.mode != CircuitCommitmentModeV4::Hidden {
+        return Err(ReceiptCycleError::Malformed(
+            "manifest-bound V4 anchor mode",
+        ));
+    }
+    let circuit_binding_digest =
+        ConstrainedBytes32::allocate(builder, statement.circuit_binding_digest);
+    let transcript = install_transcript_with_constrained_binding(
+        builder,
+        statement.shape,
+        &circuit_binding_digest,
+        statement.raw_generator_digest,
+        transcript_witness,
+    )?;
+    let precommitment = transcript.precommitment.clone();
+    let coefficient_commitment = transcript.coefficient_commitment.clone();
+    let anchored_offset = transcript.anchored_offset.clone();
+    let claim = finish_circuit_norm_leaf(
+        builder,
+        statement.shape,
+        statement.basis_digest,
+        None,
+        &transcript,
+        reduction_proof,
+    )?;
+    Ok(ManifestBoundAnchorLeaf {
+        claim,
+        circuit_binding_digest,
+        precommitment,
+        coefficient_commitment,
+        anchored_offset,
+    })
 }
 
 #[cfg(test)]

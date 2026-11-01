@@ -169,7 +169,10 @@ fn build_leaf(
     builder.finish()
 }
 
-fn finite_transcript_witness(shape: CircuitTranscriptShapeV4) -> CircuitProofTranscriptWitnessV4 {
+fn finite_transcript_witness_with_binding(
+    shape: CircuitTranscriptShapeV4,
+    circuit_binding: [u8; 32],
+) -> CircuitProofTranscriptWitnessV4 {
     let mut witness = zero_transcript_witness(shape);
     let base = generator();
     witness.raw_commitment = base;
@@ -184,7 +187,7 @@ fn finite_transcript_witness(shape: CircuitTranscriptShapeV4) -> CircuitProofTra
             let transcript = install_transcript(
                 &mut builder,
                 shape,
-                CIRCUIT_BINDING,
+                circuit_binding,
                 RAW_GENERATORS,
                 &witness,
             )
@@ -198,7 +201,7 @@ fn finite_transcript_witness(shape: CircuitTranscriptShapeV4) -> CircuitProofTra
         let transcript = install_transcript(
             &mut builder,
             shape,
-            CIRCUIT_BINDING,
+            circuit_binding,
             RAW_GENERATORS,
             &witness,
         )
@@ -212,6 +215,31 @@ fn finite_transcript_witness(shape: CircuitTranscriptShapeV4) -> CircuitProofTra
         SecpEncodedPointWitness::identity()
     );
     witness
+}
+
+fn finite_transcript_witness(shape: CircuitTranscriptShapeV4) -> CircuitProofTranscriptWitnessV4 {
+    finite_transcript_witness_with_binding(shape, CIRCUIT_BINDING)
+}
+
+fn build_manifest_bound_leaf(
+    shape: CircuitTranscriptShapeV4,
+    circuit_binding_digest: [u8; 32],
+    witness: &CircuitProofTranscriptWitnessV4,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    let mut builder = Builder::default();
+    let leaf = install_manifest_bound_anchor_leaf(
+        &mut builder,
+        ManifestBoundAnchorLeafStatementV4 {
+            shape,
+            circuit_binding_digest,
+            raw_generator_digest: RAW_GENERATORS,
+            basis_digest: BASIS,
+        },
+        witness,
+        &zero_reduction_proof(shape),
+    )?;
+    assert_eq!(leaf.claim.polynomial.len(), 3);
+    builder.finish()
 }
 
 fn build_public_leaf(
@@ -372,6 +400,26 @@ fn hidden_finite_leaf_is_one_pending_claim() {
         &wrong_offset_circuit,
         &wrong_offset_assignment
     ));
+}
+
+#[test]
+fn manifest_bound_leaf_keeps_varying_values_out_of_the_matrix() {
+    let shape = shape_for_n(4);
+    let first_binding = [0x31; 32];
+    let second_binding = [0x32; 32];
+    let first_witness = finite_transcript_witness_with_binding(shape, first_binding);
+    let second_witness = finite_transcript_witness_with_binding(shape, second_binding);
+    let (first_circuit, first_assignment) =
+        build_manifest_bound_leaf(shape, first_binding, &first_witness)
+            .expect("first manifest-bound leaf");
+    let (second_circuit, second_assignment) =
+        build_manifest_bound_leaf(shape, second_binding, &second_witness)
+            .expect("second manifest-bound leaf");
+
+    assert_eq!(first_circuit, second_circuit);
+    assert_ne!(first_assignment, second_assignment);
+    assert!(relation_satisfied(&first_circuit, &first_assignment));
+    assert!(relation_satisfied(&second_circuit, &second_assignment));
 }
 
 #[test]

@@ -864,30 +864,30 @@ stores a canonical construction-basis seed root. A homogeneous Nova
 0.76 recurrence then verifies one public anchor leaf and one ordered
 accumulation transition per step. Its 20-field state carries the pending
 root, rolling manifest, and ordered index. The recurrence, exact-shape
-lowering, canonical compressed-proof codec, and serialized Nova session
-are implemented. Exact production setup confirms primary and secondary
-buckets of respectively $2^{21}$ and $2^{14}$, giving a 12,466-byte
-canonical proof with 125 fixed sequence lengths. The resulting candidate
-wire size is
+lowering, canonical compressed-proof codec, verifier-only artifact format,
+and authenticated-root verifier are implemented. Exact setup confirms primary
+and secondary buckets of respectively $2^{21}$ and $2^{14}$, giving a
+12,466-byte canonical proof with 125 fixed sequence lengths. The resulting
+candidate wire size is
 \[
   69 + 224N + 12{,}466\text{ bytes},
 \]
 or 34,935 bytes for 100 anchors, without a duplicated 545-byte root.
 
-No construction receipt is activated. Canonical suite-ID framing and exact
-static setup selection are implemented. Production setup passed twice and
-froze the public-parameter digest for testing:
-\texttt{c2f52aae3239db04a73a5fc3b157fa8585ff203d6e36ee823c297df829cfc800},
-but no production profile or suite ID is installed and no production fold or
-compression has run. Shipped-suite activation, the C ABI, and the
-root-to-native-decision acceptance path remain. The
-bounded-memory fork preserves the existing tiny-suite bytes;
-synthetic setup stages $2^{16}$ through $2^{20}$ all passed with zero
-swap. The $2^{20}$ stage completed in 46.06 seconds at 1,490,878,464
-bytes peak RSS. Exact production setup completed in about 93.4 seconds;
-two runs peaked at 2,310,144,000 and 3,272,425,472 bytes RSS with zero
-swap. Real production folding/compression remains the next qualification
-gate.
+The selected native profile freezes relation ID
+\texttt{ecfd8e56084083ba9a94431fad5a5b1e0991d7597746440e76ccf77924444a66},
+public-parameter digest
+\texttt{b90f7e761288cc1fdb7abd16f4e0abbbe2c8d7c773f315a17f1d7c4f982f7900},
+and suite ID
+\texttt{116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa}.
+Exact setup and one full-scale fold have qualified. No construction receipt is
+activated. The exact payload-plus-proof envelope is syntax-only, and the
+generic artifact loader authenticates an expected length and digest before
+decoding; no production artifact descriptor is frozen or shipped. The latest
+guarded native-profile lifecycle run was aborted after about 1.0 GiB of
+swapout during setup, before compression. This was a resource failure, not a
+cryptographic failure. Full native-profile compression, the C ABI, and the
+root-to-native-decision acceptance path remain.
 
 The remainder of this section through the historical efficiency note
 records the preceding V3 implementation and its measurements. Its
@@ -1273,11 +1273,11 @@ Three caveats are worth stating explicitly:
   \item Native and constrained V4 leaves exist, and Nova 0.76 is the
   selected transparent folding backend for construction-receipt work.
   The public-anchor recurrence migration and canonical Nova session are
-  implemented. Setup-only production resource qualification and a
-  deterministic test digest are complete. Shipped-suite activation,
-  production fold/compression, and the complete acceptance API remain
-  unfinished. Anchor escrow record version~3 already carries a V4 public
-  proof.
+  implemented. The native profile, exact setup, and one full-scale fold are
+  qualified, and the verifier-only artifact and authenticated-root boundary
+  exist. Full native-profile compression, the shipped artifact descriptor,
+  and the C ABI/native acceptance API remain unfinished. Anchor escrow record
+  version~3 already carries a V4 public proof.
 \end{enumerate}
 
 \section{Summary}
@@ -1289,9 +1289,9 @@ way to understand the design of \texttt{purify-cpp}: one circuit, two proving en
 V4 is the candidate circuit leaf and the registry-seeded homogeneous
 Nova recurrence is the implemented composition direction. The extended V3
 discussion remains its historical implementation baseline. The recurrence
-and canonical proof transport are not by themselves an activated construction
-receipt; shipped-suite activation, production folding/compression, and the
-native acceptance boundary still gate deployment.
+and exact proof transport are not by themselves an activated construction
+receipt; native-profile full compression, the shipped verifier artifact, and
+the C ABI/native decision boundary still gate deployment.
 
 \appendix
 

@@ -171,9 +171,10 @@ composition still requires the stated random-oracle assumptions and review.
 
 Coefficient preparation costs a native linear-size MSM per child. The public
 opening prover also does linear generator work. The opening's short equation
-uses logarithmically many proof points. A future recursive parent must
-authenticate the derivation of `c` and `Cc`, including any dependence on child
-messages. This native API has not compressed or eliminated that requirement.
+uses logarithmically many proof points. The selected construction-parent
+recurrence authenticates the derivation of `c` and `Cc`, including their
+dependence on child messages. This native API alone has not compressed or
+eliminated that requirement.
 
 The raw-basis digest uses `Purify/BPPP/NormAccumBasisV2`, binding the framed
 semantic domain, `g,h` and all `2g` canonical points. The prepared statement
@@ -344,8 +345,10 @@ must still call `decide` for the mandatory final basis MSM.
 
 These openings are additional public transition data. Native verification
 retains them alongside the original child proofs; a final 1,122-byte step
-does not replace that history. Recursive authentication is the remaining
-mechanism needed to discard it in an on-chain construction receipt.
+does not replace that history. The selected recurrence implements recursive
+authentication so this history can become a parent witness, but its
+native-profile compression is not qualified and its acceptance path is not
+implemented.
 
 ## Historical generic varying-coefficient measurements
 
@@ -450,13 +453,13 @@ canonical reduction SHA256 is
 the final step SHA256 is
 `b3a14ad17548fed019e02a5d90063be232826750d1f5987a72b22013585f7b1b`.
 
-Remaining work for construction receipts is specific: independently
-review the V4 leaf argument; authenticate the purpose-owned semantic
-digest and frontend constants; constrain V4 preparation, reduction,
-promotion, and every accumulation transition in a parent proof; bind
-exact registry coverage; and enforce the final accumulator decision.
-The native V4 adapter is implemented and focused-green, but no parent
-receipt integrates it yet.
+The selected parent now authenticates the purpose-owned semantic digest and
+frontend constants, constrains V4 preparation, reduction, and every ordered
+accumulation transition, and binds exact registry coverage. Remaining work is
+specific: independently review the V4 leaf and composition arguments, qualify
+full native-profile compression, ship the verifier artifact and C ABI, and
+enforce the final native accumulator decision. The native V4 adapter remains a
+component of that path, not receipt acceptance by itself.
 
 The construction-specific V3 adapter previously demonstrated setup-proof
 preparation and safe zero-extension into the anchor basis. That

@@ -2,9 +2,10 @@
 
 > Implementation note: the production recurrence now uses the record-version-3
 > public V4 anchor leaf and constrains its canonical punishment-key DLog
-> equation. This completes the hidden-to-public relation migration. It does not
-> activate receipts: production setup is test-frozen, but the shipped suite and
-> end-to-end native acceptance path remain deliberately absent.
+> equation. This completes the hidden-to-public relation migration. The native
+> profile, exact setup, and one full-scale fold are qualified, but full
+> native-profile compression, the shipped verifier artifact, and end-to-end
+> native acceptance remain deliberately absent.
 
 This document fixes the selected boundary between a transparent Nova parent
 proof and the native BP++ accumulator. It is an implementation map, not a
@@ -138,13 +139,14 @@ two-lane transcript challenge selector uses
 into the secp scalar field. The V4 leaf, reduction, accumulation step, and
 variable transcript-binding pieces are implemented. The homogeneous public
 anchor recurrence, verifier-derived 20-field state, exact-shape Nova lowering,
-canonical compressed-proof codec, and serialized fixed-template Nova session
-are also implemented. Canonical suite-ID framing and exact static setup
-selection reject a changed relation, parameter digest, matrix dimensions,
-codec schedule, or construction-version tuple. Production setup qualification
-now passes and freezes its test digest, but no production profile or suite ID
-is instantiated. Shipped-suite selection and the C ABI/native acceptance
-boundary remain.
+canonical compressed-proof codec, fixed-template Nova session, verifier-only
+artifact format, and authenticated-root verifier are also implemented.
+Canonical suite-ID framing and exact static setup selection reject a changed
+relation, parameter digest, matrix dimensions, codec schedule, or
+construction-version tuple. The native profile, exact setup, and one
+full-scale fold are qualified. Full native-profile compression, a frozen
+production artifact descriptor, the C ABI, and the native acceptance boundary
+remain.
 
 The historical secq SHA-256 gadget costs 30,952 multipliers per
 compression block, plus eight multipliers per private input byte.
@@ -200,8 +202,9 @@ typed transcript, distinct proof types and codecs, and reject V1 encodings.
 The standalone relation is cross-checked against the vendored native map and
 is composed directly into the candidate step; no caller supplies an opening
 point. The V4 leaf and typed native prepared-obligation adapter are
-implemented. Remaining receipt work is production-suite selection,
-production folding and compression qualification, and the final
+implemented. The production suite and one fold are selected and qualified.
+Remaining receipt work is full native-profile compression qualification,
+shipping the authenticated verifier artifact, and the final C ABI and
 root-to-decision acceptance boundary. The internal Nova session already checks
 the verifier-derived initial state, exact step count, state continuity, and
 expected final state before and after compression.
@@ -233,7 +236,7 @@ public-anchor recurrence.
 The complete selected recurrence is now frozen by relation ID:
 
 ```text
-530dc18d9ba3769c16a13ac4ac7d8a87f6289898c4036da6a18be8ee0d87c1da
+ecfd8e56084083ba9a94431fad5a5b1e0991d7597746440e76ccf77924444a66
 ```
 
 Its source relation has 1,851,594 gates, 3,813,632 rows, and 14,293,837 terms.
@@ -264,6 +267,10 @@ verifies the recursive result before compression, and verifies a canonical
 fixed-length Spartan IPA proof against the exact initial and final states.
 Canonical decoding rejects the wrong length, sequence schedule, malformed
 field or point encodings, trailing bytes, and noncanonical re-encoding.
+The suite can be consumed into a verifier-only context and serialized as a
+versioned deployment artifact. Loading first authenticates an expected total
+length and tagged digest, then checks the suite ID, arity, payload length, and
+exact local profile. No production artifact length or digest is frozen yet.
 
 Nova 0.76's fixed arity-20 wrapper adds exactly 13,566 primary constraints and
 13,596 primary variables to this recurrence. The production primary
@@ -276,19 +283,24 @@ variables of padded headroom. For the pinned canonical codec, they imply:
 1,676 + 20*32 + 290*(21 + 14) = 12,466 bytes
 ```
 
-The proof has exactly 125 locally selected sequence lengths. Exact production
-setup reproduced these dimensions and proof shape twice and froze the
-public-parameter digest:
+The proof has exactly 125 locally selected sequence lengths. The selected
+native profile freezes public-parameter digest:
 
 ```text
-c2f52aae3239db04a73a5fc3b157fa8585ff203d6e36ee823c297df829cfc800
+b90f7e761288cc1fdb7abd16f4e0abbbe2c8d7c773f315a17f1d7c4f982f7900
 ```
 
-This is a test-frozen setup result, not an activated or shipped suite. The
-production relation, parameter digest, dimensions, full codec schedule, and
-payload/statement/manifest/native-decision versions must still be installed as
-one local static profile before a production suite ID exists. No production
-fold or compression has run.
+Its suite ID is:
+
+```text
+116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa
+```
+
+Exact setup and one full-scale fold have qualified against the relation,
+parameter digest, dimensions, complete codec schedule, and explicit
+payload/statement/manifest/native-decision versions. This is a selected static
+profile, not an activated or shipped suite. Full native-profile compression
+has not qualified.
 
 The real 20-state, two-step session fixture exercises setup, folding, recursive
 verification, compression, canonical encode/decode, and compressed
@@ -299,15 +311,15 @@ Nova fork left its relation ID, public-parameter digest, dimensions, proof
 length, and codec schedule unchanged.
 
 Cargo pins the bounded-memory fork at revision
-`9a659ee5aa761ce97b476877f2bd1de95e833da5`. It releases `ShapeCS` before
-commitment-key generation and shares one padded Spartan shape between
-setup-created prover and verifier keys. Its tests freeze the legacy key bytes
-and verifier-key digest and pass the real non-preprocessing Spartan IPA
-compression path. The exact-shape witness builder also streams every later
-operation and row against the immutable template instead of materializing a
-second relation. Building and binding two production recurrences peaked at
-1,547,485,184 bytes RSS with no swap, only 284,672,000 bytes above the earlier
-one-build process rather than another roughly 800 MiB shape.
+`206f4ce388d80de6421ca484f7d72c80c4c7ac67`. It releases `ShapeCS` before
+commitment-key generation, shares one padded Spartan shape between
+setup-created prover and verifier keys, and replaces duplicated sparse-matrix
+field-element caches with compact classes over the existing CSR entries. Its
+tests preserve the key bytes and verifier-key digest and pass the real
+non-preprocessing Spartan IPA compression path. The exact-shape witness builder
+also streams every later operation and row against the immutable template
+instead of materializing a second relation. These memory reductions do not by
+themselves qualify the native-profile lifecycle.
 
 A staged setup-only harness preserves the production ratios of variables,
 constraints, and nonzeros. Every synthetic stage through `2^20` passed under
@@ -325,12 +337,12 @@ The secondary shape remained fixed at 10,787 constraints and 10,769 variables.
 Each stage also froze its deterministic public-parameter digest. These are
 synthetic setup results, not production proofs.
 
-Exact production setup then passed twice in about 93.4 seconds. The two timed
-runs peaked at 2,310,144,000 and 3,272,425,472 bytes RSS, both with zero swap
-and below the 6 GiB ceiling. They reproduced the 1,975,624 / 1,865,190 primary
-shape, fixed secondary shape, 12,466-byte proof shape, 125-sequence schedule,
-and frozen digest above. Real production folding and compression remain the
-next resource and correctness gates.
+Exact native-profile setup and one full-scale fold have qualified. The latest
+guarded attempt to complete the lifecycle with the compact-cache fork was
+aborted during setup after about 1.0 GiB of swapout, before compression. That
+run exposed a resource failure, not a cryptographic failure. Full Spartan
+compression and canonical verification for this native profile remain the next
+no-swap resource and correctness gate.
 
 For historical context, the earlier pre-canonical scaling probe used
 independent multiplication gates and noncanonical bincode proof-object sizes:
@@ -384,12 +396,15 @@ backend. The current candidate receipt budget is:
 69 + 224 * anchor_count + 12,466
 ```
 
-The 69-byte header and 224-byte entries are implemented transport components,
-but their Nova envelope is not an activated consensus format. The canonical
-proof shape is independent of the number of folded steps. At 100 anchors the
-candidate total is therefore 34,935 bytes: 22,469 payload bytes plus the
-12,466-byte proof. No separate 545-byte root is included. This size does not
-make the still-uninstantiated production profile safe to activate.
+The 69-byte header, 224-byte entries, and exact 12,466-byte Nova envelope are
+implemented transport components. The envelope is exactly `payload || proof`;
+its parser establishes canonical syntax only. The proof shape is independent
+of the number of folded steps. At 100 anchors the candidate total is therefore
+34,935 bytes: 22,469 payload bytes plus the proof. No separate 545-byte root is
+included. The Rust verifier returns that pending root only after checking the
+proof and payload-derived final state, but native `decide()` remains mandatory.
+Neither the compact size nor the selected profile activates consensus
+acceptance.
 
 ## Standalone secq verifier randomization
 

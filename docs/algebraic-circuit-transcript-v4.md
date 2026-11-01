@@ -149,4 +149,7 @@ response.
 
 The hidden-anchor number is a historical measurement. Anchor escrow record
 version 3 uses public mode with one punishment commitment; the production
-recurrence has not yet been remeasured or migrated to that leaf mode.
+recurrence has been migrated to that leaf mode and measured as part of the
+selected native profile. See
+[the recursive construction receipt boundary](recursive-parent-receipt.md)
+for its exact relation, Nova dimensions, and qualification status.

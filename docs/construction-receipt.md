@@ -4,12 +4,15 @@ This is the next experiment after
 [companion scalar escrow](companion-scalar-escrow.md). Native V4 leaves and
 their typed accumulator adapter are implemented. Nova 0.76 is the selected
 transparent folding backend. The homogeneous public-anchor recurrence,
-canonical compressed-proof codec, and serialized fixed-template Nova session
-are implemented. Canonical suite-ID framing and exact static setup selection
-are also implemented. Exact production setup has been constructed twice and
-its test digest is frozen, but no production profile or suite ID is installed.
-Shipped-suite activation, production folding and compression, and the
-root-to-native-decision acceptance path are not complete. Enrollment remains
+canonical compressed-proof codec, fixed-template Nova session, selected
+native profile, verifier-only artifact format, and authenticated-root verifier
+are implemented. Exact setup and one full-scale fold have qualified for that
+profile. Full native-profile Spartan compression remains pending: the latest
+guarded run was stopped after about 1.0 GiB of swapout during setup, before
+compression, so it was a resource failure rather than a cryptographic failure.
+The exact payload-plus-proof envelope is implemented as syntax-only transport.
+No production verifier-artifact length-and-digest descriptor, C ABI, native
+final decision, or consensus activation is installed. Enrollment remains
 disabled pending review and application integration.
 
 Transparent setup is a hard requirement for the completed library: public
@@ -153,7 +156,7 @@ derive the expected coefficient commitment and anchored offset to its
 ciphertext.
 
 Payload framing remains version 2 because those bytes and field semantics are
-unchanged. `ConstructionReceiptStatement/v3` and the eventual parent suite ID
+unchanged. `ConstructionReceiptStatement/v3` and the selected parent suite ID
 version the authenticated interpretation that now includes each resolved
 punishment key.
 
@@ -180,16 +183,19 @@ schema version. Resolved setup and anchor metadata remain off wire but are
 bound into the construction statement and initial manifest.
 
 The current native root codec is 545 bytes for the 32,768-point anchor basis.
-Compressed Nova already serializes its complete final state and returns it only
-after successful verification. The new receipt therefore does not duplicate a
-545-byte root outside the proof. It converts the verified state root into the
-native codec and discharges it with `decide()`. Exact production setup confirms
+Compressed Nova serializes its complete final state and returns it only after
+successful verification. The Rust verifier checks the payload-derived final
+manifest and index, reconstructs the authenticated pending root, and exposes
+only its canonical 545-byte encoding. The receipt therefore does not duplicate
+that root outside the proof. Native code must still parse the returned root
+against the fixed basis and discharge it with `decide()`. Exact setup confirms
 a `2^21` primary shape, a `2^14` secondary shape, and a canonical 12,466-byte
 proof with 125 fixed sequence lengths. The proof size is independent of the
 number of folded steps. At 100 anchors the candidate total is therefore 34,935
-bytes: 22,469 payload bytes plus the proof. The canonical Nova envelope is not
-an implemented consensus format yet. The pre-Nova transport which appends a
-separate 545-byte root is obsolete and is not an accepted substitute.
+bytes: 22,469 payload bytes plus the proof. The exact native envelope codec now
+encodes `payload || proof`; parsing it establishes only canonical syntax, not
+proof validity or consensus acceptance. The pre-Nova transport which appends a
+separate 545-byte root is obsolete and is rejected.
 
 The typed native setup path reconstructs the exact setup record, verifies its
 V4 reduction, promotes the pending claim to the construction basis,
@@ -211,14 +217,16 @@ hidden and public tests require reduction verification and final
 `decide()`. This authenticates a pending obligation, not its recursive
 ancestry.
 
-Consents and existing anchor leaves remain contextual data. Moving the final
-basis decision inside the parent could remove the 545 bytes, but would add the
-linear fixed-basis work to the parent relation.
+Consents and existing anchor leaves remain contextual data. The verified final
+state already removes the root's 545 bytes from the wire. Moving the final
+basis decision inside the parent would remove the external native decision,
+not any receipt bytes, while adding the linear fixed-basis work to every parent
+proof.
 
 The selected recurrence is fixed by relation ID:
 
 ```text
-530dc18d9ba3769c16a13ac4ac7d8a87f6289898c4036da6a18be8ee0d87c1da
+ecfd8e56084083ba9a94431fad5a5b1e0991d7597746440e76ccf77924444a66
 ```
 
 Its source relation has 1,851,594 gates, 3,813,632 rows, and 14,293,837 terms.
@@ -227,18 +235,18 @@ a 12,552,747-nonzero upper bound. Nova's arity-20 wrapper gives the confirmed
 primary dimensions 1,975,624 constraints and 1,865,190 variables; the secondary
 dimensions are 10,787 and 10,769.
 
-The canonical codec and generic session are real, but the selected Nova
-transport is not activated. Production setup is test-frozen at digest
-`c2f52aae3239db04a73a5fc3b157fa8585ff203d6e36ee823c297df829cfc800`,
-but no production fold or compression has run. The bounded-memory fork
-preserves the frozen tiny-suite parameters and wire format.
-An exact-shape two-build test reused the trusted relation at a 1,547,485,184-byte
-peak RSS with no swap. Synthetic setup stages `2^16` through `2^20` all passed
-with zero swap. Runtime grew from 4.22 to 46.06 seconds and peak RSS from
-163,414,016 to 1,490,878,464 bytes; the `2^20` primary shape was 987,812
-constraints by 932,991 variables. Exact production setup passed twice in about
-93.4 seconds, at 2,310,144,000 and 3,272,425,472 bytes peak RSS with zero swap.
-Real production folding/compression remains the next qualification gate.
+The selected profile freezes public-parameter digest
+`b90f7e761288cc1fdb7abd16f4e0abbbe2c8d7c773f315a17f1d7c4f982f7900`
+and suite ID
+`116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa`.
+Exact setup and one full-scale fold have qualified against those values. The
+generic verifier-artifact writer and length-and-digest-authenticated loader are
+implemented, but no artifact descriptor for this production profile is frozen
+or shipped. The latest guarded native-profile lifecycle run was aborted during
+setup after about 1.0 GiB of swapout; it reached neither compression nor proof
+verification and exposed no cryptographic failure. Full native-profile Spartan
+compression under the no-swap resource gate remains the next qualification
+step. None of these results activates the transport or an acceptance API.
 
 ## Historical V2 public-prehashing experiment
 
@@ -388,19 +396,18 @@ replacing it.
 4. Completed internally: the fixed homogeneous public-anchor recurrence,
    canonical Nova codec, verifier-derived initial and expected final states,
    exact-step enforcement, and allocation-light exact-shape witness reuse.
-5. Completed for setup-only qualification: synthetic stages through `2^20` and
-   exact production setup pass under the memory ceiling; the deterministic
-   production public-parameter digest is test-frozen.
-6. In progress: instantiate the static production profile and suite ID from the
-   exact relation, parameter digest, dimensions, codec schedule, and explicit
-   construction versions, then run a real production fold and compression. Do
-   not expose proving through an RPC before those resource and correctness
-   gates pass.
-7. Remaining: connect compressed verification to the C ABI and mandatory
-   native root decision, establish composition and correlated-key privacy
-   security, implement distributed setup/proving, and integrate accepted
-   certificate recovery with the registry and Bitcoin punishment path before
-   enrollment.
+5. Completed for the selected native profile: static relation, parameter and
+   suite identities, exact setup, and one full-scale fold.
+6. Completed as non-accepting plumbing: the exact `payload || proof` envelope,
+   verifier-only artifact format and authenticated generic loader, and a Rust
+   verifier which returns only the authenticated pending root.
+7. Remaining: qualify full native-profile compression without swap, freeze and
+   ship the production verifier-artifact descriptor, connect verification to
+   the C ABI and mandatory native root decision, establish composition and
+   correlated-key privacy security, implement distributed setup/proving, and
+   integrate accepted certificate recovery with the registry and Bitcoin
+   punishment path before enrollment. Do not expose proving through an RPC
+   before those resource and correctness gates pass.
 
 No receipt should be accepted merely because its public inputs passed the
 reference assembler.

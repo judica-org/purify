@@ -29,8 +29,10 @@ V4 is the candidate active leaf path for a construction receipt. Native
 V4 proof production, preparation, verification, and the algebraic
 accumulation adapter are implemented. The fixed-size setup record and anchor
 record version 3 both encode V4 proofs. Their historical hidden-output sizes
-and timings below remain useful as an individual-proof baseline. Neither leaf
-has been migrated into a final production parent receipt.
+and timings below remain useful as an individual-proof baseline. The setup leaf
+is handled once at registry creation, and the record-version-3 public anchor
+leaf has been migrated into the homogeneous parent recurrence. That parent is
+not fully compressed or activated as a production receipt.
 
 ## Groups, keys and canonical encodings
 
@@ -294,6 +296,9 @@ The next [construction receipt experiment](construction-receipt.md)
 treats the setup and encryption proofs as out-of-band inputs to a public
 assembler. V4 is the candidate child relation for that design. The
 intended on-chain receipt retains the ciphertexts and replaces the child
-proofs with one parent proof. That parent is not yet implemented or
-measured; the historical V3 sizes above are not an estimate of its size
-or prover cost.
+proofs with one parent proof. The recurrence and selected profile are
+implemented; exact setup and one full-scale fold have qualified, and the proof
+shape and authenticated-root verifier are fixed. Full native-profile
+compression and the C ABI/native acceptance path remain incomplete; the
+historical V3 sizes above are not an estimate of the parent's size or prover
+cost.

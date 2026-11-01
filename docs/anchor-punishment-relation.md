@@ -84,12 +84,16 @@ The Rust production recurrence now selects the public V4 leaf and constrains
 the punishment-key DLog equation under the exact resolved statement. The
 construction statement digest and initial manifest bind that resolution. The
 complete recurrence is pinned by relation ID
-`530dc18d9ba3769c16a13ac4ac7d8a87f6289898c4036da6a18be8ee0d87c1da`;
+`ecfd8e56084083ba9a94431fad5a5b1e0991d7597746440e76ccf77924444a66`;
 the preceding hidden-anchor recurrence is not compatible with record version
 3. The `69 + 224*N` payload boundary is unchanged, and no punishment key is
 added to the payload entry.
 
-This relation migration does not activate construction receipts. Production
-setup qualification passes and freezes a deterministic test digest, but the
-shipped parent suite, production folding/compression, and the complete
+This relation migration does not activate construction receipts. The selected
+profile freezes public-parameter digest
+`b90f7e761288cc1fdb7abd16f4e0abbbe2c8d7c773f315a17f1d7c4f982f7900`
+and suite ID
+`116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa`;
+exact setup and one full-scale fold have qualified. Native-profile full
+compression, the shipped verifier artifact, and the complete C ABI and
 compressed-proof-to-native-decision acceptance path remain separate gates.

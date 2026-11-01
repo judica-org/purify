@@ -115,17 +115,32 @@ with an explicit recipient would be approximately:
 64 + 192*N + size(final_proof)
 ```
 
-Here `N` counts independently encrypted recovery roots, not necessarily anchors.
-Root/coalition references, context, framing, consents and existing anchor leaves
-are additional. The reference statement includes full public roots instead of
-assuming an unimplemented on-chain index; its serialized size is therefore
-larger than this incremental formula.
+Here `N` counts independently encrypted recovery roots, not necessarily
+anchors. The implemented canonical payload is `69 + 192*N` bytes: one version
+byte, the 64-byte recovery root, a four-byte entry count, and the ciphertexts.
+The recovery root selects the authenticated coalition setup. Deterministically
+ordered anchor references, roots, and contexts stay off wire but are bound into
+the receipt statement digest.
 
-The final proof has not been implemented or measured. A 1-2 KB proof is a
-target, not a result. Direct proofs of combined native relations and public
-proofs of already completed proofs also have different prover costs. Combining
-all native witnesses centrally would not satisfy the required public assembler
-interface.
+The selected accumulator boundary additionally carries a 545-byte final root
+claim for the current 32,768-point anchor basis. It is not proof acceptance:
+the parent must authenticate the claim's complete ancestry, and the native
+verifier must discharge it with `decide()`. The present concrete target is:
+
+```
+69 + 192*N + 545 + size(final_parent_proof)
+```
+
+Consents and existing anchor leaves remain contextual data. Moving the final
+basis decision inside the parent could remove the 545 bytes, but would add the
+linear fixed-basis work to the parent relation.
+
+The transparent secq proof transport is implemented, but the complete parent
+relation has not been implemented or measured. A 1-2 KB complete parent proof
+remains a target, not a result. Direct proofs of combined native relations and
+public proofs of already completed proofs also have different prover costs.
+Combining all native witnesses centrally would not satisfy the required public
+assembler interface.
 
 ## Historical V2 public-prehashing experiment
 

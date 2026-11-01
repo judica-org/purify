@@ -337,11 +337,148 @@ mod tests {
 
     use super::*;
     use crate::{
-        relation_builder::{Builder, StateVariable},
+        direct_nova::direct_nova_raw_metrics,
+        relation_builder::{Builder, Expression, StateVariable},
         Scalar,
     };
 
     const TEST_ARITY: usize = 20;
+    const PRODUCTION_PRIMARY_BUCKET: usize = 1 << 21;
+    const PRODUCTION_PRIMARY_CONSTRAINTS: usize = 1_975_624;
+    const PRODUCTION_DIRECT_CONSTRAINTS: usize = 1_962_058;
+    const PRODUCTION_DIRECT_VARIABLES: usize = 1_851_594;
+    const PRODUCTION_DIRECT_NNZ: usize = 12_552_747;
+    const NOVA_PRIMARY_CONSTRAINT_OVERHEAD: usize = 13_566;
+    const NOVA_PRIMARY_VARIABLE_OVERHEAD: usize = 13_596;
+    const NOVA_SECONDARY_CONSTRAINTS: usize = 10_787;
+    const NOVA_SECONDARY_VARIABLES: usize = 10_769;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct SyntheticQualificationShape {
+        log2_bucket: u32,
+        bucket: usize,
+        direct_constraints: usize,
+        direct_variables: usize,
+        direct_nnz: usize,
+        six_term_rows: usize,
+        bulk_semantic_rows: usize,
+    }
+
+    fn qualification_log2() -> u32 {
+        let selected = std::env::var("PURIFY_NOVA_QUALIFICATION_LOG2")
+            .expect("set PURIFY_NOVA_QUALIFICATION_LOG2 to one of 16,17,18,19,20");
+        match selected.as_str() {
+            "16" => 16,
+            "17" => 17,
+            "18" => 18,
+            "19" => 19,
+            "20" => 20,
+            _ => panic!("PURIFY_NOVA_QUALIFICATION_LOG2 must be one of 16,17,18,19,20"),
+        }
+    }
+
+    fn scaled_ratio(value: usize, numerator: usize, denominator: usize) -> usize {
+        let scaled = (value as u128)
+            .checked_mul(numerator as u128)
+            .expect("synthetic qualification ratio product")
+            .checked_div(denominator as u128)
+            .expect("synthetic qualification ratio denominator");
+        usize::try_from(scaled).expect("synthetic qualification ratio width")
+    }
+
+    fn synthetic_qualification_shape(log2_bucket: u32) -> SyntheticQualificationShape {
+        assert!((16..=20).contains(&log2_bucket));
+        let bucket = 1usize << log2_bucket;
+        let primary_constraints = scaled_ratio(
+            bucket,
+            PRODUCTION_PRIMARY_CONSTRAINTS,
+            PRODUCTION_PRIMARY_BUCKET,
+        );
+        let direct_constraints = primary_constraints
+            .checked_sub(NOVA_PRIMARY_CONSTRAINT_OVERHEAD)
+            .expect("synthetic direct constraints");
+        let direct_variables = scaled_ratio(
+            direct_constraints,
+            PRODUCTION_DIRECT_VARIABLES,
+            PRODUCTION_DIRECT_CONSTRAINTS,
+        );
+
+        // Allocated-value operation rows disappear in the direct lowering.
+        // Twenty output equalities plus twenty state bindings are fixed, so
+        // the remaining rows can model the production matrix density with
+        // five- and six-term zero-valued semantic constraints.
+        let bulk_semantic_rows = direct_constraints
+            .checked_sub(TEST_ARITY * 2)
+            .expect("synthetic bulk semantic rows");
+        let direct_nnz = scaled_ratio(
+            direct_constraints,
+            PRODUCTION_DIRECT_NNZ,
+            PRODUCTION_DIRECT_CONSTRAINTS,
+        );
+        let five_term_nnz = bulk_semantic_rows
+            .checked_mul(6)
+            .and_then(|value| value.checked_add(TEST_ARITY * 6))
+            .expect("synthetic five-term nonzeros");
+        let six_term_rows = direct_nnz
+            .checked_sub(five_term_nnz)
+            .expect("synthetic six-term row count");
+        assert!(six_term_rows <= bulk_semantic_rows);
+        assert!(direct_variables >= TEST_ARITY * 2);
+        assert_eq!(
+            (direct_constraints + NOVA_PRIMARY_CONSTRAINT_OVERHEAD)
+                .max(direct_variables + NOVA_PRIMARY_VARIABLE_OVERHEAD)
+                .next_power_of_two(),
+            bucket
+        );
+
+        SyntheticQualificationShape {
+            log2_bucket,
+            bucket,
+            direct_constraints,
+            direct_variables,
+            direct_nnz,
+            six_term_rows,
+            bulk_semantic_rows,
+        }
+    }
+
+    fn sum_zero_states(inputs: &[StateVariable], count: usize) -> Expression {
+        inputs
+            .iter()
+            .take(count)
+            .fold(Expression::constant(Scalar::ZERO), |sum, input| {
+                sum.add(input.expression())
+            })
+    }
+
+    fn synthetic_qualification_relation(shape: SyntheticQualificationShape) -> StatefulRelation {
+        let mut builder = Builder::default();
+        let inputs = (0..TEST_ARITY)
+            .map(|_| builder.allocate_state(Scalar::ZERO))
+            .collect::<Vec<_>>();
+        let filler_gates = shape.direct_variables - TEST_ARITY * 2;
+        for _ in 0..filler_gates {
+            let _ = builder.allocate(Scalar::ZERO);
+        }
+
+        let five_terms = sum_zero_states(&inputs, 5);
+        let six_terms = sum_zero_states(&inputs, 6);
+        for row in 0..shape.bulk_semantic_rows {
+            builder.constrain_zero(if row < shape.six_term_rows {
+                six_terms.clone()
+            } else {
+                five_terms.clone()
+            });
+        }
+
+        let outputs = inputs
+            .iter()
+            .map(|input| builder.expose_state(input.expression()))
+            .collect::<Vec<_>>();
+        builder
+            .finish_stateful(&inputs, &outputs)
+            .expect("synthetic Nova qualification relation")
+    }
 
     fn source_state(seed: u64) -> [Scalar; TEST_ARITY] {
         std::array::from_fn(|index| Scalar::from(seed + index as u64))
@@ -378,6 +515,99 @@ mod tests {
             Option::<DirectNovaScalar>::from(DirectNovaScalar::from_repr(repr))
                 .expect("canonical Nova state")
         })
+    }
+
+    #[test]
+    fn synthetic_qualification_shapes_preserve_production_ratios() {
+        let mut prior: Option<SyntheticQualificationShape> = None;
+        for log2_bucket in 16..=20 {
+            let shape = synthetic_qualification_shape(log2_bucket);
+            assert!(shape.six_term_rows <= shape.bulk_semantic_rows);
+            assert_eq!(
+                shape.direct_variables,
+                scaled_ratio(
+                    shape.direct_constraints,
+                    PRODUCTION_DIRECT_VARIABLES,
+                    PRODUCTION_DIRECT_CONSTRAINTS,
+                )
+            );
+            assert_eq!(
+                shape.direct_nnz,
+                scaled_ratio(
+                    shape.direct_constraints,
+                    PRODUCTION_DIRECT_NNZ,
+                    PRODUCTION_DIRECT_CONSTRAINTS,
+                )
+            );
+            assert_eq!(
+                (shape.direct_constraints + NOVA_PRIMARY_CONSTRAINT_OVERHEAD)
+                    .max(shape.direct_variables + NOVA_PRIMARY_VARIABLE_OVERHEAD)
+                    .next_power_of_two(),
+                shape.bucket
+            );
+            if let Some(prior) = prior {
+                assert!(shape.bucket > prior.bucket);
+                assert!(shape.direct_constraints > prior.direct_constraints);
+                assert!(shape.direct_variables > prior.direct_variables);
+                assert!(shape.direct_nnz > prior.direct_nnz);
+                assert!(shape.bulk_semantic_rows > prior.bulk_semantic_rows);
+                assert!(shape.six_term_rows > prior.six_term_rows);
+            }
+            prior = Some(shape);
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit synthetic setup; set PURIFY_NOVA_QUALIFICATION_LOG2=16..20"]
+    fn staged_synthetic_nova_setup_reports_exact_shape() {
+        // Parse and validate the selector before allocating any circuit data.
+        let shape = synthetic_qualification_shape(qualification_log2());
+        eprintln!("synthetic_nova_qualification_expected={shape:#?}");
+
+        let relation = synthetic_qualification_relation(shape);
+        let raw = direct_nova_raw_metrics::<TEST_ARITY>(&relation.shape)
+            .expect("synthetic direct Nova metrics");
+        assert_eq!(raw.direct_constraints, shape.direct_constraints);
+        assert_eq!(raw.direct_variables, shape.direct_variables);
+        assert_eq!(raw.direct_nnz_upper_bound, shape.direct_nnz);
+
+        let suite = DirectNovaSuite::<TEST_ARITY>::setup(relation)
+            .expect("synthetic direct Nova qualification suite");
+        let metadata = suite.metadata();
+        assert_eq!(
+            (metadata.primary_constraints, metadata.primary_variables),
+            (
+                shape.direct_constraints + NOVA_PRIMARY_CONSTRAINT_OVERHEAD,
+                shape.direct_variables + NOVA_PRIMARY_VARIABLE_OVERHEAD,
+            )
+        );
+        assert_eq!(
+            (metadata.secondary_constraints, metadata.secondary_variables),
+            (NOVA_SECONDARY_CONSTRAINTS, NOVA_SECONDARY_VARIABLES)
+        );
+        assert_eq!(
+            metadata
+                .primary_constraints
+                .max(metadata.primary_variables)
+                .next_power_of_two(),
+            shape.bucket
+        );
+        assert_eq!(
+            metadata
+                .secondary_constraints
+                .max(metadata.secondary_variables)
+                .next_power_of_two(),
+            1 << 14
+        );
+        let total_rounds = shape.log2_bucket as usize + 14;
+        assert_eq!(metadata.proof_length, 2_316 + 290 * total_rounds);
+        assert_eq!(metadata.codec_sequence_count, 20 + 3 * total_rounds);
+        eprintln!(
+            "synthetic_nova_qualification_log2={} relation_id={:02x?} pp_digest={:02x?} metadata={metadata:#?}",
+            shape.log2_bucket,
+            metadata.relation_id.bytes(),
+            metadata.public_parameter_digest,
+        );
     }
 
     #[test]

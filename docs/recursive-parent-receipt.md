@@ -1,9 +1,10 @@
 # Recursive construction receipt boundary
 
-> Migration note: anchor escrow record version 3 changes the production
-> anchor leaf from hidden to public V4 mode with one punishment commitment.
-> The hidden-anchor recurrence described below is the preceding design and
-> must not be activated for version 3 until its public-DLog migration lands.
+> Implementation note: the production recurrence now uses the record-version-3
+> public V4 anchor leaf and constrains its canonical punishment-key DLog
+> equation. This completes the hidden-to-public relation migration. It does not
+> activate receipts: production setup is test-frozen, but the shipped suite and
+> end-to-end native acceptance path remain deliberately absent.
 
 This document fixes the selected boundary between a transparent Nova parent
 proof and the native BP++ accumulator. It is an implementation map, not a
@@ -59,21 +60,24 @@ The immutable setup-record transition performs these operations once:
    one-term seed root, then run the mandatory native decision before storing
    that root in the registry.
 
-Every construction receipt then uses one fixed hidden-anchor matrix. For each
+Every construction receipt then uses one fixed public-anchor matrix. For each
 ordered anchor it performs the following operations:
 
-1. Parse the fixed-shape private V4 proof witness and validate every scalar and
+1. Parse the fixed-shape V4 proof witness and validate every scalar and
    secp256k1 point encoding.
 2. Reconstruct the exact anchor circuit and statement binding from public
    receipt data. No prover-supplied circuit digest or acceptance bit is used.
 3. Replay the V4 precommitment and typed Poseidon proof transcript,
    including canonical two-lane nonzero challenge selection.
-4. Compute the inner norm residual point and its compact generator-weight
+4. Constrain the public DLog response against the exact normalized punishment
+   key resolved for that anchor. The key is statement data, not a new payload
+   field.
+5. Compute the inner norm residual point and its compact generator-weight
    polynomials from the terminal scalars and folding challenges.
-5. Reconstruct the exact coefficient commitment obligation and verify the
+6. Reconstruct the exact coefficient commitment obligation and verify the
    constrained coefficient-opening reduction. This produces one leaf
    `PendingClaim`; it does not accept the child by itself.
-6. Verify one ordered two-claim accumulation transition from the previous root
+7. Verify one ordered two-claim accumulation transition from the previous root
    and this anchor leaf. The output root becomes the next step's input.
 
 The recurrence state has exactly 20 primary-field elements: the root point's
@@ -132,10 +136,15 @@ terms. That is 200,574 gates for 32 terms and 390,174 for 64. The fixed
 two-lane transcript challenge selector uses
 2,317 gates and implements the documented unbiased nonzero reduction
 into the secp scalar field. The V4 leaf, reduction, accumulation step, and
-variable transcript-binding pieces are implemented. The fixed-matrix
-recurrence is under integration. The canonical Nova codec, verifier-derived
-initial state, construction payload codec, resource limits, and acceptance API
-remain.
+variable transcript-binding pieces are implemented. The homogeneous public
+anchor recurrence, verifier-derived 20-field state, exact-shape Nova lowering,
+canonical compressed-proof codec, and serialized fixed-template Nova session
+are also implemented. Canonical suite-ID framing and exact static setup
+selection reject a changed relation, parameter digest, matrix dimensions,
+codec schedule, or construction-version tuple. Production setup qualification
+now passes and freezes its test digest, but no production profile or suite ID
+is instantiated. Shipped-suite selection and the C ABI/native acceptance
+boundary remain.
 
 The historical secq SHA-256 gadget costs 30,952 multipliers per
 compression block, plus eight multipliers per private input byte.
@@ -191,9 +200,11 @@ typed transcript, distinct proof types and codecs, and reject V1 encodings.
 The standalone relation is cross-checked against the vendored native map and
 is composed directly into the candidate step; no caller supplies an opening
 point. The V4 leaf and typed native prepared-obligation adapter are
-implemented. Remaining receipt work is the fixed-state Nova adapter, canonical
-codec, expected-manifest reconstruction, exact-step enforcement, and final
-root-to-decision acceptance boundary.
+implemented. Remaining receipt work is production-suite selection,
+production folding and compression qualification, and the final
+root-to-decision acceptance boundary. The internal Nova session already checks
+the verifier-derived initial state, exact step count, state continuity, and
+expected final state before and after compression.
 
 The candidate coefficient reduction consumes an internal
 `ConstrainedPreparedNorm`; there is no production constructor from raw claim
@@ -213,11 +224,22 @@ three-round step uses 342,434 gates and a 1,679-byte proof. Its accepted proof
 plus deliberate false-assignment proof completed in 110.85 seconds in the
 Release test run.
 
-The production-shape V4 public setup leaf is exactly 854,293 gates. A
-hidden anchor leaf is exactly 949,880 gates. Both fall in the standalone secq
-backend's 1,745-byte proof-length bucket. That bucket does not predict
-compressed Nova size. These are leaf relation sizes, not a complete
-parent-proof measurement.
+The production-shape V4 public setup leaf is exactly 854,293 gates. The
+historical hidden anchor leaf is exactly 949,880 gates. Both fall in the
+standalone secq backend's 1,745-byte proof-length bucket. That bucket does not
+predict compressed Nova size. These are leaf relation sizes, not the selected
+public-anchor recurrence.
+
+The complete selected recurrence is now frozen by relation ID:
+
+```text
+530dc18d9ba3769c16a13ac4ac7d8a87f6289898c4036da6a18be8ee0d87c1da
+```
+
+Its source relation has 1,851,594 gates, 3,813,632 rows, and 14,293,837 terms.
+Direct Nova lowering produces 1,851,594 variables, 1,962,058 constraints, and
+a 12,552,747-nonzero upper bound. The raw step remains in the `2^21` bucket
+with 135,094 constraints of headroom before Nova's fixed wrapper.
 
 For the superseded flat parent, shared step powers make setup plus 12 anchors
 and the first step total
@@ -236,50 +258,99 @@ consensus limit; the construction receipt requires a new versioned codec.
 ## Recursive backend feasibility
 
 Nova 0.76 over the secq/secp cycle is the selected transparent folding
-backend. A fixed-relation session owns one canonical R1CS matrix, rejects a
-changed matrix on later steps, binds every state transition, and compresses
-with transparent Spartan IPA. This selection is not receipt activation: a
-canonical proof codec, the production recurrence adapter, resource limits,
-and the complete acceptance path remain required.
+backend. The implemented fixed-template session owns one exact relation,
+rejects structural drift, checks state continuity and the exact step count,
+verifies the recursive result before compression, and verifies a canonical
+fixed-length Spartan IPA proof against the exact initial and final states.
+Canonical decoding rejects the wrong length, sequence schedule, malformed
+field or point encodings, trailing bytes, and noncanonical re-encoding.
 
-The first fixed-relation Release probe used a one-gate transition for two
-steps. Its primary matrix had 10,442 constraints and 10,434 variables; the
-secondary matrix had 10,787 constraints and 10,769 variables. Its deliberately
-noncanonical bincode serialization was 10,660 bytes. Bincode is only an
-in-memory proof-object measurement, not a consensus wire encoding or a size
-bound.
+Nova 0.76's fixed arity-20 wrapper adds exactly 13,566 primary constraints and
+13,596 primary variables to this recurrence. The production primary
+shape is therefore 1,975,624 constraints and 1,865,190 variables in `2^21`.
+The secondary shape is fixed at 10,787 constraints and 10,769 variables in
+`2^14`. These dimensions leave 121,528 primary constraints and 231,962 primary
+variables of padded headroom. For the pinned canonical codec, they imply:
 
-A bounded scaling probe then added independent multiplication gates and one
-linear constraint per extra gate. It measured the complete setup, two-step
-fold, recursive verification, compression, and compressed verification in one
-Release process:
+```text
+1,676 + 20*32 + 290*(21 + 14) = 12,466 bytes
+```
 
-| Gates | Measured bytes | Primary constraints / variables | Pipeline | Peak RSS |
+The proof has exactly 125 locally selected sequence lengths. Exact production
+setup reproduced these dimensions and proof shape twice and froze the
+public-parameter digest:
+
+```text
+c2f52aae3239db04a73a5fc3b157fa8585ff203d6e36ee823c297df829cfc800
+```
+
+This is a test-frozen setup result, not an activated or shipped suite. The
+production relation, parameter digest, dimensions, full codec schedule, and
+payload/statement/manifest/native-decision versions must still be installed as
+one local static profile before a production suite ID exists. No production
+fold or compression has run.
+
+The real 20-state, two-step session fixture exercises setup, folding, recursive
+verification, compression, canonical encode/decode, and compressed
+verification. Its primary shape is 13,606 constraints and 13,636 variables;
+its secondary shape is 10,787 constraints and 10,769 variables. Its canonical
+proof is 10,436 bytes with 104 sequence lengths. Pinning the bounded-memory
+Nova fork left its relation ID, public-parameter digest, dimensions, proof
+length, and codec schedule unchanged.
+
+Cargo pins the bounded-memory fork at revision
+`9a659ee5aa761ce97b476877f2bd1de95e833da5`. It releases `ShapeCS` before
+commitment-key generation and shares one padded Spartan shape between
+setup-created prover and verifier keys. Its tests freeze the legacy key bytes
+and verifier-key digest and pass the real non-preprocessing Spartan IPA
+compression path. The exact-shape witness builder also streams every later
+operation and row against the immutable template instead of materializing a
+second relation. Building and binding two production recurrences peaked at
+1,547,485,184 bytes RSS with no swap, only 284,672,000 bytes above the earlier
+one-build process rather than another roughly 800 MiB shape.
+
+A staged setup-only harness preserves the production ratios of variables,
+constraints, and nonzeros. Every synthetic stage through `2^20` passed under
+its memory ceiling with zero swap:
+
+| Primary bucket | Constraints / variables | Proof bytes / sequences | Setup | Peak RSS |
+| ---: | ---: | ---: | ---: | ---: |
+| `2^16` | 61,738 / 59,055 | 11,016 / 110 | 4.22 s | 163,414,016 B |
+| `2^17` | 123,476 / 117,318 | 11,306 / 113 | 7.08 s | 275,087,360 B |
+| `2^18` | 246,953 / 233,843 | 11,596 / 116 | 12.54 s | 455,507,968 B |
+| `2^19` | 493,906 / 466,892 | 11,886 / 119 | 23.80 s | 764,968,960 B |
+| `2^20` | 987,812 / 932,991 | 12,176 / 122 | 46.06 s | 1,490,878,464 B |
+
+The secondary shape remained fixed at 10,787 constraints and 10,769 variables.
+Each stage also froze its deterministic public-parameter digest. These are
+synthetic setup results, not production proofs.
+
+Exact production setup then passed twice in about 93.4 seconds. The two timed
+runs peaked at 2,310,144,000 and 3,272,425,472 bytes RSS, both with zero swap
+and below the 6 GiB ceiling. They reproduced the 1,975,624 / 1,865,190 primary
+shape, fixed secondary shape, 12,466-byte proof shape, 125-sequence schedule,
+and frozen digest above. Real production folding and compression remain the
+next resource and correctness gates.
+
+For historical context, the earlier pre-canonical scaling probe used
+independent multiplication gates and noncanonical bincode proof-object sizes:
+
+| Gates | Bincode bytes | Primary constraints / variables | Pipeline | Peak RSS |
 | ---: | ---: | ---: | ---: | ---: |
 | 1,024 | 10,660 | 12,488 / 13,503 | 4.298 s | 143,409,152 B |
 | 16,384 | 11,288 | 43,208 / 59,583 | 9.144 s | 289,062,912 B |
 | 65,536 | 11,916 | 141,512 / 207,039 | 30.994 s | 737,148,928 B |
 
-At 65,536 gates, public-parameter generation took 3.996 seconds, folding
-182 milliseconds, recursive verification 203 milliseconds, compression setup
-281 milliseconds, compression 26.073 seconds, and compressed verification
-257 milliseconds. The secondary matrix stayed fixed at 10,787 constraints and
-10,769 variables in all three runs.
+Those object sizes are retained only as historical feasibility evidence. They
+do not size the selected receipt and are superseded for wire-format accounting
+by the canonical codec above.
 
-The measured object grew by 1,256 bytes while the synthetic gate count grew by
-64 times, which is consistent with logarithmic proof growth. It does not
-qualify the production relation. One hidden anchor leaf alone is about 950,000
-gates and has denser scalar, curve, and transcript constraints. Extrapolating
-the synthetic RSS line to that relation is unsafe; a production-shaped
-measurement must pass an explicit memory ceiling before proof generation can
-be exposed by an acceptance or RPC API.
-
-The fixed-matrix mismatch between public setup and hidden anchor leaves is
-resolved by the immutable setup registry described above. Per-anchor binding
-digests, precommitments, coefficient commitments, and offsets are assignment
-variables authenticated by the rolling manifest, so different valid anchors
-must serialize one exact recurrence matrix. The setup leaf is not padded into
-or repeated by that matrix.
+The heterogeneous public setup leaf is resolved by the immutable setup
+registry described above. Per-anchor binding digests, precommitments,
+punishment keys, coefficient commitments, and offsets are statement or
+assignment values authenticated by the rolling manifest, so different valid
+anchors use one exact public-anchor recurrence matrix. The setup leaf is not
+padded into or repeated by that matrix.
 
 ## Why the final MSM stays native
 
@@ -310,15 +381,15 @@ but it did not solve flat-circuit memory and is not the selected parent
 backend. The current candidate receipt budget is:
 
 ```text
-69 + 224 * anchor_count + canonical_nova_proof_bytes
+69 + 224 * anchor_count + 12,466
 ```
 
-The 69-byte header and 224-byte entries are a codec target, not an implemented
-consensus format. At 100 anchors, the non-proof portion is 22,469 bytes. Adding
-the tiny probe's 10,660-byte noncanonical proof-object measurement would give
-33,129 bytes, but that probe has a one-field rather than 20-field state and does
-not predict production size. The production proof can be sized only after the
-exact recurrence and canonical Nova codec exist.
+The 69-byte header and 224-byte entries are implemented transport components,
+but their Nova envelope is not an activated consensus format. The canonical
+proof shape is independent of the number of folded steps. At 100 anchors the
+candidate total is therefore 34,935 bytes: 22,469 payload bytes plus the
+12,466-byte proof. No separate 545-byte root is included. This size does not
+make the still-uninstantiated production profile safe to activate.
 
 ## Standalone secq verifier randomization
 

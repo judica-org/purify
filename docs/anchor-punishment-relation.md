@@ -78,13 +78,18 @@ negligible zero case must generate a different anchor recovery key before the
 anchor is published, so native and circuit evaluation cannot select different
 rekey branches.
 
-## Recurrence migration boundary
+## Recurrence integration boundary
 
-The construction payload framing does not change, but the Rust production
-anchor recurrence currently selects a hidden V4 leaf. It must be migrated in
-a separate change to a public leaf and constrain the public DLog equation
-under the exact resolved statement. The construction statement digest and
-initial manifest already bind that resolution. Activating a parent built for
-the hidden anchor suite against this record version would be a protocol error.
-The `69 + 224*N` payload boundary is unchanged; no punishment key is added to
-the payload entry.
+The Rust production recurrence now selects the public V4 leaf and constrains
+the punishment-key DLog equation under the exact resolved statement. The
+construction statement digest and initial manifest bind that resolution. The
+complete recurrence is pinned by relation ID
+`530dc18d9ba3769c16a13ac4ac7d8a87f6289898c4036da6a18be8ee0d87c1da`;
+the preceding hidden-anchor recurrence is not compatible with record version
+3. The `69 + 224*N` payload boundary is unchanged, and no punishment key is
+added to the payload entry.
+
+This relation migration does not activate construction receipts. Production
+setup qualification passes and freezes a deterministic test digest, but the
+shipped parent suite, production folding/compression, and the complete
+compressed-proof-to-native-decision acceptance path remain separate gates.

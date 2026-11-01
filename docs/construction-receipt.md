@@ -3,9 +3,14 @@
 This is the next experiment after
 [companion scalar escrow](companion-scalar-escrow.md). Native V4 leaves and
 their typed accumulator adapter are implemented. Nova 0.76 is the selected
-transparent folding backend, but its production recurrence adapter, canonical
-codec, resource limits, and acceptance path are not complete. Enrollment
-remains disabled pending review and application integration.
+transparent folding backend. The homogeneous public-anchor recurrence,
+canonical compressed-proof codec, and serialized fixed-template Nova session
+are implemented. Canonical suite-ID framing and exact static setup selection
+are also implemented. Exact production setup has been constructed twice and
+its test digest is frozen, but no production profile or suite ID is installed.
+Shipped-suite activation, production folding and compression, and the
+root-to-native-decision acceptance path are not complete. Enrollment remains
+disabled pending review and application integration.
 
 Transparent setup is a hard requirement for the completed library: public
 parameters must not depend on a trusted ceremony or retained trapdoor. This
@@ -163,7 +168,7 @@ is authorized.
 The selected versioned target is:
 
 ```
-69 + 224*N + size(canonical compressed Nova proof)
+69 + 224*N + 12,466
 ```
 
 Each 224-byte entry is one 192-byte ciphertext plus one nonzero 32-byte
@@ -178,12 +183,13 @@ The current native root codec is 545 bytes for the 32,768-point anchor basis.
 Compressed Nova already serializes its complete final state and returns it only
 after successful verification. The new receipt therefore does not duplicate a
 545-byte root outside the proof. It converts the verified state root into the
-native codec and discharges it with `decide()`. At 100 anchors, the non-proof
-portion is 22,469 bytes. The canonical Nova envelope is not an implemented
-consensus format yet. The transitional envelope still appends the obsolete
-545-byte root and an opaque parent proof to the version-2 payload; a later
-version removes that duplicated root only when Nova verification returns the
-authenticated final state.
+native codec and discharges it with `decide()`. Exact production setup confirms
+a `2^21` primary shape, a `2^14` secondary shape, and a canonical 12,466-byte
+proof with 125 fixed sequence lengths. The proof size is independent of the
+number of folded steps. At 100 anchors the candidate total is therefore 34,935
+bytes: 22,469 payload bytes plus the proof. The canonical Nova envelope is not
+an implemented consensus format yet. The pre-Nova transport which appends a
+separate 545-byte root is obsolete and is not an accepted substitute.
 
 The typed native setup path reconstructs the exact setup record, verifies its
 V4 reduction, promotes the pending claim to the construction basis,
@@ -192,13 +198,12 @@ mandatory native decision. Registry creation stores the resulting 545-byte
 seed root. Promotion is not exposed for generic claims.
 
 A construction receipt begins from that authenticated seed. The checked-in
-Rust recurrence still verifies only homogeneous hidden-anchor leaves and must
-not be activated for the public-commitment anchor record. Its separate
-migration must constrain the public DLog equation under the exact resolved
-statement already bound by the construction digest and initial manifest; it
-does not require a new payload field and still need not repeat the public setup
-leaf. The historical setup-first native assembly remains useful as a test
-oracle, not as the selected recursive shape.
+Rust recurrence now verifies homogeneous public V4 anchor leaves and constrains
+the public DLog equation under the exact resolved punishment key. That key is
+already bound through the construction statement and initial manifest, so the
+migration added no payload field and does not repeat the public setup leaf. The
+historical setup-first native assembly remains useful as a test oracle, not as
+the selected recursive shape.
 
 The integrated V4 adapter checks the raw-generator bridge, gamma
 residual, coefficient commitment, and compact polynomial terms. Focused
@@ -210,12 +215,30 @@ Consents and existing anchor leaves remain contextual data. Moving the final
 basis decision inside the parent could remove the 545 bytes, but would add the
 linear fixed-basis work to the parent relation.
 
-The selected Nova transport remains research-only. Synthetic compressed proof
-objects measured 10,660 to 11,916 bytes as the test relation grew from 1,024 to
-65,536 gates, but those values use noncanonical bincode and do not bound the
-approximately 950,000-gate anchor leaf, much less a complete recurrence step.
-A 1-2 KB proof is therefore an aspiration contradicted by current generic-Nova
-evidence, not a production estimate.
+The selected recurrence is fixed by relation ID:
+
+```text
+530dc18d9ba3769c16a13ac4ac7d8a87f6289898c4036da6a18be8ee0d87c1da
+```
+
+Its source relation has 1,851,594 gates, 3,813,632 rows, and 14,293,837 terms.
+Direct Nova lowering produces 1,851,594 variables, 1,962,058 constraints, and
+a 12,552,747-nonzero upper bound. Nova's arity-20 wrapper gives the confirmed
+primary dimensions 1,975,624 constraints and 1,865,190 variables; the secondary
+dimensions are 10,787 and 10,769.
+
+The canonical codec and generic session are real, but the selected Nova
+transport is not activated. Production setup is test-frozen at digest
+`c2f52aae3239db04a73a5fc3b157fa8585ff203d6e36ee823c297df829cfc800`,
+but no production fold or compression has run. The bounded-memory fork
+preserves the frozen tiny-suite parameters and wire format.
+An exact-shape two-build test reused the trusted relation at a 1,547,485,184-byte
+peak RSS with no swap. Synthetic setup stages `2^16` through `2^20` all passed
+with zero swap. Runtime grew from 4.22 to 46.06 seconds and peak RSS from
+163,414,016 to 1,490,878,464 bytes; the `2^20` primary shape was 987,812
+constraints by 932,991 variables. Exact production setup passed twice in about
+93.4 seconds, at 2,310,144,000 and 3,272,425,472 bytes peak RSS with zero swap.
+Real production folding/compression remains the next qualification gate.
 
 ## Historical V2 public-prehashing experiment
 
@@ -313,22 +336,23 @@ verification, public coefficient openings for varying `c`, a typed V4
 raw-basis adapter, accumulation transitions and a mandatory final
 decision. Its API
 requires all child statements and transition transcripts. It does not implement
-their recursive authentication, and the concrete protocol still requires
-cryptographic review. The historical workload profiler does not model those
-recursive transitions. Neither native accumulation nor batch verification
-alone is a compressed construction receipt.
+their recursive authentication by itself. The selected Rust recurrence now
+constrains that ancestry, but the concrete protocol still requires
+cryptographic review and a production acceptance path. The historical workload
+profiler does not model those recursive transitions. Neither native
+accumulation nor batch verification alone is a compressed construction receipt.
 
 The selected implementation boundary and its mandatory explicit root claim are
 specified in the
 [recursive construction receipt boundary](recursive-parent-receipt.md).
 
-While qualifying the selected Nova backend, account separately for the fixed
-recurrence, canonical proof codec, native final decision, public root bytes,
-authenticated manifest, and production peak memory. Direct recursive
-verification remains a comparison point, not an unmade backend choice. The
-scalar-field circuit and historical SHA-256 choices do not define the only
-possible transparent implementation. An accumulator still needs sound child
-proofs and a parent which authenticates every V4 leaf and transition.
+While qualifying the selected Nova backend, account separately for public
+parameters, folding, compression, native final decision, authenticated
+manifest, and production peak memory. The fixed recurrence and canonical proof
+codec are now measured components rather than open design choices. Direct
+recursive verification remains a comparison point, not an unmade backend
+choice. An accumulator still needs sound child proofs and an activated parent
+which authenticates every V4 leaf and transition.
 
 Anchor escrow record version 3 fixes punishment-key derivation to
 `k_raw = PurifyEval(d, "Purify/Accountable/AnchorPunishmentKey/v1")`, followed
@@ -361,24 +385,31 @@ replacing it.
    verification, matching Rust relations, and the typed native
    accumulator adapter.
    Reduction verification and final `decide()` remain mandatory.
-4. In progress: complete the fixed homogeneous anchor recurrence, canonical
-   Nova codec, verifier-derived initial and expected final states, and
-   root-to-native-decision acceptance boundary. Measure one production-shaped
-   step before exposing proving through an RPC, then benchmark 1, 2, and 100
-   anchors. The green Nova scaling probe selects the implementation direction
-   but does not qualify production resources.
-5. Remaining: establish composition and correlated-key privacy security,
-   implement distributed setup/proving, and integrate accepted certificate
-   recovery with the registry and Bitcoin punishment path before enrollment.
+4. Completed internally: the fixed homogeneous public-anchor recurrence,
+   canonical Nova codec, verifier-derived initial and expected final states,
+   exact-step enforcement, and allocation-light exact-shape witness reuse.
+5. Completed for setup-only qualification: synthetic stages through `2^20` and
+   exact production setup pass under the memory ceiling; the deterministic
+   production public-parameter digest is test-frozen.
+6. In progress: instantiate the static production profile and suite ID from the
+   exact relation, parameter digest, dimensions, codec schedule, and explicit
+   construction versions, then run a real production fold and compression. Do
+   not expose proving through an RPC before those resource and correctness
+   gates pass.
+7. Remaining: connect compressed verification to the C ABI and mandatory
+   native root decision, establish composition and correlated-key privacy
+   security, implement distributed setup/proving, and integrate accepted
+   certificate recovery with the registry and Bitcoin punishment path before
+   enrollment.
 
 No receipt should be accepted merely because its public inputs passed the
 reference assembler.
 
 ## Running the experiments
 
-The construction fixture shares the legacy child verifiers through
+The historical construction fixture shares the legacy child verifiers through
 test-only helpers. It runs V3 predicates and does not exercise V4; it
-is not the missing parent proof or an independent security argument. Its
+is not the selected parent proof or an independent security argument. Its
 assembler accepts
 the externally supplied ordered roots and public packets; its signature
 accepts no secret, witness assignment or callback to a participant. The tested
@@ -387,12 +418,12 @@ incomplete coverage, duplicate roots, crossed child proofs, and changed
 recipients, coalitions, contexts or ciphertexts.
 After preparation, recovery uses only the statement and extracted toy scalar;
 it does not retain the child proofs. This models a future accepted receipt,
-not a substitute for its missing verifier.
+not a substitute for the still-unactivated production verifier.
 
 The two-root fixture has 3,281 bytes of out-of-band child proofs and a 662-byte
 public statement, including full roots, the coalition point, context and framing.
 Its recipient and ciphertext portion is 448 bytes. No final proof is included
-in those statement measurements because the parent is not implemented.
+because this historical fixture predates and does not invoke the Nova session.
 
 The SHA-256 fixture constrains symbolic input bits and bounded 32-bit additions,
 checks padding boundaries against the independent C hash, and produces a V3

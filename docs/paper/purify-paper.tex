@@ -852,19 +852,42 @@ The measured production-shape relations have 854,293 gates for the
 public setup leaf and 949,880 gates for the historical hidden anchor
 leaf. These are leaf relation sizes, not complete parent costs. Anchor
 escrow record version~3 now uses V4 public mode with one punishment-key
-commitment; its recursive leaf has not yet been remeasured in this
-document.
+commitment. The selected public-anchor recurrence constrains that
+commitment's DLog equation and has now been measured end to end as a
+relation: 1,851,594 source gates, 3,813,632 rows, and 14,293,837 terms.
+Its direct Nova lowering has 1,851,594 variables and 1,962,058
+constraints.
 
 The selected parent architecture verifies the heterogeneous public
 setup once through an immutable Bitcoin-replayable registry record and
 stores a canonical construction-basis seed root. A homogeneous Nova
 0.76 recurrence then verifies one public anchor leaf and one ordered
 accumulation transition per step. Its 20-field state carries the pending
-root, rolling manifest, and ordered index.
+root, rolling manifest, and ordered index. The recurrence, exact-shape
+lowering, canonical compressed-proof codec, and serialized Nova session
+are implemented. Exact production setup confirms primary and secondary
+buckets of respectively $2^{21}$ and $2^{14}$, giving a 12,466-byte
+canonical proof with 125 fixed sequence lengths. The resulting candidate
+wire size is
+\[
+  69 + 224N + 12{,}466\text{ bytes},
+\]
+or 34,935 bytes for 100 anchors, without a duplicated 545-byte root.
 
-No final construction receipt exists. Canonical Nova encoding,
-production resource qualification, and the complete
-root-to-native-decision acceptance path remain.
+No construction receipt is activated. Canonical suite-ID framing and exact
+static setup selection are implemented. Production setup passed twice and
+froze the public-parameter digest for testing:
+\texttt{c2f52aae3239db04a73a5fc3b157fa8585ff203d6e36ee823c297df829cfc800},
+but no production profile or suite ID is installed and no production fold or
+compression has run. Shipped-suite activation, the C ABI, and the
+root-to-native-decision acceptance path remain. The
+bounded-memory fork preserves the existing tiny-suite bytes;
+synthetic setup stages $2^{16}$ through $2^{20}$ all passed with zero
+swap. The $2^{20}$ stage completed in 46.06 seconds at 1,490,878,464
+bytes peak RSS. Exact production setup completed in about 93.4 seconds;
+two runs peaked at 2,310,144,000 and 3,272,425,472 bytes RSS with zero
+swap. Real production folding/compression remains the next qualification
+gate.
 
 The remainder of this section through the historical efficiency note
 records the preceding V3 implementation and its measurements. Its
@@ -1249,9 +1272,12 @@ Three caveats are worth stating explicitly:
   independent V4 review.
   \item Native and constrained V4 leaves exist, and Nova 0.76 is the
   selected transparent folding backend for construction-receipt work.
-  The public-anchor recurrence migration, fixed production suite,
-  memory qualification, and complete acceptance API remain unfinished.
-  Anchor escrow record version~3 already carries a V4 public proof.
+  The public-anchor recurrence migration and canonical Nova session are
+  implemented. Setup-only production resource qualification and a
+  deterministic test digest are complete. Shipped-suite activation,
+  production fold/compression, and the complete acceptance API remain
+  unfinished. Anchor escrow record version~3 already carries a V4 public
+  proof.
 \end{enumerate}
 
 \section{Summary}
@@ -1261,9 +1287,11 @@ circuit directly. \bppp\ first folds the same circuit into a weighted norm argum
 that reduced relation, wrapped in a \bp-style\ masking transcript. That split is the easiest
 way to understand the design of \texttt{purify-cpp}: one circuit, two proving encodings.
 V4 is the candidate circuit leaf and the registry-seeded homogeneous
-Nova recurrence is the selected composition direction. The extended V3
-discussion remains its historical implementation baseline; neither it nor
-the current Nova feasibility probe is a completed construction receipt.
+Nova recurrence is the implemented composition direction. The extended V3
+discussion remains its historical implementation baseline. The recurrence
+and canonical proof transport are not by themselves an activated construction
+receipt; shipped-suite activation, production folding/compression, and the
+native acceptance boundary still gate deployment.
 
 \appendix
 

@@ -22,6 +22,7 @@ use thiserror::Error;
 mod ffi;
 mod gadgets;
 pub mod parent_relation;
+mod relation_builder;
 
 pub(crate) type Scalar = <Secq256k1Cycle as Cycle>::Scalar;
 

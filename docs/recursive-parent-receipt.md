@@ -84,9 +84,12 @@ the SEC1 parity bit, the curve equation, and non-identity. Complete fixed-shape
 variable-base scalar multiplication costs 23,280 gates and produces a
 1,415-byte standalone backend proof. A naive 32-term accumulation-step MSM
 would therefore cost about 745,000 gates before transcript and scalar algebra.
-The implemented fixed-shape Straus relation shares all 255 doublings and costs
-`10,983 + 12,297*T` gates for `T` variable terms: 404,487 gates for the
-32-term step equation. The fixed two-lane transcript challenge selector uses
+Verifier-derived constant points use pre-shifted four-bit circuit tables: one
+scalar product costs 5,449 gates and produces a 1,283-byte proof. The
+implemented three-bit variable-base relation constrains complete point tables,
+shares every inter-window doubling, and costs `10,974 + 5,925*T` gates for `T`
+terms. That is 200,574 gates for 32 terms and 390,174 for 64. The fixed
+two-lane transcript challenge selector uses
 2,317 gates and implements the documented unbiased nonzero reduction into the
 secp scalar field. End-to-end transcript integration and the complete
 V3/reduction/promotion/step relations remain before an acceptance API can be

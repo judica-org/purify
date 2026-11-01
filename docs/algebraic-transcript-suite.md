@@ -160,6 +160,13 @@ implementation may not replace this rule with `% n`, map zero to one, or loop
 until success: those alternatives either bias the challenge or give the native
 and fixed-shape circuit implementations different transcripts.
 
+The composable parent gadget now implements this exact two-lane rule. It
+canonically decomposes both coordinate-field values, constrains both range and
+nonzero tests, selects the first valid lane, and requires the second only as a
+fallback. The fixed relation uses 2,317 gates and produces a 1,217-byte
+standalone proof. Tests cover zero and `n` fallback, two invalid lanes, changed
+output, noncanonical field encoding, and witness-independent circuit shape.
+
 ## Migration boundary
 
 The SHA transcript is hardcoded in both the vendored BPPP norm-product code and

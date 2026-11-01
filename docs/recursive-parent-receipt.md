@@ -80,9 +80,11 @@ variable-base scalar multiplication costs 23,280 gates and produces a
 would therefore cost about 745,000 gates before transcript and scalar algebra.
 The implemented fixed-shape Straus relation shares all 255 doublings and costs
 `10,983 + 12,297*T` gates for `T` variable terms: 404,487 gates for the
-32-term step equation. Wide transcript reduction, transcript integration, and
-the complete V3/reduction/promotion/step relations remain before an acceptance
-API can be exposed.
+32-term step equation. The fixed two-lane transcript challenge selector uses
+2,317 gates and implements the documented unbiased nonzero reduction into the
+secp scalar field. End-to-end transcript integration and the complete
+V3/reduction/promotion/step relations remain before an acceptance API can be
+exposed.
 
 The exact secq SHA-256 gadget costs 30,952 multipliers per compression block,
 plus eight multipliers per private input byte. Replaying the current V3
@@ -99,10 +101,12 @@ permanent compatibility path.
 
 The native candidate Poseidon permutation is reproducible from the pinned
 parameter generator and cross-language vectors. Its exact Secq R1CS gadget uses
-264 multipliers and yields a 1,019-byte standalone proof. It is deliberately
-not an accepted transcript suite: typed absorption, native prover integration,
-and cross-suite rejection must land together before the SHA format can be
-replaced.
+264 multipliers and yields a 1,019-byte standalone proof. The canonical parent
+builder also implements typed field, scalar, point-pair, byte-string, `u64`,
+and clone-and-index challenge framing; its complete probe uses 1,857 gates.
+This is deliberately not an accepted transcript suite: native prover
+integration and cross-suite rejection must land together before the SHA format
+can be replaced.
 
 ## Why the final MSM stays native
 

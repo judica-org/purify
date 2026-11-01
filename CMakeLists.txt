@@ -692,6 +692,11 @@ if(PURIFY_BUILD_TESTS)
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_norm_accumulation.py")
         set_tests_properties(purify.tests.norm_accumulation_reference PROPERTIES TIMEOUT 30)
+        add_test(NAME purify.tests.algebraic_accumulation_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_algebraic_accumulation.py")
+        set_tests_properties(purify.tests.algebraic_accumulation_reference
+            PROPERTIES TIMEOUT 30)
         add_test(NAME purify.tests.poseidon_transcript_reference
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_poseidon_transcript.py")

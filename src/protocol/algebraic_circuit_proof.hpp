@@ -7,19 +7,12 @@
 #include <array>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "algebraic_circuit_transcript.hpp"
 
-namespace purify::bppp::accumulation::internal {
-struct PreparedCircuitZkNormArgV4AdapterAccess;
-}
-
 namespace purify::bppp::candidate {
-
-namespace detail {
-struct PreparedCircuitZkNormArgV4Builder;
-}
 
 /**
  * V4 wire proof, intentionally distinct from the V3 proof.
@@ -93,6 +86,9 @@ public:
     return transcript_;
   }
   [[nodiscard]] const NormArgProof &norm() const noexcept { return norm_; }
+  [[nodiscard]] NormArgProof take_norm() && noexcept {
+    return std::move(norm_);
+  }
   [[nodiscard]] const PointBytes &pending_norm_residual() const noexcept {
     return pending_norm_residual_;
   }
@@ -129,10 +125,24 @@ private:
   NormArgProof norm_;
   PointBytes pending_norm_residual_{};
 
-  friend struct detail::PreparedCircuitZkNormArgV4Builder;
-  friend struct accumulation::internal::
-      PreparedCircuitZkNormArgV4AdapterAccess;
+  friend Result<std::optional<PreparedCircuitZkNormArgV4>>
+  prepare_circuit_zk_norm_arg_v4_impl(
+      const NativeBulletproofCircuit &,
+      const CircuitZkNormArgPublicationV4 &,
+      std::span<const PointBytes>, purify_secp_context *,
+      std::span<const unsigned char>, bool,
+      ExperimentalCircuitBackend *);
 };
+
+Result<std::optional<PreparedCircuitZkNormArgV4>>
+prepare_circuit_zk_norm_arg_v4_impl(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitZkNormArgPublicationV4 &publication,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding,
+    bool externalize_commitments,
+    ExperimentalCircuitBackend *cache);
 
 /**
  * Produce a hidden-commitment V4 proof.

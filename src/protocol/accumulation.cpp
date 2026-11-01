@@ -11,29 +11,6 @@
 
 namespace purify::bppp::accumulation {
 
-namespace internal {
-
-struct AlgebraicPreparedNormAccess {
-    static AlgebraicPreparedNorm create(
-        Digest basis_digest, FieldElement prepared_binding,
-        std::vector<ScalarBytes> c_vec,
-        PointBytes coefficient_commitment, PointBytes residual,
-        std::array<PolynomialTerm, 2> polynomial) {
-        return AlgebraicPreparedNorm(
-            basis_digest, prepared_binding, std::move(c_vec),
-            coefficient_commitment, residual, std::move(polynomial));
-    }
-};
-
-struct PreparedCircuitZkNormArgV4AdapterAccess {
-    static std::vector<ScalarBytes> take_coefficients(
-        candidate::PreparedCircuitZkNormArgV4&& prepared) {
-        return std::move(prepared.norm_.c_vec);
-    }
-};
-
-} // namespace internal
-
 namespace {
 
 const TaggedHash kBasisHash("Purify/BPPP/NormAccumBasisV2");
@@ -1674,10 +1651,9 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
 
     const auto prepared_binding =
         transcript.prepared_binding.scalar;
-    auto c_vec =
-        internal::PreparedCircuitZkNormArgV4AdapterAccess::
-            take_coefficients(std::move(prepared));
-    return internal::AlgebraicPreparedNormAccess::create(
+    auto norm_data = std::move(prepared).take_norm();
+    auto c_vec = std::move(norm_data.c_vec);
+    return AlgebraicPreparedNorm(
         basis.digest(), prepared_binding, std::move(c_vec),
         coefficient_commitment, residual,
         std::array<PolynomialTerm, 2>{std::move(g), std::move(h)});

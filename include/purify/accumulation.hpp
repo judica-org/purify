@@ -10,14 +10,13 @@ namespace purify::accountable {
 class ConstructionReceiptAccumulator;
 }
 
+namespace purify::bppp::candidate {
+class PreparedCircuitZkNormArgV4;
+}
+
 namespace purify::bppp::accumulation {
 
 using Digest = std::array<unsigned char, 32>;
-
-namespace internal {
-struct AlgebraicPreparedNormAccess;
-struct UnsafeAlgebraicPreparedNormTestAccess;
-}
 
 /** A public coefficient polynomial: scale * X^offset * product(1+factor[j]*X^(2^j)). */
 struct PolynomialTerm {
@@ -146,8 +145,10 @@ private:
     PointBytes residual_{};
     std::array<PolynomialTerm, 2> polynomial_;
 
-    friend struct internal::AlgebraicPreparedNormAccess;
-    friend struct internal::UnsafeAlgebraicPreparedNormTestAccess;
+    friend Result<AlgebraicPreparedNorm>
+    prepare_v4_circuit_norm_for_algebraic_reduction(
+        const Basis&, candidate::PreparedCircuitZkNormArgV4,
+        purify_secp_context*);
 };
 
 /**

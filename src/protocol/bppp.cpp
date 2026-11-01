@@ -2691,31 +2691,6 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
   return verify_norm_arg_with_cache(prepared->norm, secp_context, nullptr);
 }
 
-namespace candidate::detail {
-
-struct PreparedCircuitZkNormArgV4Builder {
-  static PreparedCircuitZkNormArgV4 create(
-      CircuitPrecommitmentDigestV4 precommitment,
-      CircuitTranscriptShapeV4 shape,
-      TranscriptDigest circuit_binding_digest,
-      PointBytes raw_commitment,
-      std::vector<PointBytes> trusted_public_commitments,
-      std::vector<PointBytes> raw_generators,
-      CircuitProofTranscriptInputV4 transcript_input,
-      CircuitProofTranscriptResultV4 transcript, NormArgProof norm,
-      PointBytes pending_norm_residual) {
-    return PreparedCircuitZkNormArgV4(
-        std::move(precommitment), std::move(shape),
-        circuit_binding_digest, raw_commitment,
-        std::move(trusted_public_commitments),
-        std::move(raw_generators), std::move(transcript_input),
-        std::move(transcript), std::move(norm),
-        pending_norm_residual);
-  }
-};
-
-} // namespace candidate::detail
-
 namespace {
 
 Result<candidate::CircuitTranscriptShapeV4> circuit_shape_v4(
@@ -3177,8 +3152,10 @@ prove_circuit_zk_norm_arg_v4_impl(
                           "prove_circuit_zk_norm_arg_v4:attempts");
 }
 
+} // namespace
+
 Result<std::optional<candidate::PreparedCircuitZkNormArgV4>>
-prepare_circuit_zk_norm_arg_v4_impl(
+candidate::prepare_circuit_zk_norm_arg_v4_impl(
     const NativeBulletproofCircuit &circuit,
     const candidate::CircuitZkNormArgPublicationV4 &publication,
     std::span<const PointBytes> public_commitments,
@@ -3422,7 +3399,7 @@ prepare_circuit_zk_norm_arg_v4_impl(
                             "prepare_circuit_zk_norm_arg_v4:terminal");
   }
   return std::optional<candidate::PreparedCircuitZkNormArgV4>(
-      candidate::detail::PreparedCircuitZkNormArgV4Builder::create(
+      candidate::PreparedCircuitZkNormArgV4(
           publication.precommitment, shape, binding_digest,
           publication.proof.raw_commitment,
           std::vector<PointBytes>(public_commitments.begin(),
@@ -3431,8 +3408,6 @@ prepare_circuit_zk_norm_arg_v4_impl(
           std::move(transcript_input),
           std::move(transcript_result), std::move(norm), residual));
 }
-
-} // namespace
 
 Result<candidate::CircuitZkNormArgPublicationV4>
 candidate::prove_circuit_zk_norm_arg_v4(

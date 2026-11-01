@@ -12,10 +12,11 @@ namespace purify::bppp::accumulation {
 /**
  * Convert an outer-authenticated V4 proof into its algebraic norm obligation.
  *
- * This consumes a value returned by a V4 prepare function and authenticates
- * its exact raw-generator bridge. The purpose-owned caller selects the Basis
- * semantic digest. This does not accept the child proof: the caller must
- * verify the coefficient reduction and call decide() on the pending claim.
+ * This accepts an immutable value returned by a V4 prepare function and
+ * authenticates its exact raw-generator bridge. Copies may be adapted more
+ * than once; soundness does not rely on one-shot use. The purpose-owned caller
+ * selects the Basis semantic digest. This does not accept the child proof:
+ * the caller must verify the reduction and call decide() on the pending claim.
  */
 [[nodiscard]] Result<AlgebraicPreparedNorm>
 prepare_v4_circuit_norm_for_algebraic_reduction(

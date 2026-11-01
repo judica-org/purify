@@ -1,16 +1,24 @@
+use bulletproofs_cycle::Cycle;
+use ff::Field;
+use golden_halo2curves::Secq256k1Cycle;
 use num_bigint::BigUint;
 
 use super::*;
 use crate::algebraic_circuit_transcript::{
     CircuitPointPairWitnessV4, CircuitProofTranscriptWitnessV4,
 };
-use crate::parent_relation::SecpEncodedPointWitness;
+use crate::parent_relation::{add_point_values, PointValue, SecpEncodedPointWitness};
 use crate::relation_builder::Builder;
 use crate::secp_scalar::SecpScalarWitness;
+use crate::{Assignment, Circuit, Scalar, WireKind};
 
 const CIRCUIT_BINDING: [u8; 32] = [0x31; 32];
 const RAW_GENERATORS: [u8; 32] = [0x52; 32];
 const BASIS: [u8; 32] = [0x73; 32];
+const SECP_ORDER: [u8; 32] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+    0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+];
 
 fn shape_for_n(n_vec_len: usize) -> CircuitTranscriptShapeV4 {
     CircuitTranscriptShapeV4 {
@@ -20,6 +28,13 @@ fn shape_for_n(n_vec_len: usize) -> CircuitTranscriptShapeV4 {
         commitment_count: 1,
         n_vec_len,
         l_vec_len: n_vec_len,
+    }
+}
+
+fn public_shape_for_n(n_vec_len: usize) -> CircuitTranscriptShapeV4 {
+    CircuitTranscriptShapeV4 {
+        mode: CircuitCommitmentModeV4::Public,
+        ..shape_for_n(n_vec_len)
     }
 }
 
@@ -68,6 +83,26 @@ fn scalar_witness(value: &BigUint) -> SecpScalarWitness {
     SecpScalarWitness::from_bytes_be(bytes)
 }
 
+fn scalar_add_one(value: &BigUint) -> SecpScalarWitness {
+    scalar_witness(&((value + BigUint::from(1u64)) % BigUint::from_bytes_be(&SECP_ORDER)))
+}
+
+fn relation_satisfied(circuit: &[u8], assignment: &[u8]) -> bool {
+    let circuit = Circuit::parse(circuit).expect("test circuit");
+    let assignment = Assignment::parse(assignment).expect("test assignment");
+    circuit.constraints.iter().all(|constraint| {
+        constraint.iter().fold(Scalar::ZERO, |sum, term| {
+            let value = match term.kind {
+                WireKind::One => Scalar::ONE,
+                WireKind::Left => assignment.gates[term.index].0,
+                WireKind::Right => assignment.gates[term.index].1,
+                WireKind::Output => assignment.gates[term.index].0 * assignment.gates[term.index].1,
+            };
+            sum + term.coefficient * value
+        }) == Scalar::ZERO
+    })
+}
+
 fn leaf_constants(
     shape: CircuitTranscriptShapeV4,
     witness: &CircuitProofTranscriptWitnessV4,
@@ -80,11 +115,34 @@ fn leaf_constants(
         RAW_GENERATORS,
         witness,
     )
-    .expect("derive hidden transcript constants");
+    .expect("derive transcript constants");
     CircuitNormLeafConstantsV4 {
         precommitment: scalar_witness(transcript.precommitment.integer()),
-        coefficient_commitment: SecpEncodedPointWitness::identity(),
-        anchored_offset: SecpEncodedPointWitness::identity(),
+        coefficient_commitment: witness.coefficient_commitment,
+        anchored_offset: witness.anchored_offset,
+    }
+}
+
+fn statement(
+    shape: CircuitTranscriptShapeV4,
+    constants: CircuitNormLeafConstantsV4,
+) -> CircuitNormLeafStatementV4 {
+    CircuitNormLeafStatementV4 {
+        shape,
+        circuit_binding_digest: CIRCUIT_BINDING,
+        raw_generator_digest: RAW_GENERATORS,
+        basis_digest: BASIS,
+        constants,
+    }
+}
+
+fn public_statement(
+    shape: CircuitTranscriptShapeV4,
+    constants: CircuitNormLeafConstantsV4,
+) -> PublicCircuitNormLeafStatementV4 {
+    PublicCircuitNormLeafStatementV4 {
+        leaf: statement(shape, constants),
+        public_commitments: vec![generator()],
     }
 }
 
@@ -96,17 +154,10 @@ fn build_leaf(
     let mut builder = Builder::default();
     let claim = install_hidden_circuit_norm_leaf(
         &mut builder,
-        CircuitNormLeafStatementV4 {
-            shape,
-            circuit_binding_digest: CIRCUIT_BINDING,
-            raw_generator_digest: RAW_GENERATORS,
-            basis_digest: BASIS,
-            constants: expected,
-        },
+        statement(shape, expected),
         witness,
         &zero_reduction_proof(shape),
     )?;
-    assert!(claim.point.point.witness.identity);
     assert_eq!(claim.polynomial.len(), 3);
     assert_eq!(claim.polynomial[0].offset, 0);
     assert_eq!(claim.polynomial[1].offset, shape.n_vec_len);
@@ -115,6 +166,68 @@ fn build_leaf(
         .polynomial
         .iter()
         .all(|term| term.factors.len() == shape.round_count()));
+    builder.finish()
+}
+
+fn finite_transcript_witness(shape: CircuitTranscriptShapeV4) -> CircuitProofTranscriptWitnessV4 {
+    let mut witness = zero_transcript_witness(shape);
+    let base = generator();
+    witness.raw_commitment = base;
+    witness.anchored_commitment = base;
+    witness.mask_commitment = base;
+    if shape.mode == CircuitCommitmentModeV4::Public {
+        witness.public_commitments = vec![base];
+        witness.batched_public_commitment = base;
+        witness.dlog_nonce = base;
+        let challenge = {
+            let mut builder = Builder::default();
+            let transcript = install_transcript(
+                &mut builder,
+                shape,
+                CIRCUIT_BINDING,
+                RAW_GENERATORS,
+                &witness,
+            )
+            .expect("derive public DLog challenge");
+            transcript.dlog_challenge.integer().clone()
+        };
+        witness.dlog_response = scalar_add_one(&challenge);
+    }
+    let alpha = {
+        let mut builder = Builder::default();
+        let transcript = install_transcript(
+            &mut builder,
+            shape,
+            CIRCUIT_BINDING,
+            RAW_GENERATORS,
+            &witness,
+        )
+        .expect("derive mask challenge");
+        transcript.alpha.integer().clone()
+    };
+    let combined_scalar = (alpha + BigUint::from(1u64)) % BigUint::from_bytes_be(&SECP_ORDER);
+    witness.combined_commitment = encoded_value(scale_value(point_value(base), &combined_scalar));
+    assert_ne!(
+        witness.combined_commitment,
+        SecpEncodedPointWitness::identity()
+    );
+    witness
+}
+
+fn build_public_leaf(
+    shape: CircuitTranscriptShapeV4,
+    witness: &CircuitProofTranscriptWitnessV4,
+    expected: CircuitNormLeafConstantsV4,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    let mut builder = Builder::default();
+    let statement = public_statement(shape, expected);
+    let claim = install_public_circuit_norm_leaf(
+        &mut builder,
+        &statement,
+        witness,
+        &zero_reduction_proof(shape),
+    )?;
+    assert_eq!(claim.polynomial.len(), 3);
     builder.finish()
 }
 
@@ -136,18 +249,129 @@ fn generator() -> SecpEncodedPointWitness {
     }
 }
 
-#[test]
-fn hidden_zero_leaf_is_one_pending_claim() {
-    let shape = shape_for_n(4);
-    let witness = zero_transcript_witness(shape);
-    let expected = leaf_constants(shape, &witness);
-    let (valid_circuit, _) = build_leaf(shape, &witness, expected).expect("hidden zero leaf");
+fn point_value(point: SecpEncodedPointWitness) -> PointValue {
+    if point.encoded == [0; 33] {
+        return PointValue {
+            x: Scalar::ZERO,
+            y: Scalar::ZERO,
+            identity: true,
+        };
+    }
+    let mut x = [0; 32];
+    x.copy_from_slice(&point.encoded[1..]);
+    x.reverse();
+    PointValue {
+        x: Secq256k1Cycle::scalar_from_canonical(&x).expect("canonical x"),
+        y: Secq256k1Cycle::scalar_from_canonical(&point.y).expect("canonical y"),
+        identity: false,
+    }
+}
 
-    let mut wrong_anchor = witness;
-    wrong_anchor.anchored_commitment = generator();
-    let (wrong_circuit, _) = build_leaf(shape, &wrong_anchor, expected)
+fn encoded_value(point: PointValue) -> SecpEncodedPointWitness {
+    if point.identity {
+        return SecpEncodedPointWitness::identity();
+    }
+    let mut x = Secq256k1Cycle::scalar_to_canonical(&point.x);
+    let y = Secq256k1Cycle::scalar_to_canonical(&point.y);
+    x.reverse();
+    let mut encoded = [0; 33];
+    encoded[0] = if y[0] & 1 == 0 { 0x02 } else { 0x03 };
+    encoded[1..].copy_from_slice(&x);
+    SecpEncodedPointWitness { encoded, y }
+}
+
+fn scale_value(point: PointValue, scalar: &BigUint) -> PointValue {
+    let mut accumulator = PointValue {
+        x: Scalar::ZERO,
+        y: Scalar::ZERO,
+        identity: true,
+    };
+    let mut addend = point;
+    for bit in 0..256 {
+        if scalar.bit(bit) {
+            accumulator = add_point_values(accumulator, addend);
+        }
+        addend = add_point_values(addend, addend);
+    }
+    accumulator
+}
+
+#[test]
+fn hidden_finite_leaf_is_one_pending_claim() {
+    let shape = shape_for_n(4);
+    let witness = finite_transcript_witness(shape);
+    let expected = leaf_constants(shape, &witness);
+    let (valid_circuit, valid_assignment) =
+        build_leaf(shape, &witness, expected).expect("hidden finite leaf");
+    assert!(relation_satisfied(&valid_circuit, &valid_assignment));
+    drop(valid_assignment);
+
+    let mut wrong_anchor = witness.clone();
+    wrong_anchor.anchored_commitment = SecpEncodedPointWitness::identity();
+    let (wrong_circuit, wrong_assignment) = build_leaf(shape, &wrong_anchor, expected)
         .expect("wrong anchor still builds an unsatisfied assignment");
     assert_eq!(valid_circuit, wrong_circuit);
+    assert!(!relation_satisfied(&wrong_circuit, &wrong_assignment));
+    drop((wrong_circuit, wrong_assignment));
+
+    let mut identity_raw = witness.clone();
+    identity_raw.raw_commitment = SecpEncodedPointWitness::identity();
+    let (identity_raw_circuit, identity_raw_assignment) =
+        build_leaf(shape, &identity_raw, expected)
+            .expect("identity raw commitment builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, identity_raw_circuit);
+    assert!(!relation_satisfied(
+        &identity_raw_circuit,
+        &identity_raw_assignment
+    ));
+    drop((identity_raw_circuit, identity_raw_assignment));
+
+    let mut identity_mask = witness.clone();
+    identity_mask.mask_commitment = SecpEncodedPointWitness::identity();
+    let (identity_mask_circuit, identity_mask_assignment) =
+        build_leaf(shape, &identity_mask, expected)
+            .expect("identity mask commitment builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, identity_mask_circuit);
+    assert!(!relation_satisfied(
+        &identity_mask_circuit,
+        &identity_mask_assignment
+    ));
+    drop((identity_mask_circuit, identity_mask_assignment));
+
+    let mut identity_combined = witness.clone();
+    identity_combined.combined_commitment = SecpEncodedPointWitness::identity();
+    let (identity_combined_circuit, identity_combined_assignment) =
+        build_leaf(shape, &identity_combined, expected)
+            .expect("identity combined commitment builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, identity_combined_circuit);
+    assert!(!relation_satisfied(
+        &identity_combined_circuit,
+        &identity_combined_assignment
+    ));
+    drop((identity_combined_circuit, identity_combined_assignment));
+
+    let mut wrong_coefficient = witness.clone();
+    wrong_coefficient.coefficient_commitment = generator();
+    let (wrong_coefficient_circuit, wrong_coefficient_assignment) =
+        build_leaf(shape, &wrong_coefficient, expected)
+            .expect("wrong coefficient still builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, wrong_coefficient_circuit);
+    assert!(!relation_satisfied(
+        &wrong_coefficient_circuit,
+        &wrong_coefficient_assignment
+    ));
+    drop((wrong_coefficient_circuit, wrong_coefficient_assignment));
+
+    let mut wrong_offset = witness;
+    wrong_offset.anchored_offset = generator();
+    let (wrong_offset_circuit, wrong_offset_assignment) =
+        build_leaf(shape, &wrong_offset, expected)
+            .expect("wrong offset still builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, wrong_offset_circuit);
+    assert!(!relation_satisfied(
+        &wrong_offset_circuit,
+        &wrong_offset_assignment
+    ));
 }
 
 #[test]
@@ -175,13 +399,7 @@ fn public_mode_cannot_enter_hidden_leaf() {
     assert!(matches!(
         install_hidden_circuit_norm_leaf(
             &mut builder,
-            CircuitNormLeafStatementV4 {
-                shape,
-                circuit_binding_digest: CIRCUIT_BINDING,
-                raw_generator_digest: RAW_GENERATORS,
-                basis_digest: BASIS,
-                constants: expected,
-            },
+            statement(shape, expected),
             &witness,
             &zero_reduction_proof(shape),
         ),
@@ -192,18 +410,93 @@ fn public_mode_cannot_enter_hidden_leaf() {
 }
 
 #[test]
-#[ignore = "run explicitly in release mode; composed V4 leaf proof is large"]
-fn hidden_zero_leaf_proves_and_wrong_anchor_fails() {
-    let shape = shape_for_n(4);
-    let witness = zero_transcript_witness(shape);
+fn public_setup_schnorr_is_constrained() {
+    let shape = public_shape_for_n(4);
+    let witness = finite_transcript_witness(shape);
     let expected = leaf_constants(shape, &witness);
-    let (circuit, assignment) = build_leaf(shape, &witness, expected).expect("hidden zero leaf");
+    let (valid_circuit, valid_assignment) =
+        build_public_leaf(shape, &witness, expected).expect("public setup leaf");
+    assert!(relation_satisfied(&valid_circuit, &valid_assignment));
+    drop(valid_assignment);
+
+    let mut wrong_response = witness.clone();
+    wrong_response.dlog_response =
+        scalar_add_one(&BigUint::from_bytes_be(&wrong_response.dlog_response.bytes));
+    let (wrong_response_circuit, wrong_response_assignment) =
+        build_public_leaf(shape, &wrong_response, expected)
+            .expect("wrong response still builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, wrong_response_circuit);
+    assert!(!relation_satisfied(
+        &wrong_response_circuit,
+        &wrong_response_assignment
+    ));
+    drop((wrong_response_circuit, wrong_response_assignment));
+
+    let mut zero_response = witness.clone();
+    zero_response.dlog_response = SecpScalarWitness::from_u64(0);
+    let (zero_response_circuit, zero_response_assignment) =
+        build_public_leaf(shape, &zero_response, expected)
+            .expect("zero response still builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, zero_response_circuit);
+    assert!(!relation_satisfied(
+        &zero_response_circuit,
+        &zero_response_assignment
+    ));
+    drop((zero_response_circuit, zero_response_assignment));
+
+    let mut wrong_batch = witness;
+    wrong_batch.batched_public_commitment = SecpEncodedPointWitness::identity();
+    let (wrong_batch_circuit, wrong_batch_assignment) =
+        build_public_leaf(shape, &wrong_batch, expected)
+            .expect("wrong batch still builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, wrong_batch_circuit);
+    assert!(!relation_satisfied(
+        &wrong_batch_circuit,
+        &wrong_batch_assignment
+    ));
+    drop((wrong_batch_circuit, wrong_batch_assignment));
+
+    let mut wrong_public = finite_transcript_witness(shape);
+    wrong_public.public_commitments[0] = SecpEncodedPointWitness::identity();
+    let (wrong_public_circuit, wrong_public_assignment) =
+        build_public_leaf(shape, &wrong_public, expected)
+            .expect("wrong public point still builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, wrong_public_circuit);
+    assert!(!relation_satisfied(
+        &wrong_public_circuit,
+        &wrong_public_assignment
+    ));
+}
+
+#[test]
+#[ignore = "run explicitly in release mode; production relation is large"]
+fn production_public_setup_leaf_reports_relation_size() {
+    let shape = public_shape_for_n(4096);
+    let witness = finite_transcript_witness(shape);
+    let expected = leaf_constants(shape, &witness);
+    let (circuit, assignment) = build_public_leaf(shape, &witness, expected)
+        .expect("production public setup circuit norm leaf relation");
+    drop(assignment);
+    let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("leaf gate count"));
+    let proof_bytes = crate::proof_wire_len(&circuit).expect("leaf proof length");
+    eprintln!("production_public_norm_leaf_gates={gates} proof_bytes={proof_bytes}");
+    assert_eq!(gates, 854_293);
+    assert_eq!(proof_bytes, 1_745);
+}
+
+#[test]
+#[ignore = "run explicitly in release mode; composed V4 leaf proof is large"]
+fn hidden_finite_leaf_proves_and_wrong_anchor_fails() {
+    let shape = shape_for_n(4);
+    let witness = finite_transcript_witness(shape);
+    let expected = leaf_constants(shape, &witness);
+    let (circuit, assignment) = build_leaf(shape, &witness, expected).expect("hidden finite leaf");
     let statement = b"candidate hidden V4 circuit norm leaf";
     let proof = crate::prove(&circuit, &assignment, statement, [0x95; 32]).expect("leaf proof");
     crate::verify(&circuit, statement, &proof).expect("leaf verification");
 
     let mut wrong_anchor = witness;
-    wrong_anchor.anchored_commitment = generator();
+    wrong_anchor.anchored_commitment = SecpEncodedPointWitness::identity();
     let (wrong_circuit, wrong_assignment) =
         build_leaf(shape, &wrong_anchor, expected).expect("wrong anchor assignment");
     assert_eq!(circuit, wrong_circuit);
@@ -219,10 +512,40 @@ fn hidden_zero_leaf_proves_and_wrong_anchor_fails() {
 }
 
 #[test]
+#[ignore = "run explicitly in release mode; composed V4 leaf proof is large"]
+fn public_setup_leaf_proves_and_wrong_response_fails() {
+    let shape = public_shape_for_n(4);
+    let witness = finite_transcript_witness(shape);
+    let expected = leaf_constants(shape, &witness);
+    let (circuit, assignment) =
+        build_public_leaf(shape, &witness, expected).expect("public setup leaf");
+    let statement = b"candidate public V4 circuit norm leaf";
+    let proof =
+        crate::prove(&circuit, &assignment, statement, [0xa7; 32]).expect("public leaf proof");
+    crate::verify(&circuit, statement, &proof).expect("public leaf verification");
+
+    let mut wrong_response = witness;
+    wrong_response.dlog_response =
+        scalar_add_one(&BigUint::from_bytes_be(&wrong_response.dlog_response.bytes));
+    let (wrong_circuit, wrong_assignment) =
+        build_public_leaf(shape, &wrong_response, expected).expect("wrong response assignment");
+    assert_eq!(circuit, wrong_circuit);
+    let wrong_proof = crate::prove(&wrong_circuit, &wrong_assignment, statement, [0xa8; 32])
+        .expect("unsatisfied proof transcript");
+    assert!(crate::verify(&wrong_circuit, statement, &wrong_proof).is_err());
+
+    let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("leaf gate count"));
+    eprintln!(
+        "public_circuit_norm_leaf_gates={gates} proof_bytes={}",
+        proof.len()
+    );
+}
+
+#[test]
 #[ignore = "run explicitly in release mode; production relation is large"]
 fn production_hidden_leaf_reports_relation_size() {
     let shape = shape_for_n(16_384);
-    let witness = zero_transcript_witness(shape);
+    let witness = finite_transcript_witness(shape);
     let expected = leaf_constants(shape, &witness);
     let (circuit, assignment) = build_leaf(shape, &witness, expected)
         .expect("production hidden circuit norm leaf relation");

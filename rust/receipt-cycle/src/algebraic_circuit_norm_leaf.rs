@@ -14,8 +14,9 @@ use crate::norm_reduction::{
 };
 use crate::parent_relation::{
     add_points, constrain_encoded_point_constant, derived_multiply, derived_subtract,
-    encode_computed_point, msm_points, scale_constant_point, standard_generator,
-    ConstrainedPendingClaim, ConstrainedPolynomialTerm, SecpEncodedPointWitness, SecpPoint,
+    encode_computed_point, encoded_point_value, msm_points, scale_constant_point,
+    standard_generator, ConstrainedPendingClaim, ConstrainedPolynomialTerm,
+    SecpEncodedPointWitness, SecpPoint,
 };
 use crate::relation_builder::Builder;
 use crate::secp_scalar::{
@@ -52,6 +53,13 @@ pub(crate) struct CircuitNormLeafStatementV4 {
     pub(crate) raw_generator_digest: [u8; 32],
     pub(crate) basis_digest: [u8; 32],
     pub(crate) constants: CircuitNormLeafConstantsV4,
+}
+
+/// Public setup statement with its exact ordered output commitments.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PublicCircuitNormLeafStatementV4 {
+    pub(crate) leaf: CircuitNormLeafStatementV4,
+    pub(crate) public_commitments: Vec<SecpEncodedPointWitness>,
 }
 
 fn constrain_point_equal(builder: &mut Builder, left: &SecpPoint, right: &SecpPoint) {
@@ -95,11 +103,14 @@ fn constrain_anchor_and_mask(
     builder: &mut Builder,
     transcript: &CircuitTranscriptResultV4,
 ) -> Result<(), ReceiptCycleError> {
+    builder.constrain_zero(transcript.raw_commitment.point.identity.clone());
+    builder.constrain_zero(transcript.mask_commitment.point.identity.clone());
     let anchored = add_points(
         builder,
         &transcript.raw_commitment.point,
         &transcript.anchored_offset.point,
     );
+    builder.constrain_zero(anchored.identity.clone());
     constrain_point_equal(builder, &anchored, &transcript.anchored_commitment.point);
 
     let alpha_squared = derived_multiply(builder, &transcript.alpha, &transcript.alpha)?;
@@ -114,7 +125,75 @@ fn constrain_anchor_and_mask(
     )?;
     let t2_point = scale_constant_point(builder, standard_generator(), &t2_scale)?;
     let combined = add_points(builder, &masked, &t2_point);
+    builder.constrain_zero(combined.identity.clone());
     constrain_point_equal(builder, &combined, &transcript.combined_commitment.point);
+    Ok(())
+}
+
+fn constrain_public_dlog(
+    builder: &mut Builder,
+    transcript: &CircuitTranscriptResultV4,
+    public_commitments: &[SecpEncodedPointWitness],
+) -> Result<(), ReceiptCycleError> {
+    if public_commitments.is_empty()
+        || public_commitments.len() != transcript.public_commitments.len()
+    {
+        return Err(ReceiptCycleError::Malformed(
+            "public V4 circuit norm commitments",
+        ));
+    }
+    for (actual, &expected) in transcript.public_commitments.iter().zip(public_commitments) {
+        builder.constrain_zero(actual.point.identity.clone());
+        constrain_encoded_point_constant(builder, actual, expected)?;
+    }
+    let mut weights = Vec::with_capacity(transcript.public_commitments.len());
+    weights.push(constant_scalar(1));
+    let mut weight = transcript.eta.clone();
+    for index in 1..transcript.public_commitments.len() {
+        weights.push(weight.clone());
+        if index + 1 != transcript.public_commitments.len() {
+            weight = derived_multiply(builder, &weight, &transcript.eta)?;
+        }
+    }
+    let batched = if transcript.public_commitments.len() == 1 {
+        transcript.public_commitments[0].point.clone()
+    } else {
+        let points = transcript
+            .public_commitments
+            .iter()
+            .map(|point| point.point.clone())
+            .collect::<Vec<_>>();
+        msm_points(builder, &points, &weights)?
+    };
+    builder.constrain_zero(batched.identity.clone());
+    constrain_point_equal(
+        builder,
+        &batched,
+        &transcript.batched_public_commitment.point,
+    );
+
+    let mut scaled_commitments = Vec::with_capacity(public_commitments.len());
+    for (index, (&point, weight)) in public_commitments.iter().zip(&weights).enumerate() {
+        let scale = if index == 0 {
+            transcript.dlog_challenge.clone()
+        } else {
+            derived_multiply(builder, &transcript.dlog_challenge, weight)?
+        };
+        scaled_commitments.push(scale_constant_point(
+            builder,
+            encoded_point_value(point)?,
+            &scale,
+        )?);
+    }
+    let mut scaled_batch = scaled_commitments[0].clone();
+    for term in &scaled_commitments[1..] {
+        scaled_batch = add_points(builder, &scaled_batch, term);
+    }
+    let _response_inverse =
+        crate::parent_relation::derived_inverse(builder, &transcript.dlog_response)?;
+    let lhs = scale_constant_point(builder, standard_generator(), &transcript.dlog_response)?;
+    let rhs = add_points(builder, &transcript.dlog_nonce.point, &scaled_batch);
+    constrain_point_equal(builder, &lhs, &rhs);
     Ok(())
 }
 
@@ -192,6 +271,47 @@ fn prepare_norm(
     })
 }
 
+fn install_circuit_norm_leaf(
+    builder: &mut Builder,
+    statement: CircuitNormLeafStatementV4,
+    public_commitments: Option<&[SecpEncodedPointWitness]>,
+    transcript_witness: &CircuitProofTranscriptWitnessV4,
+    reduction_proof: &CandidateNormReductionProofWitness,
+) -> Result<ConstrainedPendingClaim, ReceiptCycleError> {
+    let transcript = install_transcript(
+        builder,
+        statement.shape,
+        statement.circuit_binding_digest,
+        statement.raw_generator_digest,
+        transcript_witness,
+    )?;
+    constrain_public_constants(builder, &transcript, statement.constants)?;
+    match (statement.shape.mode, public_commitments) {
+        (CircuitCommitmentModeV4::Hidden, None) => {}
+        (CircuitCommitmentModeV4::Public, Some(public_commitments)) => {
+            if public_commitments.len() != statement.shape.commitment_count {
+                return Err(ReceiptCycleError::Malformed(
+                    "public V4 circuit norm statement commitments",
+                ));
+            }
+            constrain_public_dlog(builder, &transcript, public_commitments)?;
+        }
+        _ => {
+            return Err(ReceiptCycleError::Malformed(
+                "V4 circuit norm statement mode",
+            ));
+        }
+    }
+    let prepared = prepare_norm(builder, statement.shape, &transcript)?;
+    install_candidate_norm_reduction(
+        builder,
+        statement.basis_digest,
+        statement.shape.n_vec_len,
+        &prepared,
+        reduction_proof,
+    )
+}
+
 /// Installs one hidden-commitment anchor leaf and returns its sole pending
 /// accumulation claim.
 pub(crate) fn install_hidden_circuit_norm_leaf(
@@ -205,20 +325,33 @@ pub(crate) fn install_hidden_circuit_norm_leaf(
             "hidden V4 circuit norm leaf mode",
         ));
     }
-    let transcript = install_transcript(
+    install_circuit_norm_leaf(
         builder,
-        statement.shape,
-        statement.circuit_binding_digest,
-        statement.raw_generator_digest,
+        statement,
+        None,
         transcript_witness,
-    )?;
-    constrain_public_constants(builder, &transcript, statement.constants)?;
-    let prepared = prepare_norm(builder, statement.shape, &transcript)?;
-    install_candidate_norm_reduction(
+        reduction_proof,
+    )
+}
+
+/// Installs one public-commitment setup leaf and returns its sole pending
+/// accumulation claim.
+pub(crate) fn install_public_circuit_norm_leaf(
+    builder: &mut Builder,
+    statement: &PublicCircuitNormLeafStatementV4,
+    transcript_witness: &CircuitProofTranscriptWitnessV4,
+    reduction_proof: &CandidateNormReductionProofWitness,
+) -> Result<ConstrainedPendingClaim, ReceiptCycleError> {
+    if statement.leaf.shape.mode != CircuitCommitmentModeV4::Public {
+        return Err(ReceiptCycleError::Malformed(
+            "public V4 circuit norm leaf mode",
+        ));
+    }
+    install_circuit_norm_leaf(
         builder,
-        statement.basis_digest,
-        statement.shape.n_vec_len,
-        &prepared,
+        statement.leaf,
+        Some(&statement.public_commitments),
+        transcript_witness,
         reduction_proof,
     )
 }

@@ -10,6 +10,7 @@
 
 #include "purify.hpp"
 #include "purify/puresign/anchor_escrow.hpp"
+#include "purify/puresign/anchor_escrow_accumulation.hpp"
 #include "../src/puresign/anchor_escrow_internal.hpp"
 #include "purify_test_helpers.hpp"
 
@@ -176,6 +177,39 @@ void test_anchor_escrow(TestContext& ctx) {
     ctx.expect(reencoded && *reencoded == *encoded,
                "anchor escrow encoding round-trips exactly");
 
+    auto accumulator =
+        purify::accountable::AnchorEscrowAccumulator::create(secp.get());
+    expect_ok(ctx, accumulator,
+              "anchor escrow fixed accumulation basis creates");
+    if (!accumulator) return;
+    ctx.expect(
+        accumulator->basis().n_vec_len() ==
+                purify::accountable::AnchorEscrowAccumulator::
+                    kNormVectorLength &&
+            accumulator->basis().l_vec_len() ==
+                purify::accountable::AnchorEscrowAccumulator::
+                    kNormVectorLength,
+        "anchor escrow accumulation fixes both norm dimensions");
+    auto prepared = accumulator->prepare(
+        fixture->roster, anchor->public_key, context, *parsed,
+        secp.get());
+    expect_ok(ctx, prepared,
+              "typed adapter prepares the exact anchor escrow statement");
+    if (!prepared) return;
+    auto reduction = purify::bppp::accumulation::prove_norm_reduction(
+        accumulator->basis(), *prepared, secp.get());
+    expect_ok(ctx, reduction,
+              "anchor escrow coefficient opening proves");
+    if (!reduction) return;
+    auto pending = purify::bppp::accumulation::verify_norm_reduction(
+        accumulator->basis(), *prepared, *reduction, secp.get());
+    expect_ok(ctx, pending,
+              "anchor escrow reduction yields a pending obligation");
+    if (!pending) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       accumulator->basis(), *pending, secp.get()),
+              "final MSM discharges the honest anchor escrow obligation");
+
     const auto slot = purify::bytes_from_ascii(
         "anchor-escrow/domain=3/epoch=9/slot=4");
     purify::accountable::ConflictContext conflict{
@@ -236,6 +270,21 @@ void test_anchor_escrow(TestContext& ctx) {
             fixture->roster, anchor->public_key, changed_context,
             *record, secp.get()),
         "escrow proof cannot move to another application context");
+    auto changed_context_prepared = accumulator->prepare(
+        fixture->roster, anchor->public_key, changed_context, *record,
+        secp.get());
+    expect_ok(ctx, changed_context_prepared,
+              "changed context remains a pending public obligation");
+    if (!changed_context_prepared) return;
+    ctx.expect(changed_context_prepared->transcript_digest() !=
+                   prepared->transcript_digest(),
+               "typed adapter binds the exact escrow context");
+    auto changed_context_claim =
+        purify::bppp::accumulation::verify_norm_reduction(
+            accumulator->basis(), *changed_context_prepared, *reduction,
+            secp.get());
+    ctx.expect(!changed_context_claim,
+               "anchor reduction cannot move to another context");
     expect_error(
         ctx,
         purify::accountable::recover_escrowed_anchor(
@@ -288,6 +337,67 @@ void test_anchor_escrow(TestContext& ctx) {
             fixture->roster, anchor->public_key, context,
             *changed_record, secp.get()),
         "escrow proof cannot move to another ciphertext");
+    auto changed_ciphertext_prepared = accumulator->prepare(
+        fixture->roster, anchor->public_key, context, *changed_record,
+        secp.get());
+    expect_ok(ctx, changed_ciphertext_prepared,
+              "changed ciphertext remains a pending public obligation");
+    if (!changed_ciphertext_prepared) return;
+    ctx.expect(changed_ciphertext_prepared->transcript_digest() !=
+                   prepared->transcript_digest(),
+               "typed adapter binds the exact escrow ciphertext");
+    auto changed_ciphertext_claim =
+        purify::bppp::accumulation::verify_norm_reduction(
+            accumulator->basis(), *changed_ciphertext_prepared, *reduction,
+            secp.get());
+    ctx.expect(!changed_ciphertext_claim,
+               "anchor reduction cannot move to another ciphertext");
+
+    auto changed_inner_bytes = *encoded;
+    std::array<unsigned char, 32> terminal_n_bytes{};
+    std::copy_n(changed_inner_bytes.end() - 64, terminal_n_bytes.size(),
+                terminal_n_bytes.begin());
+    auto terminal_n =
+        FieldElement::try_from_bytes32(terminal_n_bytes);
+    expect_ok(ctx, terminal_n,
+              "anchor escrow terminal norm scalar is canonical");
+    if (!terminal_n) return;
+    terminal_n_bytes =
+        (*terminal_n + FieldElement::one()).to_bytes_be();
+    std::copy(terminal_n_bytes.begin(), terminal_n_bytes.end(),
+              changed_inner_bytes.end() - 64);
+    auto changed_inner_record =
+        purify::accountable::AnchorEscrowRecord::deserialize(
+            changed_inner_bytes, secp.get());
+    expect_ok(ctx, changed_inner_record,
+              "changed inner proof remains canonically encoded");
+    if (!changed_inner_record) return;
+    auto changed_inner_prepared = accumulator->prepare(
+        fixture->roster, anchor->public_key, context,
+        *changed_inner_record, secp.get());
+    expect_ok(ctx, changed_inner_prepared,
+              "parseable false inner proof remains pending");
+    if (!changed_inner_prepared) return;
+    ctx.expect(changed_inner_prepared->transcript_digest() !=
+                   prepared->transcript_digest(),
+               "typed adapter authenticates the exact inner proof");
+    auto changed_inner_reduction =
+        purify::bppp::accumulation::prove_norm_reduction(
+            accumulator->basis(), *changed_inner_prepared, secp.get());
+    expect_ok(ctx, changed_inner_reduction,
+              "false inner proof has a public coefficient opening");
+    if (!changed_inner_reduction) return;
+    auto changed_inner_claim =
+        purify::bppp::accumulation::verify_norm_reduction(
+            accumulator->basis(), *changed_inner_prepared,
+            *changed_inner_reduction, secp.get());
+    expect_ok(ctx, changed_inner_claim,
+              "short verifier keeps a false inner proof pending");
+    if (!changed_inner_claim) return;
+    ctx.expect(!purify::bppp::accumulation::decide(
+                   accumulator->basis(), *changed_inner_claim, secp.get()),
+               "final MSM rejects the changed inner proof");
+
     changed_record_bytes = *encoded;
     changed_record_bytes[291] ^= 1;
     changed_record = purify::accountable::AnchorEscrowRecord::deserialize(

@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <string_view>
 
 #include "../src/protocol/algebraic_transcript.hpp"
@@ -34,16 +35,18 @@ AlgebraicTranscript filled_transcript() {
     AlgebraicTranscript transcript;
     transcript.append_field(CoordinateFieldElement::from_u64(2));
     transcript.append_scalar(FieldElement::from_u64(3));
-    auto point = transcript.append_point(2, CoordinateFieldElement::from_u64(5));
-    assert(point.has_value());
-    auto pair = transcript.append_point_pair(1, CoordinateFieldElement::from_u64(7),
-                                             CoordinateFieldElement::from_u64(11));
-    assert(pair.has_value());
+    const auto point =
+        transcript.append_point(2, CoordinateFieldElement::from_u64(5));
+    if (!point.has_value()) std::terminate();
+    const auto pair = transcript.append_point_pair(
+        1, CoordinateFieldElement::from_u64(7),
+        CoordinateFieldElement::from_u64(11));
+    if (!pair.has_value()) std::terminate();
     const std::array<unsigned char, 33> bytes{1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11,
                                               12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
                                               23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33};
     const auto appended = transcript.append_bytes(bytes);
-    assert(appended.has_value());
+    if (!appended.has_value()) std::terminate();
     transcript.append_u64(13);
     return transcript;
 }
@@ -52,19 +55,21 @@ AlgebraicTranscript vector_transcript(std::uint64_t seed) {
     AlgebraicTranscript transcript;
     transcript.append_field(CoordinateFieldElement::from_u64(seed + 1));
     transcript.append_scalar(FieldElement::from_u64(seed + 2));
-    const auto point = transcript.append_point(static_cast<unsigned char>(2 + (seed & 1U)),
-                                               CoordinateFieldElement::from_u64(seed + 3));
-    assert(point.has_value());
-    const auto pair = transcript.append_point_pair(static_cast<unsigned char>(seed & 3U),
-                                                   CoordinateFieldElement::from_u64(seed + 4),
-                                                   CoordinateFieldElement::from_u64(seed + 5));
-    assert(pair.has_value());
+    const auto point = transcript.append_point(
+        static_cast<unsigned char>(2 + (seed & 1U)),
+        CoordinateFieldElement::from_u64(seed + 3));
+    if (!point.has_value()) std::terminate();
+    const auto pair = transcript.append_point_pair(
+        static_cast<unsigned char>(seed & 3U),
+        CoordinateFieldElement::from_u64(seed + 4),
+        CoordinateFieldElement::from_u64(seed + 5));
+    if (!pair.has_value()) std::terminate();
     std::array<unsigned char, 33> bytes{};
     for (std::size_t index = 0; index < bytes.size(); ++index) {
         bytes[index] = static_cast<unsigned char>(seed + index);
     }
     const auto appended = transcript.append_bytes(bytes);
-    assert(appended.has_value());
+    if (!appended.has_value()) std::terminate();
     transcript.append_u64(seed + 6);
     return transcript;
 }

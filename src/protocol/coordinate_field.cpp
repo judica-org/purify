@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <exception>
 #include <utility>
 
 #include "bppp_bridge.h"
@@ -68,26 +69,31 @@ CoordinateFieldElement operator+(const CoordinateFieldElement& left,
                                  const CoordinateFieldElement& right) {
     CoordinateFieldElement::Encoding out{};
     const int ok =
-        purify_bppp_coordinate_field_add(left.encoded_.data(), right.encoded_.data(), out.data());
-    assert(ok != 0);
+        purify_bppp_coordinate_field_add(
+            left.encoded_.data(), right.encoded_.data(), out.data());
+    if (ok == 0) std::terminate();
     return CoordinateFieldElement(out);
 }
 
 CoordinateFieldElement operator-(const CoordinateFieldElement& left,
                                  const CoordinateFieldElement& right) {
     CoordinateFieldElement::Encoding out{};
-    const int ok = purify_bppp_coordinate_field_subtract(left.encoded_.data(),
-                                                         right.encoded_.data(), out.data());
-    assert(ok != 0);
+    const int ok =
+        purify_bppp_coordinate_field_subtract(left.encoded_.data(),
+                                               right.encoded_.data(),
+                                               out.data());
+    if (ok == 0) std::terminate();
     return CoordinateFieldElement(out);
 }
 
 CoordinateFieldElement operator*(const CoordinateFieldElement& left,
                                  const CoordinateFieldElement& right) {
     CoordinateFieldElement::Encoding out{};
-    const int ok = purify_bppp_coordinate_field_multiply(left.encoded_.data(),
-                                                         right.encoded_.data(), out.data());
-    assert(ok != 0);
+    const int ok =
+        purify_bppp_coordinate_field_multiply(left.encoded_.data(),
+                                               right.encoded_.data(),
+                                               out.data());
+    if (ok == 0) std::terminate();
     return CoordinateFieldElement(out);
 }
 

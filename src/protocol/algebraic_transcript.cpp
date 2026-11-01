@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <exception>
 #include <string_view>
 #include <utility>
 
@@ -33,8 +34,9 @@ CoordinateFieldElement from_integer(const UInt256& value) {
 
 CoordinateFieldElement header(std::uint32_t item_type, std::uint64_t auxiliary) {
     UInt256 value = UInt256::from_u64(item_type).shifted_left(64);
-    const bool added = value.try_add_assign(UInt256::from_u64(auxiliary));
-    assert(added);
+    const bool added =
+        value.try_add_assign(UInt256::from_u64(auxiliary));
+    if (!added) std::terminate();
     return from_integer(value);
 }
 
@@ -136,8 +138,9 @@ std::array<CoordinateFieldElement, 2>
 AlgebraicTranscript::opening_base_scalar(const TranscriptDigest& basis_digest,
                                          std::uint64_t role) const {
     AlgebraicTranscript challenge = *this;
-    const Status appended = challenge.append_bytes(basis_digest);
-    assert(appended.has_value());
+    const Status appended =
+        challenge.append_bytes(basis_digest);
+    if (!appended.has_value()) std::terminate();
     challenge.absorb(header(kOpeningBaseItem, role));
     challenge.absorb(CoordinateFieldElement::one());
     while (challenge.rate_index_ != 0) {

@@ -5,7 +5,6 @@
 #include "coordinate_field.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <exception>
 #include <utility>
 
@@ -23,7 +22,7 @@ const UInt256& coordinate_modulus() {
 
 CoordinateFieldElement from_integer(const UInt256& value) {
     auto parsed = CoordinateFieldElement::from_bytes_be(value.to_bytes_be());
-    assert(parsed.has_value());
+    if (!parsed.has_value()) std::terminate();
     return std::move(*parsed);
 }
 

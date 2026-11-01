@@ -5,7 +5,6 @@
 #include "algebraic_transcript.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <exception>
 #include <string_view>
 #include <utility>
@@ -28,7 +27,7 @@ constexpr std::string_view kSuiteId = "Purify/PoseidonTranscript/v1";
 
 CoordinateFieldElement from_integer(const UInt256& value) {
     auto parsed = CoordinateFieldElement::from_bytes_be(value.to_bytes_be());
-    assert(parsed.has_value());
+    if (!parsed.has_value()) std::terminate();
     return std::move(*parsed);
 }
 
@@ -46,17 +45,17 @@ CoordinateFieldElement suite_capacity() {
     std::copy(kSuiteId.begin(), kSuiteId.end(),
               encoded.end() - static_cast<std::ptrdiff_t>(kSuiteId.size()));
     auto parsed = CoordinateFieldElement::from_bytes_be(encoded);
-    assert(parsed.has_value());
+    if (!parsed.has_value()) std::terminate();
     return std::move(*parsed);
 }
 
 CoordinateFieldElement byte_word(std::span<const unsigned char> bytes) {
-    assert(bytes.size() <= 31);
+    if (bytes.size() > 31) std::terminate();
     CoordinateFieldElement::Encoding encoded{};
     std::copy(bytes.begin(), bytes.end(),
               encoded.end() - static_cast<std::ptrdiff_t>(bytes.size()));
     auto parsed = CoordinateFieldElement::from_bytes_be(encoded);
-    assert(parsed.has_value());
+    if (!parsed.has_value()) std::terminate();
     return std::move(*parsed);
 }
 
@@ -83,7 +82,7 @@ void AlgebraicTranscript::append_field(const CoordinateFieldElement& value) {
 void AlgebraicTranscript::append_scalar(const FieldElement& value) {
     absorb(header(kScalarItem, 0));
     auto embedded = CoordinateFieldElement::from_bytes_be(value.to_bytes_be());
-    assert(embedded.has_value());
+    if (!embedded.has_value()) std::terminate();
     absorb(*embedded);
 }
 

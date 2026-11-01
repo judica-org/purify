@@ -22,10 +22,14 @@ use crate::{Assignment, Circuit, WireKind};
 
 const RAW_GENERATORS: [u8; 32] = [0x52; 32];
 const BASIS: [u8; 32] = [0x73; 32];
+const SECP_ORDER: [u8; 32] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+    0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+];
 
 fn small_anchor_shape() -> CircuitTranscriptShapeV4 {
     CircuitTranscriptShapeV4 {
-        mode: CircuitCommitmentModeV4::Hidden,
+        mode: CircuitCommitmentModeV4::Public,
         gate_count: 2,
         commitment_count: 1,
         n_vec_len: 4,
@@ -35,7 +39,7 @@ fn small_anchor_shape() -> CircuitTranscriptShapeV4 {
 
 fn production_anchor_shape() -> CircuitTranscriptShapeV4 {
     CircuitTranscriptShapeV4 {
-        mode: CircuitCommitmentModeV4::Hidden,
+        mode: CircuitCommitmentModeV4::Public,
         gate_count: ANCHOR_GATE_COUNT,
         commitment_count: 1,
         n_vec_len: ANCHOR_NORM_LENGTH,
@@ -53,7 +57,7 @@ fn identity_pair() -> CircuitPointPairWitnessV4 {
 
 fn zero_transcript_witness(shape: CircuitTranscriptShapeV4) -> CircuitProofTranscriptWitnessV4 {
     CircuitProofTranscriptWitnessV4 {
-        public_commitments: vec![],
+        public_commitments: vec![SecpEncodedPointWitness::identity()],
         raw_commitment: SecpEncodedPointWitness::identity(),
         coefficient_commitment: SecpEncodedPointWitness::identity(),
         anchored_offset: SecpEncodedPointWitness::identity(),
@@ -153,6 +157,10 @@ fn scalar_witness(value: &BigUint) -> SecpScalarWitness {
     SecpScalarWitness::from_bytes_be(bytes)
 }
 
+fn scalar_add_one(value: &BigUint) -> SecpScalarWitness {
+    scalar_witness(&((value + BigUint::from(1u64)) % BigUint::from_bytes_be(&SECP_ORDER)))
+}
+
 fn finite_witness(
     shape: CircuitTranscriptShapeV4,
     binding: [u8; 32],
@@ -161,11 +169,23 @@ fn finite_witness(
     mask: SecpEncodedPointWitness,
 ) -> CircuitProofTranscriptWitnessV4 {
     let mut witness = zero_transcript_witness(shape);
+    witness.public_commitments = vec![generator()];
+    witness.batched_public_commitment = generator();
+    witness.dlog_nonce = generator();
     witness.raw_commitment = raw;
     witness.anchored_offset = offset;
     witness.anchored_commitment =
         encoded_value(add_point_values(point_value(raw), point_value(offset)));
     witness.mask_commitment = mask;
+    let dlog_challenge = {
+        let mut builder = Builder::default();
+        install_transcript(&mut builder, shape, binding, RAW_GENERATORS, &witness)
+            .expect("derive anchor DLog challenge")
+            .dlog_challenge
+            .integer()
+            .clone()
+    };
+    witness.dlog_response = scalar_add_one(&dlog_challenge);
     let alpha = {
         let mut builder = Builder::default();
         install_transcript(&mut builder, shape, binding, RAW_GENERATORS, &witness)

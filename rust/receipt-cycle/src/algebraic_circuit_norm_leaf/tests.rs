@@ -173,14 +173,27 @@ fn finite_transcript_witness_with_binding(
     shape: CircuitTranscriptShapeV4,
     circuit_binding: [u8; 32],
 ) -> CircuitProofTranscriptWitnessV4 {
+    finite_transcript_witness_with_binding_and_secret(shape, circuit_binding, 1)
+}
+
+fn finite_transcript_witness_with_binding_and_secret(
+    shape: CircuitTranscriptShapeV4,
+    circuit_binding: [u8; 32],
+    public_secret: u64,
+) -> CircuitProofTranscriptWitnessV4 {
+    assert_ne!(public_secret, 0);
     let mut witness = zero_transcript_witness(shape);
     let base = generator();
     witness.raw_commitment = base;
     witness.anchored_commitment = base;
     witness.mask_commitment = base;
     if shape.mode == CircuitCommitmentModeV4::Public {
-        witness.public_commitments = vec![base];
-        witness.batched_public_commitment = base;
+        let public = encoded_value(scale_value(
+            point_value(base),
+            &BigUint::from(public_secret),
+        ));
+        witness.public_commitments = vec![public];
+        witness.batched_public_commitment = public;
         witness.dlog_nonce = base;
         let challenge = {
             let mut builder = Builder::default();
@@ -194,7 +207,9 @@ fn finite_transcript_witness_with_binding(
             .expect("derive public DLog challenge");
             transcript.dlog_challenge.integer().clone()
         };
-        witness.dlog_response = scalar_add_one(&challenge);
+        let response = (challenge * BigUint::from(public_secret) + BigUint::from(1u64))
+            % BigUint::from_bytes_be(&SECP_ORDER);
+        witness.dlog_response = scalar_witness(&response);
     }
     let alpha = {
         let mut builder = Builder::default();
@@ -404,11 +419,12 @@ fn hidden_finite_leaf_is_one_pending_claim() {
 
 #[test]
 fn manifest_bound_leaf_keeps_varying_values_out_of_the_matrix() {
-    let shape = shape_for_n(4);
+    let shape = public_shape_for_n(4);
     let first_binding = [0x31; 32];
     let second_binding = [0x32; 32];
-    let first_witness = finite_transcript_witness_with_binding(shape, first_binding);
-    let second_witness = finite_transcript_witness_with_binding(shape, second_binding);
+    let first_witness = finite_transcript_witness_with_binding_and_secret(shape, first_binding, 1);
+    let second_witness =
+        finite_transcript_witness_with_binding_and_secret(shape, second_binding, 2);
     let (first_circuit, first_assignment) =
         build_manifest_bound_leaf(shape, first_binding, &first_witness)
             .expect("first manifest-bound leaf");
@@ -420,6 +436,124 @@ fn manifest_bound_leaf_keeps_varying_values_out_of_the_matrix() {
     assert_ne!(first_assignment, second_assignment);
     assert!(relation_satisfied(&first_circuit, &first_assignment));
     assert!(relation_satisfied(&second_circuit, &second_assignment));
+}
+
+#[test]
+fn manifest_bound_precommitment_binds_public_key() {
+    let shape = public_shape_for_n(4);
+    let statement = ManifestBoundAnchorLeafStatementV4 {
+        shape,
+        circuit_binding_digest: CIRCUIT_BINDING,
+        raw_generator_digest: RAW_GENERATORS,
+        basis_digest: BASIS,
+    };
+    let first_witness =
+        finite_transcript_witness_with_binding_and_secret(shape, CIRCUIT_BINDING, 1);
+    let second_witness =
+        finite_transcript_witness_with_binding_and_secret(shape, CIRCUIT_BINDING, 2);
+    let reduction = zero_reduction_proof(shape);
+    let mut first_builder = Builder::default();
+    let first = install_manifest_bound_anchor_leaf(
+        &mut first_builder,
+        statement,
+        &first_witness,
+        &reduction,
+    )
+    .expect("first public key");
+    let mut second_builder = Builder::default();
+    let second = install_manifest_bound_anchor_leaf(
+        &mut second_builder,
+        statement,
+        &second_witness,
+        &reduction,
+    )
+    .expect("second public key");
+
+    assert_ne!(
+        first.precommitment.integer(),
+        second.precommitment.integer()
+    );
+}
+
+#[test]
+fn manifest_public_batch_cannot_substitute_transcript_key() {
+    let shape = public_shape_for_n(4);
+    let witness = finite_transcript_witness(shape);
+    let mut valid_builder = Builder::default();
+    let valid = install_transcript(
+        &mut valid_builder,
+        shape,
+        CIRCUIT_BINDING,
+        RAW_GENERATORS,
+        &witness,
+    )
+    .expect("valid transcript");
+    constrain_public_commitment_batch(&mut valid_builder, &valid, None)
+        .expect("valid public batch");
+    let (valid_circuit, valid_assignment) = valid_builder.finish().expect("valid batch relation");
+    assert!(relation_satisfied(&valid_circuit, &valid_assignment));
+
+    let mut substituted = witness;
+    substituted.batched_public_commitment = encoded_value(add_point_values(
+        point_value(generator()),
+        point_value(generator()),
+    ));
+    let mut wrong_builder = Builder::default();
+    let wrong = install_transcript(
+        &mut wrong_builder,
+        shape,
+        CIRCUIT_BINDING,
+        RAW_GENERATORS,
+        &substituted,
+    )
+    .expect("substituted transcript");
+    constrain_public_commitment_batch(&mut wrong_builder, &wrong, None)
+        .expect("substituted public batch");
+    let (wrong_circuit, wrong_assignment) = wrong_builder.finish().expect("wrong batch relation");
+    assert_eq!(valid_circuit, wrong_circuit);
+    assert!(!relation_satisfied(&wrong_circuit, &wrong_assignment));
+}
+
+#[test]
+fn manifest_bound_leaf_constrains_public_dlog() {
+    let shape = public_shape_for_n(4);
+    let witness = finite_transcript_witness(shape);
+    let (valid_circuit, valid_assignment) =
+        build_manifest_bound_leaf(shape, CIRCUIT_BINDING, &witness)
+            .expect("valid manifest-bound public leaf");
+    assert!(relation_satisfied(&valid_circuit, &valid_assignment));
+
+    let mut wrong_response = witness;
+    wrong_response.dlog_response =
+        scalar_add_one(&BigUint::from_bytes_be(&wrong_response.dlog_response.bytes));
+    let (wrong_circuit, wrong_assignment) =
+        build_manifest_bound_leaf(shape, CIRCUIT_BINDING, &wrong_response)
+            .expect("invalid response still builds an unsatisfied assignment");
+    assert_eq!(valid_circuit, wrong_circuit);
+    assert!(!relation_satisfied(&wrong_circuit, &wrong_assignment));
+}
+
+#[test]
+fn hidden_mode_cannot_enter_manifest_bound_anchor_leaf() {
+    let shape = shape_for_n(4);
+    let witness = finite_transcript_witness(shape);
+    let mut builder = Builder::default();
+    assert!(matches!(
+        install_manifest_bound_anchor_leaf(
+            &mut builder,
+            ManifestBoundAnchorLeafStatementV4 {
+                shape,
+                circuit_binding_digest: CIRCUIT_BINDING,
+                raw_generator_digest: RAW_GENERATORS,
+                basis_digest: BASIS,
+            },
+            &witness,
+            &zero_reduction_proof(shape),
+        ),
+        Err(ReceiptCycleError::Malformed(
+            "manifest-bound V4 anchor mode"
+        ))
+    ));
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! Fixed-matrix construction-parent recurrence for one hidden anchor.
+//! Fixed-matrix construction-parent recurrence for one public anchor.
 //!
 //! This relation authenticates one V4 leaf and one ordered algebraic
 //! accumulation transition. It deliberately does not select a recursive
@@ -161,7 +161,7 @@ fn validate_production_shape(
     step: &CandidateStepProofWitness,
 ) -> Result<(), ReceiptCycleError> {
     let shape = statement.shape;
-    if shape.mode != CircuitCommitmentModeV4::Hidden
+    if shape.mode != CircuitCommitmentModeV4::Public
         || shape.gate_count != ANCHOR_GATE_COUNT
         || shape.commitment_count != 1
         || shape.n_vec_len != ANCHOR_NORM_LENGTH

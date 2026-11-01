@@ -189,6 +189,59 @@ void check_shared_vector(TestContext &ctx, purify_secp_context *secp) {
                  scalar("9f5f54875acb2d863f4eb1e1c2e34de7"
                         "050b53581f3f6a531259f6dc2fdc2dad"),
              "V4 prepared binding matches Python");
+
+  auto staged = candidate::CircuitProofTranscriptV4::create(
+      *shape, precommit->digest, fixture.proof.raw_generator_digest);
+  expect_ok(ctx, staged, "V4 staged proof transcript creates");
+  if (!staged)
+    return;
+  ctx.expect(staged->rho().scalar == proof->rho.scalar &&
+                 staged->mul_scale().scalar == proof->mul_scale.scalar &&
+                 staged->mul_ratio().scalar == proof->mul_ratio.scalar &&
+                 staged->row_ratio().scalar == proof->row_ratio.scalar,
+             "V4 staged prefix matches one-shot replay");
+  auto eta = staged->append_anchored_commitments(
+      fixture.proof.coefficient_commitment, fixture.proof.anchored_offset,
+      fixture.proof.anchored_commitment, secp);
+  auto dlog = staged->append_public_opening(
+      fixture.proof.batched_public_commitment, fixture.proof.dlog_nonce, secp);
+  auto response =
+      FieldElement::try_from_bytes32(fixture.proof.dlog_response);
+  auto t2 = FieldElement::try_from_bytes32(fixture.proof.t2);
+  auto terminal_n = FieldElement::try_from_bytes32(fixture.proof.terminal_n);
+  auto terminal_l = FieldElement::try_from_bytes32(fixture.proof.terminal_l);
+  ctx.expect(eta && dlog && response && t2 && terminal_n && terminal_l,
+             "V4 staged public values parse");
+  if (!eta || !dlog || !response || !t2 || !terminal_n || !terminal_l)
+    return;
+  ctx.expect(eta->scalar == proof->eta.scalar &&
+                 dlog->scalar == proof->dlog_challenge.scalar,
+             "V4 staged public challenges match one-shot replay");
+  ctx.expect(staged->append_dlog_response(*response).has_value(),
+             "V4 staged DLog response appends");
+  auto alpha =
+      staged->append_mask(fixture.proof.mask_commitment, *t2, secp);
+  ctx.expect(alpha && alpha->scalar == proof->alpha.scalar,
+             "V4 staged masking challenge matches one-shot replay");
+  if (!alpha)
+    return;
+  ctx.expect(staged->append_combined_commitment(
+                 fixture.proof.combined_commitment, secp)
+                 .has_value(),
+             "V4 staged combined commitment appends");
+  for (std::size_t index = 0; index < fixture.proof.rounds.size(); ++index) {
+    auto gamma = staged->append_round(fixture.proof.rounds[index], secp);
+    ctx.expect(gamma && gamma->scalar == proof->gammas[index].scalar,
+               "V4 staged norm challenge matches one-shot replay");
+    if (!gamma)
+      return;
+  }
+  auto prepared = staged->finish(*terminal_n, *terminal_l);
+  ctx.expect(prepared &&
+                 prepared->scalar == proof->prepared_binding.scalar,
+             "V4 staged terminal binding matches one-shot replay");
+  ctx.expect(!staged->finish(*terminal_n, *terminal_l),
+             "V4 staged transcript rejects a repeated terminal stage");
 }
 
 void check_binding_mutations(TestContext &ctx, purify_secp_context *secp) {

@@ -115,6 +115,98 @@ struct CircuitProofTranscriptResultV4 {
 };
 
 /**
+ * Incremental V4 proof transcript used while the inner proof is produced.
+ *
+ * Each method consumes exactly the next protocol stage. The type derives
+ * challenges only; callers still have to verify every corresponding group
+ * and norm equation.
+ */
+class CircuitProofTranscriptV4 {
+public:
+  [[nodiscard]] static Result<CircuitProofTranscriptV4>
+  create(const CircuitTranscriptShapeV4 &shape,
+         const CircuitPrecommitmentDigestV4 &precommitment,
+         const TranscriptDigest &raw_generator_digest);
+
+  [[nodiscard]] const CircuitChallengeV4 &rho() const noexcept {
+    return rho_;
+  }
+  [[nodiscard]] const CircuitTranscriptShapeV4 &shape() const noexcept {
+    return shape_;
+  }
+  [[nodiscard]] const CircuitChallengeV4 &mul_scale() const noexcept {
+    return mul_scale_;
+  }
+  [[nodiscard]] const CircuitChallengeV4 &mul_ratio() const noexcept {
+    return mul_ratio_;
+  }
+  [[nodiscard]] const CircuitChallengeV4 &row_ratio() const noexcept {
+    return row_ratio_;
+  }
+
+  [[nodiscard]] Result<CircuitChallengeV4>
+  append_anchored_commitments(const PointBytes &coefficient_commitment,
+                              const PointBytes &anchored_offset,
+                              const PointBytes &anchored_commitment,
+                              purify_secp_context *secp_context);
+
+  [[nodiscard]] Result<CircuitChallengeV4>
+  append_public_opening(
+      const PointBytes &batched_public_commitment,
+      const std::array<unsigned char, 32> &dlog_nonce,
+      purify_secp_context *secp_context);
+
+  [[nodiscard]] Status append_dlog_response(
+      const FieldElement &dlog_response);
+
+  [[nodiscard]] Result<CircuitChallengeV4>
+  append_mask(const PointBytes &mask_commitment, const FieldElement &t2,
+              purify_secp_context *secp_context);
+
+  [[nodiscard]] Status append_combined_commitment(
+      const PointBytes &combined_commitment,
+      purify_secp_context *secp_context);
+
+  [[nodiscard]] Result<CircuitChallengeV4>
+  append_round(const PackedPointPairV4 &round,
+               purify_secp_context *secp_context);
+
+  [[nodiscard]] Result<CircuitChallengeV4>
+  finish(const FieldElement &terminal_n, const FieldElement &terminal_l);
+
+private:
+  enum class Stage {
+    AnchoredCommitments,
+    PublicOpening,
+    DlogResponse,
+    Mask,
+    CombinedCommitment,
+    Rounds,
+    Terminal,
+    Finished,
+  };
+
+  CircuitProofTranscriptV4(CircuitTranscriptShapeV4 shape,
+                           AlgebraicTranscript transcript,
+                           CircuitChallengeV4 rho,
+                           CircuitChallengeV4 mul_scale,
+                           CircuitChallengeV4 mul_ratio,
+                           CircuitChallengeV4 row_ratio)
+      : shape_(shape), transcript_(std::move(transcript)),
+        rho_(std::move(rho)), mul_scale_(std::move(mul_scale)),
+        mul_ratio_(std::move(mul_ratio)), row_ratio_(std::move(row_ratio)) {}
+
+  CircuitTranscriptShapeV4 shape_;
+  AlgebraicTranscript transcript_;
+  CircuitChallengeV4 rho_;
+  CircuitChallengeV4 mul_scale_;
+  CircuitChallengeV4 mul_ratio_;
+  CircuitChallengeV4 row_ratio_;
+  Stage stage_{Stage::AnchoredCommitments};
+  std::size_t next_round_{0};
+};
+
+/**
  * Bind verifier-known circuit data and the hidden raw commitment.
  *
  * The returned digest is public parent input. This function does not verify a

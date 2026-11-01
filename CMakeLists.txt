@@ -590,6 +590,18 @@ if(PURIFY_BUILD_VALGRIND_TESTS)
 endif()
 
 if(PURIFY_BUILD_TESTS)
+    add_executable(purify_opening_base_vector_tests
+        tests/opening_base_vector_tests.cpp
+    )
+    target_link_libraries(purify_opening_base_vector_tests
+        PRIVATE purify::purify
+    )
+    purify_enable_warnings(purify_opening_base_vector_tests)
+    purify_enable_sanitizers(purify_opening_base_vector_tests)
+    add_test(NAME purify.tests.opening_base_vector
+        COMMAND purify_opening_base_vector_tests
+    )
+
     set(PURIFY_HEADER_HYGIENE_SOURCES
         tests/public_header_hygiene_c_then_cpp.cpp
         tests/public_header_hygiene_cpp_then_c.cpp
@@ -662,6 +674,11 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(circuit_soundness)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME purify.tests.opening_base_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_algebraic_opening_base.py")
+        set_tests_properties(purify.tests.opening_base_reference
+            PROPERTIES TIMEOUT 30)
         add_test(NAME purify.tests.norm_accumulation_reference
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_norm_accumulation.py")

@@ -88,12 +88,26 @@ impl CoordinateFieldWitness {
     }
 
     fn scalar(self) -> Result<Scalar, ReceiptCycleError> {
-        let mut encoded = self.bytes;
-        encoded.reverse();
-        Secq256k1Cycle::scalar_from_canonical(&encoded).ok_or(ReceiptCycleError::Malformed(
-            "noncanonical coordinate field element",
-        ))
+        coordinate_field_value(self.bytes)
     }
+}
+
+/// Parses a canonical big-endian secp256k1 coordinate-field value.
+pub(crate) fn coordinate_field_value(mut bytes: [u8; 32]) -> Result<Scalar, ReceiptCycleError> {
+    bytes.reverse();
+    Secq256k1Cycle::scalar_from_canonical(&bytes).ok_or(ReceiptCycleError::Malformed(
+        "noncanonical coordinate field element",
+    ))
+}
+
+/// Parses the canonical integer embedding of one secp256k1 scalar.
+pub(crate) fn canonical_scalar_value(
+    witness: SecpScalarWitness,
+) -> Result<Scalar, ReceiptCycleError> {
+    if witness.bytes >= ORDER_N_BE {
+        return Err(ReceiptCycleError::Malformed("noncanonical secp scalar"));
+    }
+    coordinate_field_value(witness.bytes)
 }
 
 #[derive(Clone)]
@@ -779,6 +793,21 @@ mod tests {
 
     fn gate_count(circuit: &[u8]) -> u32 {
         u32::from_le_bytes(circuit[1..5].try_into().expect("gate count"))
+    }
+
+    #[test]
+    fn native_value_parsers_enforce_the_coordinate_and_scalar_moduli() {
+        assert_eq!(
+            coordinate_field_value(CoordinateFieldWitness::from_u64(7).bytes)
+                .expect("small coordinate"),
+            Scalar::from(7)
+        );
+        assert_eq!(
+            canonical_scalar_value(SecpScalarWitness::from_u64(9)).expect("small scalar"),
+            Scalar::from(9)
+        );
+        assert!(coordinate_field_value(FIELD_P_BE).is_err());
+        assert!(canonical_scalar_value(SecpScalarWitness::from_bytes_be(ORDER_N_BE)).is_err());
     }
 
     fn accepts(

@@ -19,6 +19,7 @@ use rand_core::SeedableRng;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod algebraic_transcript;
 mod ffi;
 mod gadgets;
 // This is a tested migration primitive, not an accepted transcript suite yet.

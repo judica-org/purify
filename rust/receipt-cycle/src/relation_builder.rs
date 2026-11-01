@@ -85,6 +85,14 @@ pub(crate) struct Builder {
     gates: Vec<(Scalar, Scalar)>,
     operations: Vec<GateOperationShape>,
     constraints: Vec<Vec<Term>>,
+    expected: Option<ExpectedRelation>,
+}
+
+struct ExpectedRelation {
+    shape: Arc<RelationShape>,
+    next_operation: usize,
+    next_constraint: usize,
+    drift: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,13 +146,26 @@ pub(crate) struct StatefulRelation {
 
 impl Builder {
     #[cfg(test)]
+    fn matching(shape: Arc<RelationShape>) -> Self {
+        Self {
+            expected: Some(ExpectedRelation {
+                shape,
+                next_operation: 0,
+                next_constraint: 0,
+                drift: None,
+            }),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn gate_count(&self) -> usize {
         self.gates.len()
     }
 
     pub(crate) fn allocate(&mut self, value: Scalar) -> Expression {
         let operation = GateOperationShape::AllocatedValue {
-            unit_constraint: self.constraints.len(),
+            unit_constraint: self.constraint_count(),
         };
         let index = self.push_gate(value, Scalar::ONE, operation);
         self.constrain_zero(
@@ -174,7 +195,7 @@ impl Builder {
 
     pub(crate) fn allocate_boolean(&mut self, value: bool) -> Expression {
         let value = if value { Scalar::ONE } else { Scalar::ZERO };
-        let input_constraint = self.constraints.len();
+        let input_constraint = self.constraint_count();
         let operation = GateOperationShape::Boolean {
             input_constraint,
             output_constraint: input_constraint + 1,
@@ -189,7 +210,7 @@ impl Builder {
     }
 
     pub(crate) fn multiply(&mut self, left: &Expression, right: &Expression) -> Expression {
-        let left_binding = self.constraints.len();
+        let left_binding = self.constraint_count();
         let right_binding = left_binding + 1;
         let operation = GateOperationShape::Product {
             left_binding,
@@ -205,10 +226,23 @@ impl Builder {
 
     pub(crate) fn constrain_zero(&mut self, expression: Expression) {
         if expression.constant != Scalar::ZERO || !expression.terms.is_empty() {
-            // Expressions use BTreeMap for convenient affine composition.
-            // Store the canonical row immediately so every retained
-            // constraint owns only its compact ordered terms.
-            self.constraints.push(expression_terms(expression));
+            if let Some(expected) = &mut self.expected {
+                let matches = expected
+                    .shape
+                    .circuit
+                    .constraints
+                    .get(expected.next_constraint)
+                    .is_some_and(|row| expression_matches_row(&expression, row));
+                if !matches && expected.drift.is_none() {
+                    expected.drift = Some("matching builder constraint drift");
+                }
+                expected.next_constraint += 1;
+            } else {
+                // Expressions use BTreeMap for convenient affine composition.
+                // Store the canonical row immediately so every retained
+                // constraint owns only its compact ordered terms.
+                self.constraints.push(expression_terms(expression));
+            }
         }
     }
 
@@ -219,8 +253,23 @@ impl Builder {
     fn push_gate(&mut self, left: Scalar, right: Scalar, operation: GateOperationShape) -> usize {
         let index = self.gates.len();
         self.gates.push((left, right));
-        self.operations.push(operation);
+        if let Some(expected) = &mut self.expected {
+            if expected.shape.operations.get(expected.next_operation) != Some(&operation)
+                && expected.drift.is_none()
+            {
+                expected.drift = Some("matching builder operation drift");
+            }
+            expected.next_operation += 1;
+        } else {
+            self.operations.push(operation);
+        }
         index
+    }
+
+    fn constraint_count(&self) -> usize {
+        self.expected
+            .as_ref()
+            .map_or(self.constraints.len(), |expected| expected.next_constraint)
     }
 
     pub(crate) fn finish(self) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
@@ -231,6 +280,11 @@ impl Builder {
     fn finish_structured(
         self,
     ) -> Result<(Circuit, Assignment, Vec<GateOperationShape>), ReceiptCycleError> {
+        if self.expected.is_some() {
+            return Err(ReceiptCycleError::Malformed(
+                "matching builder requires stateful finish",
+            ));
+        }
         let circuit = Circuit {
             gate_count: self.gates.len(),
             constraints: self.constraints,
@@ -241,7 +295,7 @@ impl Builder {
     }
 
     pub(crate) fn finish_stateful(
-        self,
+        mut self,
         inputs: &[StateVariable],
         outputs: &[StateVariable],
     ) -> Result<StatefulRelation, ReceiptCycleError> {
@@ -250,6 +304,30 @@ impl Builder {
         }
         let input_wires = inputs.iter().map(|state| state.wire).collect();
         let output_wires = outputs.iter().map(|state| state.wire).collect();
+        if let Some(expected) = self.expected.take() {
+            if let Some(drift) = expected.drift {
+                return Err(ReceiptCycleError::Malformed(drift));
+            }
+            if self.gates.len() != expected.shape.circuit.gate_count
+                || expected.next_operation != expected.shape.operations.len()
+            {
+                return Err(ReceiptCycleError::Malformed(
+                    "matching builder operation drift",
+                ));
+            }
+            if expected.next_constraint != expected.shape.circuit.constraints.len() {
+                return Err(ReceiptCycleError::Malformed(
+                    "matching builder constraint drift",
+                ));
+            }
+            if input_wires != expected.shape.inputs || output_wires != expected.shape.outputs {
+                return Err(ReceiptCycleError::Malformed("matching builder state drift"));
+            }
+            return Ok(StatefulRelation {
+                shape: expected.shape,
+                assignment: Assignment { gates: self.gates },
+            });
+        }
         let (circuit, assignment, operations) = self.finish_structured()?;
         Ok(StatefulRelation {
             shape: Arc::new(RelationShape {
@@ -442,6 +520,25 @@ fn expression_terms(expression: Expression) -> Vec<Term> {
     out
 }
 
+fn expression_matches_row(expression: &Expression, row: &[Term]) -> bool {
+    let mut expected = row.iter();
+    if expression.constant != Scalar::ZERO
+        && !expected.next().is_some_and(|term| {
+            term.kind == WireKind::One && term.index == 0 && term.coefficient == expression.constant
+        })
+    {
+        return false;
+    }
+    for (&(kind, index), &coefficient) in &expression.terms {
+        if !expected.next().is_some_and(|term| {
+            term.kind == kind && term.index == index && term.coefficient == coefficient
+        }) {
+            return false;
+        }
+    }
+    expected.next().is_none()
+}
+
 fn append_u32(out: &mut Vec<u8>, value: usize) {
     out.extend_from_slice(&(value as u32).to_le_bytes());
 }
@@ -501,7 +598,14 @@ mod tests {
         input_value: u64,
         swap_operands: bool,
     ) -> (Builder, [StateVariable; 1], [StateVariable; 1]) {
-        let mut builder = Builder::default();
+        product_relation_with_builder(Builder::default(), input_value, swap_operands)
+    }
+
+    fn product_relation_with_builder(
+        mut builder: Builder,
+        input_value: u64,
+        swap_operands: bool,
+    ) -> (Builder, [StateVariable; 1], [StateVariable; 1]) {
         let input = builder.allocate_state(Scalar::from(input_value));
         let constant = Expression::constant(Scalar::from(4));
         let product = if swap_operands {
@@ -521,7 +625,13 @@ mod tests {
     }
 
     fn boolean_relation(value: bool) -> (Builder, [StateVariable; 1], [StateVariable; 1]) {
-        let mut builder = Builder::default();
+        boolean_relation_with_builder(Builder::default(), value)
+    }
+
+    fn boolean_relation_with_builder(
+        mut builder: Builder,
+        value: bool,
+    ) -> (Builder, [StateVariable; 1], [StateVariable; 1]) {
         let input = builder.allocate_state(Scalar::from(3));
         let _boolean = builder.allocate_boolean(value);
         let output = builder.expose_state(input.expression());
@@ -616,6 +726,84 @@ mod tests {
         );
         assert_eq!(encode_circuit(&relation.shape.circuit), circuit);
         assert_eq!(encode_assignment(&relation.assignment), assignment);
+    }
+
+    #[test]
+    fn matching_builder_reuses_the_exact_shape_without_retaining_rows() {
+        let original = finish_product(3, false);
+        let expected = Arc::clone(&original.shape);
+        let (builder, inputs, outputs) =
+            product_relation_with_builder(Builder::matching(Arc::clone(&expected)), 9, false);
+        assert!(builder.operations.is_empty());
+        assert!(builder.constraints.is_empty());
+
+        let matching = builder
+            .finish_stateful(&inputs, &outputs)
+            .expect("matching stateful relation");
+        assert!(Arc::ptr_eq(&matching.shape, &expected));
+        assert_eq!(matching.shape.circuit, original.shape.circuit);
+        assert_eq!(matching.shape.operations, original.shape.operations);
+        assert_ne!(matching.assignment, original.assignment);
+    }
+
+    #[test]
+    fn matching_builder_rejects_exact_shape_drift() {
+        let original = finish_product(3, false);
+
+        let (changed_row, inputs, outputs) =
+            product_relation_with_builder(Builder::matching(Arc::clone(&original.shape)), 9, true);
+        assert!(matches!(
+            changed_row.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed(
+                "matching builder constraint drift"
+            ))
+        ));
+
+        let (changed_operation, inputs, outputs) =
+            boolean_relation_with_builder(Builder::matching(Arc::clone(&original.shape)), true);
+        assert!(matches!(
+            changed_operation.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed(
+                "matching builder operation drift"
+            ))
+        ));
+
+        let (changed_state, inputs, outputs) =
+            product_relation_with_builder(Builder::matching(Arc::clone(&original.shape)), 9, false);
+        assert!(matches!(
+            changed_state.finish_stateful(&outputs, &inputs),
+            Err(ReceiptCycleError::Malformed("matching builder state drift"))
+        ));
+
+        let (mut extra_operation, inputs, outputs) =
+            product_relation_with_builder(Builder::matching(Arc::clone(&original.shape)), 9, false);
+        let _extra = extra_operation.allocate(Scalar::ONE);
+        assert!(matches!(
+            extra_operation.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed(
+                "matching builder operation drift"
+            ))
+        ));
+
+        let (mut extra_row, inputs, outputs) =
+            product_relation_with_builder(Builder::matching(Arc::clone(&original.shape)), 9, false);
+        extra_row.constrain_zero(Expression::constant(Scalar::ONE));
+        assert!(matches!(
+            extra_row.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed(
+                "matching builder constraint drift"
+            ))
+        ));
+
+        let mut truncated = Builder::matching(Arc::clone(&original.shape));
+        let input = truncated.allocate_state(Scalar::from(9));
+        let output = input.clone();
+        assert!(matches!(
+            truncated.finish_stateful(&[input], &[output]),
+            Err(ReceiptCycleError::Malformed(
+                "matching builder operation drift"
+            ))
+        ));
     }
 
     #[test]

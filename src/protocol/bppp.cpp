@@ -736,10 +736,10 @@ Result<NormArgInputs> build_raw_circuit_norm_arg_inputs(
   return out;
 }
 
-Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
+Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
     const NativeBulletproofCircuit &circuit,
     std::span<const unsigned char> statement_binding,
-    const PointBytes &raw_commitment,
+    const PointBytes *raw_commitment,
     purify_secp_context *secp_context,
     bool externalize_commitments = false,
     ExperimentalCircuitBackend *cache = nullptr,
@@ -769,13 +769,18 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
     mul_ratio = explicit_challenges->mul_ratio;
     row_ratio = explicit_challenges->row_ratio;
   } else {
+    if (raw_commitment == nullptr) {
+      return unexpected_error(
+          ErrorCode::InternalMismatch,
+          "build_circuit_norm_arg_public_data:raw_commitment");
+    }
     PURIFY_ASSIGN_OR_RETURN(
         const auto &binding_digest,
         experimental_circuit_binding_digest(circuit, statement_binding),
         "build_circuit_norm_arg_public_data:binding_digest");
     PURIFY_ASSIGN_OR_RETURN(
         challenge_digest,
-        circuit_norm_arg_precommit_digest(binding_digest, raw_commitment),
+        circuit_norm_arg_precommit_digest(binding_digest, *raw_commitment),
         "build_circuit_norm_arg_public_data:challenge_digest");
     PURIFY_ASSIGN_OR_RETURN(
         rho,
@@ -943,6 +948,30 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
   }
   CircuitNormArgPublicDataPtr shared = out;
   return shared;
+}
+
+Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
+    const NativeBulletproofCircuit &circuit,
+    std::span<const unsigned char> statement_binding,
+    const PointBytes &raw_commitment,
+    purify_secp_context *secp_context,
+    bool externalize_commitments = false,
+    ExperimentalCircuitBackend *cache = nullptr,
+    const CircuitNormArgChallenges *explicit_challenges = nullptr) {
+  return build_circuit_norm_arg_public_data_impl(
+      circuit, statement_binding, &raw_commitment, secp_context,
+      externalize_commitments, cache, explicit_challenges);
+}
+
+Result<CircuitNormArgPublicDataPtr>
+build_circuit_norm_arg_public_data_from_challenges(
+    const NativeBulletproofCircuit &circuit,
+    purify_secp_context *secp_context, bool externalize_commitments,
+    ExperimentalCircuitBackend *cache,
+    const CircuitNormArgChallenges &explicit_challenges) {
+  return build_circuit_norm_arg_public_data_impl(
+      circuit, {}, nullptr, secp_context, externalize_commitments, cache,
+      &explicit_challenges);
 }
 
 Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
@@ -3685,6 +3714,100 @@ candidate::prepare_circuit_zk_norm_arg_v4_with_public_commitments(
     ExperimentalCircuitBackend *cache) {
   return prepare_circuit_zk_norm_arg_v4_impl(
       circuit, publication, public_commitments, secp_context,
+      statement_binding, true, cache);
+}
+
+namespace {
+
+Result<candidate::CircuitNormParentConstantsV4>
+derive_circuit_norm_parent_constants_v4_impl(
+    const NativeBulletproofCircuit &circuit,
+    const candidate::CircuitPrecommitmentDigestV4 &precommitment,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding,
+    bool externalize_commitments, ExperimentalCircuitBackend *cache) {
+  PURIFY_RETURN_IF_ERROR(
+      validate_circuit_proof_v4_inputs(
+          circuit, public_commitments, secp_context,
+          externalize_commitments),
+      "circuit_parent_constants_v4:inputs");
+  for (const auto &point : public_commitments) {
+    PURIFY_RETURN_IF_ERROR(
+        validate_finite_point_v4(
+            point, secp_context,
+            "circuit_parent_constants_v4:public_commitment"),
+        "circuit_parent_constants_v4:public_commitment");
+  }
+  PURIFY_ASSIGN_OR_RETURN(
+      auto binding_digest,
+      circuit_binding_digest_v4(circuit, statement_binding),
+      "circuit_parent_constants_v4:binding");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto shape,
+      circuit_shape_v4(circuit, externalize_commitments),
+      "circuit_parent_constants_v4:shape");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto raw_generator_digest,
+      raw_generator_digest_v4(shape, secp_context),
+      "circuit_parent_constants_v4:raw_basis");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto transcript,
+      candidate::CircuitProofTranscriptV4::create(
+          shape, precommitment, raw_generator_digest),
+      "circuit_parent_constants_v4:transcript");
+  const CircuitNormArgChallenges challenges{
+      transcript.rho().scalar, transcript.mul_scale().scalar,
+      transcript.mul_ratio().scalar, transcript.row_ratio().scalar};
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto public_data,
+      build_circuit_norm_arg_public_data_from_challenges(
+          circuit, secp_context, externalize_commitments, cache,
+          challenges),
+      "circuit_parent_constants_v4:public_data");
+  if (generator_backend_cache_key(public_data->raw_generators) !=
+      raw_generator_digest) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "circuit_parent_constants_v4:raw_digest");
+  }
+  PURIFY_ASSIGN_OR_RETURN(
+      auto coefficient_commitment,
+      coefficient_commitment_v4(*public_data, secp_context),
+      "circuit_parent_constants_v4:coefficient_commitment");
+  PURIFY_ASSIGN_OR_RETURN(
+      auto anchored_offset,
+      circuit_anchored_offset_v4(*public_data, public_commitments,
+                                 secp_context),
+      "circuit_parent_constants_v4:anchored_offset");
+  return candidate::CircuitNormParentConstantsV4{
+      std::move(binding_digest), std::move(coefficient_commitment),
+      std::move(anchored_offset)};
+}
+
+} // namespace
+
+Result<candidate::CircuitNormParentConstantsV4>
+candidate::derive_circuit_norm_parent_constants_v4(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitPrecommitmentDigestV4 &precommitment,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding,
+    ExperimentalCircuitBackend *cache) {
+  return derive_circuit_norm_parent_constants_v4_impl(
+      circuit, precommitment, {}, secp_context, statement_binding, false,
+      cache);
+}
+
+Result<candidate::CircuitNormParentConstantsV4>
+candidate::derive_circuit_norm_parent_constants_v4_with_public_commitments(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitPrecommitmentDigestV4 &precommitment,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding,
+    ExperimentalCircuitBackend *cache) {
+  return derive_circuit_norm_parent_constants_v4_impl(
+      circuit, precommitment, public_commitments, secp_context,
       statement_binding, true, cache);
 }
 

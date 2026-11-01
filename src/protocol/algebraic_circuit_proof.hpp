@@ -181,6 +181,43 @@ prepare_circuit_zk_norm_arg_v4_impl(
     bool externalize_commitments,
     ExperimentalCircuitBackend *cache);
 
+/** Verifier-derived constants needed by a constrained V4 parent leaf. */
+struct CircuitNormParentConstantsV4 {
+  TranscriptDigest circuit_binding_digest{};
+  PointBytes coefficient_commitment{};
+  PointBytes anchored_offset{};
+};
+
+/**
+ * Derive hidden-leaf constants from a public nonzero precommitment.
+ *
+ * A parent relation must separately constrain this precommitment to the
+ * private raw commitment and returned circuit binding digest. These derived
+ * constants alone do not authenticate a caller-supplied precommitment.
+ */
+[[nodiscard]] Result<CircuitNormParentConstantsV4>
+derive_circuit_norm_parent_constants_v4(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitPrecommitmentDigestV4 &precommitment,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding,
+    ExperimentalCircuitBackend *cache = nullptr);
+
+/**
+ * Derive public-leaf constants from a public nonzero precommitment.
+ *
+ * The same parent constraint as the hidden form is mandatory and also binds
+ * the exact ordered public commitments.
+ */
+[[nodiscard]] Result<CircuitNormParentConstantsV4>
+derive_circuit_norm_parent_constants_v4_with_public_commitments(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitPrecommitmentDigestV4 &precommitment,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding,
+    ExperimentalCircuitBackend *cache = nullptr);
+
 /**
  * Produce a hidden-commitment V4 proof.
  *

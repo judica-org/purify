@@ -1031,6 +1031,44 @@ void check_v4_algebraic_circuit_adapter(
         purify::ErrorCode::BindingMismatch,
         "V4 adapter rejects raw-basis shape substitution");
 
+    auto parent_constants =
+        candidate::derive_circuit_norm_parent_constants_v4(
+            circuit, publication->precommitment, secp, binding);
+    expect_ok(ctx, parent_constants,
+              "V4 hidden parent constants derive without raw A");
+    if (!parent_constants) return;
+    ctx.expect(
+        parent_constants->circuit_binding_digest ==
+                (**prepared).circuit_binding_digest() &&
+            parent_constants->coefficient_commitment ==
+                (**prepared).transcript_input().coefficient_commitment &&
+            parent_constants->anchored_offset ==
+                (**prepared).transcript_input().anchored_offset,
+        "V4 hidden parent constants match full preparation");
+    auto changed_parent_constants =
+        candidate::derive_circuit_norm_parent_constants_v4(
+            circuit, publication->precommitment, secp,
+            changed_statement);
+    expect_ok(ctx, changed_parent_constants,
+              "V4 parent constants retain the changed binding");
+    if (!changed_parent_constants) return;
+    ctx.expect(changed_parent_constants->circuit_binding_digest !=
+                   parent_constants->circuit_binding_digest,
+               "V4 parent constants expose the exact statement binding");
+    auto changed_precommitment_constants =
+        candidate::derive_circuit_norm_parent_constants_v4(
+            circuit, changed_statement_publication->precommitment,
+            secp, changed_statement);
+    expect_ok(ctx, changed_precommitment_constants,
+              "V4 changed precommitment derives parent constants");
+    if (!changed_precommitment_constants) return;
+    ctx.expect(
+        changed_precommitment_constants->coefficient_commitment !=
+                parent_constants->coefficient_commitment ||
+            changed_precommitment_constants->anchored_offset !=
+                parent_constants->anchored_offset,
+        "V4 parent constants bind the public precommitment");
+
     const auto expected_binding =
         (**prepared).transcript().prepared_binding.scalar;
     const auto expected_commitment =
@@ -1259,7 +1297,7 @@ void check_v4_algebraic_circuit_adapter(
                "V4 precommitment binds the exact public output");
     auto public_algebraic =
         accum::prepare_v4_circuit_norm_for_algebraic_reduction(
-            *basis, std::move(**public_prepared), secp);
+            *basis, **public_prepared, secp);
     expect_ok(ctx, public_algebraic,
               "V4 public pending norm maps to algebraic data");
     if (!public_algebraic) return;
@@ -1275,6 +1313,23 @@ void check_v4_algebraic_circuit_adapter(
     if (!public_claim) return;
     expect_ok(ctx, accum::decide(*basis, *public_claim, secp),
               "V4 public pending norm reaches mandatory decision");
+    auto public_parent_constants = candidate::
+        derive_circuit_norm_parent_constants_v4_with_public_commitments(
+            circuit, public_publication->precommitment, public_points,
+            secp, binding);
+    expect_ok(ctx, public_parent_constants,
+              "V4 public parent constants derive without raw A");
+    if (!public_parent_constants) return;
+    ctx.expect(
+        public_parent_constants->circuit_binding_digest ==
+                (**public_prepared).circuit_binding_digest() &&
+            public_parent_constants->coefficient_commitment ==
+                (**public_prepared)
+                    .transcript_input()
+                    .coefficient_commitment &&
+            public_parent_constants->anchored_offset ==
+                (**public_prepared).transcript_input().anchored_offset,
+        "V4 public parent constants match full preparation");
 }
 
 void check_zero_families(TestContext& ctx, purify_secp_context* secp) {

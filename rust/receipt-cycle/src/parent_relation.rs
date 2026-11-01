@@ -238,6 +238,25 @@ fn parse_encoded_point(
     })
 }
 
+/// Validates an exact encoded point constant and returns its affine value.
+pub(crate) fn encoded_point_value(
+    witness: SecpEncodedPointWitness,
+) -> Result<PointValue, ReceiptCycleError> {
+    let encoded = parse_encoded_point(witness)?;
+    validate_constant_point(encoded.point)?;
+    let expected_prefix = if encoded.point.identity {
+        0
+    } else {
+        2 + (Secq256k1Cycle::scalar_to_canonical(&encoded.point.y)[0] & 1)
+    };
+    if encoded.prefix != expected_prefix {
+        return Err(ReceiptCycleError::Malformed(
+            "noncanonical encoded point constant",
+        ));
+    }
+    Ok(encoded.point)
+}
+
 fn allocate_point(builder: &mut Builder, value: PointValue) -> SecpPoint {
     let x = builder.allocate(value.x);
     let y = builder.allocate(value.y);
@@ -1783,6 +1802,16 @@ mod tests {
         let (identity_circuit, proof_bytes) =
             prove_encoded_point(identity).expect("encoded identity");
         prove_encoded_point(generator).expect("encoded finite point");
+        assert!(
+            encoded_point_value(identity)
+                .expect("identity value")
+                .identity
+        );
+        assert!(
+            !encoded_point_value(generator)
+                .expect("generator value")
+                .identity
+        );
 
         let (generator_circuit, _) =
             build_secp_encoded_point_relation(generator).expect("finite circuit");
@@ -1805,26 +1834,33 @@ mod tests {
 
         let mut zero_prefix_hybrid = encoded(generator, 0x00);
         assert!(prove_encoded_point(zero_prefix_hybrid).is_err());
+        assert!(encoded_point_value(zero_prefix_hybrid).is_err());
         zero_prefix_hybrid.encoded[1] ^= 1;
         assert!(prove_encoded_point(zero_prefix_hybrid).is_err());
+        assert!(encoded_point_value(zero_prefix_hybrid).is_err());
 
         let invalid_prefix = encoded(generator, 0x04);
         assert!(prove_encoded_point(invalid_prefix).is_err());
+        assert!(encoded_point_value(invalid_prefix).is_err());
 
         let wrong_parity = encoded(generator, 0x03);
         assert!(prove_encoded_point(wrong_parity).is_err());
+        assert!(encoded_point_value(wrong_parity).is_err());
 
         let mut off_curve = encoded(generator, 0x02);
         off_curve.y[0] ^= 1;
         assert!(prove_encoded_point(off_curve).is_err());
+        assert!(encoded_point_value(off_curve).is_err());
 
         let mut noncanonical_x = encoded(generator, 0x02);
         noncanonical_x.encoded[1..].fill(0xff);
         assert!(build_secp_encoded_point_relation(noncanonical_x).is_err());
+        assert!(encoded_point_value(noncanonical_x).is_err());
 
         let mut noncanonical_y = encoded(generator, 0x02);
         noncanonical_y.y = [0xff; 32];
         assert!(build_secp_encoded_point_relation(noncanonical_y).is_err());
+        assert!(encoded_point_value(noncanonical_y).is_err());
     }
 
     #[test]

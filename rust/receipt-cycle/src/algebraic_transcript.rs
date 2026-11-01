@@ -20,6 +20,7 @@ const POINT_PAIR_ITEM: u32 = 0x5041_4952; // PAIR
 const BYTES_ITEM: u32 = 0x4259_5445; // BYTE
 const U64_ITEM: u32 = 0x5536_3420; // U64<space>
 const CHALLENGE_ITEM: u32 = 0x4348_414c; // CHAL
+const OPENING_BASE_ITEM: u32 = 0x4f42_4153; // OBAS
 
 fn scalar_pow2(exponent: usize) -> Scalar {
     let mut value = Scalar::ONE;
@@ -192,6 +193,36 @@ impl BuilderTranscript {
         }
         [challenge.state[1].clone(), challenge.state[2].clone()]
     }
+
+    /// Clone, frame, and squeeze two opening-base scalar candidates.
+    ///
+    /// This has a distinct item type from scalar challenges. The two lanes
+    /// feed unbiased selection modulo the secp256k1 group order before the
+    /// selected scalar combines two unknown-discrete-log constants.
+    pub(crate) fn opening_base_scalar(
+        &self,
+        builder: &mut Builder,
+        basis_digest: [u8; 32],
+        role: u64,
+    ) -> [Expression; 2] {
+        let mut challenge = self.clone();
+        challenge.absorb(
+            builder,
+            Expression::constant(header(BYTES_ITEM, basis_digest.len() as u64)),
+        );
+        for word in basis_digest.chunks(31).map(integer_from_be) {
+            challenge.absorb(builder, Expression::constant(word));
+        }
+        challenge.absorb(
+            builder,
+            Expression::constant(header(OPENING_BASE_ITEM, role)),
+        );
+        challenge.absorb(builder, Expression::constant(Scalar::ONE));
+        while challenge.rate_index != 0 {
+            challenge.absorb(builder, Expression::constant(Scalar::ZERO));
+        }
+        [challenge.state[1].clone(), challenge.state[2].clone()]
+    }
 }
 
 #[cfg(test)]
@@ -261,6 +292,29 @@ impl NativeTranscript {
         }
         [challenge.state[1], challenge.state[2]]
     }
+
+    fn opening_base_scalar(&self, basis_digest: [u8; 32], role: u64) -> [Scalar; 2] {
+        let mut challenge = self.clone();
+        challenge.append_bytes(&basis_digest);
+        challenge.absorb(header(OPENING_BASE_ITEM, role));
+        challenge.absorb(Scalar::ONE);
+        while challenge.rate_index != 0 {
+            challenge.absorb(Scalar::ZERO);
+        }
+        [challenge.state[1], challenge.state[2]]
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn native_opening_base_probe(
+    fields: [Scalar; 2],
+    basis_digest: [u8; 32],
+    role: u64,
+) -> [Scalar; 2] {
+    let mut transcript = NativeTranscript::new();
+    transcript.append_field(fields[0]);
+    transcript.append_field(fields[1]);
+    transcript.opening_base_scalar(basis_digest, role)
 }
 
 #[cfg(test)]
@@ -450,6 +504,11 @@ mod tests {
         let second = joined.challenge(2);
         assert_ne!(first, second);
         assert_eq!(first, joined.challenge(1));
+
+        let opening_base = joined.opening_base_scalar([0x31; 32], 1);
+        assert_ne!(opening_base, first);
+        assert_ne!(opening_base, joined.opening_base_scalar([0x31; 32], 2));
+        assert_ne!(opening_base, joined.opening_base_scalar([0x32; 32], 1));
     }
 
     #[test]

@@ -180,6 +180,7 @@ fn validate_production_shape(
 }
 
 fn build_anchor_recurrence_relation_inner(
+    mut builder: Builder,
     state: &AnchorRecurrenceStateWitness,
     statement: ManifestBoundAnchorLeafStatementV4,
     transcript_witness: &CircuitProofTranscriptWitnessV4,
@@ -200,7 +201,6 @@ fn build_anchor_recurrence_relation_inner(
         .index
         .checked_add(1)
         .ok_or(ReceiptCycleError::Malformed("anchor recurrence index"))?;
-    let mut builder = Builder::default();
     let inputs = allocate_state_inputs(&mut builder, state)?;
     let prior_root = bind_prior_root(&mut builder, &inputs, &state.root)?;
     let leaf = install_manifest_bound_anchor_leaf(
@@ -238,6 +238,7 @@ pub(crate) fn build_anchor_recurrence_relation(
     step_proof: &CandidateStepProofWitness,
 ) -> Result<StatefulRelation, ReceiptCycleError> {
     build_anchor_recurrence_relation_inner(
+        Builder::default(),
         state,
         statement,
         transcript_witness,

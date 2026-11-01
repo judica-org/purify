@@ -352,6 +352,7 @@ fn fixture_for_shape(
 
 fn build_fixture(fixture: &Fixture) -> StatefulRelation {
     build_anchor_recurrence_relation_inner(
+        Builder::default(),
         &fixture.state,
         fixture.statement,
         &fixture.witness,

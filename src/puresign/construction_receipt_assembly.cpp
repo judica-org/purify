@@ -4,7 +4,6 @@
 
 #include "purify/puresign/construction_receipt_assembly.hpp"
 
-#include <algorithm>
 #include <utility>
 
 namespace purify::accountable {
@@ -21,35 +20,21 @@ bool same_ciphertext(const AnchorEscrowCiphertext& left,
 Result<ConstructionReceiptAssembly> ConstructionReceiptAssembly::create(
     PendingConstructionSetup setup,
     ConstructionReceiptPayload payload,
+    ResolvedConstructionSetupDigest resolved_setup,
     std::vector<ResolvedConstructionReceiptEntry> resolved_entries) {
     if (payload.recovery_root() != setup.recovery_root()) {
         return unexpected_error(
             ErrorCode::BindingMismatch,
             "construction_assembly:setup_recovery_root");
     }
-    if (payload.entries().size() != resolved_entries.size()) {
-        return unexpected_error(ErrorCode::InvalidFixedSize,
-                                "construction_assembly:manifest_size");
-    }
-    for (std::size_t i = 0; i < resolved_entries.size(); ++i) {
-        for (std::size_t prior = 0; prior < i; ++prior) {
-            if (resolved_entries[prior].anchor_reference ==
-                resolved_entries[i].anchor_reference) {
-                return unexpected_error(
-                    ErrorCode::BindingMismatch,
-                    "construction_assembly:duplicate_anchor_reference");
-            }
-            if (resolved_entries[prior].anchor_root ==
-                resolved_entries[i].anchor_root) {
-                return unexpected_error(
-                    ErrorCode::BindingMismatch,
-                    "construction_assembly:duplicate_anchor_root");
-            }
-        }
-    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto statement_digest,
+        construction_receipt_statement_digest(
+            payload, resolved_setup, resolved_entries),
+        "construction_assembly:statement");
     return ConstructionReceiptAssembly(
-        std::move(setup), std::move(payload),
-        std::move(resolved_entries));
+        std::move(setup), std::move(payload), std::move(resolved_setup),
+        std::move(resolved_entries), statement_digest);
 }
 
 Result<bppp::accumulation::PendingClaim>

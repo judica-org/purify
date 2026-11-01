@@ -36,6 +36,7 @@ public:
     [[nodiscard]] static Result<ConstructionReceiptAssembly> create(
         PendingConstructionSetup setup,
         ConstructionReceiptPayload payload,
+        ResolvedConstructionSetupDigest resolved_setup,
         std::vector<ResolvedConstructionReceiptEntry> resolved_entries);
 
     [[nodiscard]] Result<bppp::accumulation::PendingClaim>
@@ -60,6 +61,16 @@ public:
         return payload_;
     }
 
+    [[nodiscard]] const ResolvedConstructionSetupDigest& resolved_setup()
+        const noexcept {
+        return resolved_setup_;
+    }
+
+    [[nodiscard]] const ConstructionReceiptStatementDigest&
+    statement_digest() const noexcept {
+        return statement_digest_;
+    }
+
     [[nodiscard]] std::span<const ResolvedConstructionReceiptEntry>
     resolved_entries() const noexcept {
         return resolved_entries_;
@@ -69,15 +80,21 @@ private:
     ConstructionReceiptAssembly(
         PendingConstructionSetup setup,
         ConstructionReceiptPayload payload,
-        std::vector<ResolvedConstructionReceiptEntry> resolved_entries)
+        ResolvedConstructionSetupDigest resolved_setup,
+        std::vector<ResolvedConstructionReceiptEntry> resolved_entries,
+        ConstructionReceiptStatementDigest statement_digest)
         : setup_(std::move(setup)),
           payload_(std::move(payload)),
+          resolved_setup_(std::move(resolved_setup)),
           resolved_entries_(std::move(resolved_entries)),
+          statement_digest_(statement_digest),
           anchor_claims_(resolved_entries_.size()) {}
 
     PendingConstructionSetup setup_;
     ConstructionReceiptPayload payload_;
+    ResolvedConstructionSetupDigest resolved_setup_;
     std::vector<ResolvedConstructionReceiptEntry> resolved_entries_;
+    ConstructionReceiptStatementDigest statement_digest_{};
     std::vector<std::optional<bppp::accumulation::PendingClaim>>
         anchor_claims_;
 };

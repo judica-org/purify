@@ -237,13 +237,30 @@ void test_anchor_escrow(TestContext& ctx) {
     resolved.anchor_reference.fill(0x71);
     resolved.anchor_root = anchor->public_key;
     resolved.context_digest = context;
+    purify::accountable::ResolvedConstructionSetupDigestBytes
+        setup_digest_bytes;
+    setup_digest_bytes.fill(0x72);
+    auto setup_digest =
+        purify::accountable::ResolvedConstructionSetupDigest::create(
+            setup_digest_bytes);
+    expect_ok(ctx, setup_digest,
+              "resolved construction setup digest creates");
+    if (!setup_digest) return;
+    auto expected_statement =
+        purify::accountable::construction_receipt_statement_digest(
+            *receipt_payload, *setup_digest, {&resolved, 1});
+    expect_ok(ctx, expected_statement,
+              "typed assembly statement digest creates");
+    if (!expected_statement) return;
     auto assembly =
         purify::accountable::ConstructionReceiptAssembly::create(
             std::move(*promoted_setup), std::move(*receipt_payload),
-            {resolved});
+            std::move(*setup_digest), {resolved});
     expect_ok(ctx, assembly,
               "typed construction assembly binds the exact manifest");
     if (!assembly) return;
+    ctx.expect(assembly->statement_digest() == *expected_statement,
+               "typed assembly owns the exact statement digest");
     expect_error(ctx, assembly->ordered_leaves(),
                  purify::ErrorCode::MissingValue,
                  "incomplete manifests cannot produce ordered leaves");

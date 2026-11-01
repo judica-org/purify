@@ -81,6 +81,36 @@ pub(crate) struct Builder {
     constraints: Vec<Expression>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StateWire {
+    pub(crate) kind: WireKind,
+    pub(crate) index: usize,
+}
+
+#[derive(Clone)]
+#[allow(dead_code)]
+pub(crate) struct StateVariable {
+    expression: Expression,
+    wire: StateWire,
+}
+
+#[allow(dead_code)]
+impl StateVariable {
+    pub(crate) fn expression(&self) -> &Expression {
+        &self.expression
+    }
+}
+
+// The recursive backend consumes this transport in the next integration
+// patch; the candidate recurrence is intentionally not an acceptance API.
+#[allow(dead_code)]
+pub(crate) struct StatefulRelation {
+    pub(crate) circuit: Vec<u8>,
+    pub(crate) assignment: Vec<u8>,
+    pub(crate) inputs: Vec<StateWire>,
+    pub(crate) outputs: Vec<StateWire>,
+}
+
 impl Builder {
     #[cfg(test)]
     pub(crate) fn gate_count(&self) -> usize {
@@ -95,6 +125,26 @@ impl Builder {
                 .sub(&Expression::constant(Scalar::ONE)),
         );
         Expression::variable(WireKind::Left, index, value)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn allocate_state(&mut self, value: Scalar) -> StateVariable {
+        let index = self.gates.len();
+        let expression = self.allocate(value);
+        StateVariable {
+            expression,
+            wire: StateWire {
+                kind: WireKind::Left,
+                index,
+            },
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn expose_state(&mut self, value: &Expression) -> StateVariable {
+        let state = self.allocate_state(value.value());
+        self.constrain_equal(state.expression(), value);
+        state
     }
 
     pub(crate) fn allocate_boolean(&mut self, value: bool) -> Expression {
@@ -140,6 +190,26 @@ impl Builder {
         };
         let assignment = Assignment { gates: self.gates };
         Ok((encode_circuit(&circuit), encode_assignment(&assignment)))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn finish_stateful(
+        self,
+        inputs: &[StateVariable],
+        outputs: &[StateVariable],
+    ) -> Result<StatefulRelation, ReceiptCycleError> {
+        if inputs.is_empty() || inputs.len() != outputs.len() {
+            return Err(ReceiptCycleError::Malformed("state variable shape"));
+        }
+        let input_wires = inputs.iter().map(|state| state.wire).collect();
+        let output_wires = outputs.iter().map(|state| state.wire).collect();
+        let (circuit, assignment) = self.finish()?;
+        Ok(StatefulRelation {
+            circuit,
+            assignment,
+            inputs: input_wires,
+            outputs: output_wires,
+        })
     }
 }
 

@@ -407,6 +407,15 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
         purify::ErrorCode::BindingMismatch,
         "one receipt cannot resolve the same anchor twice");
 
+    auto duplicate_root = fixture->resolved;
+    duplicate_root[1].anchor_root = duplicate_root[0].anchor_root;
+    expect_error(
+        ctx,
+        purify::accountable::construction_receipt_statement_digest(
+            *payload, duplicate_root),
+        purify::ErrorCode::BindingMismatch,
+        "distinct references cannot resolve the same anchor root");
+
     auto changed_root = public_root(8);
     expect_ok(ctx, changed_root, "changed recovery root constructs");
     if (!changed_root) return;

@@ -239,6 +239,12 @@ construction_receipt_statement_digest(
                     ErrorCode::BindingMismatch,
                     "construction_receipt:duplicate_anchor_reference");
             }
+            if (resolved_entries[prior].anchor_root ==
+                resolved.anchor_root) {
+                return unexpected_error(
+                    ErrorCode::BindingMismatch,
+                    "construction_receipt:duplicate_anchor_root");
+            }
         }
         PURIFY_RETURN_IF_ERROR(
             validate_public_root(resolved.anchor_root,

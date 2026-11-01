@@ -979,14 +979,16 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
   const FieldElement rho_inv = out.public_data->rho.inverse();
   FieldElement rho_weight_inv = rho_inv;
   for (std::size_t i = 0; i < circuit.n_gates; ++i) {
-    const FieldElement plus_value = assignment.left[i] + assignment.right[i] +
-                                    out.public_data->plus_shift[i];
+    FieldElement plus_value = assignment.left[i] + assignment.right[i] +
+                              out.public_data->plus_shift[i];
+    WipeObjectOnDestruction plus_value_wiper(plus_value);
     out.n_vec[2 * i] =
         out.public_data->plus_terms[i] * plus_value * rho_weight_inv;
     rho_weight_inv = rho_weight_inv * rho_inv;
 
-    const FieldElement minus_value = assignment.left[i] - assignment.right[i] +
-                                     out.public_data->minus_shift[i];
+    FieldElement minus_value = assignment.left[i] - assignment.right[i] +
+                               out.public_data->minus_shift[i];
+    WipeObjectOnDestruction minus_value_wiper(minus_value);
     out.n_vec[2 * i + 1] =
         out.public_data->minus_terms[i] * minus_value * rho_weight_inv;
     rho_weight_inv = rho_weight_inv * rho_inv;

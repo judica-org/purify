@@ -139,6 +139,40 @@ static_assert(std::is_trivially_copyable_v<purify::NativeBulletproofCircuitTerm>
 static_assert(std::is_trivially_copyable_v<purify::FieldElement>,
               "Packed circuit storage requires trivially copyable field elements");
 
+template <typename T>
+class WipeObjectOnDestruction {
+public:
+    explicit WipeObjectOnDestruction(T& value) noexcept : value_(&value) {
+        static_assert(std::is_trivially_destructible_v<T>);
+    }
+    WipeObjectOnDestruction(const WipeObjectOnDestruction&) = delete;
+    WipeObjectOnDestruction& operator=(const WipeObjectOnDestruction&) = delete;
+    ~WipeObjectOnDestruction() {
+        purify::detail::secure_clear_bytes(value_, sizeof(T));
+    }
+
+private:
+    T* value_;
+};
+
+template <typename T>
+class WipeVectorOnDestruction {
+public:
+    explicit WipeVectorOnDestruction(std::vector<T>& value) noexcept
+        : value_(&value) {
+        static_assert(std::is_trivially_destructible_v<T>);
+    }
+    WipeVectorOnDestruction(const WipeVectorOnDestruction&) = delete;
+    WipeVectorOnDestruction& operator=(const WipeVectorOnDestruction&) = delete;
+    ~WipeVectorOnDestruction() {
+        purify::detail::secure_clear_bytes(
+            value_->data(), value_->size() * sizeof(T));
+    }
+
+private:
+    std::vector<T>* value_;
+};
+
 std::uint32_t narrow_symbol_index(std::size_t index) {
     assert(index <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())
            && "symbol index must fit in uint32_t");
@@ -996,6 +1030,7 @@ bool NativeBulletproofCircuit::evaluate(const BulletproofAssignmentData& assignm
     }
 
     std::vector<FieldElement> acc(c.size(), FieldElement::zero());
+    WipeVectorOnDestruction acc_wiper(acc);
     auto accumulate = [&](const std::vector<NativeBulletproofCircuitRow>& rows,
                           std::span<const FieldElement> values,
                           bool negate_values = false) {
@@ -1005,6 +1040,7 @@ bool NativeBulletproofCircuit::evaluate(const BulletproofAssignmentData& assignm
         for (std::size_t i = 0; i < rows.size(); ++i) {
             if (negate_values) {
                 FieldElement negated = values[i].negate();
+                WipeObjectOnDestruction negated_wiper(negated);
                 for (const NativeBulletproofCircuitTerm& entry : rows[i].entries) {
                     if (entry.idx >= acc.size()) {
                         return false;

@@ -796,7 +796,8 @@ AnchorEscrowAccumulator::prepare(
         bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4(
             circuit, std::move(proof), secp_context, binding),
         "anchor_escrow_accumulation:publication");
-    const auto precommitment = publication.precommitment.bytes();
+    const auto circuit_precommitment =
+        publication.precommitment.bytes();
     PURIFY_ASSIGN_OR_RETURN(
         auto prepared,
         bppp::candidate::prepare_circuit_zk_norm_arg_v4(
@@ -812,7 +813,7 @@ AnchorEscrowAccumulator::prepare(
             prepare_v4_circuit_norm_for_algebraic_reduction(
                 basis_, std::move(*prepared), secp_context),
         "anchor_escrow_accumulation:norm");
-    return PreparedAnchorEscrow(precommitment, std::move(norm));
+    return PreparedAnchorEscrow(circuit_precommitment, std::move(norm));
 }
 
 Result<GeneratedKey> recover_escrowed_anchor(

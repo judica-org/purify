@@ -383,7 +383,8 @@ ConstructionReceiptAccumulator::verify_anchor_reduction(
         anchors_.prepare(roster, advertised_anchor_root,
                          context_digest, record, secp_context, cache),
         "construction_accumulation:prepare_anchor");
-    if (prepared.precommitment() != expected_circuit_precommitment) {
+    if (prepared.circuit_precommitment() !=
+        expected_circuit_precommitment) {
         return unexpected_error(
             ErrorCode::BindingMismatch,
             "construction_accumulation:anchor_precommitment");

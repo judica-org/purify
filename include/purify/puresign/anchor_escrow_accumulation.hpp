@@ -22,8 +22,9 @@ public:
         default;
 
     /** The verifier-derived precommitment retained by the final payload. */
-    [[nodiscard]] const bppp::ScalarBytes& precommitment() const noexcept {
-        return precommitment_;
+    [[nodiscard]] const bppp::ScalarBytes& circuit_precommitment()
+        const noexcept {
+        return circuit_precommitment_;
     }
 
     [[nodiscard]] const bppp::accumulation::AlgebraicPreparedNorm& norm()
@@ -33,11 +34,12 @@ public:
 
 private:
     PreparedAnchorEscrow(
-        bppp::ScalarBytes precommitment,
+        bppp::ScalarBytes circuit_precommitment,
         bppp::accumulation::AlgebraicPreparedNorm norm)
-        : precommitment_(precommitment), norm_(std::move(norm)) {}
+        : circuit_precommitment_(circuit_precommitment),
+          norm_(std::move(norm)) {}
 
-    bppp::ScalarBytes precommitment_{};
+    bppp::ScalarBytes circuit_precommitment_{};
     bppp::accumulation::AlgebraicPreparedNorm norm_;
 
     friend class AnchorEscrowAccumulator;

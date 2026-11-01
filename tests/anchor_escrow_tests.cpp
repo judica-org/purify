@@ -238,8 +238,8 @@ void test_anchor_escrow(TestContext& ctx) {
               "typed adapter prepares the exact anchor escrow statement");
     if (!prepared) return;
     ctx.expect(
-        std::any_of(prepared->precommitment().begin(),
-                    prepared->precommitment().end(),
+        std::any_of(prepared->circuit_precommitment().begin(),
+                    prepared->circuit_precommitment().end(),
                     [](unsigned char byte) { return byte != 0; }),
         "prepared anchor exposes its nonzero V4 precommitment");
     auto reduction =
@@ -270,7 +270,7 @@ void test_anchor_escrow(TestContext& ctx) {
     if (!promoted_setup) return;
     std::vector<purify::accountable::ConstructionReceiptEntry>
         receipt_entries{{parsed->ciphertext(),
-                         prepared->precommitment()}};
+                         prepared->circuit_precommitment()}};
     auto receipt_payload =
         purify::accountable::ConstructionReceiptPayload::create(
             fixture->roster.recovery_root(),
@@ -301,7 +301,7 @@ void test_anchor_escrow(TestContext& ctx) {
     auto mismatched_circuit_precommitment =
         FieldElement::one().to_bytes_be();
     if (mismatched_circuit_precommitment ==
-        prepared->precommitment()) {
+        prepared->circuit_precommitment()) {
         mismatched_circuit_precommitment =
             FieldElement::from_u64(2).to_bytes_be();
     }
@@ -520,8 +520,8 @@ void test_anchor_escrow(TestContext& ctx) {
               "changed context remains a pending public obligation");
     if (!changed_context_prepared) return;
     ctx.expect(
-        changed_context_prepared->precommitment() !=
-                prepared->precommitment() &&
+        changed_context_prepared->circuit_precommitment() !=
+                prepared->circuit_precommitment() &&
             changed_context_prepared->norm().prepared_binding() !=
                 prepared->norm().prepared_binding(),
         "typed adapter binds the exact escrow context");
@@ -547,7 +547,7 @@ void test_anchor_escrow(TestContext& ctx) {
         !construction_accumulator->verify_anchor_reduction(
             assembly->setup(), fixture->roster, anchor->public_key,
             changed_context, *record,
-            prepared->precommitment(),
+            prepared->circuit_precommitment(),
             *reduction, secp.get()),
         "construction leaf authenticates the exact anchor statement");
     expect_error(
@@ -609,8 +609,8 @@ void test_anchor_escrow(TestContext& ctx) {
               "changed ciphertext remains a pending public obligation");
     if (!changed_ciphertext_prepared) return;
     ctx.expect(
-        changed_ciphertext_prepared->precommitment() !=
-                prepared->precommitment() &&
+        changed_ciphertext_prepared->circuit_precommitment() !=
+                prepared->circuit_precommitment() &&
             changed_ciphertext_prepared->norm().prepared_binding() !=
                 prepared->norm().prepared_binding(),
         "typed adapter binds the exact escrow ciphertext");
@@ -660,8 +660,8 @@ void test_anchor_escrow(TestContext& ctx) {
     if (!changed_inner_prepared) return;
     ctx.expect(changed_inner_prepared->norm().prepared_binding() !=
                    prepared->norm().prepared_binding() &&
-                   changed_inner_prepared->precommitment() ==
-                       prepared->precommitment(),
+                   changed_inner_prepared->circuit_precommitment() ==
+                       prepared->circuit_precommitment(),
                "typed adapter authenticates the exact inner proof");
     auto changed_inner_reduction =
         purify::bppp::accumulation::prove_algebraic_norm_reduction(
@@ -780,7 +780,7 @@ void test_anchor_escrow(TestContext& ctx) {
         construction_accumulator->verify_anchor_reduction(
             assembly->setup(), other_fixture->roster,
             anchor->public_key,
-            context, *parsed, prepared->precommitment(),
+            context, *parsed, prepared->circuit_precommitment(),
             *reduction,
             secp.get()),
         purify::ErrorCode::BindingMismatch,

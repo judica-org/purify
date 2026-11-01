@@ -19,6 +19,8 @@ use rand_core::SeedableRng;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod ffi;
+
 type Scalar = <Secq256k1Cycle as Cycle>::Scalar;
 
 const CIRCUIT_VERSION: u8 = 1;
@@ -371,7 +373,7 @@ mod tests {
         out.extend_from_slice(&Secq256k1Cycle::scalar_to_canonical(&value));
     }
 
-    fn multiplication_circuit(expected: u64) -> Vec<u8> {
+    pub(crate) fn multiplication_circuit(expected: u64) -> Vec<u8> {
         let mut out = vec![CIRCUIT_VERSION];
         append_u32(&mut out, 1);
         append_u32(&mut out, 1);
@@ -385,7 +387,7 @@ mod tests {
         out
     }
 
-    fn multiplication_assignment(left: u64, right: u64) -> Vec<u8> {
+    pub(crate) fn multiplication_assignment(left: u64, right: u64) -> Vec<u8> {
         let mut out = vec![ASSIGNMENT_VERSION];
         append_u32(&mut out, 1);
         append_scalar(&mut out, scalar(left));

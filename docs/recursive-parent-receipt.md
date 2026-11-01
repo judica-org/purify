@@ -22,11 +22,11 @@ Neither check is optional. A pending claim does not authenticate its ancestry,
 and a parent proof which does not bind the decided claim proves a different
 statement.
 
-Coalition setup is authenticated once by the registry and referenced by the
-construction payload. The parent reconstructs each anchor statement from that
-registered setup, the ordered anchor reference and resolved root, the context,
-and the on-chain ciphertext. Registry authentication is outside the proof
-system but is part of application acceptance.
+Coalition setup is authenticated once by the registry and selected by the
+payload's recovery root. The parent reconstructs each anchor statement from
+that registered setup, the deterministic ordered anchor reference and resolved
+root, the context, and the on-chain ciphertext. Registry authentication is
+outside the proof system but is part of application acceptance.
 
 ## Constrained relation
 

@@ -10,7 +10,7 @@
 
 #include "purify.hpp"
 #include "purify/puresign/anchor_escrow.hpp"
-#include "purify/puresign/anchor_escrow_accumulation.hpp"
+#include "purify/puresign/construction_receipt_accumulation.hpp"
 #include "../src/puresign/anchor_escrow_internal.hpp"
 #include "purify_test_helpers.hpp"
 
@@ -45,6 +45,7 @@ Result<std::array<unsigned char, 33>> public_point(
 struct BoundRosterFixture {
     RecoveryBoundSigningRoster roster;
     FieldElement signing_scalar;
+    purify::accountable::RecoveryRootSetupProof setup_proof;
 };
 
 Result<BoundRosterFixture> make_roster(
@@ -89,7 +90,7 @@ Result<BoundRosterFixture> make_roster(
             std::move(raw), coalition_core_digest, hosts, secp_context),
         "anchor_escrow_test:nonce_bound");
     PURIFY_ASSIGN_OR_RETURN(
-        const auto& setup_proof,
+        auto setup_proof,
         purify::accountable::prove_recovery_root_setup(
             nonce_bound, recovery_root.public_key, signing_scalar,
             secp_context),
@@ -100,7 +101,8 @@ Result<BoundRosterFixture> make_roster(
             std::move(nonce_bound), recovery_root.public_key, setup_proof,
             secp_context),
         "anchor_escrow_test:bound_roster");
-    return BoundRosterFixture{std::move(bound), signing_scalar};
+    return BoundRosterFixture{
+        std::move(bound), signing_scalar, std::move(setup_proof)};
 }
 
 void expect_rejected(TestContext& ctx, Result<bool> result,
@@ -177,11 +179,12 @@ void test_anchor_escrow(TestContext& ctx) {
     ctx.expect(reencoded && *reencoded == *encoded,
                "anchor escrow encoding round-trips exactly");
 
-    auto accumulator =
-        purify::accountable::AnchorEscrowAccumulator::create(secp.get());
-    expect_ok(ctx, accumulator,
-              "anchor escrow fixed accumulation basis creates");
-    if (!accumulator) return;
+    auto construction_accumulator = purify::accountable::
+        ConstructionReceiptAccumulator::create(secp.get());
+    expect_ok(ctx, construction_accumulator,
+              "construction receipt fixed accumulation bases create");
+    if (!construction_accumulator) return;
+    const auto* accumulator = &construction_accumulator->anchors();
     ctx.expect(
         accumulator->basis().n_vec_len() ==
                 purify::accountable::AnchorEscrowAccumulator::
@@ -209,6 +212,62 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, purify::bppp::accumulation::decide(
                        accumulator->basis(), *pending, secp.get()),
               "final MSM discharges the honest anchor escrow obligation");
+
+    auto setup_prepared = construction_accumulator->setup().prepare(
+        fixture->roster, fixture->roster.recovery_root(),
+        fixture->setup_proof, secp.get());
+    expect_ok(ctx, setup_prepared,
+              "construction adapter prepares the exact setup proof");
+    if (!setup_prepared) return;
+    auto setup_reduction =
+        purify::bppp::accumulation::prove_norm_reduction(
+            construction_accumulator->setup().basis(),
+            *setup_prepared, secp.get());
+    expect_ok(ctx, setup_reduction,
+              "construction setup coefficient opening proves");
+    if (!setup_reduction) return;
+    auto promoted_setup =
+        construction_accumulator->verify_setup_reduction(
+            fixture->roster, fixture->roster.recovery_root(),
+            fixture->setup_proof, *setup_reduction, secp.get());
+    expect_ok(ctx, promoted_setup,
+              "exact setup reduction promotes to the anchor basis");
+    if (!promoted_setup) return;
+    const std::array construction_leaves{*promoted_setup, *pending};
+    auto construction_step = purify::bppp::accumulation::prove_step(
+        accumulator->basis(), construction_leaves, secp.get());
+    expect_ok(ctx, construction_step,
+              "setup and anchor obligations fold into one root");
+    if (!construction_step) return;
+    auto construction_root = purify::bppp::accumulation::verify_step(
+        accumulator->basis(), construction_leaves,
+        *construction_step, secp.get());
+    expect_ok(ctx, construction_root,
+              "combined construction root remains pending");
+    if (!construction_root) return;
+    auto encoded_construction_root =
+        purify::bppp::accumulation::serialize_root_claim(
+            accumulator->basis(), *construction_root, secp.get());
+    expect_ok(ctx, encoded_construction_root,
+              "combined construction root has a canonical encoding");
+    if (!encoded_construction_root) return;
+    ctx.expect(
+        encoded_construction_root->size() ==
+            purify::accountable::ConstructionReceiptAccumulator::
+                kRootClaimSerializedSize &&
+            encoded_construction_root->size() == 545,
+        "combined construction root is exactly 545 bytes");
+    auto parsed_construction_root =
+        purify::bppp::accumulation::parse_root_claim(
+            accumulator->basis(), *encoded_construction_root,
+            secp.get());
+    expect_ok(ctx, parsed_construction_root,
+              "combined construction root reparses");
+    if (!parsed_construction_root) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       accumulator->basis(),
+                       *parsed_construction_root, secp.get()),
+              "final MSM discharges setup and anchor together");
 
     const auto slot = purify::bytes_from_ascii(
         "anchor-escrow/domain=3/epoch=9/slot=4");
@@ -416,6 +475,11 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, other_fixture,
               "second setup statement constructs a bound roster");
     if (!other_fixture) return;
+    ctx.expect(
+        !construction_accumulator->verify_setup_reduction(
+            fixture->roster, fixture->roster.recovery_root(),
+            other_fixture->setup_proof, *setup_reduction, secp.get()),
+        "construction promotion rejects another setup proof");
     expect_rejected(
         ctx,
         purify::accountable::verify_anchor_escrow(

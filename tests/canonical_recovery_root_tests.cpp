@@ -235,6 +235,31 @@ void test_setup_and_recovery(TestContext& ctx) {
     expect_ok(ctx, promoted_setup,
               "exact setup reduction promotes to the construction basis");
     if (!promoted_setup) return;
+    const auto same_polynomial = [&] {
+        if (promoted_setup->polynomial().size() !=
+            setup_pending->polynomial().size()) {
+            return false;
+        }
+        for (std::size_t i = 0;
+             i < setup_pending->polynomial().size(); ++i) {
+            const auto& promoted = promoted_setup->polynomial()[i];
+            const auto& setup = setup_pending->polynomial()[i];
+            if (promoted.scale != setup.scale ||
+                promoted.offset != setup.offset ||
+                promoted.factors != setup.factors) {
+                return false;
+            }
+        }
+        return true;
+    };
+    ctx.expect(
+        promoted_setup->point() == setup_pending->point() &&
+            same_polynomial() &&
+            promoted_setup->basis_digest() ==
+                construction_accumulator->anchors().basis().digest() &&
+            promoted_setup->basis_digest() !=
+                setup_accumulator->basis().digest(),
+        "promotion changes only the authenticated basis digest");
     expect_ok(ctx, purify::bppp::accumulation::decide(
                        construction_accumulator->anchors().basis(),
                        *promoted_setup, secp.get()),

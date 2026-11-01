@@ -853,7 +853,18 @@ public setup leaf and 949,880 gates for the historical hidden anchor
 leaf. These are leaf relation sizes, not complete parent costs. Anchor
 escrow record version~3 now uses V4 public mode with one punishment-key
 commitment; its recursive leaf has not yet been remeasured in this
-document. No final construction receipt exists.
+document.
+
+The selected parent architecture verifies the heterogeneous public
+setup once through an immutable Bitcoin-replayable registry record and
+stores a canonical construction-basis seed root. A homogeneous Nova
+0.76 recurrence then verifies one public anchor leaf and one ordered
+accumulation transition per step. Its 20-field state carries the pending
+root, rolling manifest, and ordered index.
+
+No final construction receipt exists. Canonical Nova encoding,
+production resource qualification, and the complete
+root-to-native-decision acceptance path remain.
 
 The remainder of this section through the historical efficiency note
 records the preceding V3 implementation and its measurements. Its
@@ -1236,9 +1247,11 @@ Three caveats are worth stating explicitly:
   Purify circuit but changes its typed Fiat--Shamir transcript and
   composition boundary. The V3 analysis is not a substitute for
   independent V4 review.
-  \item Native and constrained V4 leaves exist. No final construction
-  receipt exists, and no recursive backend is selected. The public
-  PureSign++ and escrow codecs remain V3 during migration.
+  \item Native and constrained V4 leaves exist, and Nova 0.76 is the
+  selected transparent folding backend for construction-receipt work.
+  The public-anchor recurrence migration, fixed production suite,
+  memory qualification, and complete acceptance API remain unfinished.
+  Anchor escrow record version~3 already carries a V4 public proof.
 \end{enumerate}
 
 \section{Summary}
@@ -1247,9 +1260,10 @@ Purify is the statement. The native sparse circuit is the common intermediate fo
 circuit directly. \bppp\ first folds the same circuit into a weighted norm argument and then proves
 that reduced relation, wrapped in a \bp-style\ masking transcript. That split is the easiest
 way to understand the design of \texttt{purify-cpp}: one circuit, two proving encodings.
-V4 is the candidate circuit leaf for future receipts; the extended V3
-discussion above remains its historical implementation baseline, not a
-completed parent receipt.
+V4 is the candidate circuit leaf and the registry-seeded homogeneous
+Nova recurrence is the selected composition direction. The extended V3
+discussion remains its historical implementation baseline; neither it nor
+the current Nova feasibility probe is a completed construction receipt.
 
 \appendix
 

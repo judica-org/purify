@@ -73,9 +73,15 @@ unique identity encoding, and addition for distinct points, doubling, inverses,
 and both identity cases. Its circuit shape is independent of the private
 branch. The scalar foundation constrains canonical four-limb values modulo the
 secp256k1 group order and modular add, subtract, multiply, and inverse.
-Point decompression, wide transcript reduction, transcript hashing, and the
-complete V3/reduction/promotion/step relations remain before an acceptance API
-can be exposed.
+The compressed-point foundation constrains a unique coordinate-field integer,
+the SEC1 parity bit, the curve equation, and non-identity. Complete fixed-shape
+variable-base scalar multiplication costs 23,280 gates and produces a
+1,415-byte standalone backend proof. A naive 32-term accumulation-step MSM
+would therefore cost about 745,000 gates before transcript and scalar algebra;
+the parent needs one shared Straus-style MSM instead. Wide transcript
+reduction, transcript integration, that shared MSM, and the complete
+V3/reduction/promotion/step relations remain before an acceptance API can be
+exposed.
 
 The exact secq SHA-256 gadget costs 30,952 multipliers per compression block,
 plus eight multipliers per private input byte. Replaying the current V3
@@ -89,6 +95,12 @@ remains the only accepted format until a replacement has complete prover,
 verifier, cross-suite rejection, and security tests. Because the protocol is
 pre-release, that migration should replace the suite cleanly rather than add a
 permanent compatibility path.
+
+The native candidate Poseidon permutation is reproducible from the pinned
+parameter generator and cross-language vectors. It is deliberately not an
+accepted transcript suite: typed absorption, its R1CS implementation, native
+prover integration, and cross-suite rejection must land together before the
+SHA format can be replaced.
 
 ## Why the final MSM stays native
 

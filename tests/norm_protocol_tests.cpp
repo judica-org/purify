@@ -25,6 +25,21 @@ struct FixedRoundChallenges {
     std::vector<std::array<unsigned char, 65>> pairs;
 };
 
+struct ScriptedRoundChallenge {
+    bool accept{false};
+    purify::bppp::ScalarBytes scalar{};
+};
+
+int scripted_round_challenge(void* callback_data,
+                             const unsigned char[65], std::size_t,
+                             unsigned char challenge32[32]) {
+    const auto& script =
+        *static_cast<const ScriptedRoundChallenge*>(callback_data);
+    if (!script.accept) return 0;
+    std::copy(script.scalar.begin(), script.scalar.end(), challenge32);
+    return 1;
+}
+
 int fixed_round_challenge(void* callback_data,
                           const unsigned char point_pair65[65],
                           std::size_t round,
@@ -550,6 +565,41 @@ void check_protocol_owned_round_challenges(TestContext& ctx) {
     ctx.expect(pairs_match,
                "callback sees each exact emitted point pair");
 
+    const auto callback_rejects = [&](ScriptedRoundChallenge& script) {
+        purify::Bytes rejected_proof(proof.size());
+        std::size_t rejected_size = rejected_proof.size();
+        return purify_bppp_prove_norm_arg_to_commitment_with_callback(
+                   secp.get(), inputs.rho.data(),
+                   reinterpret_cast<const unsigned char*>(
+                       generators->data()),
+                   generators->size(),
+                   reinterpret_cast<const unsigned char*>(
+                       inputs.n_vec.data()),
+                   inputs.n_vec.size(),
+                   reinterpret_cast<const unsigned char*>(
+                       inputs.l_vec.data()),
+                   inputs.l_vec.size(),
+                   reinterpret_cast<const unsigned char*>(
+                       inputs.c_vec.data()),
+                   inputs.c_vec.size(), commitment->data(),
+                   scripted_round_challenge, &script,
+                   rejected_proof.data(), &rejected_size) == 0;
+    };
+    ScriptedRoundChallenge rejected_callback;
+    ctx.expect(callback_rejects(rejected_callback),
+               "protocol prover rejects callback failure");
+    ScriptedRoundChallenge zero_callback{true, {}};
+    ctx.expect(callback_rejects(zero_callback),
+               "protocol prover rejects a zero callback challenge");
+    ScriptedRoundChallenge noncanonical_callback{
+        true,
+        purify::UInt256::from_hex(
+            "fffffffffffffffffffffffffffffffebaaedce6af48a03b"
+            "bfd25e8cd0364141")
+            .to_bytes_be()};
+    ctx.expect(callback_rejects(noncanonical_callback),
+               "protocol prover rejects a noncanonical callback challenge");
+
     const auto* gamma_bytes = reinterpret_cast<const unsigned char*>(
         challenges.scalars.data());
     const int verified = purify_bppp_verify_norm_arg_with_challenges(
@@ -562,6 +612,17 @@ void check_protocol_owned_round_challenges(TestContext& ctx) {
         challenges.scalars.size());
     ctx.expect(verified != 0,
                "protocol challenge verifier accepts exact replay");
+    ctx.expect(purify_bppp_verify_norm_arg_with_challenges(
+                   secp.get(), inputs.rho.data(),
+                   reinterpret_cast<const unsigned char*>(
+                       generators->data()),
+                   generators->size(),
+                   reinterpret_cast<const unsigned char*>(
+                       inputs.c_vec.data()),
+                   inputs.c_vec.size(), inputs.n_vec.size(),
+                   commitment->data(), proof.data(), proof.size(),
+                   gamma_bytes, challenges.scalars.size() - 1) == 0,
+               "protocol verifier rejects a short challenge vector");
     ctx.expect(purify_bppp_verify_norm_arg(
                    secp.get(), inputs.rho.data(),
                    reinterpret_cast<const unsigned char*>(
@@ -587,6 +648,33 @@ void check_protocol_owned_round_challenges(TestContext& ctx) {
                    reinterpret_cast<const unsigned char*>(changed.data()),
                    changed.size()) == 0,
                "changed protocol challenge rejects the proof");
+    changed = challenges.scalars;
+    changed[0].fill(0);
+    ctx.expect(purify_bppp_verify_norm_arg_with_challenges(
+                   secp.get(), inputs.rho.data(),
+                   reinterpret_cast<const unsigned char*>(
+                       generators->data()),
+                   generators->size(),
+                   reinterpret_cast<const unsigned char*>(
+                       inputs.c_vec.data()),
+                   inputs.c_vec.size(), inputs.n_vec.size(),
+                   commitment->data(), proof.data(), proof.size(),
+                   reinterpret_cast<const unsigned char*>(changed.data()),
+                   changed.size()) == 0,
+               "zero protocol challenge rejects the proof");
+    changed[0] = noncanonical_callback.scalar;
+    ctx.expect(purify_bppp_verify_norm_arg_with_challenges(
+                   secp.get(), inputs.rho.data(),
+                   reinterpret_cast<const unsigned char*>(
+                       generators->data()),
+                   generators->size(),
+                   reinterpret_cast<const unsigned char*>(
+                       inputs.c_vec.data()),
+                   inputs.c_vec.size(), inputs.n_vec.size(),
+                   commitment->data(), proof.data(), proof.size(),
+                   reinterpret_cast<const unsigned char*>(changed.data()),
+                   changed.size()) == 0,
+               "noncanonical protocol challenge rejects the proof");
 
     ScalarBytes terminal_n{}, terminal_l{};
     PointBytes residual{};

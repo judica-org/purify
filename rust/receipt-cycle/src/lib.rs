@@ -23,6 +23,8 @@ use thiserror::Error;
 mod algebraic_transcript;
 mod ffi;
 mod gadgets;
+// This is a candidate suite component, not an accepted receipt verifier.
+pub mod opening_base;
 // This is a tested migration primitive, not an accepted transcript suite yet.
 pub mod parent_relation;
 #[allow(dead_code)]

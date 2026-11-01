@@ -141,18 +141,18 @@ impl SecpAffineWitness {
 }
 
 #[derive(Clone)]
-struct SecpPoint {
-    x: Expression,
-    y: Expression,
-    identity: Expression,
-    witness: PointValue,
+pub(crate) struct SecpPoint {
+    pub(crate) x: Expression,
+    pub(crate) y: Expression,
+    pub(crate) identity: Expression,
+    pub(crate) witness: PointValue,
 }
 
-#[derive(Clone, Copy)]
-struct PointValue {
-    x: Scalar,
-    y: Scalar,
-    identity: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PointValue {
+    pub(crate) x: Scalar,
+    pub(crate) y: Scalar,
+    pub(crate) identity: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -342,7 +342,7 @@ fn equality_bit(
     (equal, inverse)
 }
 
-fn add_point_values(left: PointValue, right: PointValue) -> PointValue {
+pub(crate) fn add_point_values(left: PointValue, right: PointValue) -> PointValue {
     if left.identity {
         return right;
     }
@@ -376,7 +376,7 @@ fn add_point_values(left: PointValue, right: PointValue) -> PointValue {
     }
 }
 
-fn add_points(builder: &mut Builder, left: &SecpPoint, right: &SecpPoint) -> SecpPoint {
+pub(crate) fn add_points(builder: &mut Builder, left: &SecpPoint, right: &SecpPoint) -> SecpPoint {
     let one = Expression::constant(Scalar::ONE);
     let not_left_identity = one.clone().sub(&left.identity);
     let not_right_identity = one.clone().sub(&right.identity);
@@ -474,7 +474,11 @@ fn select_point(
     }
 }
 
-fn scale_point(builder: &mut Builder, point: &SecpPoint, scalar: &SecpScalarVar) -> SecpPoint {
+pub(crate) fn scale_point(
+    builder: &mut Builder,
+    point: &SecpPoint,
+    scalar: &SecpScalarVar,
+) -> SecpPoint {
     let mut accumulator = allocate_point(
         builder,
         PointValue {

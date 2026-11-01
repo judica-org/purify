@@ -1487,6 +1487,54 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
             ErrorCode::InternalMismatch,
             "accumulation:v4_prepared_shape");
     }
+
+    if (transcript.rho.scalar.is_zero() ||
+        transcript.mul_scale.scalar.is_zero() ||
+        transcript.mul_ratio.scalar.is_zero() ||
+        transcript.prepared_binding.scalar.is_zero() ||
+        std::any_of(
+            transcript.gammas.begin(), transcript.gammas.end(),
+            [](const candidate::CircuitChallengeV4& gamma) {
+                return gamma.scalar.is_zero();
+            })) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "accumulation:v4_zero_challenge");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& sqrt_minus_one,
+        detail::canonical_sqrt_minus_one(),
+        "accumulation:v4_sqrt_minus_one");
+
+    // Reconstruct every transformed G generator rather than trusting the
+    // prepared object's duplicate list. The H suffix stays exactly raw.
+    auto rho_power = transcript.rho.scalar;
+    auto generator_term = transcript.mul_scale.scalar;
+    for (std::size_t i = 0; i < shape.n_vec_len(); ++i) {
+        const auto term = (i % 2 == 0)
+            ? generator_term
+            : sqrt_minus_one * generator_term;
+        const auto scale = rho_power * term.inverse();
+        const auto encoded_scale = scale.to_bytes_be();
+        PointBytes expected_generator{};
+        if (purify_bppp_scale_generator(
+                context, prepared.raw_generators()[i].data(),
+                encoded_scale.data(), expected_generator.data()) == 0) {
+            return unexpected_error(
+                ErrorCode::BackendRejectedInput,
+                "accumulation:v4_scale_generator");
+        }
+        if (norm.generators[i] != expected_generator) {
+            return unexpected_error(
+                ErrorCode::InternalMismatch,
+                "accumulation:v4_scaled_basis");
+        }
+        if (i % 2 == 1) {
+            generator_term =
+                generator_term * transcript.mul_ratio.scalar;
+        }
+        rho_power = rho_power * transcript.rho.scalar;
+    }
     if (!std::equal(
             norm.generators.begin() +
                 static_cast<std::ptrdiff_t>(shape.n_vec_len()),
@@ -1541,20 +1589,6 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
             "accumulation:v4_terminal_payload");
     }
 
-    if (transcript.rho.scalar.is_zero() ||
-        transcript.mul_scale.scalar.is_zero() ||
-        transcript.mul_ratio.scalar.is_zero() ||
-        transcript.prepared_binding.scalar.is_zero() ||
-        std::any_of(
-            transcript.gammas.begin(), transcript.gammas.end(),
-            [](const candidate::CircuitChallengeV4& gamma) {
-                return gamma.scalar.is_zero();
-            })) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "accumulation:v4_zero_challenge");
-    }
-
     std::vector<ScalarBytes> encoded_gammas;
     encoded_gammas.reserve(rounds);
     for (const auto& gamma : transcript.gammas) {
@@ -1597,11 +1631,6 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
         const auto& terminal_l,
         FieldElement::try_from_bytes32(terminal_l_bytes),
         "accumulation:v4_terminal_l");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& sqrt_minus_one,
-        detail::canonical_sqrt_minus_one(),
-        "accumulation:v4_sqrt_minus_one");
-
     // These are the two compact terms installed by the constrained V4 leaf.
     PolynomialTerm g{
         terminal_n *

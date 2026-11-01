@@ -918,7 +918,7 @@ void check_generic_v3_circuit_adapter(TestContext& ctx,
 
 void check_v4_algebraic_circuit_adapter(
     TestContext& ctx, purify_secp_context* secp) {
-    NativeBulletproofCircuit circuit(2, 1, 0);
+    NativeBulletproofCircuit circuit(4, 1, 0);
     const auto constraint =
         circuit.add_constraint(FieldElement::zero());
     circuit.add_output_term(
@@ -928,11 +928,14 @@ void check_v4_algebraic_circuit_adapter(
 
     purify::BulletproofAssignmentData assignment;
     assignment.left = {
-        FieldElement::from_int(3), FieldElement::from_int(5)};
+        FieldElement::from_int(3), FieldElement::from_int(5),
+        FieldElement::from_int(9), FieldElement::from_int(11)};
     assignment.right = {
-        FieldElement::from_int(4), FieldElement::from_int(6)};
+        FieldElement::from_int(4), FieldElement::from_int(6),
+        FieldElement::from_int(2), FieldElement::from_int(3)};
     assignment.output = {
-        FieldElement::from_int(12), FieldElement::from_int(30)};
+        FieldElement::from_int(12), FieldElement::from_int(30),
+        FieldElement::from_int(18), FieldElement::from_int(33)};
     assignment.commitments = {FieldElement::from_int(12)};
     ScalarBytes prover_seed{};
     prover_seed.fill(0x64);
@@ -940,7 +943,7 @@ void check_v4_algebraic_circuit_adapter(
         purify::bytes_from_ascii("test/v4-algebraic-adapter/v1");
 
     auto basis = accum::Basis::create(
-        4, 4, "test/v4-algebraic-circuit/v1", secp);
+        8, 8, "test/v4-algebraic-circuit/v1", secp);
     expect_ok(ctx, basis, "V4 algebraic raw basis creates");
     if (!basis) return;
     auto publication = candidate::prove_circuit_zk_norm_arg_v4(
@@ -962,7 +965,7 @@ void check_v4_algebraic_circuit_adapter(
                "V4 full verification remains a separate path");
 
     auto other_basis = accum::Basis::create(
-        4, 4, "test/v4-algebraic-circuit/other", secp);
+        8, 8, "test/v4-algebraic-circuit/other", secp);
     expect_ok(ctx, other_basis,
               "V4 alternative semantic basis creates");
     if (!other_basis) return;
@@ -973,7 +976,7 @@ void check_v4_algebraic_circuit_adapter(
               "purpose owner can select another semantic digest over shared raw points");
     if (!other_algebraic) return;
     auto wrong_shape = accum::Basis::create(
-        8, 4, "test/v4-algebraic-circuit/v1", secp);
+        16, 8, "test/v4-algebraic-circuit/v1", secp);
     expect_ok(ctx, wrong_shape,
               "V4 alternative raw-basis shape creates");
     if (!wrong_shape) return;
@@ -1009,7 +1012,7 @@ void check_v4_algebraic_circuit_adapter(
               "Rust leaf square-root inverse is canonical");
     if (!terminal_n || !terminal_l || !sqrt_minus_one_inverse) return;
     auto rho_to_n = FieldElement::one();
-    for (std::size_t i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < basis->n_vec_len(); ++i) {
         rho_to_n = rho_to_n * prepared_transcript.rho.scalar;
     }
     const auto expected_g_scale =
@@ -1033,6 +1036,9 @@ void check_v4_algebraic_circuit_adapter(
         }
         expected_h_factors.push_back(gamma);
     }
+    ctx.expect(expected_g_factors.size() == 3 &&
+                   expected_h_factors.size() == 3,
+               "V4 adapter fixture reaches the third norm factor");
     auto algebraic =
         accum::prepare_v4_circuit_norm_for_algebraic_reduction(
             *basis, std::move(**prepared), secp);
@@ -1051,7 +1057,7 @@ void check_v4_algebraic_circuit_adapter(
             polynomial[0].offset == 0 &&
             polynomial[0].factors == expected_g_factors &&
             polynomial[1].scale == *terminal_l &&
-            polynomial[1].offset == 4 &&
+            polynomial[1].offset == basis->n_vec_len() &&
             polynomial[1].factors == expected_h_factors,
         "V4 adapter matches both compact Rust leaf polynomial terms");
 
@@ -1093,11 +1099,14 @@ void check_v4_algebraic_circuit_adapter(
 
     purify::BulletproofAssignmentData second_assignment;
     second_assignment.left = {
-        FieldElement::from_int(7), FieldElement::from_int(8)};
+        FieldElement::from_int(7), FieldElement::from_int(8),
+        FieldElement::from_int(5), FieldElement::from_int(6)};
     second_assignment.right = {
-        FieldElement::from_int(2), FieldElement::from_int(3)};
+        FieldElement::from_int(2), FieldElement::from_int(3),
+        FieldElement::from_int(4), FieldElement::from_int(5)};
     second_assignment.output = {
-        FieldElement::from_int(14), FieldElement::from_int(24)};
+        FieldElement::from_int(14), FieldElement::from_int(24),
+        FieldElement::from_int(20), FieldElement::from_int(30)};
     second_assignment.commitments = {FieldElement::from_int(14)};
     ScalarBytes second_seed{};
     second_seed.fill(0x65);
@@ -1108,10 +1117,15 @@ void check_v4_algebraic_circuit_adapter(
               "second V4 gamma source publishes");
     if (!second_publication) return;
     auto changed_gamma = *publication;
+    const auto late_round = expected_h_factors.size() - 1;
+    const auto late_round_offset =
+        late_round * sizeof(candidate::PackedPointPairV4);
     std::copy_n(
-        second_publication->proof.norm_proof.begin(),
+        second_publication->proof.norm_proof.begin() +
+            static_cast<std::ptrdiff_t>(late_round_offset),
         sizeof(candidate::PackedPointPairV4),
-        changed_gamma.proof.norm_proof.begin());
+        changed_gamma.proof.norm_proof.begin() +
+            static_cast<std::ptrdiff_t>(late_round_offset));
     auto changed_gamma_prepared =
         candidate::prepare_circuit_zk_norm_arg_v4(
             circuit, changed_gamma, secp, binding);
@@ -1124,9 +1138,9 @@ void check_v4_algebraic_circuit_adapter(
         return;
     }
     ctx.expect(
-        (**changed_gamma_prepared).transcript().gammas[0].scalar !=
-            expected_h_factors[0],
-        "V4 round substitution changes its explicit gamma");
+        (**changed_gamma_prepared).transcript().gammas[late_round].scalar !=
+            expected_h_factors[late_round],
+        "late V4 round substitution changes its explicit gamma");
     auto changed_gamma_algebraic =
         accum::prepare_v4_circuit_norm_for_algebraic_reduction(
             *basis, std::move(**changed_gamma_prepared), secp);

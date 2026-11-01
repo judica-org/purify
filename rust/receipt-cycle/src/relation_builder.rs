@@ -5,8 +5,13 @@ use std::collections::BTreeMap;
 use bulletproofs_cycle::Cycle;
 use ff::Field;
 use golden_halo2curves::Secq256k1Cycle;
+#[cfg(test)]
+use sha2::{Digest, Sha256};
 
-use crate::{Assignment, Circuit, ReceiptCycleError, Scalar, Term, WireKind};
+use crate::{
+    Assignment, Circuit, ReceiptCycleError, Scalar, Term, WireKind, ASSIGNMENT_VERSION,
+    CIRCUIT_VERSION,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Expression {
@@ -103,8 +108,8 @@ impl StateVariable {
 // patch; the candidate recurrence is intentionally not an acceptance API.
 #[allow(dead_code)]
 pub(crate) struct StatefulRelation {
-    pub(crate) circuit: Vec<u8>,
-    pub(crate) assignment: Vec<u8>,
+    pub(crate) circuit: Circuit,
+    pub(crate) assignment: Assignment,
     pub(crate) inputs: Vec<StateWire>,
     pub(crate) outputs: Vec<StateWire>,
 }
@@ -176,6 +181,11 @@ impl Builder {
     }
 
     pub(crate) fn finish(self) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+        let (circuit, assignment) = self.finish_structured()?;
+        Ok((encode_circuit(&circuit), encode_assignment(&assignment)))
+    }
+
+    fn finish_structured(self) -> Result<(Circuit, Assignment), ReceiptCycleError> {
         let circuit = Circuit {
             gate_count: self.gates.len(),
             constraints: self
@@ -185,7 +195,7 @@ impl Builder {
                 .collect::<Result<_, _>>()?,
         };
         let assignment = Assignment { gates: self.gates };
-        Ok((encode_circuit(&circuit), encode_assignment(&assignment)))
+        Ok((circuit, assignment))
     }
 
     pub(crate) fn finish_stateful(
@@ -198,7 +208,7 @@ impl Builder {
         }
         let input_wires = inputs.iter().map(|state| state.wire).collect();
         let output_wires = outputs.iter().map(|state| state.wire).collect();
-        let (circuit, assignment) = self.finish()?;
+        let (circuit, assignment) = self.finish_structured()?;
         Ok(StatefulRelation {
             circuit,
             assignment,
@@ -238,27 +248,74 @@ fn append_scalar(out: &mut Vec<u8>, value: Scalar) {
     out.extend_from_slice(&Secq256k1Cycle::scalar_to_canonical(&value));
 }
 
-fn encode_circuit(circuit: &Circuit) -> Vec<u8> {
-    let mut out = vec![1];
-    append_u32(&mut out, circuit.gate_count);
-    append_u32(&mut out, circuit.constraints.len());
+fn emit_circuit(circuit: &Circuit, mut emit: impl FnMut(&[u8])) {
+    emit(&[CIRCUIT_VERSION]);
+    emit(&(circuit.gate_count as u32).to_le_bytes());
+    emit(&(circuit.constraints.len() as u32).to_le_bytes());
     for constraint in &circuit.constraints {
-        append_u32(&mut out, constraint.len());
+        emit(&(constraint.len() as u32).to_le_bytes());
         for term in constraint {
-            out.push(term.kind as u8);
-            append_u32(&mut out, term.index);
-            append_scalar(&mut out, term.coefficient);
+            emit(&[term.kind as u8]);
+            emit(&(term.index as u32).to_le_bytes());
+            emit(&Secq256k1Cycle::scalar_to_canonical(&term.coefficient));
         }
     }
+}
+
+fn encode_circuit(circuit: &Circuit) -> Vec<u8> {
+    let mut out = Vec::new();
+    emit_circuit(circuit, |bytes| out.extend_from_slice(bytes));
     out
 }
 
+#[cfg(test)]
+pub(crate) fn circuit_digest(circuit: &Circuit) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    emit_circuit(circuit, |bytes| digest.update(bytes));
+    digest.finalize().into()
+}
+
 fn encode_assignment(assignment: &Assignment) -> Vec<u8> {
-    let mut out = vec![1];
+    let mut out = vec![ASSIGNMENT_VERSION];
     append_u32(&mut out, assignment.gates.len());
     for &(left, right) in &assignment.gates {
         append_scalar(&mut out, left);
         append_scalar(&mut out, right);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn product_relation() -> (Builder, [StateVariable; 1], [StateVariable; 1]) {
+        let mut builder = Builder::default();
+        let input = builder.allocate_state(Scalar::from(3));
+        let product = builder.multiply(input.expression(), &Expression::constant(Scalar::from(4)));
+        let output = builder.expose_state(&product);
+        (builder, [input], [output])
+    }
+
+    #[test]
+    fn stateful_finish_retains_the_canonical_relation() {
+        let (builder, inputs, outputs) = product_relation();
+        let input_wires = inputs.each_ref().map(|state| state.wire);
+        let output_wires = outputs.each_ref().map(|state| state.wire);
+        let relation = builder
+            .finish_stateful(&inputs, &outputs)
+            .expect("stateful relation");
+
+        let (builder, _, _) = product_relation();
+        let (circuit, assignment) = builder.finish().expect("canonical relation");
+        assert_eq!(relation.inputs, input_wires);
+        assert_eq!(relation.outputs, output_wires);
+        assert_eq!(relation.circuit, Circuit::parse(&circuit).expect("circuit"));
+        assert_eq!(
+            relation.assignment,
+            Assignment::parse(&assignment).expect("assignment")
+        );
+        assert_eq!(encode_circuit(&relation.circuit), circuit);
+        assert_eq!(encode_assignment(&relation.assignment), assignment);
+    }
 }

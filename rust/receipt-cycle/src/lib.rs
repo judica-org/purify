@@ -78,20 +78,20 @@ pub(crate) enum WireKind {
     Output = 3,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Term {
     kind: WireKind,
     index: usize,
     coefficient: Scalar,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Circuit {
     gate_count: usize,
     constraints: Vec<Vec<Term>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Assignment {
     gates: Vec<(Scalar, Scalar)>,
 }

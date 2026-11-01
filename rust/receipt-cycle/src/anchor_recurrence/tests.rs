@@ -2,7 +2,6 @@ use bulletproofs_cycle::Cycle;
 use ff::Field;
 use golden_halo2curves::Secq256k1Cycle;
 use num_bigint::BigUint;
-use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::algebraic_circuit_norm_leaf::install_manifest_bound_anchor_leaf;
@@ -17,9 +16,9 @@ use crate::parent_relation::{
     CandidatePolynomialTermWitness, ConstrainedPendingClaim, EncodedSecpPoint, PointValue,
     SecpEncodedPointWitness,
 };
-use crate::relation_builder::{Builder, StateWire};
+use crate::relation_builder::{circuit_digest, Builder, StateWire};
 use crate::secp_scalar::SecpScalarVar;
-use crate::{Assignment, Circuit, WireKind, ASSIGNMENT_VERSION};
+use crate::{Assignment, Circuit, WireKind};
 
 const RAW_GENERATORS: [u8; 32] = [0x52; 32];
 const BASIS: [u8; 32] = [0x73; 32];
@@ -309,9 +308,7 @@ fn build_fixture(fixture: &Fixture) -> StatefulRelation {
     .expect("anchor recurrence")
 }
 
-fn relation_satisfied(circuit: &[u8], assignment: &[u8]) -> bool {
-    let circuit = Circuit::parse(circuit).expect("test circuit");
-    let assignment = Assignment::parse(assignment).expect("test assignment");
+fn structured_relation_satisfied(circuit: &Circuit, assignment: &Assignment) -> bool {
     circuit.constraints.iter().all(|constraint| {
         constraint.iter().fold(Scalar::ZERO, |sum, term| {
             let value = match term.kind {
@@ -325,25 +322,17 @@ fn relation_satisfied(circuit: &[u8], assignment: &[u8]) -> bool {
     })
 }
 
-fn encode_assignment(assignment: &Assignment) -> Vec<u8> {
-    let mut out = vec![ASSIGNMENT_VERSION];
-    out.extend_from_slice(&(assignment.gates.len() as u32).to_le_bytes());
-    for &(left, right) in &assignment.gates {
-        out.extend_from_slice(&Secq256k1Cycle::scalar_to_canonical(&left));
-        out.extend_from_slice(&Secq256k1Cycle::scalar_to_canonical(&right));
-    }
-    out
+fn relation_satisfied(circuit: &[u8], assignment: &[u8]) -> bool {
+    let circuit = Circuit::parse(circuit).expect("test circuit");
+    let assignment = Assignment::parse(assignment).expect("test assignment");
+    structured_relation_satisfied(&circuit, &assignment)
 }
 
-fn change_state_wire(assignment: &[u8], wire: StateWire) -> Vec<u8> {
+fn change_state_wire(assignment: &Assignment, wire: StateWire) -> Assignment {
     assert_eq!(wire.kind, WireKind::Left);
-    let mut assignment = Assignment::parse(assignment).expect("assignment");
+    let mut assignment = assignment.clone();
     assignment.gates[wire.index].0 += Scalar::ONE;
-    encode_assignment(&assignment)
-}
-
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
+    assignment
 }
 
 #[test]
@@ -426,7 +415,7 @@ fn recurrence_matrix_binds_state_order_and_anchor_substitution() {
     let first_relation = build_fixture(&first);
     assert_eq!(first_relation.inputs.len(), ANCHOR_RECURRENCE_STATE_ARITY);
     assert_eq!(first_relation.outputs.len(), ANCHOR_RECURRENCE_STATE_ARITY);
-    assert!(relation_satisfied(
+    assert!(structured_relation_satisfied(
         &first_relation.circuit,
         &first_relation.assignment
     ));
@@ -437,7 +426,10 @@ fn recurrence_matrix_binds_state_order_and_anchor_substitution() {
         first_relation.outputs[18],
     ] {
         let changed = change_state_wire(&first_relation.assignment, wire);
-        assert!(!relation_satisfied(&first_relation.circuit, &changed));
+        assert!(!structured_relation_satisfied(
+            &first_relation.circuit,
+            &changed
+        ));
     }
 
     let second_relation = build_fixture(&second);
@@ -445,11 +437,11 @@ fn recurrence_matrix_binds_state_order_and_anchor_substitution() {
     assert_eq!(first_relation.outputs, second_relation.outputs);
     assert_eq!(first_relation.circuit, second_relation.circuit);
     assert_ne!(first_relation.assignment, second_relation.assignment);
-    assert!(relation_satisfied(
+    assert!(structured_relation_satisfied(
         &second_relation.circuit,
         &second_relation.assignment
     ));
-    let circuit_digest = digest(&second_relation.circuit);
+    let expected_circuit_digest = circuit_digest(&second_relation.circuit);
     drop(first_relation);
     drop(second_relation);
 
@@ -458,8 +450,11 @@ fn recurrence_matrix_binds_state_order_and_anchor_substitution() {
         ..first
     };
     let substituted_relation = build_fixture(&substituted);
-    assert_eq!(digest(&substituted_relation.circuit), circuit_digest);
-    assert!(!relation_satisfied(
+    assert_eq!(
+        circuit_digest(&substituted_relation.circuit),
+        expected_circuit_digest
+    );
+    assert!(!structured_relation_satisfied(
         &substituted_relation.circuit,
         &substituted_relation.assignment
     ));
@@ -472,8 +467,11 @@ fn recurrence_matrix_binds_state_order_and_anchor_substitution() {
         ..second
     };
     let wrong_order_relation = build_fixture(&wrong_order);
-    assert_eq!(digest(&wrong_order_relation.circuit), circuit_digest);
-    assert!(!relation_satisfied(
+    assert_eq!(
+        circuit_digest(&wrong_order_relation.circuit),
+        expected_circuit_digest
+    );
+    assert!(!structured_relation_satisfied(
         &wrong_order_relation.circuit,
         &wrong_order_relation.assignment
     ));

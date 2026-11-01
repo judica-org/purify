@@ -649,25 +649,6 @@ pub(crate) fn derived_inverse(
     invert_scalar(builder, value, scalar_witness(&inverse)?)
 }
 
-fn derived_power(
-    builder: &mut Builder,
-    base: &SecpScalarVar,
-    mut exponent: usize,
-) -> Result<SecpScalarVar, ReceiptCycleError> {
-    let mut result = constant_scalar(1);
-    let mut power = base.clone();
-    while exponent != 0 {
-        if exponent & 1 != 0 {
-            result = derived_multiply(builder, &result, &power)?;
-        }
-        exponent >>= 1;
-        if exponent != 0 {
-            power = derived_multiply(builder, &power, &power)?;
-        }
-    }
-    Ok(result)
-}
-
 fn constant_byte_words(bytes: &[u8]) -> Vec<Expression> {
     bytes
         .chunks(31)
@@ -894,19 +875,63 @@ fn append_constrained_claims(
     }
 }
 
+fn candidate_power_ladder(
+    builder: &mut Builder,
+    x: &SecpScalarVar,
+    rounds: usize,
+) -> Result<Vec<SecpScalarVar>, ReceiptCycleError> {
+    if rounds == 0 {
+        return Err(ReceiptCycleError::Malformed("candidate power ladder"));
+    }
+    let mut powers = Vec::with_capacity(rounds);
+    powers.push(x.clone());
+    for _ in 1..rounds {
+        let previous = powers.last().expect("nonempty power ladder");
+        let next = derived_multiply(builder, previous, previous)?;
+        powers.push(next);
+    }
+    Ok(powers)
+}
+
+fn candidate_offset_power(
+    builder: &mut Builder,
+    powers: &[SecpScalarVar],
+    offset: usize,
+) -> Result<Option<SecpScalarVar>, ReceiptCycleError> {
+    if offset == 0 {
+        return Ok(None);
+    }
+    if offset >> powers.len() != 0 {
+        return Err(ReceiptCycleError::Malformed("candidate term offset"));
+    }
+    let mut selected = None;
+    for (index, power) in powers.iter().enumerate() {
+        if offset & (1usize << index) != 0 {
+            selected = Some(match selected {
+                None => power.clone(),
+                Some(value) => derived_multiply(builder, &value, power)?,
+            });
+        }
+    }
+    Ok(selected)
+}
+
 fn evaluate_candidate_term(
     builder: &mut Builder,
     term: &ConstrainedPolynomialTerm,
-    x: &SecpScalarVar,
+    powers: &[SecpScalarVar],
 ) -> Result<SecpScalarVar, ReceiptCycleError> {
-    let x_offset = derived_power(builder, x, term.offset)?;
-    let mut value = derived_multiply(builder, &term.scale, &x_offset)?;
-    let mut x_power = x.clone();
-    for factor in &term.factors {
-        let product = derived_multiply(builder, factor, &x_power)?;
+    if term.factors.len() > powers.len() {
+        return Err(ReceiptCycleError::Malformed("candidate term factors"));
+    }
+    let mut value = match candidate_offset_power(builder, powers, term.offset)? {
+        Some(offset) => derived_multiply(builder, &term.scale, &offset)?,
+        None => term.scale.clone(),
+    };
+    for (factor, x_power) in term.factors.iter().zip(powers) {
+        let product = derived_multiply(builder, factor, x_power)?;
         let one_plus_product = derived_add(builder, &constant_scalar(1), &product)?;
         value = derived_multiply(builder, &value, &one_plus_product)?;
-        x_power = derived_multiply(builder, &x_power, &x_power)?;
     }
     Ok(value)
 }
@@ -997,30 +1022,48 @@ fn install_constrained_step_for_role(
     append_constrained_claims(&mut transcript, builder, claims);
 
     let beta = append_challenge(&mut transcript, builder, 0);
-    let mut claim_weight = constant_scalar(1);
-    let mut commitment_points = Vec::with_capacity(claims.len());
-    let mut commitment_scalars = Vec::with_capacity(claims.len());
-    for claim in claims {
-        commitment_points.push(claim.point.point.clone());
-        commitment_scalars.push(claim_weight.clone());
-        claim_weight = derived_multiply(builder, &claim_weight, &beta)?;
+    let mut claim_weights = Vec::with_capacity(claims.len());
+    claim_weights.push(constant_scalar(1));
+    for _ in 1..claims.len() {
+        let next = derived_multiply(
+            builder,
+            claim_weights.last().expect("nonempty claim weights"),
+            &beta,
+        )?;
+        claim_weights.push(next);
     }
-    let commitment = msm_points(builder, &commitment_points, &commitment_scalars)?;
+    let commitment_points = claims
+        .iter()
+        .map(|claim| claim.point.point.clone())
+        .collect::<Vec<_>>();
+    let commitment = msm_points(builder, &commitment_points, &claim_weights)?;
     append_computed_point(&mut transcript, builder, &commitment);
 
     let x = append_challenge(&mut transcript, builder, 1);
-    let mut y = constant_scalar(0);
-    claim_weight = constant_scalar(1);
-    for claim in claims {
-        let mut evaluation = constant_scalar(0);
-        for term in &claim.polynomial {
-            let term = evaluate_candidate_term(builder, term, &x)?;
+    let x_powers = candidate_power_ladder(builder, &x, rounds)?;
+    let mut y = None;
+    for (index, (claim, weight)) in claims.iter().zip(&claim_weights).enumerate() {
+        let mut terms = claim.polynomial.iter();
+        let mut evaluation = evaluate_candidate_term(
+            builder,
+            terms.next().expect("nonempty candidate polynomial"),
+            &x_powers,
+        )?;
+        for term in terms {
+            let term = evaluate_candidate_term(builder, term, &x_powers)?;
             evaluation = derived_add(builder, &evaluation, &term)?;
         }
-        let weighted = derived_multiply(builder, &claim_weight, &evaluation)?;
-        y = derived_add(builder, &y, &weighted)?;
-        claim_weight = derived_multiply(builder, &claim_weight, &beta)?;
+        let weighted = if index == 0 {
+            evaluation
+        } else {
+            derived_multiply(builder, weight, &evaluation)?
+        };
+        y = Some(match y {
+            None => weighted,
+            Some(value) => derived_add(builder, &value, &weighted)?,
+        });
     }
+    let y = y.expect("nonempty candidate claims");
     append_scalar(&mut transcript, builder, &y);
 
     let opening_base =
@@ -1050,12 +1093,10 @@ fn install_constrained_step_for_role(
 
     let terminal = allocate_canonical_scalar(builder, proof.terminal_scalar)?;
     let mut b_final = folded_scale.clone();
-    let mut x_power = x;
-    for factor in &folded_factors {
-        let product = derived_multiply(builder, factor, &x_power)?;
+    for (factor, x_power) in folded_factors.iter().zip(&x_powers) {
+        let product = derived_multiply(builder, factor, x_power)?;
         let one_plus_product = derived_add(builder, &constant_scalar(1), &product)?;
         b_final = derived_multiply(builder, &b_final, &one_plus_product)?;
-        x_power = derived_multiply(builder, &x_power, &x_power)?;
     }
     let terminal_evaluation = derived_multiply(builder, &terminal, &b_final)?;
     let opening_scalar = derived_subtract(builder, &y, &terminal_evaluation)?;
@@ -1533,7 +1574,25 @@ fn derive_candidate_folded_generator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{proof_wire_len, prove, verify};
+    use crate::{proof_wire_len, prove, verify, Assignment, Circuit, WireKind};
+
+    fn relation_satisfied(circuit: &[u8], assignment: &[u8]) -> bool {
+        let circuit = Circuit::parse(circuit).expect("test circuit");
+        let assignment = Assignment::parse(assignment).expect("test assignment");
+        circuit.constraints.iter().all(|constraint| {
+            constraint.iter().fold(Scalar::ZERO, |sum, term| {
+                let value = match term.kind {
+                    WireKind::One => Scalar::ONE,
+                    WireKind::Left => assignment.gates[term.index].0,
+                    WireKind::Right => assignment.gates[term.index].1,
+                    WireKind::Output => {
+                        assignment.gates[term.index].0 * assignment.gates[term.index].1
+                    }
+                };
+                sum + term.coefficient * value
+            }) == Scalar::ZERO
+        })
+    }
 
     fn from_be_hex(hex: &str) -> [u8; 32] {
         assert_eq!(hex.len(), 64);
@@ -1725,6 +1784,82 @@ mod tests {
             offset,
             factors: vec![SecpScalarWitness::from_u64(0); factor_count],
         }
+    }
+
+    fn candidate_term_reference(
+        term: &CandidatePolynomialTermWitness,
+        x: SecpScalarWitness,
+    ) -> SecpScalarWitness {
+        let order = secp_order();
+        let x = BigUint::from_bytes_be(&x.bytes);
+        let mut value = BigUint::from_bytes_be(&term.scale.bytes)
+            * x.modpow(&BigUint::from(term.offset), &order)
+            % &order;
+        for (index, factor) in term.factors.iter().enumerate() {
+            let x_power = x.modpow(&BigUint::from(1usize << index), &order);
+            let product = BigUint::from_bytes_be(&factor.bytes) * x_power % &order;
+            value = value * (BigUint::from(1u64) + product) % &order;
+        }
+        scalar_witness(&value).expect("reference scalar")
+    }
+
+    fn build_candidate_term_evaluation(
+        term: &CandidatePolynomialTermWitness,
+        x: SecpScalarWitness,
+        expected: SecpScalarWitness,
+    ) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+        let mut builder = Builder::default();
+        let x = allocate_canonical_scalar(&mut builder, x)?;
+        let term = ConstrainedPolynomialTerm {
+            scale: allocate_canonical_scalar(&mut builder, term.scale)?,
+            offset: term.offset,
+            factors: term
+                .factors
+                .iter()
+                .map(|&factor| allocate_canonical_scalar(&mut builder, factor))
+                .collect::<Result<_, _>>()?,
+        };
+        let rounds = term.factors.len().max(3);
+        let powers = candidate_power_ladder(&mut builder, &x, rounds)?;
+        let actual = evaluate_candidate_term(&mut builder, &term, &powers)?;
+        constrain_scalar_constant(&mut builder, &actual, expected)?;
+        builder.finish()
+    }
+
+    #[test]
+    fn candidate_term_shared_powers_match_reference_and_bind_inputs() {
+        let x = SecpScalarWitness::from_u64(11);
+        let term = CandidatePolynomialTermWitness {
+            scale: SecpScalarWitness::from_u64(7),
+            offset: 5,
+            factors: vec![
+                SecpScalarWitness::from_u64(3),
+                SecpScalarWitness::from_u64(4),
+                SecpScalarWitness::from_u64(5),
+            ],
+        };
+        let expected = candidate_term_reference(&term, x);
+        let (circuit, assignment) =
+            build_candidate_term_evaluation(&term, x, expected).expect("candidate term");
+        assert!(relation_satisfied(&circuit, &assignment));
+
+        let mut changed = term;
+        changed.factors[1] = SecpScalarWitness::from_u64(6);
+        let (changed_circuit, changed_assignment) =
+            build_candidate_term_evaluation(&changed, x, expected).expect("changed term");
+        assert_eq!(circuit, changed_circuit);
+        assert!(!relation_satisfied(&changed_circuit, &changed_assignment));
+
+        let constant = CandidatePolynomialTermWitness {
+            scale: SecpScalarWitness::from_u64(9),
+            offset: 0,
+            factors: vec![],
+        };
+        let constant_expected = candidate_term_reference(&constant, x);
+        let (constant_circuit, constant_assignment) =
+            build_candidate_term_evaluation(&constant, x, constant_expected)
+                .expect("constant term");
+        assert!(relation_satisfied(&constant_circuit, &constant_assignment));
     }
 
     fn mixed_fanin_claims(
@@ -2141,6 +2276,27 @@ mod tests {
         let (second_circuit, _) = build_secp_msm_relation(&second, SecpAffineWitness::identity())
             .expect("second circuit");
         assert_eq!(first_circuit, second_circuit);
+    }
+
+    #[test]
+    fn candidate_step_shared_powers_preserve_transition_language() {
+        let (basis, claims, proof, root) = candidate_step_fixture();
+        let (circuit, assignment) =
+            build_candidate_accumulation_step_relation(basis, &claims, &proof, &root)
+                .expect("candidate step relation");
+        assert!(relation_satisfied(&circuit, &assignment));
+        drop(assignment);
+
+        let mut changed_claims = claims;
+        changed_claims[0].point = encoded(twice_generator(), 0x02);
+        let (changed_circuit, changed_assignment) =
+            build_candidate_accumulation_step_relation(basis, &changed_claims, &proof, &root)
+                .expect("changed candidate claim");
+        assert_eq!(circuit, changed_circuit);
+        assert!(!relation_satisfied(
+            &changed_circuit,
+            &changed_assignment
+        ));
     }
 
     #[test]

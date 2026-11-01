@@ -340,6 +340,7 @@ add_library(purify
     src/protocol/coordinate_field.cpp
     src/protocol/poseidon.cpp
     src/protocol/algebraic_transcript.cpp
+    src/protocol/algebraic_circuit_transcript.cpp
     src/bridge/bppp_bridge.c
 )
 
@@ -509,6 +510,7 @@ if(PURIFY_BUILD_BENCH)
         src/protocol/coordinate_field.cpp
         src/protocol/poseidon.cpp
         src/protocol/algebraic_transcript.cpp
+        src/protocol/algebraic_circuit_transcript.cpp
         src/bridge/bppp_bridge.c
     )
 
@@ -637,6 +639,7 @@ if(PURIFY_BUILD_TESTS)
         tests/coordinate_field_tests.cpp
         tests/poseidon_tests.cpp
         tests/algebraic_transcript_tests.cpp
+        tests/algebraic_circuit_transcript_tests.cpp
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
@@ -702,6 +705,11 @@ if(PURIFY_BUILD_TESTS)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_poseidon_transcript.py")
         set_tests_properties(purify.tests.poseidon_transcript_reference
             PROPERTIES TIMEOUT 30)
+        add_test(NAME purify.tests.algebraic_circuit_v4_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_algebraic_circuit_v4.py")
+        set_tests_properties(purify.tests.algebraic_circuit_v4_reference
+            PROPERTIES TIMEOUT 30)
     endif()
     purify_add_cpp_suite_test(accountable_signature)
     purify_add_cpp_suite_test(accountable_roster)
@@ -716,6 +724,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(coordinate_field)
     purify_add_cpp_suite_test(poseidon)
     purify_add_cpp_suite_test(algebraic_transcript)
+    purify_add_cpp_suite_test(algebraic_circuit_transcript)
 
     # These proof experiments saturate sanitizer runners. Keep their work
     # out of the property suites' bounded execution time.

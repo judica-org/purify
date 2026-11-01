@@ -191,28 +191,59 @@ impl<const ARITY: usize> SelectedDirectNovaVerifier<ARITY> {
     /// Loads exactly one locally selected and pre-authenticated verifier.
     ///
     /// Length and digest checks precede header parsing and all Serde work.
-    /// The artifact cannot supply suite metadata or proof shape.
+    /// The borrowed slice is immutable for the complete load. The artifact
+    /// cannot supply suite metadata or proof shape.
     pub(crate) fn from_artifact(
         artifact: &[u8],
         expected_suite: &'static ExpectedDirectNovaSuite,
         expected_artifact: &ExpectedDirectNovaVerifierArtifact,
     ) -> Result<Self, DirectNovaVerifierArtifactError> {
-        let expected_length = usize::try_from(expected_artifact.encoded_length)
-            .map_err(|_| DirectNovaVerifierArtifactError::Length)?;
-        let maximum_length = VERIFIER_ARTIFACT_HEADER_LENGTH
-            .checked_add(MAX_VERIFIER_KEY_PAYLOAD_LENGTH)
+        let mut source = io::Cursor::new(artifact);
+        Self::from_artifact_reader(&mut source, expected_suite, expected_artifact)
+    }
+
+    /// Loads an artifact from its complete seekable byte source.
+    ///
+    /// The first pass authenticates the complete source. Only a matching
+    /// digest permits the second pass to parse the header or invoke Serde.
+    /// The second pass hashes the bytes Serde consumes and rechecks the final
+    /// length, so swapped bytes cannot be accepted. A file-backed caller must
+    /// still provide an immutable local snapshot: a malicious same-length
+    /// mutation can otherwise make Serde allocate before the second digest
+    /// rejects it. The slice loader provides the strongest immutable path.
+    pub(crate) fn from_artifact_reader<R>(
+        source: &mut R,
+        expected_suite: &'static ExpectedDirectNovaSuite,
+        expected_artifact: &ExpectedDirectNovaVerifierArtifact,
+    ) -> Result<Self, DirectNovaVerifierArtifactError>
+    where
+        R: Read + Seek,
+    {
+        let maximum_length = (VERIFIER_ARTIFACT_HEADER_LENGTH as u64)
+            .checked_add(MAX_VERIFIER_KEY_PAYLOAD_LENGTH as u64)
             .ok_or(DirectNovaVerifierArtifactError::Length)?;
-        if artifact.len() != expected_length
-            || artifact.len() < VERIFIER_ARTIFACT_HEADER_LENGTH
-            || artifact.len() > maximum_length
+        let actual_length = source.seek(SeekFrom::End(0))?;
+        if expected_artifact.encoded_length < VERIFIER_ARTIFACT_HEADER_LENGTH as u64
+            || expected_artifact.encoded_length > maximum_length
+            || actual_length != expected_artifact.encoded_length
         {
             return Err(DirectNovaVerifierArtifactError::Length);
         }
-        if tagged_artifact_digest(artifact) != expected_artifact.digest {
+
+        source.seek(SeekFrom::Start(0))?;
+        let digest = tagged_artifact_digest_reader(source, actual_length)?;
+        if digest != expected_artifact.digest {
             return Err(DirectNovaVerifierArtifactError::Digest);
         }
+        if source.seek(SeekFrom::End(0))? != actual_length {
+            return Err(DirectNovaVerifierArtifactError::Length);
+        }
 
-        let header = ArtifactHeader::decode(artifact)?;
+        source.seek(SeekFrom::Start(0))?;
+        let mut authenticated_source = ArtifactDigestingReader::new(&mut *source);
+        let mut encoded_header = [0u8; VERIFIER_ARTIFACT_HEADER_LENGTH];
+        authenticated_source.read_exact(&mut encoded_header)?;
+        let header = ArtifactHeader::decode(&encoded_header)?;
         if header.suite_id != *expected_suite.suite_id.bytes() {
             return Err(DirectNovaVerifierArtifactError::Header("suite ID"));
         }
@@ -221,21 +252,31 @@ impl<const ARITY: usize> SelectedDirectNovaVerifier<ARITY> {
         if header.arity != expected_arity {
             return Err(DirectNovaVerifierArtifactError::Header("state arity"));
         }
-        let payload = &artifact[VERIFIER_ARTIFACT_HEADER_LENGTH..];
-        if header.payload_length != payload.len() as u64 {
+        let expected_payload_length = actual_length - VERIFIER_ARTIFACT_HEADER_LENGTH as u64;
+        if header.payload_length != expected_payload_length {
             return Err(DirectNovaVerifierArtifactError::Header("payload length"));
         }
 
         let (metadata, proof_shape) = expected_suite.local_verifier_components::<ARITY>()?;
-        let (verifier_key, consumed) =
-            bincode::serde::decode_from_slice::<DirectVerifierKey<ARITY>, _>(
-                payload,
-                bincode::config::legacy()
-                    .with_little_endian()
-                    .with_fixed_int_encoding()
-                    .with_limit::<MAX_VERIFIER_KEY_PAYLOAD_LENGTH>(),
-            )?;
-        if consumed != payload.len() {
+        let verifier_key = {
+            let mut payload = (&mut authenticated_source).take(header.payload_length);
+            let verifier_key =
+                bincode::serde::decode_from_std_read::<DirectVerifierKey<ARITY>, _, _>(
+                    &mut payload,
+                    bincode::config::legacy()
+                        .with_little_endian()
+                        .with_fixed_int_encoding()
+                        .with_limit::<MAX_VERIFIER_KEY_PAYLOAD_LENGTH>(),
+                )?;
+            if payload.limit() != 0 {
+                return Err(DirectNovaVerifierArtifactError::Length);
+            }
+            verifier_key
+        };
+        if authenticated_source.finalize() != expected_artifact.digest {
+            return Err(DirectNovaVerifierArtifactError::Digest);
+        }
+        if source.seek(SeekFrom::End(0))? != actual_length {
             return Err(DirectNovaVerifierArtifactError::Length);
         }
         Ok(Self {
@@ -269,6 +310,33 @@ fn tagged_artifact_hasher() -> Sha256 {
     digest
 }
 
+struct ArtifactDigestingReader<R> {
+    source: R,
+    digest: Sha256,
+}
+
+impl<R> ArtifactDigestingReader<R> {
+    fn new(source: R) -> Self {
+        Self {
+            source,
+            digest: tagged_artifact_hasher(),
+        }
+    }
+
+    fn finalize(self) -> [u8; 32] {
+        self.digest.finalize().into()
+    }
+}
+
+impl<R: Read> Read for ArtifactDigestingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, io::Error> {
+        let read = self.source.read(buffer)?;
+        self.digest.update(&buffer[..read]);
+        Ok(read)
+    }
+}
+
+#[cfg(test)]
 fn tagged_artifact_digest(encoded: &[u8]) -> [u8; 32] {
     let mut digest = tagged_artifact_hasher();
     digest.update(encoded);

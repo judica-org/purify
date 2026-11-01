@@ -1475,8 +1475,10 @@ mod tests {
             Err(DirectNovaVerifierArtifactError::DestinationNotEmpty)
         ));
 
-        let loaded = SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
-            &first_artifact,
+        let mut artifact_reader = std::io::Cursor::new(first_artifact.as_slice());
+        artifact_reader.set_position(7);
+        let loaded = SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact_reader(
+            &mut artifact_reader,
             &TINY_EXPECTED_SUITE,
             &first_descriptor,
         )
@@ -1535,6 +1537,36 @@ mod tests {
             Err(DirectNovaVerifierArtifactError::Digest)
         ));
 
+        let mut malformed_header = first_artifact.clone();
+        malformed_header[0] ^= 1;
+        let mut malformed_reader = std::io::Cursor::new(malformed_header);
+        malformed_reader.set_position(11);
+        assert!(matches!(
+            SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact_reader(
+                &mut malformed_reader,
+                &TINY_EXPECTED_SUITE,
+                &first_descriptor,
+            ),
+            Err(DirectNovaVerifierArtifactError::Digest)
+        ));
+        assert_eq!(
+            malformed_reader.position(),
+            first_descriptor.encoded_length()
+        );
+
+        let mut extra_bytes = first_artifact.clone();
+        extra_bytes.push(0);
+        let mut extra_reader = std::io::Cursor::new(extra_bytes);
+        extra_reader.set_position(13);
+        assert!(matches!(
+            SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact_reader(
+                &mut extra_reader,
+                &TINY_EXPECTED_SUITE,
+                &first_descriptor,
+            ),
+            Err(DirectNovaVerifierArtifactError::Length)
+        ));
+
         for (offset, label) in [
             (0, "magic"),
             (19, "encoding version"),
@@ -1565,6 +1597,19 @@ mod tests {
                 &truncated_descriptor,
             ),
             Err(DirectNovaVerifierArtifactError::Header("payload length"))
+        ));
+
+        let payload_length =
+            u64::try_from(truncated.len() - 64).expect("test artifact payload length fits u64");
+        truncated[56..64].copy_from_slice(&payload_length.to_be_bytes());
+        let truncated_descriptor = ExpectedDirectNovaVerifierArtifact::for_test_bytes(&truncated);
+        assert!(matches!(
+            SelectedDirectNovaVerifier::<TEST_ARITY>::from_artifact(
+                &truncated,
+                &TINY_EXPECTED_SUITE,
+                &truncated_descriptor,
+            ),
+            Err(DirectNovaVerifierArtifactError::Decode(_))
         ));
 
         let mut trailing = first_artifact.clone();

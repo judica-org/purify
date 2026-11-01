@@ -327,6 +327,115 @@ void check_bindings_and_encodings(TestContext& ctx, purify_secp_context* secp) {
     if (!decoded_claim) return;
     expect_ok(ctx, accum::decide(*basis, *decoded_claim, secp),
               "serialized public accumulation preserves final decision");
+
+    auto root_bytes =
+        accum::serialize_root_claim(*basis, *decoded_claim, secp);
+    expect_ok(ctx, root_bytes,
+              "final pending claim has a canonical unframed encoding");
+    if (!root_bytes) return;
+    ctx.expect(
+        root_bytes->size() ==
+            65 + 32 * decoded_claim->polynomial()[0].factors.size(),
+        "root claim contains only its point, scale, and fixed factors");
+    auto parsed_root = accum::parse_root_claim(*basis, *root_bytes, secp);
+    expect_ok(ctx, parsed_root,
+              "canonical final pending claim parses as an obligation");
+    if (!parsed_root) return;
+    ctx.expect(parsed_root->basis_digest() == basis->digest() &&
+                   parsed_root->point() == decoded_claim->point() &&
+                   parsed_root->polynomial().size() == 1 &&
+                   parsed_root->polynomial()[0].offset == 0 &&
+                   parsed_root->polynomial()[0].scale ==
+                       decoded_claim->polynomial()[0].scale &&
+                   parsed_root->polynomial()[0].factors ==
+                       decoded_claim->polynomial()[0].factors,
+               "root claim round-trip preserves the exact pending equation");
+    expect_ok(ctx, accum::decide(*basis, *parsed_root, secp),
+              "parsed root still requires and passes the final decision");
+    auto root_reencoded =
+        accum::serialize_root_claim(*basis, *parsed_root, secp);
+    ctx.expect(root_reencoded && *root_reencoded == *root_bytes,
+               "root claim encoding is canonical");
+
+    ctx.expect(!accum::serialize_root_claim(
+                   *basis, claims->front(), secp),
+               "multi-term leaf claim cannot use the final-root codec");
+    ctx.expect(!accum::serialize_root_claim(
+                   *basis, *decoded_claim, nullptr),
+               "root claim serialization requires a secp context");
+    ctx.expect(!accum::parse_root_claim(*basis, *root_bytes, nullptr),
+               "root claim parsing requires a secp context");
+
+    auto bad_root = *root_bytes;
+    bad_root.pop_back();
+    ctx.expect(!accum::parse_root_claim(*basis, bad_root, secp),
+               "truncated root claim is rejected");
+    bad_root = *root_bytes;
+    bad_root.push_back(0);
+    ctx.expect(!accum::parse_root_claim(*basis, bad_root, secp),
+               "trailing root claim bytes are rejected");
+    bad_root = *root_bytes;
+    std::fill_n(bad_root.begin(), 33, 0);
+    bad_root[32] = 1;
+    ctx.expect(!accum::parse_root_claim(*basis, bad_root, secp),
+               "noncanonical root claim identity is rejected");
+    bad_root = *root_bytes;
+    std::fill_n(bad_root.begin() + 33, 32, 0xff);
+    ctx.expect(!accum::parse_root_claim(*basis, bad_root, secp),
+               "noncanonical root claim scale is rejected");
+    bad_root = *root_bytes;
+    std::fill_n(bad_root.begin() + 65, 32, 0xff);
+    ctx.expect(!accum::parse_root_claim(*basis, bad_root, secp),
+               "noncanonical root claim factor is rejected");
+
+    auto wrong_root_shape =
+        accum::Basis::create(8, 2, "test/root-wrong-shape/v1", secp);
+    expect_ok(ctx, wrong_root_shape,
+              "different root-claim basis shape creates");
+    if (!wrong_root_shape) return;
+    ctx.expect(!accum::parse_root_claim(
+                   *wrong_root_shape, *root_bytes, secp),
+               "root claim cannot parse under another factor count");
+
+    bad_root = *root_bytes;
+    const auto& replacement =
+        basis->points()[0] == decoded_claim->point()
+            ? basis->points()[1]
+            : basis->points()[0];
+    std::copy(replacement.begin(), replacement.end(), bad_root.begin());
+    auto changed_root = accum::parse_root_claim(*basis, bad_root, secp);
+    expect_ok(ctx, changed_root,
+              "changed canonical root point remains a pending obligation");
+    if (!changed_root) return;
+    ctx.expect(!accum::decide(*basis, *changed_root, secp),
+               "final decision rejects a changed canonical root point");
+
+    bad_root = *root_bytes;
+    const auto changed_scale =
+        (decoded_claim->polynomial()[0].scale + FieldElement::one())
+            .to_bytes_be();
+    std::copy(changed_scale.begin(), changed_scale.end(),
+              bad_root.begin() + 33);
+    changed_root = accum::parse_root_claim(*basis, bad_root, secp);
+    expect_ok(ctx, changed_root,
+              "changed canonical root scale remains a pending obligation");
+    if (!changed_root) return;
+    ctx.expect(!accum::decide(*basis, *changed_root, secp),
+               "final decision rejects a changed canonical root scale");
+
+    bad_root = *root_bytes;
+    const auto changed_factor =
+        (decoded_claim->polynomial()[0].factors[0] + FieldElement::one())
+            .to_bytes_be();
+    std::copy(changed_factor.begin(), changed_factor.end(),
+              bad_root.begin() + 65);
+    changed_root = accum::parse_root_claim(*basis, bad_root, secp);
+    expect_ok(ctx, changed_root,
+              "changed canonical root factor remains a pending obligation");
+    if (!changed_root) return;
+    ctx.expect(!accum::decide(*basis, *changed_root, secp),
+               "final decision rejects a changed canonical root factor");
+
     auto reencoded = accum::serialize_step(*basis, *decoded, secp);
     expect_ok(ctx, reencoded, "decoded accumulation step serializes");
     ctx.expect(reencoded && *reencoded == *encoded,

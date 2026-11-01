@@ -35,6 +35,7 @@ const DIRECT_LOWERING_VERSION: u8 = 1;
 pub(crate) type DirectNovaPrimaryEngine = Secq256k1Engine;
 pub(crate) type DirectNovaSecondaryEngine = Secp256k1Engine;
 pub(crate) type DirectNovaScalar = <DirectNovaPrimaryEngine as Engine>::Scalar;
+pub(crate) type AnchorDirectNovaTemplate = DirectNovaTemplate<ANCHOR_RECURRENCE_STATE_ARITY>;
 pub(crate) type AnchorDirectNovaStep = DirectNovaStep<ANCHOR_RECURRENCE_STATE_ARITY>;
 type NovaScalar = DirectNovaScalar;
 
@@ -57,6 +58,10 @@ struct DirectNovaShape<const ARITY: usize> {
     relation_id: DirectRelationId,
 }
 
+pub(crate) struct DirectNovaTemplate<const ARITY: usize> {
+    shape: Arc<DirectNovaShape<ARITY>>,
+}
+
 #[derive(Clone)]
 pub(crate) struct DirectNovaStep<const ARITY: usize> {
     shape: Arc<DirectNovaShape<ARITY>>,
@@ -67,8 +72,8 @@ pub(crate) struct DirectNovaStep<const ARITY: usize> {
 
 impl<const ARITY: usize> DirectNovaStep<ARITY> {
     pub(crate) fn from_relation(relation: StatefulRelation) -> Result<Self, ReceiptCycleError> {
-        let shape = Arc::new(DirectNovaShape::new(relation.shape)?);
-        shape.bind_assignment(relation.assignment)
+        let (_, step) = DirectNovaTemplate::from_relation(relation)?;
+        Ok(step)
     }
 
     pub(crate) fn relation_id(&self) -> DirectRelationId {
@@ -81,6 +86,40 @@ impl<const ARITY: usize> DirectNovaStep<ARITY> {
 
     pub(crate) fn output_state(&self) -> &[NovaScalar; ARITY] {
         &self.output_state
+    }
+}
+
+impl<const ARITY: usize> DirectNovaTemplate<ARITY> {
+    pub(crate) fn from_relation(
+        relation: StatefulRelation,
+    ) -> Result<(Self, DirectNovaStep<ARITY>), ReceiptCycleError> {
+        let shape = Arc::new(DirectNovaShape::new(relation.shape)?);
+        let step = shape.bind_assignment(relation.assignment)?;
+        Ok((Self { shape }, step))
+    }
+
+    pub(crate) fn bind_relation(
+        &self,
+        relation: StatefulRelation,
+    ) -> Result<DirectNovaStep<ARITY>, ReceiptCycleError> {
+        let StatefulRelation { shape, assignment } = relation;
+        self.validate_source(&shape)?;
+        drop(shape);
+        self.shape.bind_assignment(assignment)
+    }
+
+    fn validate_source(&self, candidate: &RelationShape) -> Result<(), ReceiptCycleError> {
+        let trusted = &self.shape.source;
+        if candidate.circuit != trusted.circuit {
+            return Err(ReceiptCycleError::Malformed("direct Nova circuit drift"));
+        }
+        if candidate.operations != trusted.operations {
+            return Err(ReceiptCycleError::Malformed("direct Nova operation drift"));
+        }
+        if candidate.inputs != trusted.inputs || candidate.outputs != trusted.outputs {
+            return Err(ReceiptCycleError::Malformed("direct Nova state drift"));
+        }
+        Ok(())
     }
 }
 
@@ -808,6 +847,10 @@ mod tests {
         )
     }
 
+    fn relation_shape_mut(relation: &mut StatefulRelation) -> &mut RelationShape {
+        Arc::get_mut(&mut relation.shape).expect("fixture owns its relation shape")
+    }
+
     fn prepared(input_value: u64) -> (Arc<DirectNovaShape<1>>, Assignment) {
         let (circuit, assignment, operations, inputs, outputs) = split(fixture(input_value, false));
         let shape = DirectNovaShape::from_parts(circuit, operations, inputs, outputs)
@@ -1089,5 +1132,67 @@ mod tests {
             let source_bytes = Secq256k1Cycle::scalar_to_canonical(&value);
             assert_eq!(nova.to_repr().as_ref(), source_bytes.as_slice());
         }
+    }
+
+    #[test]
+    fn template_reuses_the_validated_shape_across_witnesses() {
+        let first_relation = fixture(3, false);
+        let original_source = Arc::clone(&first_relation.shape);
+        let (template, first) =
+            DirectNovaTemplate::<1>::from_relation(first_relation).expect("direct Nova template");
+        assert!(Arc::ptr_eq(&template.shape.source, &original_source));
+        assert!(Arc::ptr_eq(&template.shape, &first.shape));
+
+        let later_relation = fixture(9, false);
+        let discarded_source = Arc::downgrade(&later_relation.shape);
+        let second = template
+            .bind_relation(later_relation)
+            .expect("matching direct Nova relation");
+
+        assert!(discarded_source.upgrade().is_none());
+        assert!(Arc::ptr_eq(&template.shape, &second.shape));
+        assert!(Arc::ptr_eq(&first.shape, &second.shape));
+        assert_eq!(first.relation_id(), second.relation_id());
+        assert_ne!(first.input_state(), second.input_state());
+        assert_ne!(first.output_state(), second.output_state());
+    }
+
+    #[test]
+    fn template_rejects_exact_shape_drift_before_binding() {
+        let (template, _) = DirectNovaTemplate::<1>::from_relation(fixture(3, false))
+            .expect("direct Nova template");
+
+        let mut changed_circuit = fixture(9, false);
+        relation_shape_mut(&mut changed_circuit)
+            .circuit
+            .constraints
+            .last_mut()
+            .expect("semantic row")[0]
+            .coefficient *= Scalar::from(2);
+        assert!(matches!(
+            template.bind_relation(changed_circuit),
+            Err(ReceiptCycleError::Malformed("direct Nova circuit drift"))
+        ));
+
+        let mut changed_operation = fixture(9, false);
+        let GateOperationShape::AllocatedValue { unit_constraint } =
+            &mut relation_shape_mut(&mut changed_operation).operations[0]
+        else {
+            panic!("allocated operation");
+        };
+        *unit_constraint += 1;
+        assert!(matches!(
+            template.bind_relation(changed_operation),
+            Err(ReceiptCycleError::Malformed("direct Nova operation drift"))
+        ));
+
+        let (two_state_template, _) = DirectNovaTemplate::<2>::from_relation(two_state_fixture())
+            .expect("two-state direct Nova template");
+        let mut reordered_state = two_state_fixture();
+        relation_shape_mut(&mut reordered_state).inputs.swap(0, 1);
+        assert!(matches!(
+            two_state_template.bind_relation(reordered_state),
+            Err(ReceiptCycleError::Malformed("direct Nova state drift"))
+        ));
     }
 }

@@ -365,19 +365,22 @@ Status validate_ipa_encoding(std::size_t dimension, const Proof& proof,
     PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar),
                             "accumulation:step_encoding_scalar");
     (void)terminal;
-    std::vector<PointBytes> points;
-    points.reserve(2 * rounds + 1);
+    const auto is_canonical_point = [](const PointBytes& point) {
+        return purify_bppp_public_point_validate(point.data()) != 0;
+    };
     for (std::size_t round = 0; round < rounds; ++round) {
-        points.push_back(proof.left[round]);
-        points.push_back(proof.right[round]);
+        if (!is_canonical_point(proof.left[round]) ||
+            !is_canonical_point(proof.right[round])) {
+            return unexpected_error(
+                ErrorCode::BackendRejectedInput,
+                "accumulation:step_encoding_points");
+        }
     }
-    points.push_back(proof.folded_generator);
-    // The bridge callback parses every point before any zero-scalar skipping.
-    // This validates canonical encodings, including the unique identity form.
-    const std::vector<FieldElement> zeros(points.size(), FieldElement::zero());
-    PURIFY_ASSIGN_OR_RETURN(auto identity, msm(points, zeros, context),
-                            "accumulation:step_encoding_points");
-    (void)identity;
+    if (!is_canonical_point(proof.folded_generator)) {
+        return unexpected_error(
+            ErrorCode::BackendRejectedInput,
+            "accumulation:step_encoding_points");
+    }
     return {};
 }
 

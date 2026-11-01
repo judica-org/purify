@@ -8,9 +8,9 @@ use thiserror::Error;
 
 use crate::anchor_recurrence::ANCHOR_RECURRENCE_STATE_ARITY;
 use crate::construction_manifest::{
-    ConstructionManifestAnchor, ConstructionManifestSeed, ConstructionRoot,
-    CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
+    ConstructionRoot, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
 };
+use crate::construction_parent_input::ConstructionParentInputs;
 use crate::direct_nova::{nova_state_to_source, source_state_to_nova};
 use crate::nova_session::{
     DirectNovaSessionError, SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
@@ -46,11 +46,13 @@ impl AuthenticatedConstructionParentOutput {
     }
 }
 
-/// Verifies one canonical recursive parent and returns its pending root.
+/// Verifies one profile-checked recursive parent and returns its pending root.
+///
+/// The typed input is the only path into this boundary, so proof verification
+/// cannot bypass the native basis and raw-generator identity checks.
 pub(crate) fn verify_construction_parent(
     verifier: &SelectedDirectNovaVerifier<ANCHOR_RECURRENCE_STATE_ARITY>,
-    seed: &ConstructionManifestSeed,
-    anchors: &[ConstructionManifestAnchor],
+    inputs: &ConstructionParentInputs,
     proof: &[u8],
 ) -> Result<AuthenticatedConstructionParentOutput, ConstructionParentVerifierError> {
     if verifier.expected() != &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE {
@@ -66,6 +68,8 @@ pub(crate) fn verify_construction_parent(
         .into());
     }
 
+    let seed = inputs.seed();
+    let anchors = inputs.anchors();
     let expected_final = seed.derive_expected_final(anchors)?;
     let expected_suffix = expected_final.state_suffix_fields()?;
     let initial_state = source_state_to_nova(seed.initial_state_fields()?)?;

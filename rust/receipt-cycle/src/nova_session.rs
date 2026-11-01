@@ -500,7 +500,7 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
     /// Receipt acceptance must use `setup_exact` instead.
     #[cfg(test)]
     pub(crate) fn setup(
-        trusted_step: &DirectNovaStep<ARITY>,
+        trusted_step: DirectNovaStep<ARITY>,
     ) -> Result<Self, DirectNovaSessionError> {
         Self::setup_prepared(trusted_step)
     }
@@ -508,7 +508,7 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
     /// Builds a suite only after its relation and complete resulting metadata
     /// match one local profile. There is no alternate or fallback profile.
     pub(crate) fn setup_exact(
-        trusted_step: &DirectNovaStep<ARITY>,
+        trusted_step: DirectNovaStep<ARITY>,
         expected: &'static ExpectedDirectNovaSuite,
     ) -> Result<SelectedDirectNovaSuite<ARITY>, DirectNovaSessionError> {
         expected.precheck_relation(trusted_step.relation_id())?;
@@ -520,19 +520,18 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
         })
     }
 
-    fn setup_prepared(
-        trusted_step: &DirectNovaStep<ARITY>,
-    ) -> Result<Self, DirectNovaSessionError> {
+    fn setup_prepared(trusted_step: DirectNovaStep<ARITY>) -> Result<Self, DirectNovaSessionError> {
         let relation_id = trusted_step.relation_id();
         let pool = direct_nova_thread_pool()?;
 
         let (public_params, prover_key, verifier_key, proof_shape, metadata) =
-            pool.install(|| -> Result<_, DirectNovaSessionError> {
+            pool.install(move || -> Result<_, DirectNovaSessionError> {
                 let public_params = DirectPublicParams::<ARITY>::setup(
-                    trusted_step,
+                    &trusted_step,
                     &*PrimarySnark::ck_floor(),
                     &*SecondarySnark::ck_floor(),
                 )?;
+                drop(trusted_step);
                 let (primary_constraints, secondary_constraints) = public_params.num_constraints();
                 let (primary_variables, secondary_variables) = public_params.num_variables();
                 let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
@@ -766,6 +765,16 @@ pub(crate) struct DirectNovaProverSession<'suite, const ARITY: usize> {
     recursive: Option<DirectRecursiveSnark<ARITY>>,
 }
 
+fn validate_step_relation<const ARITY: usize>(
+    expected: DirectRelationId,
+    step: &DirectNovaStep<ARITY>,
+) -> Result<(), DirectNovaSessionError> {
+    if step.relation_id() != expected {
+        return Err(DirectNovaSessionError::StepRelation);
+    }
+    Ok(())
+}
+
 impl<const ARITY: usize> DirectNovaProverSession<'_, ARITY> {
     /// Consumes the session on both success and failure, so a partially
     /// mutated Nova proof can never be retried as if the fold were atomic.
@@ -779,9 +788,7 @@ impl<const ARITY: usize> DirectNovaProverSession<'_, ARITY> {
                 actual: self.completed_steps + 1,
             });
         }
-        if step.relation_id() != self.suite.verifier.metadata.relation_id {
-            return Err(DirectNovaSessionError::StepRelation);
-        }
+        validate_step_relation(self.suite.verifier.metadata.relation_id, &step)?;
         if step.input_state() != &self.current_state {
             return Err(DirectNovaSessionError::StateContinuity);
         }
@@ -1046,6 +1053,21 @@ mod tests {
             .expect("twenty-state Nova relation")
     }
 
+    fn identity_relation(state: [Scalar; TEST_ARITY]) -> StatefulRelation {
+        let mut builder = Builder::default();
+        let inputs: Vec<StateVariable> = state
+            .iter()
+            .map(|&value| builder.allocate_state(value))
+            .collect();
+        let outputs = inputs
+            .iter()
+            .map(|input| builder.expose_state(input.expression()))
+            .collect::<Vec<_>>();
+        builder
+            .finish_stateful(&inputs, &outputs)
+            .expect("identity Nova relation")
+    }
+
     fn nova_state(state: [Scalar; TEST_ARITY]) -> [DirectNovaScalar; TEST_ARITY] {
         state.map(|value| {
             let bytes = Secq256k1Cycle::scalar_to_canonical(&value);
@@ -1074,6 +1096,22 @@ mod tests {
             codec_sequence_count: proof_shape.sequence_count(),
         };
         (metadata, proof_shape)
+    }
+
+    #[test]
+    fn bound_step_with_another_shape_fails_relation_check() {
+        let (_, trusted) =
+            DirectNovaTemplate::<TEST_ARITY>::from_relation(relation(source_state(3)))
+                .expect("trusted direct Nova step");
+        let (_, different) =
+            DirectNovaTemplate::<TEST_ARITY>::from_relation(identity_relation(source_state(3)))
+                .expect("different direct Nova step");
+
+        assert!(validate_step_relation(trusted.relation_id(), &trusted).is_ok());
+        assert_eq!(
+            validate_step_relation(trusted.relation_id(), &different),
+            Err(DirectNovaSessionError::StepRelation)
+        );
     }
 
     #[test]
@@ -1214,7 +1252,7 @@ mod tests {
 
         let (_, trusted_step) = DirectNovaTemplate::<TEST_ARITY>::from_relation(relation)
             .expect("synthetic direct Nova template");
-        let suite = DirectNovaSuite::<TEST_ARITY>::setup(&trusted_step)
+        let suite = DirectNovaSuite::<TEST_ARITY>::setup(trusted_step)
             .expect("synthetic direct Nova qualification suite");
         let metadata = suite.metadata();
         assert_eq!(
@@ -1375,7 +1413,7 @@ mod tests {
             DirectNovaTemplate::<TEST_ARITY>::from_relation(relation(source_state(3)))
                 .expect("direct Nova template");
         assert!(matches!(
-            DirectNovaSuite::<TEST_ARITY>::setup_exact(&trusted_step, &TEST_WRONG_RELATION_SUITE),
+            DirectNovaSuite::<TEST_ARITY>::setup_exact(trusted_step, &TEST_WRONG_RELATION_SUITE),
             Err(DirectNovaSessionError::SuiteMismatch("relation ID"))
         ));
     }
@@ -1390,15 +1428,18 @@ mod tests {
         let z1 = nova_state(source_z1);
         let z2 = nova_state(source_z2);
 
-        let (template, first_step) =
+        let (template, trusted_step) =
             DirectNovaTemplate::<TEST_ARITY>::from_relation(relation(source_z0))
                 .expect("tiny direct Nova template");
+        let first_step = template
+            .bind_relation(relation(source_z0))
+            .expect("first tiny direct Nova step");
         let second_step = template
             .bind_relation(relation(source_z1))
             .expect("second tiny direct Nova step");
         drop(template);
         let selected =
-            DirectNovaSuite::<TEST_ARITY>::setup_exact(&first_step, &TINY_EXPECTED_SUITE)
+            DirectNovaSuite::<TEST_ARITY>::setup_exact(trusted_step, &TINY_EXPECTED_SUITE)
                 .expect("selected tiny direct Nova suite");
         assert_eq!(selected.expected(), &TINY_EXPECTED_SUITE);
         let metadata = selected.metadata();

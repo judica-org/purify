@@ -105,15 +105,40 @@ pub(crate) struct DirectNovaRawMetrics {
 }
 
 struct DirectNovaShape<const ARITY: usize> {
-    source: Arc<RelationShape>,
-    inputs: [StateWire; ARITY],
-    outputs: [StateWire; ARITY],
+    gate_kinds: Box<[DirectGateKind]>,
+    product_bindings: CompiledRows,
+    semantic_rows: CompiledRows,
+    inputs: [u32; ARITY],
+    outputs: [u32; ARITY],
     relation_id: DirectRelationId,
 }
 
 pub(crate) struct DirectNovaTemplate<const ARITY: usize> {
+    source: Arc<RelationShape>,
     shape: Arc<DirectNovaShape<ARITY>>,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+enum DirectGateKind {
+    AllocatedValue,
+    Boolean,
+    Product,
+}
+
+/// Compact structure-of-arrays storage for already lowered linear rows.
+///
+/// Offsets and variable indices are bounded by the canonical relation limits,
+/// so fixed-width indices avoid retaining millions of host-sized values. The
+/// distinguished maximum index addresses the constraint system's constant
+/// wire; every ordinary value is one direct gate index.
+struct CompiledRows {
+    offsets: Box<[u32]>,
+    variables: Box<[u32]>,
+    coefficients: Box<[NovaScalar]>,
+}
+
+const DIRECT_CONSTANT_INDEX: u32 = u32::MAX;
 
 #[derive(Clone)]
 pub(crate) struct DirectNovaStep<const ARITY: usize> {
@@ -124,6 +149,7 @@ pub(crate) struct DirectNovaStep<const ARITY: usize> {
 }
 
 impl<const ARITY: usize> DirectNovaStep<ARITY> {
+    #[cfg(test)]
     pub(crate) fn from_relation(relation: StatefulRelation) -> Result<Self, ReceiptCycleError> {
         let (_, step) = DirectNovaTemplate::from_relation(relation)?;
         Ok(step)
@@ -146,9 +172,11 @@ impl<const ARITY: usize> DirectNovaTemplate<ARITY> {
     pub(crate) fn from_relation(
         relation: StatefulRelation,
     ) -> Result<(Self, DirectNovaStep<ARITY>), ReceiptCycleError> {
-        let shape = Arc::new(DirectNovaShape::new(relation.shape)?);
-        let step = shape.bind_assignment(relation.assignment)?;
-        Ok((Self { shape }, step))
+        let source = relation.shape;
+        let shape = Arc::new(DirectNovaShape::compile(&source)?);
+        let template = Self { source, shape };
+        let step = template.bind_assignment(relation.assignment)?;
+        Ok((template, step))
     }
 
     pub(crate) fn bind_relation(
@@ -159,19 +187,19 @@ impl<const ARITY: usize> DirectNovaTemplate<ARITY> {
         // Pointer equality refers to the immutable source Arc already
         // validated by this template. It skips only the duplicate structural
         // comparison; bind_assignment still checks every witness constraint.
-        if !Arc::ptr_eq(&shape, &self.shape.source) {
+        if !Arc::ptr_eq(&shape, &self.source) {
             self.validate_source(&shape)?;
         }
         drop(shape);
-        self.shape.bind_assignment(assignment)
+        self.bind_assignment(assignment)
     }
 
     pub(crate) fn matching_builder(&self) -> Builder {
-        Builder::matching(Arc::clone(&self.shape.source))
+        Builder::matching(Arc::clone(&self.source))
     }
 
     fn validate_source(&self, candidate: &RelationShape) -> Result<(), ReceiptCycleError> {
-        let trusted = &self.shape.source;
+        let trusted = &self.source;
         if candidate.circuit != trusted.circuit {
             return Err(ReceiptCycleError::Malformed("direct Nova circuit drift"));
         }
@@ -183,57 +211,9 @@ impl<const ARITY: usize> DirectNovaTemplate<ARITY> {
         }
         Ok(())
     }
-}
-
-impl<const ARITY: usize> DirectNovaShape<ARITY> {
-    fn from_parts(
-        circuit: Circuit,
-        operations: Vec<GateOperationShape>,
-        inputs: Vec<StateWire>,
-        outputs: Vec<StateWire>,
-    ) -> Result<Self, ReceiptCycleError> {
-        Self::new(Arc::new(RelationShape {
-            circuit,
-            operations,
-            inputs,
-            outputs,
-        }))
-    }
-
-    fn new(source: Arc<RelationShape>) -> Result<Self, ReceiptCycleError> {
-        validate_direct_shape::<ARITY>(
-            &source.circuit,
-            &source.operations,
-            &source.inputs,
-            &source.outputs,
-        )?;
-        let relation_id = relation_id::<ARITY>(
-            &source.circuit,
-            &source.operations,
-            &source.inputs,
-            &source.outputs,
-            DIRECT_LOWERING_VERSION,
-        )?;
-        let inputs = source
-            .inputs
-            .as_slice()
-            .try_into()
-            .map_err(|_| ReceiptCycleError::Malformed("direct Nova input state"))?;
-        let outputs = source
-            .outputs
-            .as_slice()
-            .try_into()
-            .map_err(|_| ReceiptCycleError::Malformed("direct Nova output state"))?;
-        Ok(Self {
-            source,
-            inputs,
-            outputs,
-            relation_id,
-        })
-    }
 
     fn bind_assignment(
-        self: &Arc<Self>,
+        &self,
         assignment: Assignment,
     ) -> Result<DirectNovaStep<ARITY>, ReceiptCycleError> {
         validate_assignment(&self.source.circuit, &assignment)?;
@@ -251,13 +231,107 @@ impl<const ARITY: usize> DirectNovaShape<ARITY> {
             };
             gate_values.push(source_to_nova(logical)?);
         }
-        let input_state = state_values(&gate_values, &self.inputs)?;
-        let output_state = state_values(&gate_values, &self.outputs)?;
+        let input_state = state_values(&gate_values, &self.shape.inputs)?;
+        let output_state = state_values(&gate_values, &self.shape.outputs)?;
         Ok(DirectNovaStep {
-            shape: Arc::clone(self),
+            shape: Arc::clone(&self.shape),
             gate_values: gate_values.into(),
             input_state,
             output_state,
+        })
+    }
+}
+
+impl<const ARITY: usize> DirectNovaShape<ARITY> {
+    #[cfg(test)]
+    fn from_parts(
+        circuit: Circuit,
+        operations: Vec<GateOperationShape>,
+        inputs: Vec<StateWire>,
+        outputs: Vec<StateWire>,
+    ) -> Result<Self, ReceiptCycleError> {
+        let source = RelationShape {
+            circuit,
+            operations,
+            inputs,
+            outputs,
+        };
+        Self::compile(&source)
+    }
+
+    fn compile(source: &RelationShape) -> Result<Self, ReceiptCycleError> {
+        validate_direct_shape::<ARITY>(
+            &source.circuit,
+            &source.operations,
+            &source.inputs,
+            &source.outputs,
+        )?;
+        let relation_id = relation_id::<ARITY>(
+            &source.circuit,
+            &source.operations,
+            &source.inputs,
+            &source.outputs,
+            DIRECT_LOWERING_VERSION,
+        )?;
+        let gate_kinds = source
+            .operations
+            .iter()
+            .map(|operation| match operation {
+                GateOperationShape::AllocatedValue { .. } => DirectGateKind::AllocatedValue,
+                GateOperationShape::Boolean { .. } => DirectGateKind::Boolean,
+                GateOperationShape::Product { .. } => DirectGateKind::Product,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let (product_rows, product_terms, semantic_rows, semantic_terms) =
+            compact_row_counts(source)?;
+        let mut product_bindings = CompiledRowsBuilder::new(product_rows, product_terms)?;
+        for (gate_index, operation) in source.operations.iter().enumerate() {
+            if let GateOperationShape::Product {
+                left_binding,
+                right_binding,
+            } = operation
+            {
+                product_bindings.push_binding(source, *left_binding, gate_index, WireKind::Left)?;
+                product_bindings.push_binding(
+                    source,
+                    *right_binding,
+                    gate_index,
+                    WireKind::Right,
+                )?;
+            }
+        }
+        let product_bindings = product_bindings.finish()?;
+
+        let mut semantic = CompiledRowsBuilder::new(semantic_rows, semantic_terms)?;
+        let mut operation_rows = OperationRows::new(&source.operations);
+        let mut next_operation_row = operation_rows.next();
+        for (row_index, row) in source.circuit.constraints.iter().enumerate() {
+            if next_operation_row == Some(row_index) {
+                next_operation_row = operation_rows.next();
+                continue;
+            }
+            if next_operation_row.is_some_and(|owned| owned < row_index) {
+                return Err(ReceiptCycleError::Malformed(
+                    "direct Nova operation row order",
+                ));
+            }
+            semantic.push_row(source, row, false)?;
+        }
+        if next_operation_row.is_some() {
+            return Err(ReceiptCycleError::Malformed("direct Nova operation rows"));
+        }
+        let semantic_rows = semantic.finish()?;
+
+        let inputs = compact_state_indices::<ARITY>(&source.inputs, "direct Nova input state")?;
+        let outputs = compact_state_indices::<ARITY>(&source.outputs, "direct Nova output state")?;
+        Ok(Self {
+            gate_kinds,
+            product_bindings,
+            semantic_rows,
+            inputs,
+            outputs,
+            relation_id,
         })
     }
 }
@@ -272,7 +346,7 @@ impl<const ARITY: usize> StepCircuit<NovaScalar> for DirectNovaStep<ARITY> {
         cs: &mut CS,
         z: &[AllocatedNum<NovaScalar>],
     ) -> Result<Vec<AllocatedNum<NovaScalar>>, SynthesisError> {
-        if z.len() != ARITY || self.gate_values.len() != self.shape.source.circuit.gate_count {
+        if z.len() != ARITY || self.gate_values.len() != self.shape.gate_kinds.len() {
             return Err(synthesis_error("direct Nova state shape"));
         }
 
@@ -289,13 +363,14 @@ impl<const ARITY: usize> StepCircuit<NovaScalar> for DirectNovaStep<ARITY> {
             gates.push(AllocatedNum::from_parts(variable, Some(value)));
         }
 
-        for (gate_index, operation) in self.shape.source.operations.iter().enumerate() {
+        let mut product_index = 0usize;
+        for (gate_index, operation) in self.shape.gate_kinds.iter().enumerate() {
             let output = gates
                 .get(gate_index)
                 .ok_or_else(|| synthesis_error("direct Nova gate index"))?;
             match operation {
-                GateOperationShape::AllocatedValue { .. } => {}
-                GateOperationShape::Boolean { .. } => {
+                DirectGateKind::AllocatedValue => {}
+                DirectGateKind::Boolean => {
                     let variable = output.get_variable();
                     cs.enforce(
                         || "direct boolean",
@@ -304,26 +379,15 @@ impl<const ARITY: usize> StepCircuit<NovaScalar> for DirectNovaStep<ARITY> {
                         |linear| linear + variable,
                     );
                 }
-                GateOperationShape::Product {
-                    left_binding,
-                    right_binding,
-                } => {
-                    let left = lower_binding::<CS>(
-                        &self.shape.source.circuit,
-                        &self.shape.source.operations,
-                        &gates,
-                        *left_binding,
-                        gate_index,
-                        WireKind::Left,
-                    )?;
-                    let right = lower_binding::<CS>(
-                        &self.shape.source.circuit,
-                        &self.shape.source.operations,
-                        &gates,
-                        *right_binding,
-                        gate_index,
-                        WireKind::Right,
-                    )?;
+                DirectGateKind::Product => {
+                    let left_row = product_index
+                        .checked_mul(2)
+                        .ok_or_else(|| synthesis_error("direct Nova product row"))?;
+                    let right_row = left_row
+                        .checked_add(1)
+                        .ok_or_else(|| synthesis_error("direct Nova product row"))?;
+                    let left = self.shape.product_bindings.lower::<CS>(&gates, left_row)?;
+                    let right = self.shape.product_bindings.lower::<CS>(&gates, right_row)?;
                     let variable = output.get_variable();
                     cs.enforce(
                         || "direct product",
@@ -331,21 +395,22 @@ impl<const ARITY: usize> StepCircuit<NovaScalar> for DirectNovaStep<ARITY> {
                         |_| right,
                         |linear| linear + variable,
                     );
+                    product_index = product_index
+                        .checked_add(1)
+                        .ok_or_else(|| synthesis_error("direct Nova product count"))?;
                 }
             }
         }
+        if product_index
+            .checked_mul(2)
+            .ok_or_else(|| synthesis_error("direct Nova product row"))?
+            != self.shape.product_bindings.row_count()
+        {
+            return Err(synthesis_error("direct Nova product row count"));
+        }
 
-        let mut owned_rows = OperationRows::new(&self.shape.source.operations);
-        let mut next_owned = owned_rows.next();
-        for (row_index, row) in self.shape.source.circuit.constraints.iter().enumerate() {
-            if next_owned == Some(row_index) {
-                next_owned = owned_rows.next();
-                continue;
-            }
-            if next_owned.is_some_and(|owned| owned < row_index) {
-                return Err(synthesis_error("direct Nova operation row order"));
-            }
-            let semantic = lower_row::<CS>(&self.shape.source.operations, &gates, row)?;
+        for row_index in 0..self.shape.semantic_rows.row_count() {
+            let semantic = self.shape.semantic_rows.lower::<CS>(&gates, row_index)?;
             cs.enforce(
                 || "direct semantic",
                 |_| semantic,
@@ -353,13 +418,12 @@ impl<const ARITY: usize> StepCircuit<NovaScalar> for DirectNovaStep<ARITY> {
                 |linear| linear,
             );
         }
-        if next_owned.is_some() {
-            return Err(synthesis_error("direct Nova operation row count"));
-        }
 
-        for (wire, state) in self.shape.inputs.iter().zip(z) {
+        for (&wire, state) in self.shape.inputs.iter().zip(z) {
+            let wire =
+                usize::try_from(wire).map_err(|_| synthesis_error("direct Nova input gate"))?;
             let gate = gates
-                .get(wire.index)
+                .get(wire)
                 .ok_or_else(|| synthesis_error("direct Nova input gate"))?;
             let gate_variable = gate.get_variable();
             let state_variable = state.get_variable();
@@ -374,9 +438,11 @@ impl<const ARITY: usize> StepCircuit<NovaScalar> for DirectNovaStep<ARITY> {
         self.shape
             .outputs
             .iter()
-            .map(|wire| {
+            .map(|&wire| {
+                let wire = usize::try_from(wire)
+                    .map_err(|_| synthesis_error("direct Nova output gate"))?;
                 gates
-                    .get(wire.index)
+                    .get(wire)
                     .cloned()
                     .ok_or_else(|| synthesis_error("direct Nova output gate"))
             })
@@ -394,8 +460,12 @@ impl<const ARITY: usize> DirectNovaStep<ARITY> {
             .outputs
             .iter()
             .enumerate()
-            .map(|(position, wire)| (wire.index, position))
-            .collect::<Vec<_>>();
+            .map(|(position, &wire)| {
+                usize::try_from(wire)
+                    .map(|wire| (wire, position))
+                    .map_err(|_| synthesis_error("direct Nova witness output gate"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         output_positions.sort_unstable_by_key(|&(gate_index, _)| gate_index);
         let mut output_positions = output_positions.into_iter().peekable();
         let mut outputs = vec![None; ARITY];
@@ -423,6 +493,277 @@ impl<const ARITY: usize> DirectNovaStep<ARITY> {
             })
             .collect()
     }
+}
+
+struct CompiledRowsBuilder {
+    expected_rows: usize,
+    expected_terms: usize,
+    offsets: Vec<u32>,
+    variables: Vec<u32>,
+    coefficients: Vec<NovaScalar>,
+}
+
+impl CompiledRowsBuilder {
+    fn new(expected_rows: usize, expected_terms: usize) -> Result<Self, ReceiptCycleError> {
+        let offset_count = expected_rows
+            .checked_add(1)
+            .ok_or(ReceiptCycleError::Malformed(
+                "direct Nova compact row count",
+            ))?;
+        u32::try_from(expected_rows)
+            .map_err(|_| ReceiptCycleError::Malformed("direct Nova compact row count"))?;
+        u32::try_from(expected_terms)
+            .map_err(|_| ReceiptCycleError::Malformed("direct Nova compact term count"))?;
+        let mut offsets = Vec::with_capacity(offset_count);
+        offsets.push(0);
+        Ok(Self {
+            expected_rows,
+            expected_terms,
+            offsets,
+            variables: Vec::with_capacity(expected_terms),
+            coefficients: Vec::with_capacity(expected_terms),
+        })
+    }
+
+    fn push_binding(
+        &mut self,
+        source: &RelationShape,
+        row_index: usize,
+        gate_index: usize,
+        binding_kind: WireKind,
+    ) -> Result<(), ReceiptCycleError> {
+        let row = source
+            .circuit
+            .constraints
+            .get(row_index)
+            .ok_or(ReceiptCycleError::Malformed("direct Nova binding row"))?;
+        let mut binding_seen = false;
+        for term in row {
+            if term.kind == binding_kind && term.index == gate_index {
+                if term.coefficient != Scalar::ONE || binding_seen {
+                    return Err(ReceiptCycleError::Malformed("direct Nova binding term"));
+                }
+                binding_seen = true;
+                continue;
+            }
+            self.push_term(source, term, true)?;
+        }
+        if !binding_seen {
+            return Err(ReceiptCycleError::Malformed("direct Nova missing binding"));
+        }
+        self.finish_row()
+    }
+
+    fn push_row(
+        &mut self,
+        source: &RelationShape,
+        row: &[Term],
+        negate: bool,
+    ) -> Result<(), ReceiptCycleError> {
+        for term in row {
+            self.push_term(source, term, negate)?;
+        }
+        self.finish_row()
+    }
+
+    fn push_term(
+        &mut self,
+        source: &RelationShape,
+        term: &Term,
+        negate: bool,
+    ) -> Result<(), ReceiptCycleError> {
+        let variable = compact_variable_index(source, term)?;
+        let mut coefficient = source_to_nova(term.coefficient)?;
+        if negate {
+            coefficient = -coefficient;
+        }
+        self.variables.push(variable);
+        self.coefficients.push(coefficient);
+        Ok(())
+    }
+
+    fn finish_row(&mut self) -> Result<(), ReceiptCycleError> {
+        let offset = u32::try_from(self.variables.len())
+            .map_err(|_| ReceiptCycleError::Malformed("direct Nova compact term count"))?;
+        self.offsets.push(offset);
+        Ok(())
+    }
+
+    fn finish(self) -> Result<CompiledRows, ReceiptCycleError> {
+        if self.offsets.len() != self.expected_rows + 1
+            || self.variables.len() != self.expected_terms
+            || self.coefficients.len() != self.expected_terms
+        {
+            return Err(ReceiptCycleError::Malformed(
+                "direct Nova compact row shape",
+            ));
+        }
+        Ok(CompiledRows {
+            offsets: self.offsets.into_boxed_slice(),
+            variables: self.variables.into_boxed_slice(),
+            coefficients: self.coefficients.into_boxed_slice(),
+        })
+    }
+}
+
+impl CompiledRows {
+    fn row_count(&self) -> usize {
+        self.offsets.len() - 1
+    }
+
+    fn lower<CS: ConstraintSystem<NovaScalar>>(
+        &self,
+        gates: &[AllocatedNum<NovaScalar>],
+        row_index: usize,
+    ) -> Result<LinearCombination<NovaScalar>, SynthesisError> {
+        let offset_end = row_index
+            .checked_add(2)
+            .ok_or_else(|| synthesis_error("direct Nova compact row"))?;
+        let offsets = self
+            .offsets
+            .get(row_index..offset_end)
+            .ok_or_else(|| synthesis_error("direct Nova compact row"))?;
+        let start = usize::try_from(offsets[0])
+            .map_err(|_| synthesis_error("direct Nova compact offset"))?;
+        let end = usize::try_from(offsets[1])
+            .map_err(|_| synthesis_error("direct Nova compact offset"))?;
+        let variables = self
+            .variables
+            .get(start..end)
+            .ok_or_else(|| synthesis_error("direct Nova compact variables"))?;
+        let coefficients = self
+            .coefficients
+            .get(start..end)
+            .ok_or_else(|| synthesis_error("direct Nova compact coefficients"))?;
+        let mut linear = LinearCombination::zero();
+        for (&variable, &coefficient) in variables.iter().zip(coefficients) {
+            linear = if variable == DIRECT_CONSTANT_INDEX {
+                linear + (coefficient, CS::one())
+            } else {
+                let variable = usize::try_from(variable)
+                    .map_err(|_| synthesis_error("direct Nova compact gate"))?;
+                let gate = gates
+                    .get(variable)
+                    .ok_or_else(|| synthesis_error("direct Nova compact gate"))?;
+                linear + (coefficient, gate.get_variable())
+            };
+        }
+        Ok(linear)
+    }
+}
+
+fn compact_variable_index(source: &RelationShape, term: &Term) -> Result<u32, ReceiptCycleError> {
+    if term.kind == WireKind::One {
+        return Ok(DIRECT_CONSTANT_INDEX);
+    }
+    let operation = source
+        .operations
+        .get(term.index)
+        .ok_or(ReceiptCycleError::Malformed("direct Nova operation index"))?;
+    let is_constant = match operation {
+        GateOperationShape::AllocatedValue { .. } => match term.kind {
+            WireKind::Left | WireKind::Output => false,
+            WireKind::Right => true,
+            WireKind::One => unreachable!("constant terms return above"),
+        },
+        GateOperationShape::Boolean { .. } => match term.kind {
+            WireKind::Left | WireKind::Right | WireKind::Output => false,
+            WireKind::One => unreachable!("constant terms return above"),
+        },
+        GateOperationShape::Product { .. } => match term.kind {
+            WireKind::Output => false,
+            WireKind::Left | WireKind::Right | WireKind::One => {
+                return Err(ReceiptCycleError::Malformed("direct Nova product alias"));
+            }
+        },
+    };
+    if is_constant {
+        Ok(DIRECT_CONSTANT_INDEX)
+    } else {
+        u32::try_from(term.index)
+            .map_err(|_| ReceiptCycleError::Malformed("direct Nova compact gate index"))
+    }
+}
+
+fn compact_state_indices<const ARITY: usize>(
+    wires: &[StateWire],
+    label: &'static str,
+) -> Result<[u32; ARITY], ReceiptCycleError> {
+    if wires.len() != ARITY {
+        return Err(ReceiptCycleError::Malformed(label));
+    }
+    let mut compact = [0u32; ARITY];
+    for (target, wire) in compact.iter_mut().zip(wires) {
+        *target = u32::try_from(wire.index).map_err(|_| ReceiptCycleError::Malformed(label))?;
+    }
+    Ok(compact)
+}
+
+fn compact_row_counts(
+    source: &RelationShape,
+) -> Result<(usize, usize, usize, usize), ReceiptCycleError> {
+    let mut product_rows = 0usize;
+    let mut product_terms = 0usize;
+    for operation in &source.operations {
+        if let GateOperationShape::Product {
+            left_binding,
+            right_binding,
+        } = operation
+        {
+            product_rows = product_rows
+                .checked_add(2)
+                .ok_or(ReceiptCycleError::Malformed(
+                    "direct Nova compact row count",
+                ))?;
+            for &row_index in [left_binding, right_binding] {
+                let row = source
+                    .circuit
+                    .constraints
+                    .get(row_index)
+                    .ok_or(ReceiptCycleError::Malformed("direct Nova binding row"))?;
+                product_terms = product_terms
+                    .checked_add(
+                        row.len()
+                            .checked_sub(1)
+                            .ok_or(ReceiptCycleError::Malformed("direct Nova binding row"))?,
+                    )
+                    .ok_or(ReceiptCycleError::Malformed(
+                        "direct Nova compact term count",
+                    ))?;
+            }
+        }
+    }
+
+    let mut operation_rows = OperationRows::new(&source.operations);
+    let mut next_operation_row = operation_rows.next();
+    let mut semantic_rows = 0usize;
+    let mut semantic_terms = 0usize;
+    for (row_index, row) in source.circuit.constraints.iter().enumerate() {
+        if next_operation_row == Some(row_index) {
+            next_operation_row = operation_rows.next();
+            continue;
+        }
+        if next_operation_row.is_some_and(|owned| owned < row_index) {
+            return Err(ReceiptCycleError::Malformed(
+                "direct Nova operation row order",
+            ));
+        }
+        semantic_rows = semantic_rows
+            .checked_add(1)
+            .ok_or(ReceiptCycleError::Malformed(
+                "direct Nova compact row count",
+            ))?;
+        semantic_terms =
+            semantic_terms
+                .checked_add(row.len())
+                .ok_or(ReceiptCycleError::Malformed(
+                    "direct Nova compact term count",
+                ))?;
+    }
+    if next_operation_row.is_some() {
+        return Err(ReceiptCycleError::Malformed("direct Nova operation rows"));
+    }
+    Ok((product_rows, product_terms, semantic_rows, semantic_terms))
 }
 
 struct OperationRows<'a> {
@@ -803,100 +1144,18 @@ fn validate_assignment(
 
 fn state_values<const ARITY: usize>(
     gates: &[NovaScalar],
-    wires: &[StateWire; ARITY],
+    wires: &[u32; ARITY],
 ) -> Result<[NovaScalar; ARITY], ReceiptCycleError> {
     let mut values = [NovaScalar::ZERO; ARITY];
-    for (value, wire) in values.iter_mut().zip(wires) {
+    for (value, &wire) in values.iter_mut().zip(wires) {
+        let wire = usize::try_from(wire)
+            .map_err(|_| ReceiptCycleError::Malformed("direct Nova state index"))?;
         *value = gates
-            .get(wire.index)
+            .get(wire)
             .copied()
             .ok_or(ReceiptCycleError::Malformed("direct Nova state index"))?;
     }
     Ok(values)
-}
-
-fn lower_binding<CS: ConstraintSystem<NovaScalar>>(
-    circuit: &Circuit,
-    operations: &[GateOperationShape],
-    gates: &[AllocatedNum<NovaScalar>],
-    row_index: usize,
-    gate_index: usize,
-    binding_kind: WireKind,
-) -> Result<LinearCombination<NovaScalar>, SynthesisError> {
-    let row = circuit
-        .constraints
-        .get(row_index)
-        .ok_or_else(|| synthesis_error("direct Nova binding row"))?;
-    let mut binding_seen = false;
-    let mut linear = LinearCombination::zero();
-    for term in row {
-        if term.kind == binding_kind && term.index == gate_index {
-            if term.coefficient != Scalar::ONE || binding_seen {
-                return Err(synthesis_error("direct Nova binding term"));
-            }
-            binding_seen = true;
-            continue;
-        }
-        linear = add_lowered_term::<CS>(linear, operations, gates, term, true)?;
-    }
-    if !binding_seen {
-        return Err(synthesis_error("direct Nova missing binding"));
-    }
-    Ok(linear)
-}
-
-fn lower_row<CS: ConstraintSystem<NovaScalar>>(
-    operations: &[GateOperationShape],
-    gates: &[AllocatedNum<NovaScalar>],
-    row: &[Term],
-) -> Result<LinearCombination<NovaScalar>, SynthesisError> {
-    let mut linear = LinearCombination::zero();
-    for term in row {
-        linear = add_lowered_term::<CS>(linear, operations, gates, term, false)?;
-    }
-    Ok(linear)
-}
-
-fn add_lowered_term<CS: ConstraintSystem<NovaScalar>>(
-    linear: LinearCombination<NovaScalar>,
-    operations: &[GateOperationShape],
-    gates: &[AllocatedNum<NovaScalar>],
-    term: &Term,
-    negate: bool,
-) -> Result<LinearCombination<NovaScalar>, SynthesisError> {
-    let mut coefficient =
-        source_to_nova(term.coefficient).map_err(|_| synthesis_error("direct Nova coefficient"))?;
-    if negate {
-        coefficient = -coefficient;
-    }
-    if term.kind == WireKind::One {
-        return Ok(linear + (coefficient, CS::one()));
-    }
-    let operation = operations
-        .get(term.index)
-        .ok_or_else(|| synthesis_error("direct Nova operation index"))?;
-    let gate = gates
-        .get(term.index)
-        .ok_or_else(|| synthesis_error("direct Nova term gate"))?;
-    match operation {
-        GateOperationShape::AllocatedValue { .. } => match term.kind {
-            WireKind::Left | WireKind::Output => Ok(linear + (coefficient, gate.get_variable())),
-            WireKind::Right => Ok(linear + (coefficient, CS::one())),
-            WireKind::One => Err(synthesis_error("direct Nova constant wire")),
-        },
-        GateOperationShape::Boolean { .. } => match term.kind {
-            WireKind::Left | WireKind::Right | WireKind::Output => {
-                Ok(linear + (coefficient, gate.get_variable()))
-            }
-            WireKind::One => Err(synthesis_error("direct Nova constant wire")),
-        },
-        GateOperationShape::Product { .. } => match term.kind {
-            WireKind::Output => Ok(linear + (coefficient, gate.get_variable())),
-            WireKind::Left | WireKind::Right | WireKind::One => {
-                Err(synthesis_error("direct Nova product alias"))
-            }
-        },
-    }
 }
 
 fn source_to_nova(value: Scalar) -> Result<NovaScalar, ReceiptCycleError> {
@@ -1071,11 +1330,21 @@ mod tests {
         Arc::get_mut(&mut relation.shape).expect("fixture owns its relation shape")
     }
 
-    fn prepared(input_value: u64) -> (Arc<DirectNovaShape<1>>, Assignment) {
-        let (circuit, assignment, operations, inputs, outputs) = split(fixture(input_value, false));
-        let shape = DirectNovaShape::from_parts(circuit, operations, inputs, outputs)
-            .expect("direct Nova shape");
-        (Arc::new(shape), assignment)
+    fn prepared(input_value: u64) -> (DirectNovaTemplate<1>, Assignment) {
+        let relation = fixture(input_value, false);
+        let assignment = relation.assignment.clone();
+        let (template, _) =
+            DirectNovaTemplate::from_relation(relation).expect("direct Nova template");
+        (template, assignment)
+    }
+
+    fn synthesized_shape(step: &DirectNovaStep<1>) -> ShapeCS<DirectNovaPrimaryEngine> {
+        let mut shape = ShapeCS::<DirectNovaPrimaryEngine>::new();
+        let state = AllocatedNum::alloc_input(&mut shape, || Ok(NovaScalar::ZERO))
+            .expect("shape state input");
+        step.synthesize(&mut shape, &[state])
+            .expect("shape synthesis");
+        shape
     }
 
     fn synthesize_with_input(step: &DirectNovaStep<1>, input: NovaScalar) -> bool {
@@ -1108,15 +1377,16 @@ mod tests {
 
     #[test]
     fn direct_lowering_has_exact_raw_shape() {
-        let step = DirectNovaStep::<1>::from_relation(fixture(3, false)).expect("direct step");
+        let relation = fixture(3, false);
+        let gate_count = relation.shape.circuit.gate_count;
+        let source_constraints = relation.shape.circuit.constraints.len();
+        let step = DirectNovaStep::<1>::from_relation(relation).expect("direct step");
         let mut cs = ShapeCS::<DirectNovaPrimaryEngine>::new();
         let state =
             AllocatedNum::alloc_input(&mut cs, || Ok(NovaScalar::ZERO)).expect("shape state");
         let outputs = step.synthesize(&mut cs, &[state]).expect("shape");
 
         assert_eq!(outputs.len(), 1);
-        let gate_count = step.shape.source.circuit.gate_count;
-        let source_constraints = step.shape.source.circuit.constraints.len();
         assert_eq!(cs.num_aux(), gate_count);
         assert_eq!(cs.num_constraints(), source_constraints - gate_count + 1);
         assert_eq!(
@@ -1129,14 +1399,15 @@ mod tests {
 
     #[test]
     fn semantic_rows_interleaved_with_operations_are_retained() {
-        let step = DirectNovaStep::<1>::from_relation(fixture(7, true)).expect("direct step");
+        let relation = fixture(7, true);
+        let gate_count = relation.shape.circuit.gate_count;
+        let source_constraints = relation.shape.circuit.constraints.len();
+        let step = DirectNovaStep::<1>::from_relation(relation).expect("direct step");
         let mut cs = ShapeCS::<DirectNovaPrimaryEngine>::new();
         let state =
             AllocatedNum::alloc_input(&mut cs, || Ok(NovaScalar::ZERO)).expect("shape state");
         step.synthesize(&mut cs, &[state]).expect("shape");
 
-        let gate_count = step.shape.source.circuit.gate_count;
-        let source_constraints = step.shape.source.circuit.constraints.len();
         assert_eq!(cs.num_aux(), gate_count);
         assert_eq!(cs.num_constraints(), source_constraints - gate_count + 1);
         assert!(synthesize_with_input(&step, step.input_state()[0]));
@@ -1164,18 +1435,18 @@ mod tests {
             (3, Scalar::from(4), Scalar::ONE),
         ];
         for (gate, left, right) in mutations {
-            let (shape, mut assignment) = prepared(3);
+            let (template, mut assignment) = prepared(3);
             assignment.gates[gate] = (left, right);
             assert!(matches!(
-                shape.bind_assignment(assignment),
+                template.bind_assignment(assignment),
                 Err(ReceiptCycleError::Malformed(
                     "direct Nova unsatisfied assignment"
                 ))
             ));
         }
 
-        let (shape, assignment) = prepared(3);
-        let step = shape.bind_assignment(assignment).expect("direct step");
+        let (template, assignment) = prepared(3);
+        let step = template.bind_assignment(assignment).expect("direct step");
         let wrong_input = step.input_state()[0] + NovaScalar::ONE;
         assert!(!synthesize_with_input(&step, wrong_input));
     }
@@ -1364,7 +1635,7 @@ mod tests {
         let original_source = Arc::clone(&first_relation.shape);
         let (template, first) =
             DirectNovaTemplate::<1>::from_relation(first_relation).expect("direct Nova template");
-        assert!(Arc::ptr_eq(&template.shape.source, &original_source));
+        assert!(Arc::ptr_eq(&template.source, &original_source));
         assert!(Arc::ptr_eq(&template.shape, &first.shape));
 
         let later_relation = fixture(9, false);
@@ -1382,11 +1653,35 @@ mod tests {
     }
 
     #[test]
+    fn bound_steps_release_source_and_keep_identical_synthesis() {
+        let relation = fixture(3, false);
+        let source = Arc::downgrade(&relation.shape);
+        let (template, first) =
+            DirectNovaTemplate::<1>::from_relation(relation).expect("direct Nova template");
+        let second_relation = fixture_with_builder(template.matching_builder(), 9, false);
+        let second = template
+            .bind_relation(second_relation)
+            .expect("matching direct Nova relation");
+        let before_release = synthesized_shape(&first);
+
+        assert!(source.upgrade().is_some());
+        drop(template);
+        assert!(source.upgrade().is_none());
+
+        let after_release = synthesized_shape(&second);
+        assert_eq!(before_release.num_aux(), after_release.num_aux());
+        assert_eq!(before_release.num_inputs(), after_release.num_inputs());
+        assert_eq!(before_release.constraints, after_release.constraints);
+        assert!(synthesize_with_input(&first, first.input_state()[0]));
+        assert!(synthesize_with_input(&second, second.input_state()[0]));
+    }
+
+    #[test]
     fn template_streams_matching_witnesses_into_the_trusted_shape() {
         let (template, first) = DirectNovaTemplate::<1>::from_relation(fixture(3, false))
             .expect("direct Nova template");
         let later_relation = fixture_with_builder(template.matching_builder(), 9, false);
-        assert!(Arc::ptr_eq(&later_relation.shape, &template.shape.source));
+        assert!(Arc::ptr_eq(&later_relation.shape, &template.source));
 
         let second = template
             .bind_relation(later_relation)

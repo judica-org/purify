@@ -763,15 +763,15 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         .bind_relation(matching)
         .expect("matching full-scale direct Nova step");
     drop(template);
+    drop(fixture);
 
     let setup_started = std::time::Instant::now();
     eprintln!("native_profile_nova: constructing transparent parameters");
     let selected = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup_exact(
-        &trusted_step,
+        trusted_step,
         &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
     )
     .expect("qualified full-scale direct Nova suite");
-    drop(trusted_step);
     eprintln!(
         "native_profile_nova: setup complete in {:.3}s",
         setup_started.elapsed().as_secs_f64()

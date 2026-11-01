@@ -39,7 +39,7 @@ public:
         return basis_;
     }
 
-    [[nodiscard]] Result<bppp::accumulation::PreparedNorm> prepare(
+    [[nodiscard]] Result<bppp::accumulation::AlgebraicPreparedNorm> prepare(
         const NonceHostBoundSigningRoster& roster,
         const UInt512& recovery_root,
         const RecoveryRootSetupProof& proof,

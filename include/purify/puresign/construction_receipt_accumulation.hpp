@@ -90,7 +90,7 @@ public:
         const NonceHostBoundSigningRoster& roster,
         const UInt512& recovery_root,
         const RecoveryRootSetupProof& setup_proof,
-        const bppp::accumulation::NormReductionProof& reduction,
+        const bppp::accumulation::AlgebraicNormReductionProof& reduction,
         purify_secp_context* secp_context,
         bppp::ExperimentalCircuitBackend* cache = nullptr) const;
 

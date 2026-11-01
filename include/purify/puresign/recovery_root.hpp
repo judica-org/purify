@@ -19,9 +19,9 @@ class RecoveryRootSetupAccumulator;
 /** Transparent proof linking the aggregate signing scalar to a recovery root. */
 class RecoveryRootSetupProof {
 public:
-    static constexpr unsigned char kSerializationVersion = 1;
-    static constexpr std::size_t kInnerProofSize = 844;
-    static constexpr std::size_t kSerializedSize = 163 + kInnerProofSize;
+    static constexpr unsigned char kSerializationVersion = 2;
+    static constexpr std::size_t kNormProofSize = 844;
+    static constexpr std::size_t kSerializedSize = 163 + kNormProofSize;
 
     RecoveryRootSetupProof(const RecoveryRootSetupProof&) = default;
     RecoveryRootSetupProof& operator=(const RecoveryRootSetupProof&) = default;
@@ -37,13 +37,9 @@ public:
 
 private:
     RecoveryRootSetupProof() = default;
-    explicit RecoveryRootSetupProof(
-        bppp::ExperimentalCircuitZkNormArgProof&& proof);
 
     [[nodiscard]] Status validate_encoding(
         purify_secp_context* secp_context) const;
-    [[nodiscard]] bppp::ExperimentalCircuitZkNormArgProof
-    circuit_proof() const;
 
     bppp::PointBytes raw_commitment_{};
     bppp::PointBytes mask_commitment_{};
@@ -61,6 +57,8 @@ private:
         const RecoveryRootSetupProof&, purify_secp_context*);
     friend class RecoveryRootSetupAccumulator;
 };
+
+static_assert(RecoveryRootSetupProof::kSerializedSize == 1007);
 
 /** Derive the canonical companion-curve recovery key from an extracted q. */
 [[nodiscard]] Result<GeneratedKey> derive_recovery_root(

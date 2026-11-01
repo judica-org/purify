@@ -211,7 +211,7 @@ void test_anchor_escrow(TestContext& ctx) {
               "construction adapter prepares the exact setup proof");
     if (!setup_prepared) return;
     auto setup_reduction =
-        purify::bppp::accumulation::prove_norm_reduction(
+        purify::bppp::accumulation::prove_algebraic_norm_reduction(
             construction_accumulator->setup().basis(),
             *setup_prepared, secp.get());
     expect_ok(ctx, setup_reduction,

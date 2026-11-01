@@ -25,7 +25,6 @@ using purify::accountable::ConstructionReceiptPayload;
 using purify::accountable::ResolvedConstructionReceiptEntry;
 
 struct ReceiptFixture {
-    purify::accountable::CoalitionSetupReference setup_reference{};
     UInt512 recovery_root{};
     std::vector<ConstructionReceiptEntry> entries;
     std::vector<ResolvedConstructionReceiptEntry> resolved;
@@ -49,13 +48,11 @@ AnchorReference reference(unsigned char marker) {
 
 Result<ReceiptFixture> make_fixture() {
     ReceiptFixture fixture;
-    fixture.setup_reference.fill(0x31);
     PURIFY_ASSIGN_OR_RETURN(fixture.recovery_root,
                             public_root(1),
                             "construction_receipt_codec_test:root");
 
     fixture.entries.resize(2);
-    fixture.entries[0].anchor_reference = reference(0x41);
     PURIFY_ASSIGN_OR_RETURN(
         fixture.entries[0].ciphertext.ephemeral_keys[0],
         public_root(2),
@@ -67,7 +64,6 @@ Result<ReceiptFixture> make_fixture() {
     fixture.entries[0].ciphertext.masked_scalars = {
         FieldElement::from_u64(11), FieldElement::from_u64(12)};
 
-    fixture.entries[1].anchor_reference = reference(0x42);
     PURIFY_ASSIGN_OR_RETURN(
         fixture.entries[1].ciphertext.ephemeral_keys[0],
         public_root(4),
@@ -82,7 +78,7 @@ Result<ReceiptFixture> make_fixture() {
     fixture.resolved.resize(2);
     for (std::size_t i = 0; i < fixture.resolved.size(); ++i) {
         fixture.resolved[i].anchor_reference =
-            fixture.entries[i].anchor_reference;
+            reference(static_cast<unsigned char>(0x41 + i));
         PURIFY_ASSIGN_OR_RETURN(
             fixture.resolved[i].anchor_root,
             public_root(static_cast<unsigned char>(6 + i)),
@@ -95,8 +91,7 @@ Result<ReceiptFixture> make_fixture() {
 
 Result<ConstructionReceiptPayload> make_payload(
     const ReceiptFixture& fixture) {
-    return ConstructionReceiptPayload::create(fixture.setup_reference,
-                                               fixture.recovery_root,
+    return ConstructionReceiptPayload::create(fixture.recovery_root,
                                                fixture.entries);
 }
 
@@ -108,39 +103,28 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
     expect_ok(ctx, payload, "canonical payload constructs");
     if (!payload) return;
 
-    constexpr std::size_t kExpectedSize = 1 + 32 + 64 + 4 +
-                                          2 * (32 + 192);
-    static_assert(ConstructionReceiptPayload::kFixedHeaderSize == 101);
-    static_assert(ConstructionReceiptPayload::kEntrySize == 224);
+    constexpr std::size_t kExpectedSize = 1 + 64 + 4 + 2 * 192;
+    static_assert(ConstructionReceiptPayload::kFixedHeaderSize == 69);
+    static_assert(ConstructionReceiptPayload::kEntrySize == 192);
     const Bytes encoded = payload->serialize();
     ctx.expect(payload->serialized_size() == kExpectedSize,
                "reported size accounts for every fixed field");
     ctx.expect(encoded.size() == kExpectedSize,
-               "wire size is exactly 101 + 224*N bytes");
+               "wire size is exactly 69 + 192*N bytes");
     ctx.expect(encoded[0] ==
                    ConstructionReceiptPayload::kSerializationVersion,
                "wire starts with the construction receipt version");
-    ctx.expect(std::equal(fixture->setup_reference.begin(),
-                          fixture->setup_reference.end(),
-                          encoded.begin() + 1),
-               "wire carries the exact setup reference");
     const auto recovery_root_bytes = fixture->recovery_root.to_bytes_be();
     ctx.expect(std::equal(recovery_root_bytes.begin(),
                           recovery_root_bytes.end(),
-                          encoded.begin() + 33),
+                          encoded.begin() + 1),
                "wire carries the exact 64-byte recovery root");
-    ctx.expect(encoded[97] == 0 && encoded[98] == 0 &&
-                   encoded[99] == 0 && encoded[100] == 2,
+    ctx.expect(encoded[65] == 0 && encoded[66] == 0 &&
+                   encoded[67] == 0 && encoded[68] == 2,
                "wire count is canonical big endian");
 
-    constexpr std::size_t kFirstEntryOffset =
-        ConstructionReceiptPayload::kFixedHeaderSize;
     constexpr std::size_t kFirstCiphertextOffset =
-        kFirstEntryOffset + 32;
-    ctx.expect(std::equal(fixture->entries[0].anchor_reference.begin(),
-                          fixture->entries[0].anchor_reference.end(),
-                          encoded.begin() + kFirstEntryOffset),
-               "wire carries the first ordered anchor reference");
+        ConstructionReceiptPayload::kFixedHeaderSize;
     const auto first_ephemeral =
         fixture->entries[0].ciphertext.ephemeral_keys[0].to_bytes_be();
     ctx.expect(std::equal(first_ephemeral.begin(),
@@ -165,9 +149,6 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
     if (!decoded) return;
     ctx.expect(decoded->serialize() == encoded,
                "decoding and encoding preserve canonical bytes");
-    ctx.expect(decoded->coalition_setup_reference() ==
-                   fixture->setup_reference,
-               "round trip preserves the setup reference");
     ctx.expect(decoded->recovery_root() == fixture->recovery_root,
                "round trip preserves the recovery root");
     ctx.expect(decoded->entries().size() == fixture->entries.size(),
@@ -181,29 +162,16 @@ void test_construction_invariants(TestContext& ctx) {
 
     expect_error(ctx,
                  ConstructionReceiptPayload::create(
-                     fixture->setup_reference,
                      fixture->recovery_root,
                      {}),
                  purify::ErrorCode::EmptyInput,
                  "empty entry collections are rejected");
-
-    auto duplicate_references = fixture->entries;
-    duplicate_references[1].anchor_reference =
-        duplicate_references[0].anchor_reference;
-    expect_error(ctx,
-                 ConstructionReceiptPayload::create(
-                     fixture->setup_reference,
-                     fixture->recovery_root,
-                     std::move(duplicate_references)),
-                 purify::ErrorCode::BindingMismatch,
-                 "duplicate anchor references are rejected");
 
     auto duplicate_ephemerals = fixture->entries;
     duplicate_ephemerals[0].ciphertext.ephemeral_keys[1] =
         duplicate_ephemerals[0].ciphertext.ephemeral_keys[0];
     expect_error(ctx,
                  ConstructionReceiptPayload::create(
-                     fixture->setup_reference,
                      fixture->recovery_root,
                      std::move(duplicate_ephemerals)),
                  purify::ErrorCode::BindingMismatch,
@@ -211,7 +179,6 @@ void test_construction_invariants(TestContext& ctx) {
 
     expect_error(ctx,
                  ConstructionReceiptPayload::create(
-                     fixture->setup_reference,
                      purify::packed_public_key_space_size(),
                      fixture->entries),
                  purify::ErrorCode::RangeViolation,
@@ -252,30 +219,29 @@ void test_noncanonical_and_framing_rejection(TestContext& ctx) {
                  "unknown payload versions are rejected");
 
     auto zero_count = encoded;
-    std::fill(zero_count.begin() + 97, zero_count.begin() + 101, 0);
+    std::fill(zero_count.begin() + 65, zero_count.begin() + 69, 0);
     expect_error(ctx,
                  ConstructionReceiptPayload::deserialize(zero_count),
                  purify::ErrorCode::EmptyInput,
                  "zero entry count is rejected");
 
     auto smaller_count = encoded;
-    smaller_count[100] = 1;
+    smaller_count[68] = 1;
     ctx.expect(!ConstructionReceiptPayload::deserialize(smaller_count),
                "a count smaller than the carried entries is rejected");
 
     auto larger_count = encoded;
-    larger_count[100] = 3;
+    larger_count[68] = 3;
     ctx.expect(!ConstructionReceiptPayload::deserialize(larger_count),
                "a count larger than the carried entries is rejected");
 
-    constexpr std::size_t kFirstEntry =
+    constexpr std::size_t kFirstCiphertext =
         ConstructionReceiptPayload::kFixedHeaderSize;
-    constexpr std::size_t kFirstCiphertext = kFirstEntry + 32;
     auto invalid_recovery_root = encoded;
     const auto invalid_root =
         purify::packed_public_key_space_size().to_bytes_be();
     std::copy(invalid_root.begin(), invalid_root.end(),
-              invalid_recovery_root.begin() + 33);
+              invalid_recovery_root.begin() + 1);
     ctx.expect(!ConstructionReceiptPayload::deserialize(
                    invalid_recovery_root),
                "noncanonical recovery roots are rejected");
@@ -303,16 +269,6 @@ void test_noncanonical_and_framing_rejection(TestContext& ctx) {
                  purify::ErrorCode::BindingMismatch,
                  "duplicate ephemeral keys are rejected on decode");
 
-    auto duplicate_reference = encoded;
-    std::copy_n(duplicate_reference.begin() + kFirstEntry,
-                32,
-                duplicate_reference.begin() +
-                    kFirstEntry + ConstructionReceiptPayload::kEntrySize);
-    expect_error(ctx,
-                 ConstructionReceiptPayload::deserialize(
-                     duplicate_reference),
-                 purify::ErrorCode::BindingMismatch,
-                 "duplicate anchor references are rejected on decode");
 }
 
 void test_statement_digest_binds_all_inputs(TestContext& ctx) {
@@ -329,8 +285,8 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     ctx.expect(
         purify::UInt256::from_bytes_be(digest->data(), digest->size())
                 .to_hex() ==
-            "4f0477952c606d317e80c180f20a7c603afea54800c54b7b"
-            "ef120a38d13ed862",
+            "e0c0489e1ae651bf84e63318b24f7c3fc3c95106a848672c"
+            "5485b6d9c7349d6e",
         "statement digest matches the canonical tagged-hash vector");
     auto repeated =
         purify::accountable::construction_receipt_statement_digest(
@@ -349,27 +305,26 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
         purify::ErrorCode::InvalidFixedSize,
         "resolved input count must equal the payload count");
 
-    auto wrong_resolution = fixture->resolved;
-    std::swap(wrong_resolution[0], wrong_resolution[1]);
+    auto reordered_resolution = fixture->resolved;
+    std::swap(reordered_resolution[0], reordered_resolution[1]);
+    auto reordered_resolution_digest =
+        purify::accountable::construction_receipt_statement_digest(
+            *payload, reordered_resolution);
+    expect_ok(ctx, reordered_resolution_digest,
+              "reordered resolved inputs construct a distinct statement");
+    if (!reordered_resolution_digest) return;
+    ctx.expect(*reordered_resolution_digest != *digest,
+               "statement digest binds resolved input order");
+
+    auto duplicate_resolution = fixture->resolved;
+    duplicate_resolution[1].anchor_reference =
+        duplicate_resolution[0].anchor_reference;
     expect_error(
         ctx,
         purify::accountable::construction_receipt_statement_digest(
-            *payload, wrong_resolution),
+            *payload, duplicate_resolution),
         purify::ErrorCode::BindingMismatch,
-        "resolved roots cannot be reordered under payload references");
-
-    auto changed_setup = *fixture;
-    changed_setup.setup_reference[0] ^= 1U;
-    auto changed_setup_payload = make_payload(changed_setup);
-    expect_ok(ctx, changed_setup_payload, "changed setup payload constructs");
-    if (!changed_setup_payload) return;
-    auto changed_setup_digest =
-        purify::accountable::construction_receipt_statement_digest(
-            *changed_setup_payload, changed_setup.resolved);
-    expect_ok(ctx, changed_setup_digest, "changed setup digest constructs");
-    if (!changed_setup_digest) return;
-    ctx.expect(*changed_setup_digest != *digest,
-               "statement digest binds the setup reference");
+        "one receipt cannot resolve the same anchor twice");
 
     auto changed_root = public_root(8);
     expect_ok(ctx, changed_root, "changed recovery root constructs");
@@ -390,9 +345,7 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
                "statement digest binds the recovery root");
 
     auto changed_reference = *fixture;
-    changed_reference.entries[0].anchor_reference[0] ^= 1U;
-    changed_reference.resolved[0].anchor_reference =
-        changed_reference.entries[0].anchor_reference;
+    changed_reference.resolved[0].anchor_reference[0] ^= 1U;
     auto changed_reference_payload = make_payload(changed_reference);
     expect_ok(ctx, changed_reference_payload,
               "changed reference payload constructs");

@@ -61,17 +61,9 @@ Status validate_entries(
         return unexpected_error(ErrorCode::UnexpectedSize,
                                 "construction_receipt:entry_count");
     }
-    for (std::size_t i = 0; i < entries.size(); ++i) {
-        PURIFY_RETURN_IF_ERROR(validate_ciphertext(entries[i].ciphertext),
+    for (const ConstructionReceiptEntry& entry : entries) {
+        PURIFY_RETURN_IF_ERROR(validate_ciphertext(entry.ciphertext),
                                "construction_receipt:ciphertext");
-        for (std::size_t prior = 0; prior < i; ++prior) {
-            if (entries[prior].anchor_reference ==
-                entries[i].anchor_reference) {
-                return unexpected_error(
-                    ErrorCode::BindingMismatch,
-                    "construction_receipt:duplicate_anchor_reference");
-            }
-        }
     }
     return {};
 }
@@ -146,7 +138,6 @@ Result<std::size_t> encoded_size_for_count(std::size_t entry_count) {
 }  // namespace
 
 Result<ConstructionReceiptPayload> ConstructionReceiptPayload::create(
-    CoalitionSetupReference coalition_setup_reference,
     UInt512 recovery_root,
     std::vector<ConstructionReceiptEntry> entries) {
     PURIFY_RETURN_IF_ERROR(
@@ -155,8 +146,7 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::create(
         "construction_receipt:recovery_root");
     PURIFY_RETURN_IF_ERROR(validate_entries(entries),
                            "construction_receipt:entries");
-    return ConstructionReceiptPayload(coalition_setup_reference,
-                                      recovery_root,
+    return ConstructionReceiptPayload(recovery_root,
                                       std::move(entries));
 }
 
@@ -164,12 +154,10 @@ Bytes ConstructionReceiptPayload::serialize() const {
     Bytes encoded;
     encoded.reserve(serialized_size());
     encoded.push_back(kSerializationVersion);
-    append_array(encoded, coalition_setup_reference_);
     append_array(encoded, recovery_root_.to_bytes_be());
     assert(size_fits_u32(entries_.size()));
     append_u32_be(encoded, static_cast<std::uint32_t>(entries_.size()));
     for (const ConstructionReceiptEntry& entry : entries_) {
-        append_array(encoded, entry.anchor_reference);
         append_ciphertext(encoded, entry.ciphertext);
     }
     assert(encoded.size() == serialized_size());
@@ -188,12 +176,6 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::deserialize(
     }
 
     std::size_t offset = 1;
-    CoalitionSetupReference coalition_setup_reference{};
-    std::copy_n(encoded.data() + offset,
-                coalition_setup_reference.size(),
-                coalition_setup_reference.begin());
-    offset += coalition_setup_reference.size();
-
     UInt512 recovery_root =
         UInt512::from_bytes_be(encoded.data() + offset, 64);
     offset += 64;
@@ -219,10 +201,6 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::deserialize(
     entries.reserve(entry_count);
     for (std::uint32_t i = 0; i < entry_count; ++i) {
         ConstructionReceiptEntry entry;
-        std::copy_n(encoded.data() + offset,
-                    entry.anchor_reference.size(),
-                    entry.anchor_reference.begin());
-        offset += entry.anchor_reference.size();
         const std::span<const unsigned char,
                         AnchorEscrowCiphertext::kSerializedSize>
             encoded_ciphertext(encoded.data() + offset,
@@ -234,9 +212,7 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::deserialize(
         entries.push_back(std::move(entry));
     }
     assert(offset == encoded.size());
-    return create(coalition_setup_reference,
-                  recovery_root,
-                  std::move(entries));
+    return create(recovery_root, std::move(entries));
 }
 
 Result<ConstructionReceiptStatementDigest>
@@ -249,19 +225,24 @@ construction_receipt_statement_digest(
     }
 
     Bytes statement = payload.serialize();
-    statement.reserve(statement.size() + resolved_entries.size() * (64 + 32));
+    statement.reserve(statement.size() +
+                      resolved_entries.size() * (32 + 64 + 32));
     for (std::size_t i = 0; i < resolved_entries.size(); ++i) {
         const ResolvedConstructionReceiptEntry& resolved =
             resolved_entries[i];
-        if (resolved.anchor_reference !=
-            payload.entries()[i].anchor_reference) {
-            return unexpected_error(ErrorCode::BindingMismatch,
-                                    "construction_receipt:resolved_reference");
+        for (std::size_t prior = 0; prior < i; ++prior) {
+            if (resolved_entries[prior].anchor_reference ==
+                resolved.anchor_reference) {
+                return unexpected_error(
+                    ErrorCode::BindingMismatch,
+                    "construction_receipt:duplicate_anchor_reference");
+            }
         }
         PURIFY_RETURN_IF_ERROR(
             validate_public_root(resolved.anchor_root,
                                  "construction_receipt:anchor_root"),
             "construction_receipt:anchor_root");
+        append_array(statement, resolved.anchor_reference);
         append_array(statement, resolved.anchor_root.to_bytes_be());
         append_array(statement, resolved.context_digest);
     }

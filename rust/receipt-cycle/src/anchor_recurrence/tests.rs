@@ -12,6 +12,7 @@ use crate::construction_manifest::{
     derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestStepInput,
 };
 use crate::direct_nova::direct_nova_raw_metrics;
+use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
 use crate::parent_relation::{
     add_point_values, derive_candidate_folded_generator, CandidatePendingClaimWitness,
     CandidatePolynomialTermWitness, ConstrainedPendingClaim, EncodedSecpPoint, PointValue,
@@ -23,6 +24,21 @@ use crate::{Assignment, Circuit, WireKind};
 
 const RAW_GENERATORS: [u8; 32] = [0x52; 32];
 const BASIS: [u8; 32] = [0x73; 32];
+const PRODUCTION_DIRECT_NOVA_RELATION_ID: [u8; 32] = [
+    0x53, 0x0d, 0xc1, 0x8d, 0x9b, 0xa3, 0x76, 0x9c, 0x16, 0xa1, 0x3a, 0xc4, 0xac, 0x7d, 0x8a, 0x87,
+    0xf6, 0x28, 0x98, 0x98, 0xc4, 0x03, 0x6d, 0xa6, 0xa1, 0x8b, 0xe8, 0xee, 0x0d, 0x87, 0xc1, 0xda,
+];
+const PRODUCTION_DIRECT_NOVA_VARIABLES: usize = 1_851_594;
+const PRODUCTION_DIRECT_NOVA_CONSTRAINTS: usize = 1_962_058;
+
+// Nova 0.76, Secq primary/Secp secondary, and arity 20 only. The primary
+// overhead is the pinned tiny suite's augmented 13,606/13,636 shape minus
+// its 40/40 direct relation. The secondary augmented circuit is independent
+// of that direct relation at this fixed arity.
+const NOVA_076_ARITY_20_PRIMARY_CONSTRAINT_OVERHEAD: usize = 13_566;
+const NOVA_076_ARITY_20_PRIMARY_VARIABLE_OVERHEAD: usize = 13_596;
+const NOVA_076_ARITY_20_SECONDARY_CONSTRAINTS: usize = 10_787;
+const NOVA_076_ARITY_20_SECONDARY_VARIABLES: usize = 10_769;
 const SECP_ORDER: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
     0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
@@ -434,6 +450,54 @@ fn production_shape_is_exact() {
 }
 
 #[test]
+fn production_nova_076_pre_pp_forecast_is_exact() {
+    assert_eq!(ANCHOR_RECURRENCE_STATE_ARITY, 20);
+    assert_eq!(13_606 - 40, NOVA_076_ARITY_20_PRIMARY_CONSTRAINT_OVERHEAD);
+    assert_eq!(13_636 - 40, NOVA_076_ARITY_20_PRIMARY_VARIABLE_OVERHEAD);
+
+    let primary_constraints =
+        PRODUCTION_DIRECT_NOVA_CONSTRAINTS + NOVA_076_ARITY_20_PRIMARY_CONSTRAINT_OVERHEAD;
+    let primary_variables =
+        PRODUCTION_DIRECT_NOVA_VARIABLES + NOVA_076_ARITY_20_PRIMARY_VARIABLE_OVERHEAD;
+    let secondary_constraints = NOVA_076_ARITY_20_SECONDARY_CONSTRAINTS;
+    let secondary_variables = NOVA_076_ARITY_20_SECONDARY_VARIABLES;
+    assert_eq!(
+        (primary_constraints, primary_variables),
+        (1_975_624, 1_865_190)
+    );
+    assert_eq!(
+        (secondary_constraints, secondary_variables),
+        (10_787, 10_769)
+    );
+    assert_eq!(
+        primary_constraints
+            .max(primary_variables)
+            .next_power_of_two(),
+        1 << 21
+    );
+    assert_eq!(
+        secondary_constraints
+            .max(secondary_variables)
+            .next_power_of_two(),
+        1 << 14
+    );
+
+    let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
+        NovaR1csDimensions::new(primary_constraints, primary_variables),
+        NovaR1csDimensions::new(secondary_constraints, secondary_variables),
+        ANCHOR_RECURRENCE_STATE_ARITY,
+    )
+    .expect("forecast compressed proof shape");
+    assert_eq!(proof_shape.encoded_len(), 12_466);
+    assert_eq!(proof_shape.sequence_count(), 125);
+
+    // This relation ID will enter the eventual suite identity. This forecast
+    // does not construct public parameters, so no PP digest or production
+    // suite identity is available or activated here.
+    assert_ne!(PRODUCTION_DIRECT_NOVA_RELATION_ID, [0; 32]);
+}
+
+#[test]
 #[ignore = "run explicitly in release mode; builds one production recurrence"]
 fn production_public_anchor_recurrence_reports_direct_shape() {
     eprintln!("production_shape_metrics: deriving fixture");
@@ -480,11 +544,7 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
 
     assert_eq!(
         metrics.relation_id.bytes(),
-        &[
-            0x53, 0x0d, 0xc1, 0x8d, 0x9b, 0xa3, 0x76, 0x9c, 0x16, 0xa1, 0x3a, 0xc4, 0xac, 0x7d,
-            0x8a, 0x87, 0xf6, 0x28, 0x98, 0x98, 0xc4, 0x03, 0x6d, 0xa6, 0xa1, 0x8b, 0xe8, 0xee,
-            0x0d, 0x87, 0xc1, 0xda,
-        ]
+        &PRODUCTION_DIRECT_NOVA_RELATION_ID
     );
     assert_eq!(
         (
@@ -507,7 +567,14 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
             metrics.direct_bucket_headroom,
             metrics.direct_rounds,
         ),
-        (1_851_594, 1_962_058, 12_552_747, 2_097_152, 135_094, 21,)
+        (
+            PRODUCTION_DIRECT_NOVA_VARIABLES,
+            PRODUCTION_DIRECT_NOVA_CONSTRAINTS,
+            12_552_747,
+            2_097_152,
+            135_094,
+            21,
+        )
     );
     assert_eq!(
         metrics.source_gates,

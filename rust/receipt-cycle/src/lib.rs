@@ -20,6 +20,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[allow(dead_code)]
+mod algebraic_circuit_norm_leaf;
+#[allow(dead_code)]
 mod algebraic_circuit_transcript;
 #[allow(dead_code)]
 mod algebraic_transcript;

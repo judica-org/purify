@@ -77,7 +77,7 @@ impl CircuitTranscriptShapeV4 {
         }
     }
 
-    fn round_count(self) -> usize {
+    pub(crate) fn round_count(self) -> usize {
         self.n_vec_len.trailing_zeros() as usize
     }
 }

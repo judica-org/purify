@@ -348,6 +348,36 @@ pub(crate) fn constant_scalar(value: u64) -> SecpScalarVar {
     }
 }
 
+/// Constructs a typed canonical constant without allocating prover wires.
+pub(crate) fn constant_scalar_witness(
+    witness: SecpScalarWitness,
+) -> Result<SecpScalarVar, ReceiptCycleError> {
+    let value = witness.integer();
+    if value >= order_n() {
+        return Err(ReceiptCycleError::Malformed("noncanonical constant scalar"));
+    }
+    let limb_vec = limbs(&value, LIMB_COUNT)?;
+    let limb_values: [u64; LIMB_COUNT] = limb_vec
+        .try_into()
+        .map_err(|_| ReceiptCycleError::Malformed("constant scalar limbs"))?;
+    let bits = (0..SCALAR_BITS)
+        .map(|index| {
+            Expression::constant(if value.bit(index as u64) {
+                Scalar::ONE
+            } else {
+                Scalar::ZERO
+            })
+        })
+        .collect();
+    let limbs = std::array::from_fn(|index| Expression::constant(Scalar::from(limb_values[index])));
+    Ok(SecpScalarVar {
+        limbs,
+        bits,
+        limb_values,
+        value,
+    })
+}
+
 fn constrain_less_than_order(builder: &mut Builder, value: &SecpScalarVar) {
     let one = Expression::constant(Scalar::ONE);
     let mut equal = one.clone();

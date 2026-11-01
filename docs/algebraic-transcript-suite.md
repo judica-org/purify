@@ -35,6 +35,13 @@ three multiplication constraints, so one permutation needs exactly
 
 multipliers. Addition of constants and the MDS layer are linear.
 
+The internal Secq R1CS gadget now instantiates exactly those constants and MDS
+entries. One permutation uses 264 multipliers. Binding all three output lanes
+adds three linear constraints, for 531 explicit linear constraints under the
+backend's two input constraints per multiplier. Its circuit shape is identical
+for different input states. This gadget remains disconnected from receipt
+acceptance until the complete typed transcript suite is frozen and migrated.
+
 The parameter generator is equivalent to the Poseidon v1.1 Sage generator in
 `daira/pasta-hadeshash` commit
 `5959f2684a25b372fba347e62467efb00e7e2c3f`. Its inputs are equivalent to:

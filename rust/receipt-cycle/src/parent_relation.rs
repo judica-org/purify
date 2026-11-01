@@ -12,6 +12,7 @@ use num_bigint::BigUint;
 use num_traits::Zero;
 
 use crate::algebraic_transcript::BuilderTranscript;
+use crate::opening_base::{constrain_transcript_opening_base, ACCUMULATION_OPENING_BASE_ROLE};
 use crate::relation_builder::{Builder, Expression};
 use crate::secp_scalar::{
     add_scalars, allocate_canonical_scalar, constant_scalar, constrain_scalar_equal,
@@ -95,17 +96,6 @@ pub struct CandidateStepProofWitness {
     pub terminal_scalar: SecpScalarWitness,
     /// Exact folded-generator point returned as the next obligation.
     pub folded_generator: SecpEncodedPointWitness,
-}
-
-/// Verifier-supplied opening base for the candidate step relation.
-///
-/// The point is baked into the regenerated circuit and must be finite. This
-/// type does not prove the required transcript-bound hash-to-curve derivation.
-/// A caller-selected point, even when finite, is not a sound opening base.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CandidateOpeningBase {
-    /// Exact public point and its deterministic affine y opening.
-    pub point: SecpEncodedPointWitness,
 }
 
 /// Public next-claim constants for one candidate accumulation step.
@@ -754,6 +744,8 @@ struct CandidateDerivedRoot {
     point: EncodedSecpPoint,
     scale: SecpScalarVar,
     factors: Vec<SecpScalarVar>,
+    #[cfg(test)]
+    equation_residual: PointValue,
 }
 
 fn candidate_step_shape(
@@ -845,10 +837,26 @@ fn evaluate_candidate_term(
     Ok(value)
 }
 
+#[cfg(test)]
 fn install_candidate_step(
     builder: &mut Builder,
     basis_digest: [u8; 32],
-    opening_base: CandidateOpeningBase,
+    claims: &[CandidatePendingClaimWitness],
+    proof: &CandidateStepProofWitness,
+) -> Result<CandidateDerivedRoot, ReceiptCycleError> {
+    install_candidate_step_for_role(
+        builder,
+        basis_digest,
+        ACCUMULATION_OPENING_BASE_ROLE,
+        claims,
+        proof,
+    )
+}
+
+fn install_candidate_step_for_role(
+    builder: &mut Builder,
+    basis_digest: [u8; 32],
+    opening_base_role: u64,
     claims: &[CandidatePendingClaimWitness],
     proof: &CandidateStepProofWitness,
 ) -> Result<CandidateDerivedRoot, ReceiptCycleError> {
@@ -886,9 +894,9 @@ fn install_candidate_step(
     }
     append_scalar(&mut transcript, builder, &y);
 
-    let opening_base = allocate_encoded_point_constant(builder, opening_base.point)?;
-    builder.constrain_zero(opening_base.point.identity.clone());
-    append_encoded_point(&mut transcript, builder, &opening_base);
+    let opening_base =
+        constrain_transcript_opening_base(builder, &transcript, basis_digest, opening_base_role)?;
+    append_computed_point(&mut transcript, builder, &opening_base);
 
     let mut equation_points = vec![commitment];
     let mut equation_scalars = vec![constant_scalar(1)];
@@ -923,13 +931,15 @@ fn install_candidate_step(
     let terminal_evaluation = derived_multiply(builder, &terminal, &b_final)?;
     let opening_scalar = derived_subtract(builder, &y, &terminal_evaluation)?;
     let negative_terminal = derived_subtract(builder, &constant_scalar(0), &terminal)?;
-    equation_points.push(opening_base.point);
+    equation_points.push(opening_base);
     equation_scalars.push(opening_scalar);
 
     let folded_generator = allocate_encoded_point(builder, proof.folded_generator)?;
     equation_points.push(folded_generator.point.clone());
     equation_scalars.push(negative_terminal);
     let residual = msm_points(builder, &equation_points, &equation_scalars)?;
+    #[cfg(test)]
+    let equation_residual = residual.witness;
     builder.constrain_zero(residual.x);
     builder.constrain_zero(residual.y);
     builder.constrain_equal(&residual.identity, &Expression::constant(Scalar::ONE));
@@ -938,6 +948,8 @@ fn install_candidate_step(
         point: folded_generator,
         scale: folded_scale,
         factors: folded_factors,
+        #[cfg(test)]
+        equation_residual,
     })
 }
 
@@ -1289,23 +1301,44 @@ fn build_secp_msm_relation_with(
 ///
 /// The relation binds the fixed basis digest, ordered compact claims, typed
 /// Poseidon batching and evaluation challenges, every IPA round, the short
-/// secp256k1 MSM equation, and the exact next root claim. The opening base and
-/// root are verifier-supplied constants baked into the regenerated circuit.
+/// secp256k1 MSM equation, and the exact next root claim. The opening base is
+/// derived inside the relation after the claim and evaluation are fixed. The
+/// root remains a verifier-supplied constant in the regenerated circuit.
 ///
-/// This remains a migration primitive, not receipt acceptance. In particular,
-/// the caller must derive `opening_base` with the frozen transcript-bound
-/// algebraic hash-to-curve map. Supplying any merely finite point is
-/// insufficient, even though this relation rejects the identity.
+/// This remains a migration primitive, not receipt acceptance. The native
+/// accumulation suite must use this exact transcript before the relation can
+/// participate in receipt verification.
 pub fn build_candidate_accumulation_step_relation(
     basis_digest: [u8; 32],
-    opening_base: CandidateOpeningBase,
+    claims: &[CandidatePendingClaimWitness],
+    proof: &CandidateStepProofWitness,
+    root: &CandidateRootClaim,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    build_candidate_accumulation_step_relation_for_role(
+        basis_digest,
+        ACCUMULATION_OPENING_BASE_ROLE,
+        claims,
+        proof,
+        root,
+    )
+}
+
+fn build_candidate_accumulation_step_relation_for_role(
+    basis_digest: [u8; 32],
+    opening_base_role: u64,
     claims: &[CandidatePendingClaimWitness],
     proof: &CandidateStepProofWitness,
     root: &CandidateRootClaim,
 ) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
     candidate_step_shape(claims, proof, Some(root))?;
     let mut builder = Builder::default();
-    let derived = install_candidate_step(&mut builder, basis_digest, opening_base, claims, proof)?;
+    let derived = install_candidate_step_for_role(
+        &mut builder,
+        basis_digest,
+        opening_base_role,
+        claims,
+        proof,
+    )?;
     constrain_encoded_point_constant(&mut builder, &derived.point, root.point)?;
     constrain_scalar_constant(&mut builder, &derived.scale, root.scale)?;
     for (actual, &expected) in derived.factors.iter().zip(&root.factors) {
@@ -1317,12 +1350,11 @@ pub fn build_candidate_accumulation_step_relation(
 #[cfg(test)]
 fn derive_candidate_root_witness(
     basis_digest: [u8; 32],
-    opening_base: CandidateOpeningBase,
     claims: &[CandidatePendingClaimWitness],
     proof: &CandidateStepProofWitness,
 ) -> Result<CandidateRootClaim, ReceiptCycleError> {
     let mut builder = Builder::default();
-    let derived = install_candidate_step(&mut builder, basis_digest, opening_base, claims, proof)?;
+    let derived = install_candidate_step(&mut builder, basis_digest, claims, proof)?;
     Ok(CandidateRootClaim {
         point: proof.folded_generator,
         scale: scalar_witness(derived.scale.integer())?,
@@ -1340,6 +1372,33 @@ pub fn build_secp_msm_relation(
     expected: SecpAffineWitness,
 ) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
     build_secp_msm_relation_with(terms, expected, msm_points)
+}
+
+#[cfg(test)]
+fn derive_candidate_folded_generator(
+    basis_digest: [u8; 32],
+    claims: &[CandidatePendingClaimWitness],
+    proof: &CandidateStepProofWitness,
+) -> Result<SecpEncodedPointWitness, ReceiptCycleError> {
+    let mut builder = Builder::default();
+    let derived = install_candidate_step(&mut builder, basis_digest, claims, proof)?;
+    let point = derived.equation_residual;
+    if point.identity {
+        return Ok(SecpEncodedPointWitness::identity());
+    }
+    let mut encoded = [0; 33];
+    encoded[0] = if Secq256k1Cycle::scalar_to_canonical(&point.y)[0] & 1 == 0 {
+        0x02
+    } else {
+        0x03
+    };
+    let mut x = Secq256k1Cycle::scalar_to_canonical(&point.x);
+    x.reverse();
+    encoded[1..].copy_from_slice(&x);
+    Ok(SecpEncodedPointWitness {
+        encoded,
+        y: Secq256k1Cycle::scalar_to_canonical(&point.y),
+    })
 }
 
 #[cfg(test)]
@@ -1504,14 +1563,12 @@ mod tests {
 
     fn candidate_step_fixture() -> (
         [u8; 32],
-        CandidateOpeningBase,
         Vec<CandidatePendingClaimWitness>,
         CandidateStepProofWitness,
         CandidateRootClaim,
     ) {
         let basis_digest = [0x42; 32];
         let generator = encoded(generator(), 0x02);
-        let opening_base = CandidateOpeningBase { point: generator };
         let claims = vec![CandidatePendingClaimWitness {
             point: generator,
             polynomial: vec![CandidatePolynomialTermWitness {
@@ -1520,15 +1577,17 @@ mod tests {
                 factors: vec![],
             }],
         }];
-        let proof = CandidateStepProofWitness {
+        let mut proof = CandidateStepProofWitness {
             left: vec![SecpEncodedPointWitness::identity()],
             right: vec![SecpEncodedPointWitness::identity()],
-            terminal_scalar: SecpScalarWitness::from_u64(0),
+            terminal_scalar: SecpScalarWitness::from_u64(1),
             folded_generator: SecpEncodedPointWitness::identity(),
         };
-        let root = derive_candidate_root_witness(basis_digest, opening_base, &claims, &proof)
+        proof.folded_generator = derive_candidate_folded_generator(basis_digest, &claims, &proof)
+            .expect("candidate folded generator");
+        let root = derive_candidate_root_witness(basis_digest, &claims, &proof)
             .expect("candidate root witness");
-        (basis_digest, opening_base, claims, proof, root)
+        (basis_digest, claims, proof, root)
     }
 
     fn prove_bitwise_msm_relation(
@@ -1895,16 +1954,12 @@ mod tests {
 
     #[test]
     fn candidate_step_rejects_invalid_public_shapes() {
-        let (basis, opening, claims, proof, root) = candidate_step_fixture();
-        assert!(
-            build_candidate_accumulation_step_relation(basis, opening, &[], &proof, &root,)
-                .is_err()
-        );
+        let (basis, claims, proof, root) = candidate_step_fixture();
+        assert!(build_candidate_accumulation_step_relation(basis, &[], &proof, &root).is_err());
 
         let excessive_claims = vec![claims[0].clone(); MAX_CANDIDATE_CLAIMS + 1];
         assert!(build_candidate_accumulation_step_relation(
             basis,
-            opening,
             &excessive_claims,
             &proof,
             &root,
@@ -1913,20 +1968,15 @@ mod tests {
 
         let mut missing_right = proof.clone();
         missing_right.right.clear();
-        assert!(build_candidate_accumulation_step_relation(
-            basis,
-            opening,
-            &claims,
-            &missing_right,
-            &root,
-        )
-        .is_err());
+        assert!(
+            build_candidate_accumulation_step_relation(basis, &claims, &missing_right, &root,)
+                .is_err()
+        );
 
         let mut excessive_degree = claims.clone();
         excessive_degree[0].polynomial[0].offset = 2;
         assert!(build_candidate_accumulation_step_relation(
             basis,
-            opening,
             &excessive_degree,
             &proof,
             &root,
@@ -1937,7 +1987,6 @@ mod tests {
         wrong_root_shape.factors.clear();
         assert!(build_candidate_accumulation_step_relation(
             basis,
-            opening,
             &claims,
             &proof,
             &wrong_root_shape,
@@ -1948,9 +1997,9 @@ mod tests {
     #[test]
     #[ignore = "run explicitly in release mode; candidate step proof is large"]
     fn candidate_step_binds_transition_and_public_constants() {
-        let (basis, opening, claims, proof, root) = candidate_step_fixture();
+        let (basis, claims, proof, root) = candidate_step_fixture();
         let (circuit, assignment) =
-            build_candidate_accumulation_step_relation(basis, opening, &claims, &proof, &root)
+            build_candidate_accumulation_step_relation(basis, &claims, &proof, &root)
                 .expect("candidate step relation");
         let statement = b"candidate accumulation step";
         let accepted = prove(&circuit, &assignment, statement, [0x83; 32]).expect("proof");
@@ -1958,14 +2007,9 @@ mod tests {
 
         let mut changed_claims = claims.clone();
         changed_claims[0].point = encoded(twice_generator(), 0x02);
-        let (same_circuit, false_assignment) = build_candidate_accumulation_step_relation(
-            basis,
-            opening,
-            &changed_claims,
-            &proof,
-            &root,
-        )
-        .expect("changed private claim");
+        let (same_circuit, false_assignment) =
+            build_candidate_accumulation_step_relation(basis, &changed_claims, &proof, &root)
+                .expect("changed private claim");
         assert_eq!(same_circuit, circuit);
         let rejected = prove(&circuit, &false_assignment, statement, [0x84; 32])
             .expect("false transition proof");
@@ -1976,41 +2020,37 @@ mod tests {
             + BigUint::from(1u64))
             % secp_order();
         changed_root.factors[0] = scalar_witness(&changed_factor).expect("changed factor");
-        let (changed_root_circuit, _) = build_candidate_accumulation_step_relation(
-            basis,
-            opening,
-            &claims,
-            &proof,
-            &changed_root,
-        )
-        .expect("changed public root");
+        let (changed_root_circuit, _) =
+            build_candidate_accumulation_step_relation(basis, &claims, &proof, &changed_root)
+                .expect("changed public root");
         assert_ne!(changed_root_circuit, circuit);
         assert!(verify(&changed_root_circuit, statement, &accepted).is_err());
 
-        let changed_opening = CandidateOpeningBase {
-            point: encoded(twice_generator(), 0x02),
-        };
-        let (changed_opening_circuit, _) = build_candidate_accumulation_step_relation(
-            basis,
-            changed_opening,
-            &claims,
-            &proof,
-            &root,
+        let (changed_role_circuit, changed_role_assignment) =
+            build_candidate_accumulation_step_relation_for_role(
+                basis,
+                crate::opening_base::REDUCTION_OPENING_BASE_ROLE,
+                &claims,
+                &proof,
+                &root,
+            )
+            .expect("changed opening-base role");
+        assert_ne!(changed_role_circuit, circuit);
+        assert!(verify(&changed_role_circuit, statement, &accepted).is_err());
+        let changed_role_proof = prove(
+            &changed_role_circuit,
+            &changed_role_assignment,
+            statement,
+            [0x85; 32],
         )
-        .expect("changed public opening base");
-        assert_ne!(changed_opening_circuit, circuit);
-        assert!(verify(&changed_opening_circuit, statement, &accepted).is_err());
+        .expect("changed-role proof");
+        assert!(verify(&changed_role_circuit, statement, &changed_role_proof,).is_err());
 
         let mut changed_basis = basis;
         changed_basis[0] ^= 1;
-        let (changed_basis_circuit, _) = build_candidate_accumulation_step_relation(
-            changed_basis,
-            opening,
-            &claims,
-            &proof,
-            &root,
-        )
-        .expect("changed public basis");
+        let (changed_basis_circuit, _) =
+            build_candidate_accumulation_step_relation(changed_basis, &claims, &proof, &root)
+                .expect("changed public basis");
         assert_ne!(changed_basis_circuit, circuit);
         assert!(verify(&changed_basis_circuit, statement, &accepted).is_err());
 

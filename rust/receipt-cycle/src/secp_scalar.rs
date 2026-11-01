@@ -6,7 +6,9 @@
 //! far below the outer field modulus, so equality in the outer field cannot
 //! hide an integer wrap.
 
+use bulletproofs_cycle::Cycle;
 use ff::Field;
+use golden_halo2curves::Secq256k1Cycle;
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
@@ -29,6 +31,11 @@ const ORDER_N_LIMBS: [u64; LIMB_COUNT] = [
     0xbaae_dce6_af48_a03b,
     0xffff_ffff_ffff_fffe,
     0xffff_ffff_ffff_ffff,
+];
+
+const FIELD_P_BE: [u8; 32] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2f,
 ];
 
 /// Raw big-endian witness bytes for one secp256k1 scalar.
@@ -57,6 +64,35 @@ impl SecpScalarWitness {
 
     fn integer(self) -> BigUint {
         BigUint::from_bytes_be(&self.bytes)
+    }
+}
+
+/// Canonical big-endian witness for the secp256k1 coordinate field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoordinateFieldWitness {
+    /// Big-endian unsigned integer bytes in `[0, p - 1]`.
+    pub bytes: [u8; 32],
+}
+
+impl CoordinateFieldWitness {
+    /// Constructs a witness from exact big-endian bytes.
+    pub const fn from_bytes_be(bytes: [u8; 32]) -> Self {
+        Self { bytes }
+    }
+
+    /// Constructs a small canonical witness.
+    pub fn from_u64(value: u64) -> Self {
+        let mut bytes = [0u8; 32];
+        bytes[24..].copy_from_slice(&value.to_be_bytes());
+        Self { bytes }
+    }
+
+    fn scalar(self) -> Result<Scalar, ReceiptCycleError> {
+        let mut encoded = self.bytes;
+        encoded.reverse();
+        Secq256k1Cycle::scalar_from_canonical(&encoded).ok_or(ReceiptCycleError::Malformed(
+            "noncanonical coordinate field element",
+        ))
     }
 }
 
@@ -93,12 +129,21 @@ fn order_bit(index: usize) -> bool {
     ((byte >> (index % 8)) & 1) != 0
 }
 
+fn field_bit(index: usize) -> bool {
+    let byte = FIELD_P_BE[31 - index / 8];
+    ((byte >> (index % 8)) & 1) != 0
+}
+
 fn scalar_pow2(exponent: usize) -> Scalar {
     let mut out = Scalar::ONE;
     for _ in 0..exponent {
         out = out + out;
     }
     out
+}
+
+fn scalar_integer(value: Scalar) -> BigUint {
+    BigUint::from_bytes_le(&Secq256k1Cycle::scalar_to_canonical(&value))
 }
 
 fn limbs(value: &BigUint, count: usize) -> Result<Vec<u64>, ReceiptCycleError> {
@@ -158,6 +203,122 @@ fn allocate_uint256(
         limb_values,
         value,
     })
+}
+
+fn less_than_constant(
+    builder: &mut Builder,
+    bits: &[Expression],
+    constant_bit: impl Fn(usize) -> bool,
+) -> Expression {
+    let mut equal = Expression::constant(Scalar::ONE);
+    let mut less = Expression::constant(Scalar::ZERO);
+    for index in (0..bits.len()).rev() {
+        let equal_and_bit = builder.multiply(&equal, &bits[index]);
+        if constant_bit(index) {
+            less = less.add(&equal.clone().sub(&equal_and_bit));
+            equal = equal_and_bit;
+        } else {
+            equal = equal.sub(&equal_and_bit);
+        }
+    }
+    less
+}
+
+fn embedded_integer(value: &SecpScalarVar) -> Expression {
+    let mut out = Expression::constant(Scalar::ZERO);
+    let mut coefficient = Scalar::ONE;
+    for bit in &value.bits {
+        out = out.add(&bit.clone().scale(coefficient));
+        coefficient = coefficient + coefficient;
+    }
+    out
+}
+
+fn zero_bit(builder: &mut Builder, value: &Expression) -> Expression {
+    let is_zero = builder.allocate_boolean(value.value() == Scalar::ZERO);
+    let inverse =
+        builder.allocate(Option::<Scalar>::from(value.value().invert()).unwrap_or(Scalar::ZERO));
+    let product = builder.multiply(value, &inverse);
+    builder.constrain_equal(&product, &Expression::constant(Scalar::ONE).sub(&is_zero));
+    let zero_product = builder.multiply(&is_zero, value);
+    builder.constrain_zero(zero_product);
+    is_zero
+}
+
+struct ChallengeCandidate {
+    value: SecpScalarVar,
+    valid: Expression,
+}
+
+fn challenge_candidate(builder: &mut Builder, native: &Expression) -> ChallengeCandidate {
+    let value = allocate_uint256(builder, scalar_integer(native.value()))
+        .expect("a native field element always fits 256 bits");
+    builder.constrain_equal(&embedded_integer(&value), native);
+
+    let below_field = less_than_constant(builder, &value.bits, field_bit);
+    builder.constrain_equal(&below_field, &Expression::constant(Scalar::ONE));
+
+    let below_order = less_than_constant(builder, &value.bits, order_bit);
+    let nonzero = Expression::constant(Scalar::ONE).sub(&zero_bit(builder, native));
+    let valid = builder.multiply(&below_order, &nonzero);
+    ChallengeCandidate { value, valid }
+}
+
+/// Select the first valid nonzero secp scalar from two coordinate-field lanes.
+///
+/// Both lanes receive canonical 256-bit decompositions. The first lane is
+/// selected exactly when its integer is in `[1, n - 1]`; otherwise the second
+/// must be in that range. Failure of both lanes leaves an unsatisfied relation.
+pub(crate) fn select_challenge_lanes(
+    builder: &mut Builder,
+    first: &Expression,
+    second: &Expression,
+) -> SecpScalarVar {
+    let first = challenge_candidate(builder, first);
+    let second = challenge_candidate(builder, second);
+    let use_second = Expression::constant(Scalar::ONE).sub(&first.valid);
+    let valid_fallback = builder.multiply(&use_second, &second.valid);
+    builder.constrain_equal(
+        &first.valid.clone().add(&valid_fallback),
+        &Expression::constant(Scalar::ONE),
+    );
+
+    let selected_value = if first.valid.value() == Scalar::ONE {
+        first.value.value.clone()
+    } else {
+        second.value.value.clone()
+    };
+    let selected_bits = first
+        .value
+        .bits
+        .iter()
+        .zip(&second.value.bits)
+        .map(|(first_bit, second_bit)| {
+            let difference = first_bit.clone().sub(second_bit);
+            second_bit
+                .clone()
+                .add(&builder.multiply(&first.valid, &difference))
+        })
+        .collect::<Vec<_>>();
+    let selected_limbs = std::array::from_fn(|limb| {
+        let mut expression = Expression::constant(Scalar::ZERO);
+        let mut coefficient = Scalar::ONE;
+        for bit in &selected_bits[limb * LIMB_BITS..(limb + 1) * LIMB_BITS] {
+            expression = expression.add(&bit.clone().scale(coefficient));
+            coefficient = coefficient + coefficient;
+        }
+        expression
+    });
+    let limb_values: [u64; LIMB_COUNT] = limbs(&selected_value, LIMB_COUNT)
+        .expect("a selected lane has four limbs")
+        .try_into()
+        .expect("the selected limb count is fixed");
+    SecpScalarVar {
+        limbs: selected_limbs,
+        bits: selected_bits,
+        limb_values,
+        value: selected_value,
+    }
 }
 
 fn constant_uint256(value: u64) -> SecpScalarVar {
@@ -464,6 +625,27 @@ pub fn build_scalar_inverse_relation(
     builder.finish()
 }
 
+/// Builds the fixed-shape two-lane transcript challenge selection relation.
+///
+/// Each coordinate-field lane is interpreted as its canonical integer. The
+/// first value in `[1, n - 1]` is selected, with the second lane used only
+/// when the first is invalid. Both invalid leaves the relation unsatisfied.
+pub fn build_challenge_selection_relation(
+    first: CoordinateFieldWitness,
+    second: CoordinateFieldWitness,
+    expected: SecpScalarWitness,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    let mut builder = Builder::default();
+    let first = builder.allocate(first.scalar()?);
+    let second = builder.allocate(second.scalar()?);
+    let selected = select_challenge_lanes(&mut builder, &first, &second);
+    let expected = allocate_canonical_scalar(&mut builder, expected)?;
+    for index in 0..LIMB_COUNT {
+        builder.constrain_equal(&selected.limbs[index], &expected.limbs[index]);
+    }
+    builder.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -662,4 +844,5 @@ mod tests {
             0x63,
         );
     }
+
 }

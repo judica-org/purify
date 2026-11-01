@@ -485,6 +485,16 @@ void check_hidden_branch_and_rejections(TestContext &ctx,
   ctx.expect(!CircuitTranscriptShapeV4::create(CircuitCommitmentModeV4::Hidden,
                                                7, 2, 14, 14),
              "V4 rejects non-power-of-two gate shape");
+  ctx.expect(CircuitTranscriptShapeV4::create(
+                 CircuitCommitmentModeV4::Hidden, 8, 7, 16, 16)
+                 .has_value(),
+             "V4 hidden shape retains its last hiding coordinate");
+  ctx.expect(!CircuitTranscriptShapeV4::create(
+                 CircuitCommitmentModeV4::Hidden, 8, 8, 16, 16),
+             "V4 rejects a hidden shape without a hiding coordinate");
+  ctx.expect(!CircuitTranscriptShapeV4::create(
+                 CircuitCommitmentModeV4::Hidden, 8, 9, 16, 16),
+             "V4 rejects hidden commitments beyond the padded gates");
 }
 
 } // namespace

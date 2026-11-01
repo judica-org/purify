@@ -29,9 +29,12 @@ exact 32-byte canonical encoding of `d`. The parent later constrains the
 hidden raw commitment and public fields to this value.
 
 The mode is a closed enum. Public mode requires one public point for every
-circuit commitment. Hidden mode requires none. The current circuit reduction
-also fixes `n_vec_len = l_vec_len = 2 * gate_count` and requires a nonzero
-power-of-two gate count.
+circuit commitment. Hidden mode requires no public points, but its internal
+circuit-commitment count must be smaller than the padded gate count. Its
+linear vector stores both groups and must retain at least one zero-coefficient
+hiding coordinate. The current circuit reduction also fixes
+`n_vec_len = l_vec_len = 2 * gate_count` and requires a nonzero power-of-two
+gate count.
 
 ## Proof transcript
 

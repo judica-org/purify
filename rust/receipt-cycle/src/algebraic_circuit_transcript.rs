@@ -53,6 +53,8 @@ impl CircuitTranscriptShapeV4 {
             .checked_mul(2)
             .ok_or(ReceiptCycleError::Malformed("V4 gate count"))?;
         if !self.gate_count.is_power_of_two()
+            || (self.mode == CircuitCommitmentModeV4::Hidden
+                && self.commitment_count >= self.gate_count)
             || self.n_vec_len != expected_n
             || self.l_vec_len != self.n_vec_len
             || (self.mode == CircuitCommitmentModeV4::Public && self.commitment_count == 0)
@@ -723,6 +725,17 @@ mod tests {
             shape, binding, generators, &witness, &expected,
         )
         .is_err());
+
+        let hidden_shape = |commitment_count| CircuitTranscriptShapeV4 {
+            mode: CircuitCommitmentModeV4::Hidden,
+            gate_count: 8,
+            commitment_count,
+            n_vec_len: 16,
+            l_vec_len: 16,
+        };
+        assert!(hidden_shape(7).validate().is_ok());
+        assert!(hidden_shape(8).validate().is_err());
+        assert!(hidden_shape(9).validate().is_err());
     }
 
     #[test]

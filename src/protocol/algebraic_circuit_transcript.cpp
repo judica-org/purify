@@ -166,6 +166,8 @@ CircuitTranscriptShapeV4::create(CircuitCommitmentModeV4 mode,
   }
   std::size_t expected_n = 0;
   if (!is_power_of_two_size(gate_count) ||
+      (mode == CircuitCommitmentModeV4::Hidden &&
+       commitment_count >= gate_count) ||
       !checked_mul_size(gate_count, 2, expected_n) || n_vec_len != expected_n ||
       l_vec_len != n_vec_len || !size_fits_u64(gate_count) ||
       !size_fits_u64(commitment_count) || !size_fits_u64(n_vec_len) ||

@@ -97,7 +97,39 @@ def challenge(transcript, index):
     return lanes, value
 
 
+def validate_shape(shape):
+    mode = shape["mode"]
+    gate_count = shape["gate_count"]
+    commitment_count = shape["commitment_count"]
+    n_vec_len = shape["n_vec_len"]
+    l_vec_len = shape["l_vec_len"]
+    public_count = shape["public_commitment_count"]
+    values = (
+        mode,
+        gate_count,
+        commitment_count,
+        n_vec_len,
+        l_vec_len,
+        public_count,
+    )
+    if any(value < 0 or value >= 1 << 64 for value in values):
+        raise ValueError("V4 shape value outside u64")
+    if mode not in (0, 1):
+        raise ValueError("V4 commitment mode")
+    if gate_count == 0 or gate_count & (gate_count - 1):
+        raise ValueError("V4 padded gate count")
+    if n_vec_len != 2 * gate_count or l_vec_len != n_vec_len:
+        raise ValueError("V4 vector lengths")
+    if mode == 0 and commitment_count >= gate_count:
+        raise ValueError("V4 hidden commitment count")
+    if mode == 1 and commitment_count == 0:
+        raise ValueError("V4 empty public mode")
+    if public_count != (commitment_count if mode == 1 else 0):
+        raise ValueError("V4 public commitment count")
+
+
 def append_shape(transcript, shape):
+    validate_shape(shape)
     transcript.append_u64(shape["mode"])
     transcript.append_u64(shape["gate_count"])
     transcript.append_u64(shape["commitment_count"])
@@ -282,6 +314,20 @@ def check_vector():
     wrong_proof.append_bytes(bytes.fromhex(expected["raw_generator_digest"]))
     append_shape(wrong_proof, shape)
     assert select_scalar(wrong_proof.challenge(0)) != int(expected["rho"], 16)
+
+    hidden = dict(shape, mode=0, public_commitment_count=0)
+    validate_shape(dict(hidden, commitment_count=7))
+    for commitment_count in (8, 9):
+        try:
+            validate_shape(dict(hidden, commitment_count=commitment_count))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid hidden V4 shape accepted")
+
+    validate_shape(
+        dict(shape, commitment_count=9, public_commitment_count=9)
+    )
 
 
 if __name__ == "__main__":

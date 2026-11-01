@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <utility>
 
@@ -11,6 +12,14 @@
 #include "purify/puresign/anchor_escrow.hpp"
 
 namespace purify::accountable {
+
+/** Verifier-derived public constants consumed by one recursive parent leaf. */
+struct AnchorEscrowParentConstants {
+    std::array<unsigned char, 32> circuit_binding_digest{};
+    std::array<unsigned char, 32> raw_generator_digest{};
+    bppp::PointBytes coefficient_commitment{};
+    bppp::PointBytes anchored_offset{};
+};
 
 /** V4 anchor proof prepared for reduction with its exact public digest. */
 class PreparedAnchorEscrow {
@@ -71,6 +80,24 @@ public:
     [[nodiscard]] const bppp::accumulation::Basis& basis() const noexcept {
         return basis_;
     }
+
+    /**
+     * Derives the exact public constants bound by one parent recurrence leaf.
+     *
+     * This authenticates no proof and does not discharge an accumulation
+     * obligation. Receipt acceptance must verify the recursive parent and
+     * complete the final native decision.
+     */
+    [[nodiscard]] Result<AnchorEscrowParentConstants>
+    derive_parent_constants(
+        const RecoveryBoundSigningRoster& roster,
+        const UInt512& advertised_anchor_root,
+        const AnchorPunishmentPublicKey& punishment_key,
+        const AnchorEscrowContextDigest& context_digest,
+        const AnchorEscrowCiphertext& ciphertext,
+        const bppp::ScalarBytes& circuit_precommitment,
+        purify_secp_context* secp_context,
+        bppp::ExperimentalCircuitBackend* cache = nullptr) const;
 
     [[nodiscard]] Result<PreparedAnchorEscrow> prepare(
         const RecoveryBoundSigningRoster& roster,

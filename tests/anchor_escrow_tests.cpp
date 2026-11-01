@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <iostream>
+#include <span>
 #include <utility>
 
 #include "purify.hpp"
@@ -25,6 +26,17 @@ using purify::accountable::AnchorEscrowContextDigest;
 using purify::accountable::CoalitionCoreDigest;
 using purify::accountable::RecoveryBoundSigningRoster;
 using purify::accountable::SigningRoster;
+
+std::array<unsigned char, 32> raw_generator_digest(
+    std::span<const purify::bppp::PointBytes> generators) {
+    std::array<unsigned char, 32> digest{};
+    const auto bytes = std::as_bytes(generators);
+    purify_sha256(
+        digest.data(),
+        reinterpret_cast<const unsigned char*>(bytes.data()),
+        bytes.size());
+    return digest;
+}
 
 Result<std::array<unsigned char, 33>> public_point(
     const FieldElement& scalar, purify_secp_context* secp_context) {
@@ -439,9 +451,10 @@ void test_anchor_escrow(TestContext& ctx) {
                 purify::accountable::AnchorEscrowAccumulator::
                     kNormVectorLength,
         "anchor escrow accumulation fixes both norm dimensions");
+    purify::bppp::ExperimentalCircuitCache parent_cache;
     auto prepared = accumulator->prepare(
         fixture->roster, anchor->public_key, punishment_key, context,
-        *parsed, secp.get());
+        *parsed, secp.get(), &parent_cache);
     expect_ok(ctx, prepared,
               "typed adapter prepares the exact anchor escrow statement");
     if (!prepared) return;
@@ -450,6 +463,58 @@ void test_anchor_escrow(TestContext& ctx) {
                     prepared->circuit_precommitment().end(),
                     [](unsigned char byte) { return byte != 0; }),
         "prepared anchor exposes its nonzero V4 precommitment");
+    auto parent_constants = accumulator->derive_parent_constants(
+        fixture->roster, anchor->public_key, punishment_key, context,
+        parsed->ciphertext(), prepared->circuit_precommitment(),
+        secp.get(), &parent_cache);
+    expect_ok(ctx, parent_constants,
+              "anchor parent constants derive from public payload data");
+    if (!parent_constants) return;
+    ctx.expect(
+        parent_constants->raw_generator_digest ==
+                raw_generator_digest(
+                    accumulator->basis().norm_generators()) &&
+            parent_constants->coefficient_commitment ==
+                prepared->norm().coefficient_commitment(),
+        "anchor parent constants match the prepared V4 proof family");
+    auto changed_parent_context = context;
+    changed_parent_context[0] ^= 1;
+    auto changed_parent_constants = accumulator->derive_parent_constants(
+        fixture->roster, anchor->public_key, punishment_key,
+        changed_parent_context, parsed->ciphertext(),
+        prepared->circuit_precommitment(), secp.get(), &parent_cache);
+    expect_ok(ctx, changed_parent_constants,
+              "changed anchor context still derives public constants");
+    if (!changed_parent_constants) return;
+    ctx.expect(
+        changed_parent_constants->circuit_binding_digest !=
+                parent_constants->circuit_binding_digest &&
+            changed_parent_constants->raw_generator_digest ==
+                parent_constants->raw_generator_digest &&
+            changed_parent_constants->coefficient_commitment ==
+                parent_constants->coefficient_commitment &&
+            changed_parent_constants->anchored_offset ==
+                parent_constants->anchored_offset,
+        "only the parent binding digest follows a changed public context");
+    expect_error(
+        ctx,
+        accumulator->derive_parent_constants(
+            fixture->roster, anchor->public_key, punishment_key, context,
+            parsed->ciphertext(), purify::bppp::ScalarBytes{},
+            secp.get()),
+        purify::ErrorCode::RangeViolation,
+        "anchor parent constants reject a zero precommitment");
+    auto duplicate_ciphertext = parsed->ciphertext();
+    duplicate_ciphertext.ephemeral_keys[1] =
+        duplicate_ciphertext.ephemeral_keys[0];
+    expect_error(
+        ctx,
+        accumulator->derive_parent_constants(
+            fixture->roster, anchor->public_key, punishment_key, context,
+            duplicate_ciphertext, prepared->circuit_precommitment(),
+            secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "anchor parent constants reject duplicate ephemeral keys");
     auto reduction =
         purify::bppp::accumulation::prove_algebraic_norm_reduction(
             accumulator->basis(), prepared->norm(), secp.get());

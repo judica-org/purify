@@ -1001,6 +1001,61 @@ Result<AnchorEscrowAccumulator> AnchorEscrowAccumulator::create(
     return AnchorEscrowAccumulator(std::move(basis));
 }
 
+Result<AnchorEscrowParentConstants>
+AnchorEscrowAccumulator::derive_parent_constants(
+    const RecoveryBoundSigningRoster& roster,
+    const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
+    const AnchorEscrowContextDigest& context_digest,
+    const AnchorEscrowCiphertext& ciphertext,
+    const bppp::ScalarBytes& circuit_precommitment,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) const {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v3_hash_suite(
+            "anchor_escrow_parent:hash_suite"),
+        "anchor_escrow_parent:hash_suite");
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(secp_context, "anchor_escrow_parent:context"),
+        "anchor_escrow_parent:context");
+    PURIFY_RETURN_IF_ERROR(
+        require_roster(roster, "anchor_escrow_parent:empty_roster"),
+        "anchor_escrow_parent:roster");
+    if (ciphertext.ephemeral_keys[0] == ciphertext.ephemeral_keys[1]) {
+        return unexpected_error(ErrorCode::BindingMismatch,
+                                "anchor_escrow_parent:duplicate_ephemeral");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto precommitment,
+        bppp::candidate::CircuitPrecommitmentDigestV4::parse(
+            circuit_precommitment),
+        "anchor_escrow_parent:precommitment");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto circuit,
+        public_escrow_circuit(roster.recovery_root(),
+                              advertised_anchor_root, ciphertext),
+        "anchor_escrow_parent:circuit");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto binding,
+        escrow_binding(roster, advertised_anchor_root, punishment_key,
+                       context_digest, ciphertext),
+        "anchor_escrow_parent:binding");
+    const std::array<PointBytes, 1> outputs{
+        punishment_point(punishment_key)};
+    PURIFY_ASSIGN_OR_RETURN(
+        auto constants,
+        bppp::candidate::
+            derive_circuit_norm_parent_constants_v4_with_public_commitments(
+                circuit, precommitment, outputs, secp_context, binding,
+                cache),
+        "anchor_escrow_parent:derive");
+    return AnchorEscrowParentConstants{
+        std::move(constants.circuit_binding_digest),
+        std::move(constants.raw_generator_digest),
+        std::move(constants.coefficient_commitment),
+        std::move(constants.anchored_offset)};
+}
+
 Result<PreparedAnchorEscrow>
 AnchorEscrowAccumulator::prepare(
     const RecoveryBoundSigningRoster& roster,

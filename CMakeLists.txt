@@ -337,6 +337,7 @@ add_library(purify
     src/puresign/construction_receipt_assembly.cpp
     src/protocol/bppp.cpp
     src/protocol/accumulation.cpp
+    src/protocol/coordinate_field.cpp
     src/bridge/bppp_bridge.c
 )
 
@@ -503,6 +504,7 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/construction_receipt_assembly.cpp
         src/protocol/bppp.cpp
         src/protocol/accumulation.cpp
+        src/protocol/coordinate_field.cpp
         src/bridge/bppp_bridge.c
     )
 
@@ -628,6 +630,7 @@ if(PURIFY_BUILD_TESTS)
         tests/construction_receipt_tests.cpp
         tests/construction_receipt_codec_tests.cpp
         tests/receipt_sha256_tests.cpp
+        tests/coordinate_field_tests.cpp
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
@@ -694,6 +697,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(construction_receipt)
     purify_add_cpp_suite_test(construction_receipt_codec)
     purify_add_cpp_suite_test(receipt_sha256)
+    purify_add_cpp_suite_test(coordinate_field)
 
     # These proof experiments saturate sanitizer runners. Keep their work
     # out of the property suites' bounded execution time.

@@ -213,6 +213,26 @@ int purify_bppp_public_hash_to_point(purify_secp_context* context,
                                    const unsigned char* input, size_t input_len,
                                    unsigned char out33[33]);
 
+/**
+ * Canonical secp256k1 coordinate-field arithmetic for public transcript data.
+ *
+ * Inputs and outputs are 32-byte big-endian integers in `[0, p - 1]`. These
+ * helpers are variable-time and must never process secret data.
+ */
+int purify_bppp_coordinate_field_validate(
+    const unsigned char input32[32]);
+int purify_bppp_coordinate_field_add(
+    const unsigned char left32[32], const unsigned char right32[32],
+    unsigned char out32[32]);
+int purify_bppp_coordinate_field_subtract(
+    const unsigned char left32[32], const unsigned char right32[32],
+    unsigned char out32[32]);
+int purify_bppp_coordinate_field_multiply(
+    const unsigned char left32[32], const unsigned char right32[32],
+    unsigned char out32[32]);
+int purify_bppp_coordinate_field_inverse(
+    const unsigned char input32[32], unsigned char out32[32]);
+
 typedef struct purify_bulletproof_row_view {
     size_t size;
     const size_t* indices;

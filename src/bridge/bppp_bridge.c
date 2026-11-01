@@ -3126,3 +3126,75 @@ int purify_bppp_public_hash_to_point(purify_secp_context* context,
     secp256k1_generator_load(&point, &generator);
     return purify_serialize_point(out33, &point);
 }
+
+static int purify_bppp_coordinate_field_parse(
+    secp256k1_fe* out, const unsigned char input32[32]) {
+    return out != NULL && input32 != NULL
+        && secp256k1_fe_set_b32_limit(out, input32);
+}
+
+static int purify_bppp_coordinate_field_serialize(
+    unsigned char out32[32], secp256k1_fe value) {
+    if (out32 == NULL) return 0;
+    secp256k1_fe_normalize_var(&value);
+    secp256k1_fe_get_b32(out32, &value);
+    return 1;
+}
+
+int purify_bppp_coordinate_field_validate(
+    const unsigned char input32[32]) {
+    secp256k1_fe value;
+    return purify_bppp_coordinate_field_parse(&value, input32);
+}
+
+int purify_bppp_coordinate_field_add(
+    const unsigned char left32[32], const unsigned char right32[32],
+    unsigned char out32[32]) {
+    secp256k1_fe left, right;
+    if (!purify_bppp_coordinate_field_parse(&left, left32)
+        || !purify_bppp_coordinate_field_parse(&right, right32)
+        || out32 == NULL) {
+        return 0;
+    }
+    secp256k1_fe_add(&left, &right);
+    return purify_bppp_coordinate_field_serialize(out32, left);
+}
+
+int purify_bppp_coordinate_field_subtract(
+    const unsigned char left32[32], const unsigned char right32[32],
+    unsigned char out32[32]) {
+    secp256k1_fe left, right, negated;
+    if (!purify_bppp_coordinate_field_parse(&left, left32)
+        || !purify_bppp_coordinate_field_parse(&right, right32)
+        || out32 == NULL) {
+        return 0;
+    }
+    secp256k1_fe_negate(&negated, &right, 1);
+    secp256k1_fe_add(&left, &negated);
+    return purify_bppp_coordinate_field_serialize(out32, left);
+}
+
+int purify_bppp_coordinate_field_multiply(
+    const unsigned char left32[32], const unsigned char right32[32],
+    unsigned char out32[32]) {
+    secp256k1_fe left, right, product;
+    if (!purify_bppp_coordinate_field_parse(&left, left32)
+        || !purify_bppp_coordinate_field_parse(&right, right32)
+        || out32 == NULL) {
+        return 0;
+    }
+    secp256k1_fe_mul(&product, &left, &right);
+    return purify_bppp_coordinate_field_serialize(out32, product);
+}
+
+int purify_bppp_coordinate_field_inverse(
+    const unsigned char input32[32], unsigned char out32[32]) {
+    secp256k1_fe input, inverse;
+    if (!purify_bppp_coordinate_field_parse(&input, input32)
+        || secp256k1_fe_normalizes_to_zero_var(&input)
+        || out32 == NULL) {
+        return 0;
+    }
+    secp256k1_fe_inv_var(&inverse, &input);
+    return purify_bppp_coordinate_field_serialize(out32, inverse);
+}

@@ -1890,7 +1890,7 @@ mod tests {
         claims
     }
 
-    fn production_fanin_step_proof() -> CandidateStepProofWitness {
+    fn arithmetic_fanin_step_proof() -> CandidateStepProofWitness {
         CandidateStepProofWitness {
             left: vec![SecpEncodedPointWitness::identity(); 15],
             right: vec![SecpEncodedPointWitness::identity(); 15],
@@ -2341,13 +2341,13 @@ mod tests {
         .is_err());
     }
 
-    fn measure_production_fanin_step(
+    fn measure_arithmetic_fanin_step(
         anchor_count: usize,
         include_setup: bool,
     ) -> (usize, usize, usize) {
         let basis = [0xb6; 32];
         let claims = mixed_fanin_claims(anchor_count, include_setup);
-        let proof = production_fanin_step_proof();
+        let proof = arithmetic_fanin_step_proof();
         assert_eq!(claims.len(), anchor_count + usize::from(include_setup));
         assert_eq!(proof.left.len(), 15);
         let root = derive_candidate_root_witness(basis, &claims, &proof)
@@ -2384,7 +2384,7 @@ mod tests {
             .checked_sub(input_gates)
             .expect("step contains claim inputs");
         eprintln!(
-            "fanin_step anchor_count={anchor_count} include_setup={include_setup} \
+            "arithmetic_fanin_step anchor_count={anchor_count} include_setup={include_setup} \
              step_gates={step_gates} total_gates={total_gates} input_gates={input_gates}"
         );
         (step_gates, total_gates, input_gates)
@@ -2394,53 +2394,65 @@ mod tests {
     #[ignore = "run explicitly in release mode; fan-in step relation is large"]
     fn fanin_sixteen_mixed_claim_step_reports_gate_delta() {
         assert_eq!(
-            measure_production_fanin_step(16, true),
-            (7_610_694, 8_008_210, 397_516)
+            measure_arithmetic_fanin_step(16, true),
+            (4_800_750, 5_198_266, 397_516)
         );
     }
 
     #[test]
     #[ignore = "run explicitly in release mode; fan-in step relation is large"]
-    fn fanin_ten_mixed_claim_step_reports_gate_delta() {
+    fn fanin_twelve_mixed_claim_step_reports_gate_delta() {
         assert_eq!(
-            measure_production_fanin_step(10, true),
-            (5_095_194, 5_351_326, 256_132)
+            measure_arithmetic_fanin_step(12, true),
+            (3_788_394, 4_091_654, 303_260)
         );
     }
 
     #[test]
     #[ignore = "run explicitly in release mode; fan-in step relation is large"]
-    fn fanin_eleven_mixed_claim_step_reports_gate_delta() {
+    fn fanin_thirteen_mixed_claim_step_reports_gate_delta() {
         assert_eq!(
-            measure_production_fanin_step(11, true),
-            (5_510_088, 5_789_784, 279_696)
+            measure_arithmetic_fanin_step(13, true),
+            (4_037_127, 4_363_951, 326_824)
         );
     }
 
     #[test]
     #[ignore = "run explicitly in release mode; fan-in step relation is large"]
-    fn fanin_eleven_anchor_only_step_reports_gate_delta() {
+    fn fanin_thirteen_anchor_only_step_reports_gate_delta() {
         assert_eq!(
-            measure_production_fanin_step(11, false),
-            (5_150_996, 5_410_200, 259_204)
+            measure_arithmetic_fanin_step(13, false),
+            (3_821_856, 4_128_188, 306_332)
         );
     }
 
     #[test]
-    fn baseline_production_fanin_budget_is_explicit() {
+    #[ignore = "run explicitly in release mode; fan-in step relation is large"]
+    fn fanin_fourteen_anchor_only_step_reports_gate_delta() {
+        assert_eq!(
+            measure_arithmetic_fanin_step(14, false),
+            (4_070_589, 4_400_485, 329_896)
+        );
+    }
+
+    #[test]
+    fn maximum_arithmetic_fanin_is_explicit() {
         const MAX_GATES: usize = 1 << 24;
         const ANCHOR_LEAF_GATES: usize = 949_880;
         const SETUP_LEAF_GATES: usize = 854_293;
-        const FIRST_TEN_STEP_GATES: usize = 5_095_194;
-        const FIRST_ELEVEN_STEP_GATES: usize = 5_510_088;
-        const LATER_ELEVEN_STEP_GATES: usize = 5_150_996;
-        let first_ten = 10 * ANCHOR_LEAF_GATES + SETUP_LEAF_GATES + FIRST_TEN_STEP_GATES;
-        let first_eleven = 11 * ANCHOR_LEAF_GATES + SETUP_LEAF_GATES + FIRST_ELEVEN_STEP_GATES;
-        let later_eleven = 11 * ANCHOR_LEAF_GATES + LATER_ELEVEN_STEP_GATES;
+        const FIRST_TWELVE_STEP_GATES: usize = 3_788_394;
+        const FIRST_THIRTEEN_STEP_GATES: usize = 4_037_127;
+        const LATER_THIRTEEN_STEP_GATES: usize = 3_821_856;
+        const LATER_FOURTEEN_STEP_GATES: usize = 4_070_589;
+        let first_twelve = 12 * ANCHOR_LEAF_GATES + SETUP_LEAF_GATES + FIRST_TWELVE_STEP_GATES;
+        let first_thirteen = 13 * ANCHOR_LEAF_GATES + SETUP_LEAF_GATES + FIRST_THIRTEEN_STEP_GATES;
+        let later_thirteen = 13 * ANCHOR_LEAF_GATES + LATER_THIRTEEN_STEP_GATES;
+        let later_fourteen = 14 * ANCHOR_LEAF_GATES + LATER_FOURTEEN_STEP_GATES;
 
-        assert_eq!(MAX_GATES - first_ten, 1_328_929);
-        assert_eq!(first_eleven - MAX_GATES, 35_845);
-        assert_eq!(MAX_GATES - later_eleven, 1_177_540);
+        assert_eq!(MAX_GATES - first_twelve, 735_969);
+        assert_eq!(first_thirteen - MAX_GATES, 462_644);
+        assert_eq!(MAX_GATES - later_thirteen, 606_920);
+        assert_eq!(later_fourteen - MAX_GATES, 591_693);
     }
 
     #[test]

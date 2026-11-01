@@ -10,8 +10,8 @@ use crate::algebraic_circuit_transcript::{
 };
 use crate::construction_manifest::{
     derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestSeed,
-    ConstructionManifestStepInput, ConstructionRegistrySeedRoot, CONSTRUCTION_ROOT_STATE_ARITY,
-    CONSTRUCTION_SEED_ROOT_BYTES,
+    ConstructionManifestStepInput, ConstructionRoot, CONSTRUCTION_ROOT_BYTES,
+    CONSTRUCTION_ROOT_STATE_ARITY,
 };
 use crate::direct_nova::{direct_nova_raw_metrics, source_state_to_nova, DirectNovaTemplate};
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
@@ -361,16 +361,16 @@ fn fixture_for_shape(
     }
 }
 
-fn registry_seed_root(root: &CandidateRootClaim) -> ConstructionRegistrySeedRoot {
+fn registry_seed_root(root: &CandidateRootClaim) -> ConstructionRoot {
     assert_eq!(root.factors.len(), CONSTRUCTION_ROOT_ROUNDS);
-    let mut encoded = [0; CONSTRUCTION_SEED_ROOT_BYTES];
+    let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
     encoded[..33].copy_from_slice(&root.point.encoded);
     encoded[33..65].copy_from_slice(&root.scale.bytes);
     for (index, factor) in root.factors.iter().enumerate() {
         let offset = 65 + 32 * index;
         encoded[offset..offset + 32].copy_from_slice(&factor.bytes);
     }
-    ConstructionRegistrySeedRoot::parse(&encoded).expect("construction registry seed root")
+    ConstructionRoot::parse(&encoded).expect("construction registry seed root")
 }
 
 fn relation_state(

@@ -13,7 +13,7 @@ use crate::construction_manifest::{
 };
 use crate::direct_nova::{nova_state_to_source, source_state_to_nova};
 use crate::nova_session::{
-    DirectNovaSessionError, SelectedDirectNovaSuite, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+    DirectNovaSessionError, SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
 };
 use crate::{ReceiptCycleError, Scalar};
 
@@ -48,16 +48,16 @@ impl AuthenticatedConstructionParentOutput {
 
 /// Verifies one canonical recursive parent and returns its pending root.
 pub(crate) fn verify_construction_parent(
-    suite: &SelectedDirectNovaSuite<ANCHOR_RECURRENCE_STATE_ARITY>,
+    verifier: &SelectedDirectNovaVerifier<ANCHOR_RECURRENCE_STATE_ARITY>,
     seed: &ConstructionManifestSeed,
     anchors: &[ConstructionManifestAnchor],
     proof: &[u8],
 ) -> Result<AuthenticatedConstructionParentOutput, ConstructionParentVerifierError> {
-    if suite.expected() != &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE {
+    if verifier.expected() != &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE {
         return Err(ConstructionParentVerifierError::Suite);
     }
 
-    let proof_length = suite.metadata().proof_length;
+    let proof_length = verifier.metadata().proof_length;
     if proof.len() != proof_length {
         return Err(DirectNovaSessionError::ProofLength {
             expected: proof_length,
@@ -69,7 +69,7 @@ pub(crate) fn verify_construction_parent(
     let expected_final = seed.derive_expected_final(anchors)?;
     let expected_suffix = expected_final.state_suffix_fields()?;
     let initial_state = source_state_to_nova(seed.initial_state_fields()?)?;
-    let authenticated_final = suite.verify_final(&initial_state, anchors.len(), proof)?;
+    let authenticated_final = verifier.verify_final(&initial_state, anchors.len(), proof)?;
     let authenticated_final = nova_state_to_source(authenticated_final)?;
     validated_output_from_authenticated_state(authenticated_final, expected_suffix)
 }

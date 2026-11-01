@@ -167,6 +167,18 @@ hidden anchor leaf is exactly 949,880 gates. Both fall in the backend's
 1,745-byte proof-length bucket. These are leaf relation sizes, not a
 complete parent-proof measurement.
 
+With shared step powers, setup plus 12 anchors and the first step totals
+16,041,247 gates, 735,969 below the `2^24` cap. Setup plus 13 totals
+17,239,860, which is 462,644 over. A later anchor-only step fits 13
+anchors at 16,170,296 gates; 14 totals 17,368,909 and is 591,693 over.
+These are arithmetic bounds only. No near-cap proof has qualified peak
+memory, proving time, or verification time.
+
+The version-one descriptor's 16-entry limit is therefore a partition
+bound, not a flat-circuit capacity. It requires an authenticated proof
+tree within the descriptor or a new measured partition version; native
+equation batching alone retains every child proof.
+
 ## Why the final MSM stays native
 
 Directly checking every child's fixed-generator norm equation in the parent

@@ -62,7 +62,29 @@ digest. A future parent relation must bind one of those forms and constrain
 the exact selected entry range. The descriptor alone does not prove that work
 or authenticate any child proof.
 
+The value 16 is a statement-partition limit, not a measured flat-circuit
+capacity. With the current production-shape V4 leaves and shared-power
+step, setup plus 12 anchors totals 16,041,247 gates and fits under the
+`2^24` gate cap. Setup plus 13 totals 17,239,860 gates and does not
+fit. A later step without setup fits 13 anchors at 16,170,296 gates. A
+14-anchor step totals 17,368,909 and does not fit. These are
+arithmetic-only bounds. No near-cap shape has been qualified for peak
+memory or full proving time.
+
+Consequently, a 16-entry descriptor cannot currently be equated with
+one flat parent proof. The implementation must either place a proof tree
+inside that descriptor or introduce a new partition version with a
+measured capacity. It must not silently reinterpret the version-one
+ranges.
+
+Here a proof tree must authenticate each child relation and transition.
+Regrouping native pending claims without such a parent still requires
+all child proofs and does not provide recursive compression.
+
 Later recursive or accumulated layers may combine batch proofs, but they must
 preserve the full construction digest and ordered descriptor identity. This
 partition layer intentionally does not choose their proof encoding or final
-decision rule.
+decision rule. Native verification-equation batching retains every child
+proof. Existing BP++ batch proofs are not a public post-hoc compressor
+for independently published proofs. Neither is the missing recursive
+layer.

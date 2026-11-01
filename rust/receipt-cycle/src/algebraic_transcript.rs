@@ -15,6 +15,7 @@ const SUITE_ID: &[u8] = b"Purify/PoseidonTranscript/v1";
 
 const FIELD_ITEM: u32 = 0x4649_454c; // FIEL
 const SCALAR_ITEM: u32 = 0x5343_414c; // SCAL
+const POINT_ITEM: u32 = 0x504f_494e; // POIN
 const POINT_PAIR_ITEM: u32 = 0x5041_4952; // PAIR
 const BYTES_ITEM: u32 = 0x4259_5445; // BYTE
 const U64_ITEM: u32 = 0x5536_3420; // U64<space>
@@ -129,6 +130,16 @@ impl BuilderTranscript {
         self.absorb(builder, value);
     }
 
+    pub(crate) fn append_point(
+        &mut self,
+        builder: &mut Builder,
+        prefix: Expression,
+        x: Expression,
+    ) {
+        self.absorb_header(builder, POINT_ITEM, prefix);
+        self.absorb(builder, x);
+    }
+
     pub(crate) fn append_point_pair(
         &mut self,
         builder: &mut Builder,
@@ -216,6 +227,11 @@ impl NativeTranscript {
     fn append_scalar(&mut self, value: Scalar) {
         self.absorb(header(SCALAR_ITEM, 0));
         self.absorb(value);
+    }
+
+    fn append_point(&mut self, prefix: u8, x: Scalar) {
+        self.absorb(header(POINT_ITEM, u64::from(prefix)));
+        self.absorb(x);
     }
 
     fn append_point_pair(&mut self, parity: u8, first_x: Scalar, second_x: Scalar) {
@@ -423,6 +439,12 @@ mod tests {
         let mut odd = NativeTranscript::new();
         odd.append_point_pair(1, Scalar::from(3), Scalar::from(5));
         assert_ne!(challenge(&even), challenge(&odd));
+
+        let mut point = NativeTranscript::new();
+        point.append_point(2, Scalar::from(3));
+        let mut point_pair = NativeTranscript::new();
+        point_pair.append_point_pair(2, Scalar::from(3), Scalar::ZERO);
+        assert_ne!(challenge(&point), challenge(&point_pair));
 
         let first = joined.challenge(1);
         let second = joined.challenge(2);

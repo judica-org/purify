@@ -339,6 +339,7 @@ add_library(purify
     src/protocol/accumulation.cpp
     src/protocol/coordinate_field.cpp
     src/protocol/poseidon.cpp
+    src/protocol/algebraic_transcript.cpp
     src/bridge/bppp_bridge.c
 )
 
@@ -507,6 +508,7 @@ if(PURIFY_BUILD_BENCH)
         src/protocol/accumulation.cpp
         src/protocol/coordinate_field.cpp
         src/protocol/poseidon.cpp
+        src/protocol/algebraic_transcript.cpp
         src/bridge/bppp_bridge.c
     )
 
@@ -634,6 +636,7 @@ if(PURIFY_BUILD_TESTS)
         tests/receipt_sha256_tests.cpp
         tests/coordinate_field_tests.cpp
         tests/poseidon_tests.cpp
+        tests/algebraic_transcript_tests.cpp
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
@@ -702,6 +705,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(receipt_sha256)
     purify_add_cpp_suite_test(coordinate_field)
     purify_add_cpp_suite_test(poseidon)
+    purify_add_cpp_suite_test(algebraic_transcript)
 
     # These proof experiments saturate sanitizer runners. Keep their work
     # out of the property suites' bounded execution time.

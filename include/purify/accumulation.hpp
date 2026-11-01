@@ -115,6 +115,9 @@ private:
                                                      const NormReductionProof&, purify_secp_context*);
     friend Result<PendingClaim> verify_step(const Basis&, std::span<const PendingClaim>,
                                            const StepProof&, purify_secp_context*);
+    friend Result<PendingClaim> parse_root_claim(
+        const Basis&, std::span<const unsigned char>,
+        purify_secp_context*);
 };
 
 /** Public one-vector IPA transcript; all-zero33 encodes the point at infinity. */
@@ -144,6 +147,22 @@ Result<Bytes> serialize_step(const Basis& basis, const StepProof& proof,
                              purify_secp_context* context);
 Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> encoded,
                              purify_secp_context* context);
+
+/**
+ * Canonical unframed final-claim encoding:
+ * point33 || scale32 || factors[log2(basis.dimension())]32.
+ *
+ * The sole polynomial term has implicit offset zero. Only a one-term claim
+ * returned by verify_step has this shape. Parsing validates syntax and binds
+ * the supplied basis digest; it never authenticates omitted transitions or
+ * accepts the claim. The caller must verify the parent and call decide().
+ */
+Result<Bytes> serialize_root_claim(const Basis& basis,
+                                   const PendingClaim& claim,
+                                   purify_secp_context* context);
+Result<PendingClaim> parse_root_claim(
+    const Basis& basis, std::span<const unsigned char> encoded,
+    purify_secp_context* context);
 
 /** Parses the norm transcript and computes C_c from its exact required public coefficients. */
 Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,

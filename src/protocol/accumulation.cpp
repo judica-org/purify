@@ -177,6 +177,29 @@ Result<PointBytes> msm(std::span<const PointBytes> points, std::span<const Field
     return out;
 }
 
+Status validate_root_claim(const Basis& basis, const PendingClaim& claim,
+                           purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(context, "accumulation:root_claim_context"),
+        "accumulation:root_claim_context");
+    PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim),
+                           "accumulation:root_claim");
+    if (claim.polynomial().size() != 1 ||
+        claim.polynomial()[0].offset != 0 ||
+        claim.polynomial()[0].factors.size() !=
+            log2_dimension(basis.dimension())) {
+        return unexpected_error(ErrorCode::InvalidDimensions,
+                                "accumulation:root_claim_shape");
+    }
+    const std::array<PointBytes, 1> points{claim.point()};
+    const std::array<FieldElement, 1> scalars{FieldElement::zero()};
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& identity, msm(points, scalars, context),
+        "accumulation:root_claim_point");
+    (void)identity;
+    return {};
+}
+
 Status validate_ipa_encoding(std::size_t dimension, const StepProof& proof,
                               purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
@@ -659,6 +682,62 @@ Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> 
         return unexpected_error(ErrorCode::UnsupportedSymbol, "accumulation:parse_step_version");
     }
     return parse_ipa(basis.dimension(), encoded.subspan(1), context);
+}
+
+Result<Bytes> serialize_root_claim(const Basis& basis,
+                                   const PendingClaim& claim,
+                                   purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(
+        validate_root_claim(basis, claim, context),
+        "accumulation:serialize_root_claim");
+    const auto& polynomial = claim.polynomial()[0];
+    Bytes out;
+    out.reserve(65 + 32 * polynomial.factors.size());
+    append(out, claim.point());
+    append(out, polynomial.scale.to_bytes_be());
+    for (const auto& factor : polynomial.factors) {
+        append(out, factor.to_bytes_be());
+    }
+    return out;
+}
+
+Result<PendingClaim> parse_root_claim(
+    const Basis& basis, std::span<const unsigned char> encoded,
+    purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    const auto factor_count = log2_dimension(basis.dimension());
+    if (encoded.size() != 65 + 32 * factor_count) {
+        return unexpected_error(ErrorCode::InvalidFixedSize,
+                                "accumulation:parse_root_claim_size");
+    }
+
+    PointBytes point{};
+    std::copy_n(encoded.begin(), point.size(), point.begin());
+    ScalarBytes scalar{};
+    std::copy_n(encoded.begin() + static_cast<std::ptrdiff_t>(point.size()),
+                scalar.size(), scalar.begin());
+    PURIFY_ASSIGN_OR_RETURN(
+        auto scale, FieldElement::try_from_bytes32(scalar),
+        "accumulation:parse_root_claim_scale");
+    std::vector<FieldElement> factors;
+    factors.reserve(factor_count);
+    std::size_t offset = point.size() + scalar.size();
+    for (std::size_t i = 0; i < factor_count; ++i) {
+        std::copy_n(encoded.begin() + static_cast<std::ptrdiff_t>(offset),
+                    scalar.size(), scalar.begin());
+        offset += scalar.size();
+        PURIFY_ASSIGN_OR_RETURN(
+            auto factor, FieldElement::try_from_bytes32(scalar),
+            "accumulation:parse_root_claim_factor");
+        factors.push_back(factor);
+    }
+    PendingClaim out(basis.digest(), point,
+                     {PolynomialTerm{scale, 0, std::move(factors)}});
+    PURIFY_RETURN_IF_ERROR(
+        validate_root_claim(basis, out, context),
+        "accumulation:parse_root_claim");
+    return out;
 }
 
 Result<Bytes> serialize_norm_reduction(const Basis& basis, const NormReductionProof& proof,

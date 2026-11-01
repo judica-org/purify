@@ -291,6 +291,25 @@ transcript domains prevent interpreting an accumulation step as a coefficient
 opening. Both parsers validate syntax only. An application must still use
 the appropriate verifier and finish with the accumulator decision.
 
+A final one-term claim returned by `verify_step` has a separate unframed
+encoding. The selected basis and receipt version supply its dimensions:
+
+```
+point33 || scale32 || factors32[log2(D)]
+```
+
+The polynomial offset is implicitly zero. Its exact length is
+`65+32*log2(D)` bytes. The current anchor basis has `D=32768`, so its root
+claim is 545 bytes. The encoding intentionally omits a basis digest; the
+parent statement and receipt version must bind the exact basis supplied to
+the parser.
+
+Parsing a root claim establishes only canonical point and scalar encodings
+and the required one-term shape. It does not authenticate child proofs or
+accumulation transitions, and it is never acceptance. A compressed parent
+must bind the exact parsed claim and its ancestry, after which the verifier
+must still call `decide` for the mandatory final basis MSM.
+
 These openings are additional public transition data. Native verification
 retains them alongside the original child proofs; a final 1,122-byte step
 does not replace that history. Recursive authentication is the remaining

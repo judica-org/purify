@@ -4,9 +4,7 @@
 //! pending claim. It does not authenticate a child proof by itself and exposes
 //! no receipt acceptance API.
 
-use bulletproofs_cycle::Cycle;
 use ff::Field;
-use golden_halo2curves::Secq256k1Cycle;
 
 use crate::algebraic_transcript::BuilderTranscript;
 use crate::opening_base::{constrain_transcript_opening_base, REDUCTION_OPENING_BASE_ROLE};
@@ -14,8 +12,8 @@ use crate::parent_relation::{
     add_points, allocate_encoded_point, append_challenge, append_computed_point,
     append_constant_bytes, append_constrained_polynomial, append_encoded_point, append_scalar,
     derived_inverse, derived_multiply, derived_subtract, encode_computed_point, msm_points,
-    scale_constant_point, ConstrainedPendingClaim, ConstrainedPolynomialTerm, EncodedSecpPoint,
-    PointValue, SecpEncodedPointWitness,
+    scale_constant_point, standard_generator, ConstrainedPendingClaim, ConstrainedPolynomialTerm,
+    EncodedSecpPoint, SecpEncodedPointWitness,
 };
 use crate::relation_builder::{Builder, Expression};
 use crate::secp_scalar::{
@@ -39,24 +37,6 @@ pub(crate) struct CandidateNormReductionProofWitness {
     pub(crate) right: Vec<SecpEncodedPointWitness>,
     pub(crate) terminal_scalar: SecpScalarWitness,
     pub(crate) folded_generator: SecpEncodedPointWitness,
-}
-
-fn standard_generator() -> PointValue {
-    const X: [u8; 32] = [
-        0x98, 0x17, 0xf8, 0x16, 0x5b, 0x81, 0xf2, 0x59, 0xd9, 0x28, 0xce, 0x2d, 0xdb, 0xfc, 0x9b,
-        0x02, 0x07, 0x0b, 0x87, 0xce, 0x95, 0x62, 0xa0, 0x55, 0xac, 0xbb, 0xdc, 0xf9, 0x7e, 0x66,
-        0xbe, 0x79,
-    ];
-    const Y: [u8; 32] = [
-        0xb8, 0xd4, 0x10, 0xfb, 0x8f, 0xd0, 0x47, 0x9c, 0x19, 0x54, 0x85, 0xa6, 0x48, 0xb4, 0x17,
-        0xfd, 0xa8, 0x08, 0x11, 0x0e, 0xfc, 0xfb, 0xa4, 0x5d, 0x65, 0xc4, 0xa3, 0x26, 0x77, 0xda,
-        0x3a, 0x48,
-    ];
-    PointValue {
-        x: Secq256k1Cycle::scalar_from_canonical(&X).expect("generator x is canonical"),
-        y: Secq256k1Cycle::scalar_from_canonical(&Y).expect("generator y is canonical"),
-        identity: false,
-    }
 }
 
 fn validate_shape(

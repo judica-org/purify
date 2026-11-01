@@ -1,12 +1,14 @@
 use super::*;
 
+use bulletproofs_cycle::Cycle;
 use ff::Field;
+use golden_halo2curves::Secq256k1Cycle;
 use num_bigint::BigUint;
 
 use crate::parent_relation::{
     add_point_values, constrain_encoded_point_constant, constrain_scalar_constant,
     install_constrained_candidate_step, CandidatePendingClaimWitness,
-    CandidatePolynomialTermWitness, CandidateRootClaim, CandidateStepProofWitness,
+    CandidatePolynomialTermWitness, CandidateRootClaim, CandidateStepProofWitness, PointValue,
 };
 use crate::{proof_wire_len, prove, verify};
 

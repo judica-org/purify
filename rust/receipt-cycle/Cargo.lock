@@ -624,8 +624,7 @@ dependencies = [
 [[package]]
 name = "nova-snark"
 version = "0.76.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9bb3809a6c70057ea722c1c4fe5097cf29a3479d0b4671f3cddb1d81043bb31"
+source = "git+https://github.com/JeremyRubin/Nova?rev=9a659ee5aa761ce97b476877f2bd1de95e833da5#9a659ee5aa761ce97b476877f2bd1de95e833da5"
 dependencies = [
  "bincode",
  "bitvec",

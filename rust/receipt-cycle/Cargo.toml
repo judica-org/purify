@@ -15,7 +15,7 @@ bulletproofs-cycle = { version = "=0.4.1" }
 ff = { version = "0.13", default-features = false }
 golden-halo2curves = { version = "=0.4.1" }
 merlin = { version = "3", default-features = false }
-nova-snark = { version = "=0.76.0", default-features = false }
+nova-snark = { git = "https://github.com/JeremyRubin/Nova", rev = "9a659ee5aa761ce97b476877f2bd1de95e833da5", version = "=0.76.0", default-features = false }
 num-bigint = { version = "=0.4.8", default-features = false }
 num-traits = { version = "=0.2.19", default-features = false }
 rand_chacha = "0.3"

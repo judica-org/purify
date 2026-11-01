@@ -83,6 +83,26 @@ Final verification requires the expected step count, manifest, and index. It
 then decodes the root carried by the verified final state and passes it directly
 to the native decision. No intermediate state is an acceptance result.
 
+The version-two typed Poseidon framing is exact. `m0` is lane zero of challenge
+zero after appending, in order:
+
+```text
+BYTES("Purify/Accountable/ConstructionParentManifest/v2/init")
+U64(2)
+BYTES(construction_statement_digest32)
+BYTES(resolved_setup_record_digest32)
+BYTES(canonical_registry_seed_root545)
+U64(nonzero_payload_anchor_count_u32)
+```
+
+Step `i` uses the separate
+`Purify/Accountable/ConstructionParentManifest/v2/anchor` byte-string domain,
+then appends `FIELD(m_i)`, `FIELD(i)`, the 32-byte binding digest, scalar `d`,
+coefficient-commitment point, and anchored-offset point before taking lane zero
+of challenge zero. The verifier derives `m0`, starts only at index zero, and
+iterates the authoritative payload order; neither value is supplied by the
+prover.
+
 The secq commitment group has the secp256k1 coordinate field as its R1CS scalar
 field. Secp256k1 point arithmetic is therefore native in the parent. BP++
 scalars live modulo the secp256k1 group order and still require canonical

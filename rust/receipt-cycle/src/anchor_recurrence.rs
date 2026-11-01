@@ -14,9 +14,7 @@
 //! root prefix and x coordinate are recursive state; its y coordinate remains
 //! private but is curve- and parity-constrained here.
 
-use bulletproofs_cycle::Cycle;
 use ff::Field;
-use golden_halo2curves::Secq256k1Cycle;
 
 use crate::algebraic_circuit_norm_leaf::{
     install_manifest_bound_anchor_leaf, ManifestBoundAnchorLeaf, ManifestBoundAnchorLeafStatementV4,
@@ -25,6 +23,9 @@ use crate::algebraic_circuit_transcript::{
     CircuitCommitmentModeV4, CircuitProofTranscriptWitnessV4,
 };
 use crate::algebraic_transcript::BuilderTranscript;
+use crate::construction_manifest::{
+    CONSTRUCTION_ROOT_ROUNDS, CONSTRUCTION_STATE_ARITY, CONSTRUCTION_STEP_MANIFEST_DOMAIN,
+};
 use crate::norm_reduction::CandidateNormReductionProofWitness;
 use crate::parent_relation::{
     allocate_encoded_point, append_constant_bytes, append_encoded_point, append_scalar,
@@ -33,16 +34,15 @@ use crate::parent_relation::{
 };
 use crate::relation_builder::{Builder, Expression, StateVariable, StatefulRelation};
 use crate::secp_scalar::{
-    allocate_canonical_scalar, embedded_integer, SecpScalarVar, SecpScalarWitness,
+    allocate_canonical_scalar, canonical_scalar_value, coordinate_field_value, embedded_integer,
+    SecpScalarVar, SecpScalarWitness,
 };
 use crate::{ReceiptCycleError, Scalar};
 
-const MANIFEST_STEP_DOMAIN: &[u8] = b"Purify/Accountable/ConstructionParentManifest/v2/anchor";
 const ANCHOR_GATE_COUNT: usize = 8_192;
 const ANCHOR_NORM_LENGTH: usize = 16_384;
 const ANCHOR_LEAF_ROUNDS: usize = 14;
-const CONSTRUCTION_ROOT_ROUNDS: usize = 15;
-pub(crate) const ANCHOR_RECURRENCE_STATE_ARITY: usize = 20;
+pub(crate) const ANCHOR_RECURRENCE_STATE_ARITY: usize = CONSTRUCTION_STATE_ARITY;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AnchorRecurrenceStateWitness {
@@ -52,14 +52,12 @@ pub(crate) struct AnchorRecurrenceStateWitness {
     pub(crate) index: u32,
 }
 
-fn outer_scalar(mut bytes: [u8; 32]) -> Result<Scalar, ReceiptCycleError> {
-    bytes.reverse();
-    Secq256k1Cycle::scalar_from_canonical(&bytes)
-        .ok_or(ReceiptCycleError::Malformed("recurrence state field"))
+fn outer_scalar(bytes: [u8; 32]) -> Result<Scalar, ReceiptCycleError> {
+    coordinate_field_value(bytes)
 }
 
 fn secp_scalar_value(witness: SecpScalarWitness) -> Result<Scalar, ReceiptCycleError> {
-    outer_scalar(witness.bytes)
+    canonical_scalar_value(witness)
 }
 
 fn allocate_state_inputs(
@@ -127,7 +125,7 @@ fn install_manifest_transition(
     leaf: &ManifestBoundAnchorLeaf,
 ) -> Result<Expression, ReceiptCycleError> {
     let mut transcript = BuilderTranscript::new();
-    append_constant_bytes(&mut transcript, builder, MANIFEST_STEP_DOMAIN)?;
+    append_constant_bytes(&mut transcript, builder, CONSTRUCTION_STEP_MANIFEST_DOMAIN)?;
     transcript.append_field(builder, prior_manifest.clone());
     transcript.append_field(builder, index.clone());
     leaf.circuit_binding_digest

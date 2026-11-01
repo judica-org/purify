@@ -9,7 +9,9 @@ use crate::algebraic_circuit_norm_leaf::install_manifest_bound_anchor_leaf;
 use crate::algebraic_circuit_transcript::{
     install_transcript, CircuitPointPairWitnessV4, CircuitTranscriptShapeV4,
 };
-use crate::algebraic_transcript::NativeTranscript;
+use crate::construction_manifest::{
+    derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestStepInput,
+};
 use crate::parent_relation::{
     add_point_values, derive_candidate_folded_generator, CandidatePendingClaimWitness,
     CandidatePolynomialTermWitness, ConstrainedPendingClaim, EncodedSecpPoint, PointValue,
@@ -344,28 +346,6 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-fn native_manifest_transition(
-    prior_manifest: Scalar,
-    index: Scalar,
-    binding: [u8; 32],
-    precommitment: Scalar,
-    coefficient_commitment: SecpEncodedPointWitness,
-    anchored_offset: SecpEncodedPointWitness,
-) -> Scalar {
-    let mut transcript = NativeTranscript::new();
-    transcript.append_bytes(MANIFEST_STEP_DOMAIN);
-    transcript.append_field(prior_manifest);
-    transcript.append_field(index);
-    transcript.append_bytes(&binding);
-    transcript.append_scalar(precommitment);
-    transcript.append_point(
-        coefficient_commitment.encoded[0],
-        point_value(coefficient_commitment).x,
-    );
-    transcript.append_point(anchored_offset.encoded[0], point_value(anchored_offset).x);
-    transcript.challenge(0)[0]
-}
-
 #[test]
 fn manifest_transition_matches_native_transcript() {
     let fixture = fixture(
@@ -389,14 +369,18 @@ fn manifest_transition_matches_native_transcript() {
     let index_variable = builder.allocate(index);
     let actual = install_manifest_transition(&mut builder, &prior_variable, &index_variable, &leaf)
         .expect("manifest transition");
-    let expected = native_manifest_transition(
-        prior_manifest,
-        index,
+    let anchor = ConstructionManifestAnchor::new(
         fixture.statement.circuit_binding_digest,
-        secp_scalar_value(constrained_scalar_witness(&leaf.precommitment)).expect("precommitment"),
+        constrained_scalar_witness(&leaf.precommitment),
         fixture.witness.coefficient_commitment,
         fixture.witness.anchored_offset,
-    );
+    )
+    .expect("native manifest anchor");
+    let input =
+        ConstructionManifestStepInput::new(fixture.state.manifest, fixture.state.index, anchor)
+            .expect("native manifest input");
+    let expected = outer_scalar(derive_step_manifest(&input).expect("native manifest"))
+        .expect("manifest field");
     assert_eq!(actual.value(), expected);
     let (circuit, assignment) = builder.finish().expect("manifest relation");
     assert!(relation_satisfied(&circuit, &assignment));

@@ -27,6 +27,8 @@ mod algebraic_circuit_transcript;
 mod algebraic_transcript;
 #[allow(dead_code)]
 mod anchor_recurrence;
+#[allow(dead_code)]
+mod construction_manifest;
 mod ffi;
 // This is an internal proof-codec foundation, not a receipt parser.
 #[allow(dead_code)]

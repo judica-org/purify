@@ -27,6 +27,17 @@ pub struct SecpAffineWitness {
     pub identity: bool,
 }
 
+/// Canonical non-identity secp256k1 point with its compressed parity bit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SecpCompressedWitness {
+    /// Canonical little-endian x coordinate.
+    pub x: [u8; 32],
+    /// Canonical little-endian y coordinate used to open the point.
+    pub y: [u8; 32],
+    /// The SEC1 prefix bit: true for an odd y coordinate.
+    pub odd: bool,
+}
+
 impl SecpAffineWitness {
     /// Returns the unique identity witness.
     pub const fn identity() -> Self {
@@ -53,6 +64,16 @@ struct PointValue {
     identity: bool,
 }
 
+const SECP_FIELD_MODULUS_BE: [u8; 32] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2f,
+];
+
+fn field_modulus_bit(index: usize) -> bool {
+    let byte = SECP_FIELD_MODULUS_BE[31 - index / 8];
+    ((byte >> (index % 8)) & 1) != 0
+}
+
 fn parse_point(witness: SecpAffineWitness) -> Result<PointValue, ReceiptCycleError> {
     let x = Secq256k1Cycle::scalar_from_canonical(&witness.x)
         .ok_or(ReceiptCycleError::Malformed("noncanonical secp x"))?;
@@ -62,6 +83,14 @@ fn parse_point(witness: SecpAffineWitness) -> Result<PointValue, ReceiptCycleErr
         x,
         y,
         identity: witness.identity,
+    })
+}
+
+fn parse_compressed_point(witness: SecpCompressedWitness) -> Result<PointValue, ReceiptCycleError> {
+    parse_point(SecpAffineWitness {
+        x: witness.x,
+        y: witness.y,
+        identity: false,
     })
 }
 
@@ -92,6 +121,51 @@ fn allocate_point(builder: &mut Builder, value: PointValue) -> SecpPoint {
         identity,
         witness: value,
     }
+}
+
+fn canonical_field_bits(builder: &mut Builder, value: &Expression) -> Vec<Expression> {
+    let encoded = Secq256k1Cycle::scalar_to_canonical(&value.value());
+    let mut bits = Vec::with_capacity(256);
+    let mut reconstructed = Expression::constant(Scalar::ZERO);
+    let mut coefficient = Scalar::ONE;
+    for index in 0..256 {
+        let bit = ((encoded[index / 8] >> (index % 8)) & 1) != 0;
+        let bit = builder.allocate_boolean(bit);
+        reconstructed = reconstructed.add(&bit.clone().scale(coefficient));
+        coefficient = coefficient + coefficient;
+        bits.push(bit);
+    }
+    builder.constrain_equal(&reconstructed, value);
+
+    // Equality modulo p alone would also permit the 256-bit integer value+p.
+    // Constraining the decomposition below p makes the low parity bit unique.
+    let one = Expression::constant(Scalar::ONE);
+    let mut equal = one.clone();
+    let mut less = Expression::constant(Scalar::ZERO);
+    for index in (0..256).rev() {
+        let equal_and_bit = builder.multiply(&equal, &bits[index]);
+        if field_modulus_bit(index) {
+            less = less.add(&equal.clone().sub(&equal_and_bit));
+            equal = equal_and_bit;
+        } else {
+            builder.constrain_zero(equal_and_bit.clone());
+            equal = equal.sub(&equal_and_bit);
+        }
+    }
+    builder.constrain_equal(&less, &one);
+    bits
+}
+
+fn allocate_compressed_point(
+    builder: &mut Builder,
+    witness: SecpCompressedWitness,
+) -> Result<SecpPoint, ReceiptCycleError> {
+    let point = allocate_point(builder, parse_compressed_point(witness)?);
+    builder.constrain_zero(point.identity.clone());
+    let y_bits = canonical_field_bits(builder, &point.y);
+    let odd = builder.allocate_boolean(witness.odd);
+    builder.constrain_equal(&odd, &y_bits[0]);
+    Ok(point)
 }
 
 fn inverse_or_zero(value: Scalar) -> Scalar {
@@ -221,6 +295,19 @@ fn add_points(builder: &mut Builder, left: &SecpPoint, right: &SecpPoint) -> Sec
     output
 }
 
+/// Builds the canonical compressed-point relation used by parent transcripts.
+///
+/// The private y coordinate must open a non-identity secp256k1 point and its
+/// canonical integer decomposition must have the advertised SEC1 parity. The
+/// circuit shape is independent of the point and parity witnesses.
+pub fn build_secp_compressed_point_relation(
+    witness: SecpCompressedWitness,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    let mut builder = Builder::default();
+    let _point = allocate_compressed_point(&mut builder, witness)?;
+    builder.finish()
+}
+
 /// Builds a native-field secp256k1 addition relation.
 ///
 /// This narrow constructor exists so the complete exceptional-case group
@@ -292,6 +379,23 @@ mod tests {
         }
     }
 
+    fn compressed(point: SecpAffineWitness, odd: bool) -> SecpCompressedWitness {
+        assert!(!point.identity);
+        SecpCompressedWitness {
+            x: point.x,
+            y: point.y,
+            odd,
+        }
+    }
+
+    fn prove_compressed_point(witness: SecpCompressedWitness) -> Result<(), ReceiptCycleError> {
+        let (circuit, assignment) = build_secp_compressed_point_relation(witness)?;
+        let statement = b"secp compressed-point foundation";
+        let proof = prove(&circuit, &assignment, statement, [0x92; 32])?;
+        assert_eq!(proof.len(), proof_wire_len(&circuit)?);
+        verify(&circuit, statement, &proof)
+    }
+
     fn prove_relation(
         left: SecpAffineWitness,
         right: SecpAffineWitness,
@@ -318,6 +422,36 @@ mod tests {
             SecpAffineWitness::identity(),
         )
         .expect("both identity");
+    }
+
+    #[test]
+    fn compressed_point_binds_canonical_y_parity() {
+        let even = compressed(generator(), false);
+        let odd = compressed(negate(generator()), true);
+        prove_compressed_point(even).expect("even generator");
+        prove_compressed_point(odd).expect("odd negated generator");
+
+        let mut wrong_parity = even;
+        wrong_parity.odd = true;
+        assert!(prove_compressed_point(wrong_parity).is_err());
+
+        let (even_circuit, _) = build_secp_compressed_point_relation(even).expect("even circuit");
+        let (odd_circuit, _) = build_secp_compressed_point_relation(odd).expect("odd circuit");
+        assert_eq!(even_circuit, odd_circuit);
+        assert_eq!(
+            crate::Circuit::parse(&even_circuit)
+                .expect("circuit")
+                .gate_count,
+            522
+        );
+        assert_eq!(proof_wire_len(&even_circuit).expect("proof size"), 1085);
+    }
+
+    #[test]
+    fn compressed_point_rejects_noncanonical_coordinates() {
+        let mut noncanonical = compressed(generator(), false);
+        noncanonical.y = [0xff; 32];
+        assert!(build_secp_compressed_point_relation(noncanonical).is_err());
     }
 
     #[test]

@@ -2,16 +2,17 @@
 
 This document fixes the selected boundary between the transparent secq parent
 proof and the native BP++ accumulator. It is an implementation map, not a claim
-that construction receipts are accepted yet.
+that construction receipts are accepted yet. It does not select the
+recursive proof backend.
 
 The parent must authenticate independently published anchor-escrow proofs. The
 assembler learns no anchor or coalition secret. Child proof payloads, norm
 reduction proofs, and accumulation transitions are witnesses to the parent and
 can disappear after the final receipt is published.
 
-## Acceptance rule
+## Target acceptance rule
 
-A construction receipt is accepted only when both checks succeed:
+A future receipt may be accepted only when both checks succeed:
 
 1. the secq parent proof verifies for the exact construction payload,
    registry-resolved setup-record digest and setup statement, resolved anchor
@@ -178,6 +179,45 @@ The version-one descriptor's 16-entry limit is therefore a partition
 bound, not a flat-circuit capacity. It requires an authenticated proof
 tree within the descriptor or a new measured partition version; native
 equation batching alone retains every child proof.
+
+## Recursive backend feasibility
+
+An isolated Nova 0.76 probe folds a one-gate canonical R1CS relation for
+two steps over the secq/secp cycle and compresses it with transparent
+Spartan IPA. The Release measurement was:
+
+| Operation | Time |
+| --- | ---: |
+| Public parameters | 1.205 s |
+| Recursive fold | 93.8 ms |
+| Recursive verification | 60.8 ms |
+| Compressed setup | 77.9 ms |
+| Compression | 2.623 s |
+| Compressed verification | 51.2 ms |
+
+The timed test took 4.12 seconds after an 8 minute 29 second Release
+compile. A deliberately noncanonical bincode serialization of the
+compressed object was 10,660 bytes. It is an in-memory shape
+observation, not a receipt codec or accepted proof encoding. Even this
+tiny relation is about 5-10 times the 1-2 KB parent-proof target before
+the production relation, manifest, or root binding. Peak RSS was not
+measured because
+the sandbox denied the system query used by `/usr/bin/time -l`.
+
+Nova folds one fixed R1CS matrix. The current public setup and hidden
+anchor V4 leaves have different shapes. Per-child statement constants
+are baked into their matrix coefficients. A production recurrence must
+make varying constants witnessed values constrained to the manifest and
+then either:
+
+1. seed homogeneous anchor steps from a registry-authenticated setup
+   root; or
+2. redesign and pad both leaf types into one fixed shape.
+
+Neither design is selected. The probe does not implement the V4 leaves,
+construction manifest, accumulated root, native final decision, or a
+construction receipt. Nova is feasible as transparent folding machinery,
+but it is not the selected or accepted receipt backend.
 
 ## Why the final MSM stays native
 

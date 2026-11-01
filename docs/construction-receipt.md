@@ -340,7 +340,9 @@ public recovery, custody and privacy guarantees before replacing it.
    Reduction verification and final `decide()` remain mandatory.
 4. Remaining: choose and review the parent relation/backend. Implement canonical
    child parsing, transcript replay and constrained curve verification; benchmark
-   one setup plus two encryption children before scaling to 100.
+   one setup plus two encryption children before scaling to 100. The
+   green Nova probe is isolated feasibility evidence, not a backend
+   selection.
 5. Remaining: establish composition and correlated-key privacy security,
    implement distributed setup/proving, and integrate accepted certificate
    recovery with the registry and Bitcoin punishment path before enrollment.

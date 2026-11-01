@@ -330,6 +330,13 @@ mod tests {
 
     use crate::{poseidon, proof_wire_len, prove, verify, ReceiptCycleError, Scalar};
 
+    fn decode_hex<const SIZE: usize>(value: &str) -> [u8; SIZE] {
+        assert_eq!(value.len(), 2 * SIZE);
+        array::from_fn(|index| {
+            u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).expect("hex")
+        })
+    }
+
     #[derive(Clone)]
     struct Probe {
         field: Scalar,
@@ -509,6 +516,42 @@ mod tests {
         assert_ne!(opening_base, first);
         assert_ne!(opening_base, joined.opening_base_scalar([0x31; 32], 2));
         assert_ne!(opening_base, joined.opening_base_scalar([0x32; 32], 1));
+    }
+
+    #[test]
+    fn native_transcript_matches_cross_language_vectors() {
+        let vectors = include_str!("../tests/vectors/algebraic_transcript_v1.txt");
+        for line in vectors.lines().filter(|line| line.starts_with("vector ")) {
+            let words: Vec<_> = line.split_ascii_whitespace().collect();
+            assert_eq!(words.len(), 7);
+            let seed = words[1].parse::<u64>().expect("seed");
+            let basis_digest = decode_hex::<32>(words[2]);
+
+            let mut transcript = NativeTranscript::new();
+            transcript.append_field(Scalar::from(seed + 1));
+            transcript.append_scalar(Scalar::from(seed + 2));
+            transcript.append_point(2 + (seed as u8 & 1), Scalar::from(seed + 3));
+            transcript.append_point_pair(
+                seed as u8 & 3,
+                Scalar::from(seed + 4),
+                Scalar::from(seed + 5),
+            );
+            let bytes = (0..33)
+                .map(|index| (seed as u8).wrapping_add(index as u8))
+                .collect::<Vec<_>>();
+            transcript.append_bytes(&bytes);
+            transcript.append_u64(seed + 6);
+
+            let expected = |word: &str| integer_from_be(&decode_hex::<32>(word));
+            assert_eq!(
+                transcript.challenge(seed + 7),
+                [expected(words[3]), expected(words[4])]
+            );
+            assert_eq!(
+                transcript.opening_base_scalar(basis_digest, 1 + (seed & 1)),
+                [expected(words[5]), expected(words[6])]
+            );
+        }
     }
 
     #[test]

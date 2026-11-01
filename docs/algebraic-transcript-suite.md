@@ -73,6 +73,12 @@ b214b9440fa5cb193ab6bc98fad114eaad5da447dc61629c03ab1805328945d5
 The cross-language permutation vectors live in
 `rust/receipt-cycle/tests/vectors/poseidon_secp256k1_p.txt`.
 
+The native C++ candidate uses a dedicated canonical coordinate-field value.
+It does not reuse `FieldElement`, whose arithmetic is modulo the secp256k1
+group order `n`. The native layer accepts only 32-byte big-endian integers
+below `p`; its variable-time arithmetic is restricted to public transcript
+data.
+
 Primary references:
 
 - Grassi et al., *POSEIDON: A New Hash Function for Zero-Knowledge Proof
@@ -107,13 +113,18 @@ counter, or canonical encoding flag. The candidate type constants are:
 |---|---:|---|
 | Coordinate-field element | `0x4649454c` | `FIEL` |
 | secp256k1 scalar | `0x5343414c` | `SCAL` |
+| SEC1 point | `0x504f494e` | `POIN` |
 | BPPP point pair | `0x50414952` | `PAIR` |
 | Byte string | `0x42595445` | `BYTE` |
 | `u64` | `0x55363420` | `U64 ` |
 | Challenge request | `0x4348414c` | `CHAL` |
+| Opening-base request | `0x4f424153` | `OBAS` |
 
 Candidate item encodings are:
 
+- A SEC1 point absorbs a header whose auxiliary value is its canonical prefix,
+  followed by its coordinate-field x value. The identity is `(prefix, x) =
+  (0, 0)`; ordinary compressed points use prefix 2 or 3.
 - A BPPP point pair absorbs a header whose auxiliary value is the canonical
   two-bit parity byte, followed by the two coordinate-field x values. An all
   zero x value with a zero parity bit retains the existing infinity encoding.
@@ -135,11 +146,24 @@ Item type, byte length, item boundary, point parity, and challenge index all
 change the squeeze. This remains candidate behavior and must not become an
 accepted wire format before the complete migration review.
 
+The full native transcript vectors cover a coordinate-field value, scalar,
+SEC1 point, BPPP point pair, 33-byte string, `u64`, ordinary challenge, and
+opening-base squeeze. The shared records live at
+`rust/receipt-cycle/tests/vectors/algebraic_transcript_v1.txt`; Rust parses that
+file and C++ asserts the identical records. The independent Python generator
+and checker is `tests/reference_poseidon_transcript.py`.
+
 To derive a challenge, clone the current sponge, absorb a suite-specific
 challenge header with the round index in `auxiliary`, then append field padding
 `1, 0*` through the next rate boundary. Permute and take both rate lanes as
 ordered candidates. The append-only main transcript remains unchanged, which
 matches the current BPPP clone-and-index SHA behavior.
+
+An opening-base request instead clones the transcript, appends the 32-byte
+basis digest as one typed `BYTE` item, absorbs an `OBAS` header with the role in
+`auxiliary`, and applies the same `1, 0*` padding. Its two output lanes feed the
+same unbiased scalar selection rule below. This domain cannot collide with an
+ordinary challenge request, a raw byte item, or another opening role.
 
 ## Reduction to a nonzero secp256k1 scalar
 

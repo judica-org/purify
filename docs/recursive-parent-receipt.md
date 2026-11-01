@@ -102,11 +102,13 @@ SHA multipliers per anchor before point, scalar, reduction, or transition
 constraints. This is a correct fallback relation, but it does not meet the
 hundred-member production budget. The child transcript suite therefore needs
 either a reviewed recursion-friendly replacement or a proof tree with a
-measured bounded fan-in before activation. The existing SHA-based proof format
-remains the only accepted format until a replacement has complete prover,
-verifier, cross-suite rejection, and security tests. Because the protocol is
-pre-release, that migration should replace the suite cleanly rather than add a
-permanent compatibility path.
+measured bounded fan-in before activation. The
+[fixed-fan-in batch statements](construction-receipt-batches.md) now define a
+canonical 16-entry partition boundary, but do not yet supply its parent proof.
+The existing SHA-based proof format remains the only accepted format until a
+replacement has complete prover, verifier, cross-suite rejection, and security
+tests. Because the protocol is pre-release, that migration should replace the
+suite cleanly rather than add a permanent compatibility path.
 
 The native candidate Poseidon permutation is reproducible from the pinned
 parameter generator and cross-language vectors. Its exact Secq R1CS gadget uses

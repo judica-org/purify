@@ -29,6 +29,8 @@ mod algebraic_transcript;
 mod anchor_recurrence;
 #[allow(dead_code)]
 mod construction_manifest;
+#[allow(dead_code)]
+mod construction_parent_input;
 // This authenticates a pending construction root. Native decide remains
 // mandatory before receipt acceptance.
 #[allow(dead_code)]

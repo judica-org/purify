@@ -121,16 +121,16 @@ The candidate parent relation now composes those foundations through one
 complete public accumulation transition. It fixes the basis digest and claim
 shape in the regenerated circuit, absorbs every ordered claim point and compact
 polynomial, selects `beta`, constrains the batched claim MSM, selects `x`, and
-constrains the compact polynomial evaluation `y`. It then absorbs a fixed
-opening base, derives every IPA round challenge, checks the complete short MSM
-equation, and binds the resulting folded point, scale, and factors to root-claim
-circuit constants. Identity round points remain valid; the opening base is
-required to be finite. Shapes are capped at 1,024 claims and 24 rounds. The
-claim cap covers the setup plus the required 100-anchor construction while
-bounding host allocation; the round cap follows the current backend limit.
-The one-claim, one-round end-to-end probe uses 140,295 gates and a 1,613-byte
-transparent proof. This is a composition check, not a production 15-round or
-100-anchor size estimate.
+constrains the compact polynomial evaluation `y`. It then derives the exact
+role-separated `U0 + u U1` opening base from that post-claim transcript,
+absorbs the result, derives every IPA round challenge, checks the complete
+short MSM equation, and binds the resulting folded point, scale, and factors
+to root-claim circuit constants. Identity round points remain valid. Shapes
+are capped at 1,024 claims and 24 rounds. The claim cap covers the setup plus
+the required 100-anchor construction while bounding host allocation; the
+round cap follows the current backend limit. The one-claim, one-round
+end-to-end probe uses 109,600 gates and a 1,547-byte transparent proof. This
+is a composition check, not a production 15-round or 100-anchor size estimate.
 
 This transition uses the separate
 `Purify/BPPP/CandidateAccumStep/v1` Poseidon transcript. It is not compatible
@@ -142,11 +142,10 @@ domain-separated constants per basis and role, samples a nonzero transcript
 scalar only after the opening claim is fixed, and constrains
 `U = U0 + u U1`. This remains a V2 candidate until the native reduction and
 step suites use the identical transcript and reject cross-version proofs.
-The standalone relation is implemented and cross-checked against the vendored
-native map, but the candidate step still receives its opening base as a circuit
-constant. Those relations must be composed so no caller can substitute an
-arbitrary finite point. Native transcript migration, child reductions, and
-final decision binding must also be composed before any acceptance API exists.
+The standalone relation is cross-checked against the vendored native map and
+is now composed directly into the candidate step; no caller supplies an
+opening point. Native transcript migration, child reductions, and final
+decision binding must still be composed before any acceptance API exists.
 
 ## Why the final MSM stays native
 

@@ -14,6 +14,8 @@
 
 namespace purify::accountable {
 
+class AnchorEscrowAccumulator;
+
 /**
  * Digest of the application statement protected by one anchor escrow.
  *
@@ -88,6 +90,7 @@ private:
         const RecoveryBoundSigningRoster&, const UInt512&,
         const AnchorEscrowContextDigest&, const AnchorEscrowRecord&,
         purify_secp_context*, bppp::ExperimentalCircuitBackend*);
+    friend class AnchorEscrowAccumulator;
 };
 
 static_assert(AnchorEscrowRecord::kProofPayloadSize ==

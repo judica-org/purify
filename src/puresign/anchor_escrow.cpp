@@ -3,6 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include "purify/puresign/anchor_escrow.hpp"
+#include "purify/puresign/anchor_escrow_accumulation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -756,6 +757,51 @@ Result<bool> verify_anchor_escrow(
     const auto proof = record.circuit_proof();
     return bppp::verify_experimental_circuit_zk_norm_arg(
         circuit, proof, secp_context, binding, cache);
+}
+
+Result<AnchorEscrowAccumulator> AnchorEscrowAccumulator::create(
+    purify_secp_context* secp_context) {
+    static_assert(AnchorEscrowRecord::kInnerProofSize == 65 * 14 + 64);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto basis,
+        bppp::accumulation::Basis::create(
+            kNormVectorLength, kNormVectorLength,
+            "Purify/Accountable/AnchorEscrowAccumulation/v1",
+            secp_context),
+        "anchor_escrow_accumulation:basis");
+    return AnchorEscrowAccumulator(std::move(basis));
+}
+
+Result<bppp::accumulation::PreparedNorm>
+AnchorEscrowAccumulator::prepare(
+    const RecoveryBoundSigningRoster& roster,
+    const UInt512& advertised_anchor_root,
+    const AnchorEscrowContextDigest& context_digest,
+    const AnchorEscrowRecord& record,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) const {
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(secp_context,
+                             "anchor_escrow_accumulation:prepare"),
+        "anchor_escrow_accumulation:prepare");
+    PURIFY_RETURN_IF_ERROR(
+        require_roster(roster, "anchor_escrow_accumulation:empty_roster"),
+        "anchor_escrow_accumulation:roster");
+    PURIFY_RETURN_IF_ERROR(record.validate_encoding(secp_context),
+                           "anchor_escrow_accumulation:record");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& circuit,
+        public_escrow_circuit(roster.recovery_root(),
+                              advertised_anchor_root, record.ciphertext_),
+        "anchor_escrow_accumulation:circuit");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& binding,
+        escrow_binding(roster, advertised_anchor_root, context_digest,
+                       record.ciphertext_),
+        "anchor_escrow_accumulation:binding");
+    return bppp::accumulation::prepare_experimental_circuit_zk_norm_arg(
+        basis_, circuit, record.circuit_proof(), secp_context, binding,
+        cache);
 }
 
 Result<GeneratedKey> recover_escrowed_anchor(

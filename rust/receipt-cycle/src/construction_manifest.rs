@@ -19,34 +19,35 @@ use crate::{ReceiptCycleError, Scalar};
 pub(crate) const CONSTRUCTION_ROOT_ROUNDS: usize = 15;
 pub(crate) const CONSTRUCTION_ROOT_STATE_ARITY: usize = 3 + CONSTRUCTION_ROOT_ROUNDS;
 pub(crate) const CONSTRUCTION_STATE_ARITY: usize = CONSTRUCTION_ROOT_STATE_ARITY + 2;
-pub(crate) const CONSTRUCTION_SEED_ROOT_BYTES: usize = 33 + 32 + 32 * CONSTRUCTION_ROOT_ROUNDS;
+pub(crate) const CONSTRUCTION_ROOT_BYTES: usize = 33 + 32 + 32 * CONSTRUCTION_ROOT_ROUNDS;
 const CONSTRUCTION_RELATION_VERSION: u64 = 2;
 const CONSTRUCTION_INITIAL_MANIFEST_DOMAIN: &[u8] =
     b"Purify/Accountable/ConstructionParentManifest/v2/init";
 pub(crate) const CONSTRUCTION_STEP_MANIFEST_DOMAIN: &[u8] =
     b"Purify/Accountable/ConstructionParentManifest/v2/anchor";
 
-/// Canonical registry seed for the fixed 32,768-point construction basis.
+/// Canonical pending root for the fixed 32,768-point construction basis.
 ///
-/// Registration is responsible for verifying and deciding this root. This
-/// type establishes only its exact one-term encoding and state conversion.
+/// This type establishes only the exact one-term encoding shared by the
+/// registry seed and proof-authenticated final state. Parsing or constructing
+/// one does not verify or decide the represented accumulation obligation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ConstructionRegistrySeedRoot {
-    encoded: [u8; CONSTRUCTION_SEED_ROOT_BYTES],
+pub(crate) struct ConstructionRoot {
+    encoded: [u8; CONSTRUCTION_ROOT_BYTES],
     claim: CandidateRootClaim,
 }
 
-impl ConstructionRegistrySeedRoot {
+impl ConstructionRoot {
     pub(crate) fn parse(encoded: &[u8]) -> Result<Self, ReceiptCycleError> {
-        let encoded: [u8; CONSTRUCTION_SEED_ROOT_BYTES] = encoded
+        let encoded: [u8; CONSTRUCTION_ROOT_BYTES] = encoded
             .try_into()
-            .map_err(|_| ReceiptCycleError::Malformed("construction seed root size"))?;
-        let point = decode_seed_point(encoded[..33].try_into().expect("fixed point slice"))?;
-        let scale = parse_seed_scalar(encoded[33..65].try_into().expect("fixed root scale slice"))?;
+            .map_err(|_| ReceiptCycleError::Malformed("construction root size"))?;
+        let point = decode_root_point(encoded[..33].try_into().expect("fixed point slice"))?;
+        let scale = parse_root_scalar(encoded[33..65].try_into().expect("fixed root scale slice"))?;
         let mut factors = Vec::with_capacity(CONSTRUCTION_ROOT_ROUNDS);
         for index in 0..CONSTRUCTION_ROOT_ROUNDS {
             let offset = 65 + 32 * index;
-            factors.push(parse_seed_scalar(
+            factors.push(parse_root_scalar(
                 encoded[offset..offset + 32]
                     .try_into()
                     .expect("fixed root factor slice"),
@@ -60,7 +61,42 @@ impl ConstructionRegistrySeedRoot {
         Ok(Self { encoded, claim })
     }
 
-    fn canonical_bytes(&self) -> &[u8; CONSTRUCTION_SEED_ROOT_BYTES] {
+    /// Reconstructs the unique root encoding from authenticated state fields.
+    pub(crate) fn from_state_fields(
+        fields: [Scalar; CONSTRUCTION_ROOT_STATE_ARITY],
+    ) -> Result<Self, ReceiptCycleError> {
+        let prefix = if fields[0] == Scalar::ZERO {
+            0
+        } else if fields[0] == Scalar::from(2) {
+            2
+        } else if fields[0] == Scalar::from(3) {
+            3
+        } else {
+            return Err(ReceiptCycleError::Malformed(
+                "construction root point prefix",
+            ));
+        };
+
+        let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
+        if prefix == 0 {
+            if fields[1] != Scalar::ZERO {
+                return Err(ReceiptCycleError::Malformed(
+                    "construction root identity point",
+                ));
+            }
+        } else {
+            encoded[0] = prefix;
+            encoded[1..33].copy_from_slice(&field_to_be(fields[1]));
+        }
+        encoded[33..65].copy_from_slice(&field_to_be(fields[2]));
+        for (index, field) in fields[3..].iter().enumerate() {
+            let offset = 65 + 32 * index;
+            encoded[offset..offset + 32].copy_from_slice(&field_to_be(*field));
+        }
+        Self::parse(&encoded)
+    }
+
+    pub(crate) fn canonical_bytes(&self) -> &[u8; CONSTRUCTION_ROOT_BYTES] {
         &self.encoded
     }
 
@@ -68,11 +104,7 @@ impl ConstructionRegistrySeedRoot {
         self.claim.clone()
     }
 
-    /// Converts the registry seed into the recurrence's exact root prefix.
-    ///
-    /// This deliberately has no inverse final-root serializer. Compressed
-    /// proof verification owns the final state and passes its root directly
-    /// to the native decision path.
+    /// Converts this root into the recurrence's exact public-state prefix.
     pub(crate) fn state_fields(
         &self,
     ) -> Result<[Scalar; CONSTRUCTION_ROOT_STATE_ARITY], ReceiptCycleError> {
@@ -93,7 +125,7 @@ impl ConstructionRegistrySeedRoot {
 pub(crate) struct ConstructionManifestSeed {
     construction_statement_digest: [u8; 32],
     resolved_setup_record_digest: [u8; 32],
-    root: ConstructionRegistrySeedRoot,
+    root: ConstructionRoot,
     payload_anchor_count: u32,
 }
 
@@ -101,7 +133,7 @@ impl ConstructionManifestSeed {
     pub(crate) fn new(
         construction_statement_digest: [u8; 32],
         resolved_setup_record_digest: [u8; 32],
-        root: ConstructionRegistrySeedRoot,
+        root: ConstructionRoot,
         payload_anchor_count: u64,
     ) -> Result<Self, ReceiptCycleError> {
         if resolved_setup_record_digest == [0; 32] {
@@ -303,19 +335,19 @@ pub(crate) fn derive_step_manifest(
     Ok(field_to_be(transcript.challenge(0)[0]))
 }
 
-fn decode_seed_point(encoded: [u8; 33]) -> Result<SecpEncodedPointWitness, ReceiptCycleError> {
+fn decode_root_point(encoded: [u8; 33]) -> Result<SecpEncodedPointWitness, ReceiptCycleError> {
     if encoded == [0; 33] {
         return Ok(SecpEncodedPointWitness::identity());
     }
     if encoded[0] != 2 && encoded[0] != 3 {
         return Err(ReceiptCycleError::Malformed(
-            "construction seed point prefix",
+            "construction root point prefix",
         ));
     }
     let x = coordinate_field_value(encoded[1..].try_into().expect("fixed x slice"))?;
     let rhs = x.square() * x + Scalar::from(7);
     let mut y = Option::<Scalar>::from(rhs.sqrt())
-        .ok_or(ReceiptCycleError::Malformed("construction seed point"))?;
+        .ok_or(ReceiptCycleError::Malformed("construction root point"))?;
     let want_odd = encoded[0] & 1;
     if Secq256k1Cycle::scalar_to_canonical(&y)[0] & 1 != want_odd {
         y = -y;
@@ -323,7 +355,7 @@ fn decode_seed_point(encoded: [u8; 33]) -> Result<SecpEncodedPointWitness, Recei
     let y = Secq256k1Cycle::scalar_to_canonical(&y);
     if y[0] & 1 != want_odd {
         return Err(ReceiptCycleError::Malformed(
-            "construction seed point parity",
+            "construction root point parity",
         ));
     }
     let point = SecpEncodedPointWitness { encoded, y };
@@ -331,7 +363,7 @@ fn decode_seed_point(encoded: [u8; 33]) -> Result<SecpEncodedPointWitness, Recei
     Ok(point)
 }
 
-fn parse_seed_scalar(bytes: [u8; 32]) -> Result<SecpScalarWitness, ReceiptCycleError> {
+fn parse_root_scalar(bytes: [u8; 32]) -> Result<SecpScalarWitness, ReceiptCycleError> {
     let witness = SecpScalarWitness::from_bytes_be(bytes);
     canonical_scalar_value(witness)?;
     Ok(witness)

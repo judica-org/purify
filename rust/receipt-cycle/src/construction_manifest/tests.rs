@@ -27,12 +27,12 @@ fn generator() -> SecpEncodedPointWitness {
     }
 }
 
-fn put_u64_scalar(encoded: &mut [u8; CONSTRUCTION_SEED_ROOT_BYTES], offset: usize, value: u64) {
+fn put_u64_scalar(encoded: &mut [u8; CONSTRUCTION_ROOT_BYTES], offset: usize, value: u64) {
     encoded[offset + 24..offset + 32].copy_from_slice(&value.to_be_bytes());
 }
 
-fn seed_bytes() -> [u8; CONSTRUCTION_SEED_ROOT_BYTES] {
-    let mut encoded = [0; CONSTRUCTION_SEED_ROOT_BYTES];
+fn seed_bytes() -> [u8; CONSTRUCTION_ROOT_BYTES] {
+    let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
     encoded[..33].copy_from_slice(&generator().encoded);
     put_u64_scalar(&mut encoded, 33, 1);
     for index in 0..CONSTRUCTION_ROOT_ROUNDS {
@@ -41,8 +41,8 @@ fn seed_bytes() -> [u8; CONSTRUCTION_SEED_ROOT_BYTES] {
     encoded
 }
 
-fn seed_root() -> ConstructionRegistrySeedRoot {
-    ConstructionRegistrySeedRoot::parse(&seed_bytes()).expect("canonical registry seed")
+fn seed_root() -> ConstructionRoot {
+    ConstructionRoot::parse(&seed_bytes()).expect("canonical registry seed")
 }
 
 fn manifest_seed(count: u64) -> ConstructionManifestSeed {
@@ -66,8 +66,9 @@ fn anchor(
 
 #[test]
 fn registry_seed_is_byte_identical_and_maps_to_18_fields() {
+    assert_eq!(CONSTRUCTION_ROOT_BYTES, 545);
     let encoded = seed_bytes();
-    let root = ConstructionRegistrySeedRoot::parse(&encoded).expect("registry seed");
+    let root = ConstructionRoot::parse(&encoded).expect("registry seed");
     assert_eq!(root.canonical_bytes(), &encoded);
     assert_eq!(root.claim.point, generator());
     assert_eq!(root.claim.factors.len(), CONSTRUCTION_ROOT_ROUNDS);
@@ -83,56 +84,89 @@ fn registry_seed_is_byte_identical_and_maps_to_18_fields() {
     for index in 0..CONSTRUCTION_ROOT_ROUNDS {
         assert_eq!(fields[3 + index], Scalar::from(index as u64 + 2));
     }
+    let reconstructed =
+        ConstructionRoot::from_state_fields(fields).expect("root reconstructed from fields");
+    assert_eq!(reconstructed, root);
+    assert_eq!(reconstructed.canonical_bytes(), &encoded);
 
     let mut odd_encoded = encoded;
     odd_encoded[0] = 3;
-    let odd = ConstructionRegistrySeedRoot::parse(&odd_encoded).expect("odd root point");
+    let odd = ConstructionRoot::parse(&odd_encoded).expect("odd root point");
     assert_eq!(odd.claim.point.y[0] & 1, 1);
     assert_eq!(
         odd.state_fields().expect("odd root fields")[0],
         Scalar::from(3)
     );
+    assert_eq!(
+        ConstructionRoot::from_state_fields(odd.state_fields().expect("odd root fields"))
+            .expect("odd root reconstructed")
+            .canonical_bytes(),
+        &odd_encoded
+    );
 }
 
 #[test]
 fn registry_seed_parser_rejects_noncanonical_root_encodings() {
-    assert!(
-        ConstructionRegistrySeedRoot::parse(&seed_bytes()[..CONSTRUCTION_SEED_ROOT_BYTES - 1])
-            .is_err()
-    );
+    assert!(ConstructionRoot::parse(&seed_bytes()[..CONSTRUCTION_ROOT_BYTES - 1]).is_err());
 
     let mut bad_prefix = seed_bytes();
     bad_prefix[0] = 4;
-    assert!(ConstructionRegistrySeedRoot::parse(&bad_prefix).is_err());
+    assert!(ConstructionRoot::parse(&bad_prefix).is_err());
 
     let mut identity = seed_bytes();
     identity[..33].fill(0);
-    let identity = ConstructionRegistrySeedRoot::parse(&identity).expect("identity root point");
+    let identity = ConstructionRoot::parse(&identity).expect("identity root point");
+    let identity_fields = identity.state_fields().expect("identity root fields");
+    assert_eq!(&identity_fields[..2], &[Scalar::ZERO, Scalar::ZERO]);
     assert_eq!(
-        &identity.state_fields().expect("identity root fields")[..2],
-        &[Scalar::ZERO, Scalar::ZERO]
+        ConstructionRoot::from_state_fields(identity_fields)
+            .expect("identity root reconstructed")
+            .canonical_bytes(),
+        identity.canonical_bytes()
     );
 
     let mut noncanonical_identity = seed_bytes();
     noncanonical_identity[0] = 0;
-    assert!(ConstructionRegistrySeedRoot::parse(&noncanonical_identity).is_err());
+    assert!(ConstructionRoot::parse(&noncanonical_identity).is_err());
 
     let mut bad_x = seed_bytes();
     bad_x[1..33].copy_from_slice(&SECP_FIELD);
-    assert!(ConstructionRegistrySeedRoot::parse(&bad_x).is_err());
+    assert!(ConstructionRoot::parse(&bad_x).is_err());
 
     // x = 0 is canonical, but x^3 + 7 is a nonsquare modulo secp256k1 p.
     let mut nonsquare_x = seed_bytes();
     nonsquare_x[1..33].fill(0);
-    assert!(ConstructionRegistrySeedRoot::parse(&nonsquare_x).is_err());
+    assert!(ConstructionRoot::parse(&nonsquare_x).is_err());
 
     let mut bad_scale = seed_bytes();
     bad_scale[33..65].copy_from_slice(&SECP_ORDER);
-    assert!(ConstructionRegistrySeedRoot::parse(&bad_scale).is_err());
+    assert!(ConstructionRoot::parse(&bad_scale).is_err());
 
     let mut bad_factor = seed_bytes();
     bad_factor[65..97].copy_from_slice(&SECP_ORDER);
-    assert!(ConstructionRegistrySeedRoot::parse(&bad_factor).is_err());
+    assert!(ConstructionRoot::parse(&bad_factor).is_err());
+
+    let fields = seed_root().state_fields().expect("canonical root fields");
+    let mut invalid_prefix = fields;
+    invalid_prefix[0] = Scalar::from(4);
+    assert!(ConstructionRoot::from_state_fields(invalid_prefix).is_err());
+
+    let mut invalid_identity = fields;
+    invalid_identity[0] = Scalar::ZERO;
+    assert!(ConstructionRoot::from_state_fields(invalid_identity).is_err());
+
+    let mut nonsquare_point = fields;
+    nonsquare_point[1] = Scalar::ZERO;
+    assert!(ConstructionRoot::from_state_fields(nonsquare_point).is_err());
+
+    let noncanonical_scalar = coordinate_field_value(SECP_ORDER).expect("group order below field");
+    let mut noncanonical_scale = fields;
+    noncanonical_scale[2] = noncanonical_scalar;
+    assert!(ConstructionRoot::from_state_fields(noncanonical_scale).is_err());
+
+    let mut noncanonical_factor = fields;
+    noncanonical_factor[3] = noncanonical_scalar;
+    assert!(ConstructionRoot::from_state_fields(noncanonical_factor).is_err());
 }
 
 #[test]
@@ -174,7 +208,7 @@ fn initial_manifest_binds_statement_setup_root_and_count() {
     let changed_root = ConstructionManifestSeed::new(
         [0x31; 32],
         [0x52; 32],
-        ConstructionRegistrySeedRoot::parse(&changed_root_bytes).expect("changed root"),
+        ConstructionRoot::parse(&changed_root_bytes).expect("changed root"),
         2,
     )
     .expect("changed root seed")

@@ -9,9 +9,11 @@ use crate::algebraic_circuit_transcript::{
     install_transcript, CircuitPointPairWitnessV4, CircuitTranscriptShapeV4,
 };
 use crate::construction_manifest::{
-    derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestStepInput,
+    derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestSeed,
+    ConstructionManifestStepInput, ConstructionRegistrySeedRoot, CONSTRUCTION_ROOT_STATE_ARITY,
+    CONSTRUCTION_SEED_ROOT_BYTES,
 };
-use crate::direct_nova::{direct_nova_raw_metrics, DirectNovaTemplate};
+use crate::direct_nova::{direct_nova_raw_metrics, source_state_to_nova, DirectNovaTemplate};
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
 use crate::nova_session::{DirectNovaSuite, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE};
 use crate::parent_relation::{
@@ -258,15 +260,22 @@ fn root_claim_witness(root: &CandidateRootClaim) -> CandidatePendingClaimWitness
     }
 }
 
-fn leaf_claim_witness(
+fn leaf_claim_and_manifest_anchor(
     statement: ManifestBoundAnchorLeafStatementV4,
     witness: &CircuitProofTranscriptWitnessV4,
     reduction: &CandidateNormReductionProofWitness,
-) -> CandidatePendingClaimWitness {
+) -> (CandidatePendingClaimWitness, ConstructionManifestAnchor) {
     let mut builder = Builder::default();
     let leaf = install_manifest_bound_anchor_leaf(&mut builder, statement, witness, reduction)
         .expect("manifest-bound leaf");
-    claim_witness(&leaf.claim)
+    let anchor = ConstructionManifestAnchor::new(
+        statement.circuit_binding_digest,
+        constrained_scalar_witness(&leaf.precommitment),
+        witness.coefficient_commitment,
+        witness.anchored_offset,
+    )
+    .expect("construction manifest anchor");
+    (claim_witness(&leaf.claim), anchor)
 }
 
 fn step_proof(claims: &[CandidatePendingClaimWitness]) -> CandidateStepProofWitness {
@@ -298,6 +307,7 @@ struct Fixture {
     statement: ManifestBoundAnchorLeafStatementV4,
     witness: CircuitProofTranscriptWitnessV4,
     reduction: CandidateNormReductionProofWitness,
+    manifest_anchor: ConstructionManifestAnchor,
     claims: Vec<CandidatePendingClaimWitness>,
     proof: CandidateStepProofWitness,
 }
@@ -336,19 +346,43 @@ fn fixture_for_shape(
     let witness = finite_witness(shape, statement.circuit_binding_digest, raw, offset, mask);
     let reduction = zero_reduction_proof(shape);
     let state = prior_state(manifest_byte);
-    let claims = vec![
-        root_claim_witness(&state.root),
-        leaf_claim_witness(statement, &witness, &reduction),
-    ];
+    let (leaf_claim, manifest_anchor) =
+        leaf_claim_and_manifest_anchor(statement, &witness, &reduction);
+    let claims = vec![root_claim_witness(&state.root), leaf_claim];
     let proof = step_proof(&claims);
     Fixture {
         state,
         statement,
         witness,
         reduction,
+        manifest_anchor,
         claims,
         proof,
     }
+}
+
+fn registry_seed_root(root: &CandidateRootClaim) -> ConstructionRegistrySeedRoot {
+    assert_eq!(root.factors.len(), CONSTRUCTION_ROOT_ROUNDS);
+    let mut encoded = [0; CONSTRUCTION_SEED_ROOT_BYTES];
+    encoded[..33].copy_from_slice(&root.point.encoded);
+    encoded[33..65].copy_from_slice(&root.scale.bytes);
+    for (index, factor) in root.factors.iter().enumerate() {
+        let offset = 65 + 32 * index;
+        encoded[offset..offset + 32].copy_from_slice(&factor.bytes);
+    }
+    ConstructionRegistrySeedRoot::parse(&encoded).expect("construction registry seed root")
+}
+
+fn relation_state(
+    relation: &StatefulRelation,
+    wires: &[StateWire],
+) -> [Scalar; ANCHOR_RECURRENCE_STATE_ARITY] {
+    assert_eq!(wires.len(), ANCHOR_RECURRENCE_STATE_ARITY);
+    std::array::from_fn(|index| {
+        let wire = wires[index];
+        assert_eq!(wire.kind, WireKind::Left);
+        relation.assignment.gates[wire.index].0
+    })
 }
 
 fn build_fixture(fixture: &Fixture) -> StatefulRelation {
@@ -627,10 +661,13 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
 }
 
 #[test]
-#[ignore = "run explicitly in release mode; constructs production Nova setup"]
-fn production_public_anchor_nova_setup_is_exact() {
-    eprintln!("production_nova_setup: deriving fixture");
-    let fixture = fixture_for_shape(
+#[ignore = "explicit full-scale test-profile Nova fold and compression"]
+fn qualified_shape_anchor_nova_one_step_is_exact() {
+    // This freezes the full-scale Nova machinery around the local fixture
+    // constants. It is not a cross-language receipt-acceptance profile.
+    let total_started = std::time::Instant::now();
+    eprintln!("qualified_shape_nova_one_step: deriving fixture and verifier seed");
+    let mut fixture = fixture_for_shape(
         production_anchor_shape(),
         0x31,
         1,
@@ -638,7 +675,26 @@ fn production_public_anchor_nova_setup_is_exact() {
         SecpEncodedPointWitness::identity(),
         generator(),
     );
-    eprintln!("production_nova_setup: building recurrence");
+    let seed = ConstructionManifestSeed::new(
+        [0x91; 32],
+        [0xa2; 32],
+        registry_seed_root(&fixture.state.root),
+        1,
+    )
+    .expect("one-anchor construction manifest seed");
+    fixture.state = seed.initial_recurrence_witness();
+    let source_z0 = seed.initial_state_fields().expect("verifier-derived z0");
+    assert_eq!(
+        fixture.state.state_fields().expect("fixture state fields"),
+        source_z0
+    );
+    let expected_suffix = seed
+        .derive_expected_final(&[fixture.manifest_anchor])
+        .expect("independent final manifest")
+        .state_suffix_fields()
+        .expect("final manifest state suffix");
+
+    eprintln!("qualified_shape_nova_one_step: building trusted recurrence");
     let relation = build_anchor_recurrence_relation(
         &fixture.state,
         fixture.statement,
@@ -646,22 +702,79 @@ fn production_public_anchor_nova_setup_is_exact() {
         &fixture.reduction,
         &fixture.proof,
     )
-    .expect("production anchor recurrence");
+    .expect("full-scale fixture anchor recurrence");
 
-    eprintln!("production_nova_setup: constructing transparent parameters");
+    let setup_started = std::time::Instant::now();
+    eprintln!("qualified_shape_nova_one_step: constructing transparent parameters");
     let selected = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup_exact(
         relation,
         &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
     )
-    .expect("qualified production direct Nova suite");
+    .expect("qualified full-scale direct Nova suite");
+    eprintln!(
+        "qualified_shape_nova_one_step: setup complete in {:.3}s",
+        setup_started.elapsed().as_secs_f64()
+    );
     assert_eq!(
         selected.expected(),
         &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE
     );
     let metadata = selected.metadata();
+    assert_eq!(metadata.proof_length, 12_466);
+    assert_eq!(metadata.codec_sequence_count, 125);
+
+    eprintln!("qualified_shape_nova_one_step: building matching recurrence");
+    let matching = build_anchor_recurrence_relation_with_builder(
+        selected.matching_builder(),
+        &fixture.state,
+        fixture.statement,
+        &fixture.witness,
+        &fixture.reduction,
+        &fixture.proof,
+    )
+    .expect("matching full-scale anchor recurrence");
+    assert_eq!(relation_state(&matching, &matching.shape.inputs), source_z0);
+    let source_z1 = relation_state(&matching, &matching.shape.outputs);
+    assert_eq!(
+        &source_z1[CONSTRUCTION_ROOT_STATE_ARITY..],
+        expected_suffix.as_slice()
+    );
+    let z0 = source_state_to_nova(source_z0).expect("Nova z0");
+    let z1 = source_state_to_nova(source_z1).expect("Nova z1");
+
+    let fold_started = std::time::Instant::now();
+    eprintln!("qualified_shape_nova_one_step: folding one matching recurrence");
+    let session = selected
+        .start(z0, 1)
+        .expect("one-step qualified-shape session")
+        .add_relation(matching)
+        .expect("qualified-shape recurrence fold");
     eprintln!(
-        "production_nova_setup_pp_digest={:02x?} metadata={metadata:#?}",
-        metadata.public_parameter_digest
+        "qualified_shape_nova_one_step: fold complete in {:.3}s",
+        fold_started.elapsed().as_secs_f64()
+    );
+
+    let compression_started = std::time::Instant::now();
+    eprintln!("qualified_shape_nova_one_step: recursively verifying and compressing");
+    let proof = session
+        .finish()
+        .expect("recursive verify and Spartan IPA compression");
+    eprintln!(
+        "qualified_shape_nova_one_step: compression complete in {:.3}s",
+        compression_started.elapsed().as_secs_f64()
+    );
+    assert_eq!(proof.len(), metadata.proof_length);
+
+    let verify_started = std::time::Instant::now();
+    eprintln!("qualified_shape_nova_one_step: verifying canonical compressed proof");
+    selected
+        .verify_exact(&z0, 1, &z1, &proof)
+        .expect("exact compressed qualified-shape proof");
+    eprintln!(
+        "qualified_shape_nova_one_step: compressed verify complete in {:.3}s; total {:.3}s; proof_bytes={}",
+        verify_started.elapsed().as_secs_f64(),
+        total_started.elapsed().as_secs_f64(),
+        proof.len()
     );
 }
 

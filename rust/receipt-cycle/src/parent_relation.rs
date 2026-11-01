@@ -341,6 +341,39 @@ fn scale_point(builder: &mut Builder, point: &SecpPoint, scalar: &SecpScalarVar)
     accumulator
 }
 
+fn msm_points(
+    builder: &mut Builder,
+    points: &[SecpPoint],
+    scalars: &[SecpScalarVar],
+) -> Result<SecpPoint, ReceiptCycleError> {
+    if points.is_empty() || points.len() != scalars.len() {
+        return Err(ReceiptCycleError::Malformed("secp MSM shape"));
+    }
+    let bit_count = scalars[0].bits.len();
+    if bit_count == 0 || scalars.iter().any(|scalar| scalar.bits.len() != bit_count) {
+        return Err(ReceiptCycleError::Malformed("secp MSM scalar width"));
+    }
+
+    let mut accumulator = allocate_point(
+        builder,
+        PointValue {
+            x: Scalar::ZERO,
+            y: Scalar::ZERO,
+            identity: true,
+        },
+    );
+    for bit in (0..bit_count).rev() {
+        if bit + 1 != bit_count {
+            accumulator = add_points(builder, &accumulator, &accumulator);
+        }
+        for (point, scalar) in points.iter().zip(scalars) {
+            let sum = add_points(builder, &accumulator, point);
+            accumulator = select_point(builder, &scalar.bits[bit], &accumulator, &sum);
+        }
+    }
+    Ok(accumulator)
+}
+
 /// Builds the canonical compressed-point relation used by parent transcripts.
 ///
 /// The private y coordinate must open a non-identity secp256k1 point and its
@@ -395,6 +428,35 @@ pub fn build_secp_scalar_multiplication_relation(
     builder.constrain_equal(&product.x, &expected.x);
     builder.constrain_equal(&product.y, &expected.y);
     builder.constrain_equal(&product.identity, &expected.identity);
+    builder.finish()
+}
+
+/// Builds one shared variable-base secp256k1 MSM relation.
+///
+/// The public term count fixes the circuit shape. All scalars are canonical
+/// modulo the secp256k1 group order. One MSB-first accumulator shares the 255
+/// doublings across every term instead of repeating them per scalar.
+pub fn build_secp_msm_relation(
+    terms: &[(SecpAffineWitness, SecpScalarWitness)],
+    expected: SecpAffineWitness,
+) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
+    const MAX_PARENT_MSM_TERMS: usize = 64;
+    if terms.is_empty() || terms.len() > MAX_PARENT_MSM_TERMS {
+        return Err(ReceiptCycleError::Malformed("secp MSM term count"));
+    }
+
+    let mut builder = Builder::default();
+    let mut points = Vec::with_capacity(terms.len());
+    let mut scalars = Vec::with_capacity(terms.len());
+    for &(point, scalar) in terms {
+        points.push(allocate_point(&mut builder, parse_point(point)?));
+        scalars.push(allocate_canonical_scalar(&mut builder, scalar)?);
+    }
+    let expected = allocate_point(&mut builder, parse_point(expected)?);
+    let result = msm_points(&mut builder, &points, &scalars)?;
+    builder.constrain_equal(&result.x, &expected.x);
+    builder.constrain_equal(&result.y, &expected.y);
+    builder.constrain_equal(&result.identity, &expected.identity);
     builder.finish()
 }
 
@@ -484,6 +546,19 @@ mod tests {
             build_secp_scalar_multiplication_relation(point, scalar, expected)?;
         let statement = b"secp scalar multiplication foundation";
         let proof = prove(&circuit, &assignment, statement, [0x81; 32])?;
+        verify(&circuit, statement, &proof)?;
+        assert_eq!(proof.len(), proof_wire_len(&circuit)?);
+        let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("gate count")) as usize;
+        Ok((circuit, gates, proof.len()))
+    }
+
+    fn prove_msm_relation(
+        terms: &[(SecpAffineWitness, SecpScalarWitness)],
+        expected: SecpAffineWitness,
+    ) -> Result<(Vec<u8>, usize, usize), ReceiptCycleError> {
+        let (circuit, assignment) = build_secp_msm_relation(terms, expected)?;
+        let statement = b"shared secp MSM foundation";
+        let proof = prove(&circuit, &assignment, statement, [0x82; 32])?;
         verify(&circuit, statement, &proof)?;
         assert_eq!(proof.len(), proof_wire_len(&circuit)?);
         let gates = u32::from_le_bytes(circuit[1..5].try_into().expect("gate count")) as usize;
@@ -633,5 +708,59 @@ mod tests {
             0xd0, 0x36, 0x41, 0x41,
         ]);
         assert!(prove_scale_relation(generator(), order, SecpAffineWitness::identity(),).is_err());
+    }
+
+    #[test]
+    fn shared_msm_handles_sum_cancellation_and_zero() {
+        let sum_terms = [
+            (generator(), SecpScalarWitness::from_u64(1)),
+            (generator(), SecpScalarWitness::from_u64(2)),
+        ];
+        let (_, gates, proof_bytes) =
+            prove_msm_relation(&sum_terms, three_times_generator()).expect("shared sum");
+        let cancellation_terms = [
+            (generator(), SecpScalarWitness::from_u64(1)),
+            (negate(generator()), SecpScalarWitness::from_u64(1)),
+        ];
+        prove_msm_relation(&cancellation_terms, SecpAffineWitness::identity())
+            .expect("shared cancellation");
+        let zero_terms = [
+            (generator(), SecpScalarWitness::from_u64(0)),
+            (twice_generator(), SecpScalarWitness::from_u64(0)),
+        ];
+        prove_msm_relation(&zero_terms, SecpAffineWitness::identity()).expect("shared zero");
+
+        eprintln!("receipt_secp_two_term_msm_gates={gates} proof_bytes={proof_bytes}");
+        assert_eq!(gates, 35_577);
+        assert_eq!(proof_bytes, 1_481);
+    }
+
+    #[test]
+    fn shared_msm_rejects_wrong_output_and_bad_shape() {
+        let terms = [
+            (generator(), SecpScalarWitness::from_u64(1)),
+            (generator(), SecpScalarWitness::from_u64(2)),
+        ];
+        assert!(prove_msm_relation(&terms, twice_generator()).is_err());
+        assert!(build_secp_msm_relation(&[], SecpAffineWitness::identity()).is_err());
+        let excessive = vec![(generator(), SecpScalarWitness::from_u64(0)); 65];
+        assert!(build_secp_msm_relation(&excessive, SecpAffineWitness::identity()).is_err());
+    }
+
+    #[test]
+    fn shared_msm_shape_is_secret_independent() {
+        let first = [
+            (generator(), SecpScalarWitness::from_u64(1)),
+            (generator(), SecpScalarWitness::from_u64(2)),
+        ];
+        let second = [
+            (generator(), SecpScalarWitness::from_u64(0)),
+            (twice_generator(), SecpScalarWitness::from_u64(0)),
+        ];
+        let (first_circuit, _) =
+            build_secp_msm_relation(&first, three_times_generator()).expect("first circuit");
+        let (second_circuit, _) = build_secp_msm_relation(&second, SecpAffineWitness::identity())
+            .expect("second circuit");
+        assert_eq!(first_circuit, second_circuit);
     }
 }

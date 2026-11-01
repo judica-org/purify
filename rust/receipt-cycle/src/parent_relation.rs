@@ -1096,6 +1096,9 @@ fn precompute_constant_window(
             point,
         ));
     }
+    for &multiple in &values {
+        validate_constant_point(multiple)?;
+    }
     if values
         .iter()
         .skip(1)

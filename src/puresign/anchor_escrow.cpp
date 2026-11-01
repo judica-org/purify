@@ -4,6 +4,8 @@
 
 #include "purify/puresign/anchor_escrow.hpp"
 #include "purify/puresign/anchor_escrow_accumulation.hpp"
+#include "../protocol/algebraic_circuit_accumulation.hpp"
+#include "../protocol/algebraic_circuit_proof.hpp"
 
 #include <algorithm>
 #include <array>
@@ -32,7 +34,7 @@ const TaggedHash kFirstEphemeralHash(
 const TaggedHash kSecondEphemeralHash(
     "Purify/Accountable/AnchorEscrowSecondEphemeral/v1");
 const TaggedHash kProofSeedHash(
-    "Purify/Accountable/AnchorEscrowProofSeed/v1");
+    "Purify/Accountable/AnchorEscrowProofSeed/v2");
 
 template <typename T>
 class WipeObjectOnDestruction {
@@ -453,7 +455,7 @@ Result<Bytes> escrow_binding(
     const auto anchor_root = advertised_anchor_root.to_bytes_be();
     const auto encrypted = ciphertext_bytes(ciphertext);
     const auto signing_key = roster_point(roster);
-    static const TaggedHash hash("Purify/Accountable/AnchorEscrow/v1");
+    static const TaggedHash hash("Purify/Accountable/AnchorEscrow/v2");
     const auto digest = hash.digest_many<8>({
         signing_key, roster.key_list_hash(), roster.coalition_core_digest(),
         roster.nonce_host_commitment(), recovery_root, anchor_root, encrypted,
@@ -463,7 +465,7 @@ Result<Bytes> escrow_binding(
 }
 
 bool has_zero_dlog(
-    const bppp::ExperimentalCircuitZkNormArgProof& proof) {
+    const bppp::candidate::CircuitZkNormArgProofV4& proof) {
     return std::all_of(
                proof.public_commitment_dlog_nonce.begin(),
                proof.public_commitment_dlog_nonce.end(),
@@ -500,15 +502,6 @@ Result<GeneratedKey> decrypt_anchor(
 
 } // namespace
 
-AnchorEscrowRecord::AnchorEscrowRecord(
-    AnchorEscrowCiphertext ciphertext,
-    bppp::ExperimentalCircuitZkNormArgProof&& proof)
-    : ciphertext_(std::move(ciphertext)),
-      raw_commitment_(proof.a_commitment),
-      mask_commitment_(proof.s_commitment),
-      t2_(proof.t2),
-      norm_proof_(std::move(proof.proof)) {}
-
 Status AnchorEscrowRecord::validate_encoding(
     purify_secp_context* secp_context) const {
     PURIFY_RETURN_IF_ERROR(
@@ -524,30 +517,14 @@ Status AnchorEscrowRecord::validate_encoding(
         return unexpected_error(ErrorCode::BindingMismatch,
                                 "anchor_escrow:duplicate_ephemeral");
     }
-    if (norm_proof_.size() != kInnerProofSize) {
-        return unexpected_error(ErrorCode::InvalidFixedSize,
-                                "anchor_escrow:proof_inner_size");
-    }
-    for (const auto* point : {&raw_commitment_, &mask_commitment_}) {
-        std::array<unsigned char, 32> xonly{};
-        int parity = 0;
-        if (purify_bip340_xonly_from_point(
-                secp_context, point->data(), xonly.data(), &parity) == 0) {
-            return unexpected_error(ErrorCode::RangeViolation,
-                                    "anchor_escrow:proof_point");
-        }
-    }
-    PURIFY_ASSIGN_OR_RETURN(const auto& t2,
-                            FieldElement::try_from_bytes32(t2_),
-                            "anchor_escrow:proof_t2");
-    (void)t2;
-    return {};
-}
-
-bppp::ExperimentalCircuitZkNormArgProof
-AnchorEscrowRecord::circuit_proof() const {
-    return bppp::ExperimentalCircuitZkNormArgProof{
+    static constexpr std::size_t kRoundCount = 14;
+    static_assert(kNormProofSize == 65 * kRoundCount + 64);
+    const bppp::candidate::CircuitZkNormArgProofV4 proof{
         raw_commitment_, mask_commitment_, t2_, {}, {}, norm_proof_};
+    return bppp::candidate::
+        validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
+            proof, bppp::candidate::CircuitCommitmentModeV4::Hidden,
+            kRoundCount, secp_context);
 }
 
 Result<Bytes> AnchorEscrowRecord::serialize(
@@ -714,16 +691,21 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
         prover_seed.value = digest;
     }
     PURIFY_ASSIGN_OR_RETURN(
-        auto proof,
-        bppp::prove_experimental_circuit_zk_norm_arg(
+        auto publication,
+        bppp::candidate::prove_circuit_zk_norm_arg_v4(
             circuit, assignment, prover_seed.value, secp_context, binding,
             cache),
         "anchor_escrow:prove");
-    if (!has_zero_dlog(proof)) {
+    if (!has_zero_dlog(publication.proof)) {
         return unexpected_error(ErrorCode::InternalMismatch,
                                 "anchor_escrow:unexpected_dlog");
     }
-    AnchorEscrowRecord record(ciphertext, std::move(proof));
+    AnchorEscrowRecord record;
+    record.ciphertext_ = ciphertext;
+    record.raw_commitment_ = publication.proof.raw_commitment;
+    record.mask_commitment_ = publication.proof.mask_commitment;
+    record.t2_ = publication.proof.t2;
+    record.norm_proof_ = std::move(publication.proof.norm_proof);
     PURIFY_RETURN_IF_ERROR(record.validate_encoding(secp_context),
                            "anchor_escrow:proof_encoding");
     return record;
@@ -754,25 +736,32 @@ Result<bool> verify_anchor_escrow(
         escrow_binding(roster, advertised_anchor_root, context_digest,
                        record.ciphertext_),
         "anchor_escrow:verify_binding");
-    const auto proof = record.circuit_proof();
-    return bppp::verify_experimental_circuit_zk_norm_arg(
-        circuit, proof, secp_context, binding, cache);
+    bppp::candidate::CircuitZkNormArgProofV4 proof{
+        record.raw_commitment_, record.mask_commitment_, record.t2_,
+        {}, {}, record.norm_proof_};
+    PURIFY_ASSIGN_OR_RETURN(
+        auto publication,
+        bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4(
+            circuit, std::move(proof), secp_context, binding),
+        "anchor_escrow:publication");
+    return bppp::candidate::verify_circuit_zk_norm_arg_v4(
+        circuit, publication, secp_context, binding, cache);
 }
 
 Result<AnchorEscrowAccumulator> AnchorEscrowAccumulator::create(
     purify_secp_context* secp_context) {
-    static_assert(AnchorEscrowRecord::kInnerProofSize == 65 * 14 + 64);
+    static_assert(AnchorEscrowRecord::kNormProofSize == 65 * 14 + 64);
     PURIFY_ASSIGN_OR_RETURN(
         auto basis,
         bppp::accumulation::Basis::create(
             kNormVectorLength, kNormVectorLength,
-            "Purify/Accountable/AnchorEscrowAccumulation/v1",
+            "Purify/Accountable/AnchorEscrowAccumulation/v2",
             secp_context),
         "anchor_escrow_accumulation:basis");
     return AnchorEscrowAccumulator(std::move(basis));
 }
 
-Result<bppp::accumulation::PreparedNorm>
+Result<PreparedAnchorEscrow>
 AnchorEscrowAccumulator::prepare(
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,
@@ -799,9 +788,31 @@ AnchorEscrowAccumulator::prepare(
         escrow_binding(roster, advertised_anchor_root, context_digest,
                        record.ciphertext_),
         "anchor_escrow_accumulation:binding");
-    return bppp::accumulation::prepare_experimental_circuit_zk_norm_arg(
-        basis_, circuit, record.circuit_proof(), secp_context, binding,
-        cache);
+    bppp::candidate::CircuitZkNormArgProofV4 proof{
+        record.raw_commitment_, record.mask_commitment_, record.t2_,
+        {}, {}, record.norm_proof_};
+    PURIFY_ASSIGN_OR_RETURN(
+        auto publication,
+        bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4(
+            circuit, std::move(proof), secp_context, binding),
+        "anchor_escrow_accumulation:publication");
+    const auto precommitment = publication.precommitment.bytes();
+    PURIFY_ASSIGN_OR_RETURN(
+        auto prepared,
+        bppp::candidate::prepare_circuit_zk_norm_arg_v4(
+            circuit, publication, secp_context, binding, cache),
+        "anchor_escrow_accumulation:outer");
+    if (!prepared.has_value()) {
+        return unexpected_error(ErrorCode::EquationMismatch,
+                                "anchor_escrow_accumulation:outer");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto norm,
+        bppp::accumulation::
+            prepare_v4_circuit_norm_for_algebraic_reduction(
+                basis_, std::move(*prepared), secp_context),
+        "anchor_escrow_accumulation:norm");
+    return PreparedAnchorEscrow(precommitment, std::move(norm));
 }
 
 Result<GeneratedKey> recover_escrowed_anchor(

@@ -12,6 +12,7 @@
 #include "purify/puresign/anchor_escrow.hpp"
 #include "purify/puresign/construction_receipt_assembly.hpp"
 #include "../src/puresign/anchor_escrow_internal.hpp"
+#include "companion_scalar_escrow_helpers.hpp"
 #include "purify_test_helpers.hpp"
 
 namespace {
@@ -19,12 +20,48 @@ namespace {
 using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
+using purify::Bytes;
 using purify::FieldElement;
 using purify::Result;
+using purify::accountable::AnchorEscrowCiphertext;
 using purify::accountable::AnchorEscrowContextDigest;
 using purify::accountable::CoalitionCoreDigest;
 using purify::accountable::RecoveryBoundSigningRoster;
 using purify::accountable::SigningRoster;
+
+Bytes anchor_ciphertext_bytes(const AnchorEscrowCiphertext& ciphertext) {
+    Bytes out;
+    out.reserve(AnchorEscrowCiphertext::kSerializedSize);
+    for (std::size_t i = 0; i < ciphertext.ephemeral_keys.size(); ++i) {
+        const auto ephemeral = ciphertext.ephemeral_keys[i].to_bytes_be();
+        const auto masked = ciphertext.masked_scalars[i].to_bytes_be();
+        out.insert(out.end(), ephemeral.begin(), ephemeral.end());
+        out.insert(out.end(), masked.begin(), masked.end());
+    }
+    return out;
+}
+
+Bytes legacy_anchor_binding(
+    const RecoveryBoundSigningRoster& roster,
+    const purify::UInt512& anchor_root,
+    const AnchorEscrowContextDigest& context,
+    const AnchorEscrowCiphertext& ciphertext) {
+    purify::bppp::PointBytes signing_key{};
+    signing_key[0] = 0x02;
+    std::copy(roster.signing_key().begin(), roster.signing_key().end(),
+              signing_key.begin() + 1);
+    const auto recovery_root = roster.recovery_root().to_bytes_be();
+    const auto anchor = anchor_root.to_bytes_be();
+    const auto encrypted = anchor_ciphertext_bytes(ciphertext);
+    static const purify::TaggedHash hash(
+        "Purify/Accountable/AnchorEscrow/v1");
+    const auto digest = hash.digest_many<8>({
+        signing_key, roster.key_list_hash(),
+        roster.coalition_core_digest(), roster.nonce_host_commitment(),
+        recovery_root, anchor, encrypted, context,
+    });
+    return Bytes(digest.begin(), digest.end());
+}
 
 Result<std::array<unsigned char, 33>> public_point(
     const FieldElement& scalar, purify_secp_context* secp_context) {
@@ -169,7 +206,8 @@ void test_anchor_escrow(TestContext& ctx) {
     ctx.expect(
         encoded->size() == 1265 &&
             encoded->size() ==
-                purify::accountable::AnchorEscrowRecord::kSerializedSize,
+                purify::accountable::AnchorEscrowRecord::kSerializedSize &&
+            encoded->front() == 2,
         "anchor escrow is one version byte plus 192 and 1072 bytes");
     auto parsed = purify::accountable::AnchorEscrowRecord::deserialize(
         *encoded, secp.get());
@@ -199,8 +237,14 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, prepared,
               "typed adapter prepares the exact anchor escrow statement");
     if (!prepared) return;
-    auto reduction = purify::bppp::accumulation::prove_norm_reduction(
-        accumulator->basis(), *prepared, secp.get());
+    ctx.expect(
+        std::any_of(prepared->precommitment().begin(),
+                    prepared->precommitment().end(),
+                    [](unsigned char byte) { return byte != 0; }),
+        "prepared anchor exposes its nonzero V4 precommitment");
+    auto reduction =
+        purify::bppp::accumulation::prove_algebraic_norm_reduction(
+            accumulator->basis(), prepared->norm(), secp.get());
     expect_ok(ctx, reduction,
               "anchor escrow coefficient opening proves");
     if (!reduction) return;
@@ -426,15 +470,30 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, changed_context_prepared,
               "changed context remains a pending public obligation");
     if (!changed_context_prepared) return;
-    ctx.expect(changed_context_prepared->transcript_digest() !=
-                   prepared->transcript_digest(),
-               "typed adapter binds the exact escrow context");
-    auto changed_context_claim =
-        purify::bppp::accumulation::verify_norm_reduction(
-            accumulator->basis(), *changed_context_prepared, *reduction,
+    ctx.expect(
+        changed_context_prepared->precommitment() !=
+                prepared->precommitment() &&
+            changed_context_prepared->norm().prepared_binding() !=
+                prepared->norm().prepared_binding(),
+        "typed adapter binds the exact escrow context");
+    auto changed_context_reduction =
+        purify::bppp::accumulation::prove_algebraic_norm_reduction(
+            accumulator->basis(), changed_context_prepared->norm(),
             secp.get());
-    ctx.expect(!changed_context_claim,
-               "anchor reduction cannot move to another context");
+    expect_ok(ctx, changed_context_reduction,
+              "changed context has an algebraic reduction");
+    if (!changed_context_reduction) return;
+    auto changed_context_claim =
+        purify::bppp::accumulation::verify_algebraic_norm_reduction(
+            accumulator->basis(), changed_context_prepared->norm(),
+            *changed_context_reduction, secp.get());
+    expect_ok(ctx, changed_context_claim,
+              "changed context remains a pending claim");
+    if (!changed_context_claim) return;
+    ctx.expect(
+        !purify::bppp::accumulation::decide(
+            accumulator->basis(), *changed_context_claim, secp.get()),
+        "final MSM rejects the changed escrow context");
     ctx.expect(
         !construction_accumulator->verify_anchor_reduction(
             assembly->setup(), fixture->roster, anchor->public_key,
@@ -498,15 +557,30 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, changed_ciphertext_prepared,
               "changed ciphertext remains a pending public obligation");
     if (!changed_ciphertext_prepared) return;
-    ctx.expect(changed_ciphertext_prepared->transcript_digest() !=
-                   prepared->transcript_digest(),
-               "typed adapter binds the exact escrow ciphertext");
-    auto changed_ciphertext_claim =
-        purify::bppp::accumulation::verify_norm_reduction(
-            accumulator->basis(), *changed_ciphertext_prepared, *reduction,
+    ctx.expect(
+        changed_ciphertext_prepared->precommitment() !=
+                prepared->precommitment() &&
+            changed_ciphertext_prepared->norm().prepared_binding() !=
+                prepared->norm().prepared_binding(),
+        "typed adapter binds the exact escrow ciphertext");
+    auto changed_ciphertext_reduction =
+        purify::bppp::accumulation::prove_algebraic_norm_reduction(
+            accumulator->basis(), changed_ciphertext_prepared->norm(),
             secp.get());
-    ctx.expect(!changed_ciphertext_claim,
-               "anchor reduction cannot move to another ciphertext");
+    expect_ok(ctx, changed_ciphertext_reduction,
+              "changed ciphertext has an algebraic reduction");
+    if (!changed_ciphertext_reduction) return;
+    auto changed_ciphertext_claim =
+        purify::bppp::accumulation::verify_algebraic_norm_reduction(
+            accumulator->basis(), changed_ciphertext_prepared->norm(),
+            *changed_ciphertext_reduction, secp.get());
+    expect_ok(ctx, changed_ciphertext_claim,
+              "changed ciphertext remains a pending claim");
+    if (!changed_ciphertext_claim) return;
+    ctx.expect(
+        !purify::bppp::accumulation::decide(
+            accumulator->basis(), *changed_ciphertext_claim, secp.get()),
+        "final MSM rejects the changed escrow ciphertext");
 
     auto changed_inner_bytes = *encoded;
     std::array<unsigned char, 32> terminal_n_bytes{};
@@ -533,18 +607,21 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, changed_inner_prepared,
               "parseable false inner proof remains pending");
     if (!changed_inner_prepared) return;
-    ctx.expect(changed_inner_prepared->transcript_digest() !=
-                   prepared->transcript_digest(),
+    ctx.expect(changed_inner_prepared->norm().prepared_binding() !=
+                   prepared->norm().prepared_binding() &&
+                   changed_inner_prepared->precommitment() ==
+                       prepared->precommitment(),
                "typed adapter authenticates the exact inner proof");
     auto changed_inner_reduction =
-        purify::bppp::accumulation::prove_norm_reduction(
-            accumulator->basis(), *changed_inner_prepared, secp.get());
+        purify::bppp::accumulation::prove_algebraic_norm_reduction(
+            accumulator->basis(), changed_inner_prepared->norm(),
+            secp.get());
     expect_ok(ctx, changed_inner_reduction,
               "false inner proof has a public coefficient opening");
     if (!changed_inner_reduction) return;
     auto changed_inner_claim =
-        purify::bppp::accumulation::verify_norm_reduction(
-            accumulator->basis(), *changed_inner_prepared,
+        purify::bppp::accumulation::verify_algebraic_norm_reduction(
+            accumulator->basis(), changed_inner_prepared->norm(),
             *changed_inner_reduction, secp.get());
     expect_ok(ctx, changed_inner_claim,
               "short verifier keeps a false inner proof pending");
@@ -553,19 +630,90 @@ void test_anchor_escrow(TestContext& ctx) {
                    accumulator->basis(), *changed_inner_claim, secp.get()),
                "final MSM rejects the changed inner proof");
 
-    changed_record_bytes = *encoded;
-    changed_record_bytes[291] ^= 1;
-    changed_record = purify::accountable::AnchorEscrowRecord::deserialize(
-        changed_record_bytes, secp.get());
-    expect_ok(ctx, changed_record,
-              "changed inner proof remains structurally canonical");
-    if (!changed_record) return;
+    seed.fill(0x83);
+    auto legacy_first_ephemeral = purify::generate_key(seed);
+    seed.fill(0x94);
+    auto legacy_second_ephemeral = purify::generate_key(seed);
+    expect_ok(ctx, legacy_first_ephemeral,
+              "legacy V3 first ephemeral derives");
+    expect_ok(ctx, legacy_second_ephemeral,
+              "legacy V3 second ephemeral derives");
+    if (!legacy_first_ephemeral || !legacy_second_ephemeral) return;
+    purify_test::scalar_escrow::Opening legacy_opening{
+        anchor->secret,
+        {&*legacy_first_ephemeral, &*legacy_second_ephemeral}};
+    auto legacy_ciphertext = purify_test::scalar_escrow::encrypt(
+        fixture->roster.recovery_root(), legacy_opening);
+    expect_ok(ctx, legacy_ciphertext,
+              "legacy V3 ciphertext constructs");
+    if (!legacy_ciphertext) return;
+    AnchorEscrowCiphertext legacy_record_ciphertext{
+        legacy_ciphertext->ephemeral, legacy_ciphertext->masked};
+    auto legacy_circuit = purify_test::scalar_escrow::public_circuit(
+        fixture->roster.recovery_root(), anchor->public_key,
+        *legacy_ciphertext);
+    auto legacy_assignment = purify_test::scalar_escrow::assignment(
+        fixture->roster.recovery_root(), anchor->public_key,
+        *legacy_ciphertext, legacy_opening);
+    expect_ok(ctx, legacy_circuit,
+              "legacy V3 anchor circuit reconstructs");
+    expect_ok(ctx, legacy_assignment,
+              "legacy V3 anchor witness reconstructs");
+    if (!legacy_circuit || !legacy_assignment) return;
+    purify::bppp::ScalarBytes legacy_seed{};
+    legacy_seed.fill(0x45);
+    const auto legacy_binding = legacy_anchor_binding(
+        fixture->roster, anchor->public_key, context,
+        legacy_record_ciphertext);
+    auto legacy_proof = purify::bppp::
+        prove_experimental_circuit_zk_norm_arg(
+            *legacy_circuit, *legacy_assignment, legacy_seed, secp.get(),
+            legacy_binding);
+    expect_ok(ctx, legacy_proof, "legacy V3 anchor proof constructs");
+    if (!legacy_proof) return;
+    auto legacy_valid = purify::bppp::
+        verify_experimental_circuit_zk_norm_arg(
+            *legacy_circuit, *legacy_proof, secp.get(), legacy_binding);
+    ctx.expect(legacy_valid && *legacy_valid,
+               "legacy V3 anchor proof verifies in its own protocol");
+    Bytes version_flipped_legacy;
+    version_flipped_legacy.reserve(
+        purify::accountable::AnchorEscrowRecord::kSerializedSize);
+    version_flipped_legacy.push_back(
+        purify::accountable::AnchorEscrowRecord::kSerializationVersion);
+    const auto legacy_encrypted =
+        anchor_ciphertext_bytes(legacy_record_ciphertext);
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(), legacy_encrypted.begin(),
+        legacy_encrypted.end());
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(), legacy_proof->a_commitment.begin(),
+        legacy_proof->a_commitment.end());
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(), legacy_proof->s_commitment.begin(),
+        legacy_proof->s_commitment.end());
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(), legacy_proof->t2.begin(),
+        legacy_proof->t2.end());
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(), legacy_proof->proof.begin(),
+        legacy_proof->proof.end());
+    ctx.expect(
+        version_flipped_legacy.size() ==
+            purify::accountable::AnchorEscrowRecord::kSerializedSize,
+        "legacy V3 body has the anchor record's fixed shape");
+    auto parsed_version_flipped =
+        purify::accountable::AnchorEscrowRecord::deserialize(
+            version_flipped_legacy, secp.get());
+    expect_ok(ctx, parsed_version_flipped,
+              "version-flipped V3 anchor body remains canonical");
+    if (!parsed_version_flipped) return;
     expect_rejected(
         ctx,
         purify::accountable::verify_anchor_escrow(
             fixture->roster, anchor->public_key, context,
-            *changed_record, secp.get()),
-        "changed escrow proof rejects");
+            *parsed_version_flipped, secp.get()),
+        "V4 anchor semantics reject a version-flipped V3 proof");
 
     auto other_fixture = make_roster(0x62, 0x9d, secp.get());
     expect_ok(ctx, other_fixture,
@@ -748,7 +896,7 @@ void test_anchor_escrow(TestContext& ctx) {
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
             malformed, secp.get()),
-        purify::ErrorCode::RangeViolation,
+        purify::ErrorCode::BackendRejectedInput,
         "invalid escrow A commitment rejects");
     malformed = *encoded;
     std::fill_n(malformed.begin() + 226, 33, 0);
@@ -756,7 +904,7 @@ void test_anchor_escrow(TestContext& ctx) {
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
             malformed, secp.get()),
-        purify::ErrorCode::RangeViolation,
+        purify::ErrorCode::BackendRejectedInput,
         "invalid escrow S commitment rejects");
     malformed = *encoded;
     std::fill_n(malformed.begin() + 259, 32, 0xff);
@@ -766,6 +914,29 @@ void test_anchor_escrow(TestContext& ctx) {
             malformed, secp.get()),
         purify::ErrorCode::RangeViolation,
         "noncanonical escrow t2 rejects");
+    malformed = *encoded;
+    malformed[291] = 4;
+    expect_error(
+        ctx,
+        purify::accountable::AnchorEscrowRecord::deserialize(
+            malformed, secp.get()),
+        purify::ErrorCode::RangeViolation,
+        "noncanonical escrow round parity rejects");
+    malformed = *encoded;
+    std::copy_n(malformed.begin() + 226, 33,
+                malformed.begin() + 193);
+    auto changed_raw_record =
+        purify::accountable::AnchorEscrowRecord::deserialize(
+            malformed, secp.get());
+    expect_ok(ctx, changed_raw_record,
+              "changed finite escrow raw commitment reparses");
+    if (!changed_raw_record) return;
+    expect_rejected(
+        ctx,
+        purify::accountable::verify_anchor_escrow(
+            fixture->roster, anchor->public_key, context,
+            *changed_raw_record, secp.get()),
+        "V4 anchor precommitment binds the exact raw commitment");
     malformed = *encoded;
     malformed[291] ^= 1;
     auto opaque_inner =

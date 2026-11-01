@@ -45,7 +45,7 @@ public:
         const ConstructionReceiptAccumulator& accumulator,
         const RecoveryBoundSigningRoster& roster,
         const AnchorEscrowRecord& record,
-        const bppp::accumulation::NormReductionProof& reduction,
+        const bppp::accumulation::AlgebraicNormReductionProof& reduction,
         purify_secp_context* secp_context,
         bppp::ExperimentalCircuitBackend* cache = nullptr);
 

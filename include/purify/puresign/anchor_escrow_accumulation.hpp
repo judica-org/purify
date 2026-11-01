@@ -12,6 +12,37 @@
 
 namespace purify::accountable {
 
+/** V4 anchor proof prepared for reduction with its exact public digest. */
+class PreparedAnchorEscrow {
+public:
+    PreparedAnchorEscrow(const PreparedAnchorEscrow&) = delete;
+    PreparedAnchorEscrow& operator=(const PreparedAnchorEscrow&) = delete;
+    PreparedAnchorEscrow(PreparedAnchorEscrow&&) noexcept = default;
+    PreparedAnchorEscrow& operator=(PreparedAnchorEscrow&&) noexcept =
+        default;
+
+    /** The verifier-derived precommitment retained by the final payload. */
+    [[nodiscard]] const bppp::ScalarBytes& precommitment() const noexcept {
+        return precommitment_;
+    }
+
+    [[nodiscard]] const bppp::accumulation::AlgebraicPreparedNorm& norm()
+        const noexcept {
+        return norm_;
+    }
+
+private:
+    PreparedAnchorEscrow(
+        bppp::ScalarBytes precommitment,
+        bppp::accumulation::AlgebraicPreparedNorm norm)
+        : precommitment_(precommitment), norm_(std::move(norm)) {}
+
+    bppp::ScalarBytes precommitment_{};
+    bppp::accumulation::AlgebraicPreparedNorm norm_;
+
+    friend class AnchorEscrowAccumulator;
+};
+
 /**
  * Fixed-basis adapter for accumulating production anchor-escrow proofs.
  *
@@ -39,7 +70,7 @@ public:
         return basis_;
     }
 
-    [[nodiscard]] Result<bppp::accumulation::PreparedNorm> prepare(
+    [[nodiscard]] Result<PreparedAnchorEscrow> prepare(
         const RecoveryBoundSigningRoster& roster,
         const UInt512& advertised_anchor_root,
         const AnchorEscrowContextDigest& context_digest,

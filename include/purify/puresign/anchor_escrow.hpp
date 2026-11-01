@@ -39,8 +39,8 @@ struct AnchorEscrowCiphertext {
  */
 class AnchorEscrowRecord {
 public:
-    static constexpr unsigned char kSerializationVersion = 1;
-    static constexpr std::size_t kInnerProofSize = 974;
+    static constexpr unsigned char kSerializationVersion = 2;
+    static constexpr std::size_t kNormProofSize = 974;
     static constexpr std::size_t kProofPayloadSize = 1072;
     static constexpr std::size_t kSerializedSize =
         1 + AnchorEscrowCiphertext::kSerializedSize + kProofPayloadSize;
@@ -62,14 +62,9 @@ public:
 
 private:
     AnchorEscrowRecord() = default;
-    AnchorEscrowRecord(
-        AnchorEscrowCiphertext ciphertext,
-        bppp::ExperimentalCircuitZkNormArgProof&& proof);
 
     [[nodiscard]] Status validate_encoding(
         purify_secp_context* secp_context) const;
-    [[nodiscard]] bppp::ExperimentalCircuitZkNormArgProof
-    circuit_proof() const;
 
     AnchorEscrowCiphertext ciphertext_{};
     bppp::PointBytes raw_commitment_{};
@@ -96,7 +91,7 @@ private:
 static_assert(AnchorEscrowRecord::kProofPayloadSize ==
               2 * bppp::PointBytes{}.size() +
                   bppp::ScalarBytes{}.size() +
-                  AnchorEscrowRecord::kInnerProofSize);
+                  AnchorEscrowRecord::kNormProofSize);
 static_assert(AnchorEscrowRecord::kSerializedSize == 1265);
 
 /**

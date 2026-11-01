@@ -226,6 +226,10 @@ cryptographic review. The historical workload profiler does not model those
 recursive transitions. Neither native accumulation nor batch verification
 alone is a compressed construction receipt.
 
+The selected implementation boundary and its mandatory explicit root claim are
+specified in the
+[recursive construction receipt boundary](recursive-parent-receipt.md).
+
 Before selecting a replacement backend on cost grounds, evaluate this route
 alongside direct recursive verification. Account separately for the recursive
 circuit, final verifier, public accumulator bytes and authenticated manifest.

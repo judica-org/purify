@@ -1,17 +1,17 @@
-# Construction receipt batch statements
+# Historical construction receipt batch statements
 
-This document fixes the first construction-receipt partition suite. It defines
-which ordered anchor entries a bounded parent circuit is responsible for. It
-does not define proof bytes, recursive aggregation, network state, or an
-acceptance API.
+This document records the pre-Nova version-one partition suite for bounded flat
+parents. It is not the selected construction-receipt path. The selected
+homogeneous Nova recurrence processes one anchor per step from an immutable
+registry seed. Version-one descriptors must not be reinterpreted as Nova
+consensus objects.
 
-The complete construction statement is already committed by
-`ConstructionReceiptStatementDigest`. That digest binds the canonical payload,
-the resolved setup-record digest, and every resolved anchor input in order. A
-batch therefore binds that complete digest and an exact contiguous range. No
-second Merkle commitment or mutable batch manifest is needed at this layer.
+The legacy `ConstructionReceiptStatementDigest` binds the legacy payload, the
+resolved setup-record digest, and every resolved anchor input in order. A new
+receipt version must additionally bind every public V4 precommitment and the
+recurrence's initial-manifest inputs.
 
-## Version-one descriptor
+## Historical version-one descriptor
 
 Version one fixes a maximum of 16 anchor entries per batch. Its canonical
 statement is exactly 54 bytes:
@@ -56,11 +56,10 @@ batches without workflow state.
 
 ## Circuit boundary
 
-`ConstructionReceiptBatchDescriptor::serialize()` supplies canonical public
-statement bytes, and `statement_digest()` supplies their domain-separated
-digest. A future parent relation must bind one of those forms and constrain
-the exact selected entry range. The descriptor alone does not prove that work
-or authenticate any child proof.
+No selected Nova recurrence consumes this descriptor. Its serialization and
+digest remain useful only for legacy parser tests and historical flat-parent
+experiments. A new construction-receipt version must define its own initial
+manifest, exact step count, and payload binding.
 
 The value 16 is a statement-partition limit, not a measured flat-circuit
 capacity. With the current production-shape V4 leaves and shared-power
@@ -71,20 +70,14 @@ fit. A later step without setup fits 13 anchors at 16,170,296 gates. A
 arithmetic-only bounds. No near-cap shape has been qualified for peak
 memory or full proving time.
 
-Consequently, a 16-entry descriptor cannot currently be equated with
-one flat parent proof. The implementation must either place a proof tree
-inside that descriptor or introduce a new partition version with a
-measured capacity. It must not silently reinterpret the version-one
-ranges.
+This mismatch is why the flat 16-entry and proof-tree route was rejected. The
+selected design does not place a proof tree inside a version-one descriptor and
+does not reinterpret its ranges. It uses a new versioned receipt whose
+recurrence authenticates one ordered anchor per step.
 
-Here a proof tree must authenticate each child relation and transition.
-Regrouping native pending claims without such a parent still requires
-all child proofs and does not provide recursive compression.
-
-Later recursive or accumulated layers may combine batch proofs, but they must
-preserve the full construction digest and ordered descriptor identity. This
-partition layer intentionally does not choose their proof encoding or final
-decision rule. Native verification-equation batching retains every child
-proof. Existing BP++ batch proofs are not a public post-hoc compressor
-for independently published proofs. Neither is the missing recursive
-layer.
+The selected recurrence binds the full construction statement, setup-record
+digest, seed root, and count into its initial manifest, then binds each
+zero-based index and exact leaf constants at every step. Native
+verification-equation batching still retains all child proofs and is not a
+post-hoc compressor. The version-one batch layer is not part of receipt
+acceptance.

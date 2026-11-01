@@ -21,7 +21,10 @@ use thiserror::Error;
 
 mod ffi;
 mod gadgets;
+// This is a tested migration primitive, not an accepted transcript suite yet.
 pub mod parent_relation;
+#[allow(dead_code)]
+mod poseidon;
 mod relation_builder;
 pub mod secp_scalar;
 

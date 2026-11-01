@@ -162,6 +162,18 @@ Result<std::size_t> encoded_size_for_count(std::size_t entry_count) {
 
 }  // namespace
 
+Result<ResolvedConstructionSetupDigest>
+ResolvedConstructionSetupDigest::create(
+    const ResolvedConstructionSetupDigestBytes& digest) {
+    if (std::all_of(digest.begin(), digest.end(),
+                    [](unsigned char byte) { return byte == 0; })) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "construction_receipt:resolved_setup_digest_zero");
+    }
+    return ResolvedConstructionSetupDigest(digest);
+}
+
 Result<ConstructionReceiptPayload> ConstructionReceiptPayload::create(
     UInt512 recovery_root,
     std::vector<ConstructionReceiptEntry> entries) {
@@ -243,6 +255,7 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::deserialize(
 Result<ConstructionReceiptStatementDigest>
 construction_receipt_statement_digest(
     const ConstructionReceiptPayload& payload,
+    const ResolvedConstructionSetupDigest& resolved_setup,
     std::span<const ResolvedConstructionReceiptEntry> resolved_entries) {
     if (resolved_entries.size() != payload.entries().size()) {
         return unexpected_error(ErrorCode::InvalidFixedSize,
@@ -251,7 +264,9 @@ construction_receipt_statement_digest(
 
     Bytes statement = payload.serialize();
     statement.reserve(statement.size() +
+                      ResolvedConstructionSetupDigest::kSerializedSize +
                       resolved_entries.size() * (32 + 64 + 32));
+    append_array(statement, resolved_setup.bytes());
     for (std::size_t i = 0; i < resolved_entries.size(); ++i) {
         const ResolvedConstructionReceiptEntry& resolved =
             resolved_entries[i];

@@ -15,6 +15,36 @@ namespace purify::accountable {
 
 using AnchorReference = std::array<unsigned char, 32>;
 using ConstructionReceiptStatementDigest = std::array<unsigned char, 32>;
+using ResolvedConstructionSetupDigestBytes =
+    std::array<unsigned char, 32>;
+
+/**
+ * @brief Immutable registry-record digest selected by a recovery root.
+ *
+ * The registry preimage must include the recovery root, exact ordered roster,
+ * coalition core, nonce-host commitment, setup context, and registry schema
+ * version. Zero is reserved for an unresolved setup and cannot be bound into a
+ * construction statement.
+ */
+class ResolvedConstructionSetupDigest {
+public:
+    static constexpr std::size_t kSerializedSize = 32;
+
+    [[nodiscard]] static Result<ResolvedConstructionSetupDigest> create(
+        const ResolvedConstructionSetupDigestBytes& digest);
+
+    [[nodiscard]] const ResolvedConstructionSetupDigestBytes& bytes()
+        const noexcept {
+        return digest_;
+    }
+
+private:
+    explicit ResolvedConstructionSetupDigest(
+        ResolvedConstructionSetupDigestBytes digest)
+        : digest_(digest) {}
+
+    ResolvedConstructionSetupDigestBytes digest_{};
+};
 
 /** @brief One ordered anchor ciphertext in a construction receipt. */
 struct ConstructionReceiptEntry {
@@ -82,14 +112,17 @@ struct ResolvedConstructionReceiptEntry {
 /**
  * @brief Bind a canonical payload to its ordered, resolved anchor inputs.
  *
- * The digest binds the exact serialized payload followed by each unique
- * anchor reference, exact anchor root, and context digest in deterministic
- * payload order. This operation does not verify an escrow proof or
- * authenticate the referenced setup and anchors.
+ * The digest binds the exact serialized payload, its registry-resolved setup
+ * record digest, then each unique anchor reference, exact anchor root, and
+ * context digest in deterministic payload order. The registry must resolve a
+ * recovery root immutably and one-to-one to the exact setup record whose
+ * digest is supplied here. This operation does not verify an escrow proof or
+ * authenticate the registry lookup and referenced anchors.
  */
 [[nodiscard]] Result<ConstructionReceiptStatementDigest>
 construction_receipt_statement_digest(
     const ConstructionReceiptPayload& payload,
+    const ResolvedConstructionSetupDigest& resolved_setup,
     std::span<const ResolvedConstructionReceiptEntry> resolved_entries);
 
 }  // namespace purify::accountable

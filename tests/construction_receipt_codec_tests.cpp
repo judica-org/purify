@@ -25,6 +25,8 @@ using purify::accountable::ConstructionReceiptEntry;
 using purify::accountable::ConstructionReceiptEnvelope;
 using purify::accountable::ConstructionReceiptPayload;
 using purify::accountable::ResolvedConstructionReceiptEntry;
+using purify::accountable::ResolvedConstructionSetupDigest;
+using purify::accountable::ResolvedConstructionSetupDigestBytes;
 
 struct ReceiptFixture {
     UInt512 recovery_root{};
@@ -46,6 +48,13 @@ AnchorReference reference(unsigned char marker) {
     AnchorReference out{};
     out.fill(marker);
     return out;
+}
+
+Result<ResolvedConstructionSetupDigest> resolved_setup(
+    unsigned char marker) {
+    ResolvedConstructionSetupDigestBytes digest{};
+    digest.fill(marker);
+    return ResolvedConstructionSetupDigest::create(digest);
 }
 
 Result<ReceiptFixture> make_fixture() {
@@ -359,30 +368,53 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     auto payload = make_payload(*fixture);
     expect_ok(ctx, payload, "statement payload constructs");
     if (!payload) return;
+    auto setup = resolved_setup(0x31);
+    expect_ok(ctx, setup, "resolved setup digest constructs");
+    if (!setup) return;
     auto digest = purify::accountable::construction_receipt_statement_digest(
-        *payload, fixture->resolved);
+        *payload, *setup, fixture->resolved);
     expect_ok(ctx, digest, "statement digest constructs");
     if (!digest) return;
     ctx.expect(
         purify::UInt256::from_bytes_be(digest->data(), digest->size())
                 .to_hex() ==
-            "e0c0489e1ae651bf84e63318b24f7c3fc3c95106a848672c"
-            "5485b6d9c7349d6e",
+            "e2d1d34806397fa0f859a6a94f937a809f8a5c8b73ad90a7"
+            "39914c0323f7acc0",
         "statement digest matches the canonical tagged-hash vector");
     auto repeated =
         purify::accountable::construction_receipt_statement_digest(
-            *payload, fixture->resolved);
+            *payload, *setup, fixture->resolved);
     expect_ok(ctx, repeated, "statement digest repeats");
     if (!repeated) return;
     ctx.expect(*repeated == *digest,
                "identical statements have identical digests");
+
+    auto changed_setup = resolved_setup(0x32);
+    expect_ok(ctx, changed_setup,
+              "changed resolved setup digest constructs");
+    if (!changed_setup) return;
+    auto changed_setup_statement =
+        purify::accountable::construction_receipt_statement_digest(
+            *payload, *changed_setup, fixture->resolved);
+    expect_ok(ctx, changed_setup_statement,
+              "changed setup statement digest constructs");
+    if (!changed_setup_statement) return;
+    ctx.expect(*changed_setup_statement != *digest,
+               "statement binds the exact resolved setup record");
+
+    expect_error(
+        ctx,
+        ResolvedConstructionSetupDigest::create(
+            ResolvedConstructionSetupDigestBytes{}),
+        purify::ErrorCode::RangeViolation,
+        "zero cannot stand in for an unresolved setup record");
 
     auto missing_resolved = fixture->resolved;
     missing_resolved.pop_back();
     expect_error(
         ctx,
         purify::accountable::construction_receipt_statement_digest(
-            *payload, missing_resolved),
+            *payload, *setup, missing_resolved),
         purify::ErrorCode::InvalidFixedSize,
         "resolved input count must equal the payload count");
 
@@ -390,7 +422,7 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     std::swap(reordered_resolution[0], reordered_resolution[1]);
     auto reordered_resolution_digest =
         purify::accountable::construction_receipt_statement_digest(
-            *payload, reordered_resolution);
+            *payload, *setup, reordered_resolution);
     expect_ok(ctx, reordered_resolution_digest,
               "reordered resolved inputs construct a distinct statement");
     if (!reordered_resolution_digest) return;
@@ -403,7 +435,7 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     expect_error(
         ctx,
         purify::accountable::construction_receipt_statement_digest(
-            *payload, duplicate_resolution),
+            *payload, *setup, duplicate_resolution),
         purify::ErrorCode::BindingMismatch,
         "one receipt cannot resolve the same anchor twice");
 
@@ -412,7 +444,7 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     expect_error(
         ctx,
         purify::accountable::construction_receipt_statement_digest(
-            *payload, duplicate_root),
+            *payload, *setup, duplicate_root),
         purify::ErrorCode::BindingMismatch,
         "distinct references cannot resolve the same anchor root");
 
@@ -427,7 +459,8 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     if (!changed_recovery_payload) return;
     auto changed_recovery_digest =
         purify::accountable::construction_receipt_statement_digest(
-            *changed_recovery_payload, changed_recovery.resolved);
+            *changed_recovery_payload, *setup,
+            changed_recovery.resolved);
     expect_ok(ctx, changed_recovery_digest,
               "changed recovery digest constructs");
     if (!changed_recovery_digest) return;
@@ -442,7 +475,8 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     if (!changed_reference_payload) return;
     auto changed_reference_digest =
         purify::accountable::construction_receipt_statement_digest(
-            *changed_reference_payload, changed_reference.resolved);
+            *changed_reference_payload, *setup,
+            changed_reference.resolved);
     expect_ok(ctx, changed_reference_digest,
               "changed reference digest constructs");
     if (!changed_reference_digest) return;
@@ -459,7 +493,8 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     if (!changed_ciphertext_payload) return;
     auto changed_ciphertext_digest =
         purify::accountable::construction_receipt_statement_digest(
-            *changed_ciphertext_payload, changed_ciphertext.resolved);
+            *changed_ciphertext_payload, *setup,
+            changed_ciphertext.resolved);
     expect_ok(ctx, changed_ciphertext_digest,
               "changed ciphertext digest constructs");
     if (!changed_ciphertext_digest) return;
@@ -474,7 +509,7 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     if (!reordered_payload) return;
     auto reordered_digest =
         purify::accountable::construction_receipt_statement_digest(
-            *reordered_payload, reordered.resolved);
+            *reordered_payload, *setup, reordered.resolved);
     expect_ok(ctx, reordered_digest, "reordered digest constructs");
     if (!reordered_digest) return;
     ctx.expect(*reordered_digest != *digest,
@@ -484,7 +519,7 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     changed_anchor.resolved[0].anchor_root = *changed_root;
     auto changed_anchor_digest =
         purify::accountable::construction_receipt_statement_digest(
-            *payload, changed_anchor.resolved);
+            *payload, *setup, changed_anchor.resolved);
     expect_ok(ctx, changed_anchor_digest, "changed anchor digest constructs");
     if (!changed_anchor_digest) return;
     ctx.expect(*changed_anchor_digest != *digest,
@@ -494,7 +529,7 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     changed_context[0].context_digest[0] ^= 1U;
     auto changed_context_digest =
         purify::accountable::construction_receipt_statement_digest(
-            *payload, changed_context);
+            *payload, *setup, changed_context);
     expect_ok(ctx, changed_context_digest,
               "changed context digest constructs");
     if (!changed_context_digest) return;

@@ -1152,6 +1152,17 @@ void check_algebraic_suite(TestContext& ctx,
     if (!claim) return;
     expect_ok(ctx, accum::decide(*basis, *claim, secp),
               "algebraic coefficient reduction decides");
+    auto changed_reduction = *parsed_reduction;
+    auto reduction_evaluation = FieldElement::try_from_bytes32(
+        parsed_reduction->coefficient_evaluation);
+    expect_ok(ctx, reduction_evaluation,
+              "algebraic coefficient evaluation is canonical");
+    if (!reduction_evaluation) return;
+    changed_reduction.coefficient_evaluation =
+        (*reduction_evaluation + FieldElement::one()).to_bytes_be();
+    ctx.expect(!accum::verify_algebraic_norm_reduction(
+                   *basis, *algebraic_prepared, changed_reduction, secp),
+               "algebraic reduction rejects a changed coefficient evaluation");
     auto different_binding =
         accum::bind_algebraic_prepared_norm(
             *basis, *prepared, FieldElement::from_int(42));
@@ -1186,6 +1197,14 @@ void check_algebraic_suite(TestContext& ctx,
     expect_ok(ctx, second_prepared,
               "second algebraic fixture norm prepares");
     if (!second_prepared) return;
+    auto second_same_binding = accum::bind_algebraic_prepared_norm(
+        *basis, *second_prepared, FieldElement::from_int(41));
+    expect_ok(ctx, second_same_binding,
+              "second norm accepts the same staged V4 binding");
+    if (!second_same_binding) return;
+    ctx.expect(!accum::verify_algebraic_norm_reduction(
+                   *basis, *second_same_binding, *parsed_reduction, secp),
+               "algebraic reduction binds prepared components beyond the scalar");
     auto second_algebraic_prepared =
         accum::bind_algebraic_prepared_norm(
             *basis, std::move(*second_prepared),
@@ -1227,12 +1246,47 @@ void check_algebraic_suite(TestContext& ctx,
         *basis, *step_bytes, secp);
     expect_ok(ctx, parsed_step, "algebraic accumulation step parses");
     if (!parsed_step) return;
+    ctx.expect(!accum::parse_algebraic_step(
+                   *basis, *reduction_bytes, secp),
+               "algebraic step parser rejects a coefficient-reduction proof");
+    ctx.expect(!accum::parse_algebraic_norm_reduction(
+                   *basis, *step_bytes, secp),
+               "algebraic reduction parser rejects an accumulation-step proof");
     auto root = accum::verify_algebraic_step(
         *basis, claims, *parsed_step, secp);
     expect_ok(ctx, root, "algebraic accumulation step verifies");
     if (!root) return;
     expect_ok(ctx, accum::decide(*basis, *root, secp),
               "algebraic accumulation root decides");
+    auto step_terminal = FieldElement::try_from_bytes32(
+        parsed_step->terminal_scalar);
+    expect_ok(ctx, step_terminal,
+              "algebraic step terminal scalar is canonical");
+    if (!step_terminal) return;
+    auto changed_step = *parsed_step;
+    changed_step.terminal_scalar =
+        (*step_terminal + FieldElement::one()).to_bytes_be();
+    ctx.expect(!accum::verify_algebraic_step(
+                   *basis, claims, changed_step, secp),
+               "algebraic step rejects a changed terminal scalar");
+
+    auto root_bytes = accum::serialize_root_claim(
+        *basis, *root, secp);
+    expect_ok(ctx, root_bytes,
+              "algebraic root claim serializes");
+    if (!root_bytes) return;
+    const auto changed_factor =
+        (root->polynomial()[0].factors[0] + FieldElement::one())
+            .to_bytes_be();
+    std::copy(changed_factor.begin(), changed_factor.end(),
+              root_bytes->begin() + 65);
+    auto changed_root = accum::parse_root_claim(
+        *basis, *root_bytes, secp);
+    expect_ok(ctx, changed_root,
+              "changed algebraic root remains a pending obligation");
+    if (!changed_root) return;
+    ctx.expect(!accum::decide(*basis, *changed_root, secp),
+               "final decision rejects a changed algebraic root");
     const std::array reversed_claims{*second_claim, *claim};
     ctx.expect(!accum::verify_algebraic_step(
                    *basis, reversed_claims, *parsed_step, secp),

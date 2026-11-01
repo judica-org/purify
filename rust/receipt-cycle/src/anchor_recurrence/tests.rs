@@ -11,6 +11,7 @@ use crate::algebraic_circuit_transcript::{
 use crate::construction_manifest::{
     derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestStepInput,
 };
+use crate::direct_nova::direct_nova_raw_metrics;
 use crate::parent_relation::{
     add_point_values, derive_candidate_folded_generator, CandidatePendingClaimWitness,
     CandidatePolynomialTermWitness, ConstrainedPendingClaim, EncodedSecpPoint, PointValue,
@@ -291,7 +292,24 @@ fn fixture(
     offset: SecpEncodedPointWitness,
     mask: SecpEncodedPointWitness,
 ) -> Fixture {
-    let shape = small_anchor_shape();
+    fixture_for_shape(
+        small_anchor_shape(),
+        binding_byte,
+        manifest_byte,
+        raw,
+        offset,
+        mask,
+    )
+}
+
+fn fixture_for_shape(
+    shape: CircuitTranscriptShapeV4,
+    binding_byte: u8,
+    manifest_byte: u8,
+    raw: SecpEncodedPointWitness,
+    offset: SecpEncodedPointWitness,
+    mask: SecpEncodedPointWitness,
+) -> Fixture {
     let statement = ManifestBoundAnchorLeafStatementV4 {
         shape,
         circuit_binding_digest: [binding_byte; 32],
@@ -413,6 +431,106 @@ fn production_shape_is_exact() {
         folded_generator: SecpEncodedPointWitness::identity(),
     };
     validate_production_shape(statement, &reduction, &step).expect("production shape");
+}
+
+#[test]
+#[ignore = "run explicitly in release mode; builds one production recurrence"]
+fn production_public_anchor_recurrence_reports_direct_shape() {
+    eprintln!("production_shape_metrics: deriving fixture");
+    let fixture = fixture_for_shape(
+        production_anchor_shape(),
+        0x31,
+        1,
+        generator(),
+        SecpEncodedPointWitness::identity(),
+        generator(),
+    );
+    assert_eq!(
+        fixture.statement.shape.mode,
+        CircuitCommitmentModeV4::Public
+    );
+    assert_eq!(fixture.statement.shape.gate_count, 8_192);
+    assert_eq!(fixture.statement.shape.commitment_count, 1);
+    assert_eq!(fixture.statement.shape.n_vec_len, 16_384);
+    assert_eq!(fixture.statement.shape.l_vec_len, 16_384);
+    assert_eq!(fixture.statement.shape.round_count(), 14);
+    assert_eq!(fixture.claims.len(), 2);
+    assert_eq!(fixture.proof.left.len(), 15);
+    assert_eq!(fixture.proof.right.len(), 15);
+    eprintln!("production_shape_metrics: building recurrence");
+    let relation = build_anchor_recurrence_relation(
+        &fixture.state,
+        fixture.statement,
+        &fixture.witness,
+        &fixture.reduction,
+        &fixture.proof,
+    )
+    .expect("production anchor recurrence");
+    let StatefulRelation { shape, assignment } = relation;
+    assert!(structured_relation_satisfied(&shape.circuit, &assignment));
+    drop(assignment);
+
+    eprintln!("production_shape_metrics: measuring direct lowering");
+    let metrics = direct_nova_raw_metrics::<ANCHOR_RECURRENCE_STATE_ARITY>(&shape)
+        .expect("direct Nova raw metrics");
+    eprintln!(
+        "relation_id={:02x?}\n{metrics:#?}",
+        metrics.relation_id.bytes()
+    );
+
+    assert_eq!(
+        metrics.relation_id.bytes(),
+        &[
+            0x53, 0x0d, 0xc1, 0x8d, 0x9b, 0xa3, 0x76, 0x9c, 0x16, 0xa1, 0x3a, 0xc4, 0xac, 0x7d,
+            0x8a, 0x87, 0xf6, 0x28, 0x98, 0x98, 0xc4, 0x03, 0x6d, 0xa6, 0xa1, 0x8b, 0xe8, 0xee,
+            0x0d, 0x87, 0xc1, 0xda,
+        ]
+    );
+    assert_eq!(
+        (
+            metrics.source_gates,
+            metrics.source_constraints,
+            metrics.source_terms,
+            metrics.allocated_operations,
+            metrics.boolean_operations,
+            metrics.product_operations,
+            metrics.semantic_constraints,
+        ),
+        (1_851_594, 3_813_632, 14_293_837, 57_328, 898_123, 896_143, 167_772,)
+    );
+    assert_eq!(
+        (
+            metrics.direct_variables,
+            metrics.direct_constraints,
+            metrics.direct_nnz_upper_bound,
+            metrics.direct_power_of_two_bucket,
+            metrics.direct_bucket_headroom,
+            metrics.direct_rounds,
+        ),
+        (1_851_594, 1_962_058, 12_552_747, 2_097_152, 135_094, 21,)
+    );
+    assert_eq!(
+        metrics.source_gates,
+        metrics.allocated_operations + metrics.boolean_operations + metrics.product_operations
+    );
+    assert!(metrics.source_terms >= metrics.source_constraints);
+    assert!(metrics.semantic_constraints <= metrics.source_constraints);
+    assert_eq!(
+        metrics.direct_constraints,
+        metrics.source_constraints - metrics.source_gates + ANCHOR_RECURRENCE_STATE_ARITY
+    );
+    assert_eq!(metrics.direct_variables, metrics.source_gates);
+    assert!(metrics.direct_nnz_upper_bound >= metrics.direct_constraints);
+    assert!(metrics.direct_power_of_two_bucket.is_power_of_two());
+    assert_eq!(
+        metrics.direct_bucket_headroom,
+        metrics.direct_power_of_two_bucket
+            - metrics.direct_variables.max(metrics.direct_constraints)
+    );
+    assert_eq!(
+        metrics.direct_rounds,
+        metrics.direct_power_of_two_bucket.ilog2()
+    );
 }
 
 #[test]

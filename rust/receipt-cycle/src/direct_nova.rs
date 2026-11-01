@@ -51,6 +51,32 @@ impl DirectRelationId {
     }
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DirectNovaRawMetrics {
+    pub(crate) relation_id: DirectRelationId,
+    pub(crate) source_gates: usize,
+    pub(crate) source_constraints: usize,
+    pub(crate) source_terms: usize,
+    pub(crate) allocated_operations: usize,
+    pub(crate) boolean_operations: usize,
+    pub(crate) product_operations: usize,
+    pub(crate) semantic_constraints: usize,
+    /// Auxiliary variables contributed by the direct step circuit. This does
+    /// not include Nova's augmented-circuit variables.
+    pub(crate) direct_variables: usize,
+    /// Constraints contributed by the direct step circuit. This does not
+    /// include Nova's augmented-circuit constraints.
+    pub(crate) direct_constraints: usize,
+    /// An upper bound before coefficient coalescing in Nova's matrices.
+    pub(crate) direct_nnz_upper_bound: usize,
+    /// The raw step bucket, before Nova's augmented-circuit overhead.
+    pub(crate) direct_power_of_two_bucket: usize,
+    /// Capacity left in the raw bucket before augmented-circuit overhead.
+    pub(crate) direct_bucket_headroom: usize,
+    pub(crate) direct_rounds: u32,
+}
+
 struct DirectNovaShape<const ARITY: usize> {
     source: Arc<RelationShape>,
     inputs: [StateWire; ARITY],
@@ -421,6 +447,157 @@ fn validate_direct_shape<const ARITY: usize>(
     validate_operations(operations, circuit)?;
     validate_direct_wire_provenance(circuit, operations)?;
     validate_state_wires::<ARITY>(circuit, operations, inputs, outputs)
+}
+
+#[cfg(test)]
+pub(crate) fn direct_nova_raw_metrics<const ARITY: usize>(
+    shape: &RelationShape,
+) -> Result<DirectNovaRawMetrics, ReceiptCycleError> {
+    validate_direct_shape::<ARITY>(
+        &shape.circuit,
+        &shape.operations,
+        &shape.inputs,
+        &shape.outputs,
+    )?;
+
+    let source_terms = shape
+        .circuit
+        .constraints
+        .iter()
+        .try_fold(0usize, |total, row| {
+            total
+                .checked_add(row.len())
+                .ok_or(ReceiptCycleError::Malformed(
+                    "direct Nova metric term overflow",
+                ))
+        })?;
+
+    let mut allocated_operations = 0usize;
+    let mut boolean_operations = 0usize;
+    let mut product_operations = 0usize;
+    let mut operation_nnz_upper_bound = 0usize;
+    for operation in &shape.operations {
+        let operation_nnz = match operation {
+            GateOperationShape::AllocatedValue { .. } => {
+                allocated_operations += 1;
+                0
+            }
+            GateOperationShape::Boolean { .. } => {
+                boolean_operations += 1;
+                3
+            }
+            GateOperationShape::Product {
+                left_binding,
+                right_binding,
+            } => {
+                product_operations += 1;
+                let left_terms = shape.circuit.constraints[*left_binding]
+                    .len()
+                    .checked_sub(1)
+                    .ok_or(ReceiptCycleError::Malformed("direct Nova product binding"))?;
+                let right_terms = shape.circuit.constraints[*right_binding]
+                    .len()
+                    .checked_sub(1)
+                    .ok_or(ReceiptCycleError::Malformed("direct Nova product binding"))?;
+                left_terms
+                    .checked_add(right_terms)
+                    .and_then(|terms| terms.checked_add(1))
+                    .ok_or(ReceiptCycleError::Malformed(
+                        "direct Nova metric nonzero overflow",
+                    ))?
+            }
+        };
+        operation_nnz_upper_bound = operation_nnz_upper_bound.checked_add(operation_nnz).ok_or(
+            ReceiptCycleError::Malformed("direct Nova metric nonzero overflow"),
+        )?;
+    }
+
+    let mut operation_rows = OperationRows::new(&shape.operations);
+    let mut next_operation_row = operation_rows.next();
+    let mut semantic_constraints = 0usize;
+    let mut semantic_nnz_upper_bound = 0usize;
+    for (row_index, row) in shape.circuit.constraints.iter().enumerate() {
+        if next_operation_row == Some(row_index) {
+            next_operation_row = operation_rows.next();
+            continue;
+        }
+        if next_operation_row.is_some_and(|owned| owned < row_index) {
+            return Err(ReceiptCycleError::Malformed(
+                "direct Nova metric operation row order",
+            ));
+        }
+        semantic_constraints += 1;
+        semantic_nnz_upper_bound = semantic_nnz_upper_bound
+            .checked_add(row.len())
+            .and_then(|terms| terms.checked_add(1))
+            .ok_or(ReceiptCycleError::Malformed(
+                "direct Nova metric nonzero overflow",
+            ))?;
+    }
+    if next_operation_row.is_some() {
+        return Err(ReceiptCycleError::Malformed(
+            "direct Nova metric operation rows",
+        ));
+    }
+
+    let direct_constraints = boolean_operations
+        .checked_add(product_operations)
+        .and_then(|constraints| constraints.checked_add(semantic_constraints))
+        .and_then(|constraints| constraints.checked_add(ARITY))
+        .ok_or(ReceiptCycleError::Malformed(
+            "direct Nova metric constraint overflow",
+        ))?;
+    let expected_direct_constraints = shape
+        .circuit
+        .constraints
+        .len()
+        .checked_sub(shape.circuit.gate_count)
+        .and_then(|constraints| constraints.checked_add(ARITY))
+        .ok_or(ReceiptCycleError::Malformed(
+            "direct Nova metric constraint shape",
+        ))?;
+    if direct_constraints != expected_direct_constraints {
+        return Err(ReceiptCycleError::Malformed(
+            "direct Nova metric constraint shape",
+        ));
+    }
+    let direct_nnz_upper_bound = operation_nnz_upper_bound
+        .checked_add(semantic_nnz_upper_bound)
+        .and_then(|terms| terms.checked_add(ARITY.checked_mul(3)?))
+        .ok_or(ReceiptCycleError::Malformed(
+            "direct Nova metric nonzero overflow",
+        ))?;
+    let direct_variables = shape.circuit.gate_count;
+    let direct_power_of_two_bucket = direct_variables
+        .max(direct_constraints)
+        .checked_next_power_of_two()
+        .ok_or(ReceiptCycleError::Malformed(
+            "direct Nova metric bucket overflow",
+        ))?;
+
+    Ok(DirectNovaRawMetrics {
+        relation_id: relation_id::<ARITY>(
+            &shape.circuit,
+            &shape.operations,
+            &shape.inputs,
+            &shape.outputs,
+            DIRECT_LOWERING_VERSION,
+        )?,
+        source_gates: shape.circuit.gate_count,
+        source_constraints: shape.circuit.constraints.len(),
+        source_terms,
+        allocated_operations,
+        boolean_operations,
+        product_operations,
+        semantic_constraints,
+        direct_variables,
+        direct_constraints,
+        direct_nnz_upper_bound,
+        direct_power_of_two_bucket,
+        direct_bucket_headroom: direct_power_of_two_bucket
+            - direct_variables.max(direct_constraints),
+        direct_rounds: direct_power_of_two_bucket.ilog2(),
+    })
 }
 
 fn validate_structured_circuit(circuit: &Circuit) -> Result<(), ReceiptCycleError> {

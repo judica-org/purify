@@ -83,7 +83,23 @@ impl Expression {
 #[derive(Default)]
 pub(crate) struct Builder {
     gates: Vec<(Scalar, Scalar)>,
+    operations: Vec<GateOperationShape>,
     constraints: Vec<Expression>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GateOperationShape {
+    AllocatedValue {
+        unit_constraint: usize,
+    },
+    Boolean {
+        input_constraint: usize,
+        output_constraint: usize,
+    },
+    Product {
+        left_binding: usize,
+        right_binding: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,6 +126,7 @@ impl StateVariable {
 pub(crate) struct StatefulRelation {
     pub(crate) circuit: Circuit,
     pub(crate) assignment: Assignment,
+    pub(crate) operations: Vec<GateOperationShape>,
     pub(crate) inputs: Vec<StateWire>,
     pub(crate) outputs: Vec<StateWire>,
 }
@@ -121,8 +138,10 @@ impl Builder {
     }
 
     pub(crate) fn allocate(&mut self, value: Scalar) -> Expression {
-        let index = self.gates.len();
-        self.gates.push((value, Scalar::ONE));
+        let operation = GateOperationShape::AllocatedValue {
+            unit_constraint: self.constraints.len(),
+        };
+        let index = self.push_gate(value, Scalar::ONE, operation);
         self.constrain_zero(
             Expression::variable(WireKind::Right, index, Scalar::ONE)
                 .sub(&Expression::constant(Scalar::ONE)),
@@ -150,8 +169,12 @@ impl Builder {
 
     pub(crate) fn allocate_boolean(&mut self, value: bool) -> Expression {
         let value = if value { Scalar::ONE } else { Scalar::ZERO };
-        let index = self.gates.len();
-        self.gates.push((value, value));
+        let input_constraint = self.constraints.len();
+        let operation = GateOperationShape::Boolean {
+            input_constraint,
+            output_constraint: input_constraint + 1,
+        };
+        let index = self.push_gate(value, value, operation);
         let left = Expression::variable(WireKind::Left, index, value);
         let right = Expression::variable(WireKind::Right, index, value);
         let output = Expression::variable(WireKind::Output, index, value);
@@ -161,8 +184,13 @@ impl Builder {
     }
 
     pub(crate) fn multiply(&mut self, left: &Expression, right: &Expression) -> Expression {
-        let index = self.gates.len();
-        self.gates.push((left.value, right.value));
+        let left_binding = self.constraints.len();
+        let right_binding = left_binding + 1;
+        let operation = GateOperationShape::Product {
+            left_binding,
+            right_binding,
+        };
+        let index = self.push_gate(left.value, right.value, operation);
         let left_wire = Expression::variable(WireKind::Left, index, left.value);
         let right_wire = Expression::variable(WireKind::Right, index, right.value);
         self.constrain_zero(left_wire.sub(left));
@@ -180,12 +208,21 @@ impl Builder {
         self.constrain_zero(left.clone().sub(right));
     }
 
+    fn push_gate(&mut self, left: Scalar, right: Scalar, operation: GateOperationShape) -> usize {
+        let index = self.gates.len();
+        self.gates.push((left, right));
+        self.operations.push(operation);
+        index
+    }
+
     pub(crate) fn finish(self) -> Result<(Vec<u8>, Vec<u8>), ReceiptCycleError> {
-        let (circuit, assignment) = self.finish_structured()?;
+        let (circuit, assignment, _) = self.finish_structured()?;
         Ok((encode_circuit(&circuit), encode_assignment(&assignment)))
     }
 
-    fn finish_structured(self) -> Result<(Circuit, Assignment), ReceiptCycleError> {
+    fn finish_structured(
+        self,
+    ) -> Result<(Circuit, Assignment, Vec<GateOperationShape>), ReceiptCycleError> {
         let circuit = Circuit {
             gate_count: self.gates.len(),
             constraints: self
@@ -194,8 +231,9 @@ impl Builder {
                 .map(expression_terms)
                 .collect::<Result<_, _>>()?,
         };
+        validate_operations(&self.operations, &circuit)?;
         let assignment = Assignment { gates: self.gates };
-        Ok((circuit, assignment))
+        Ok((circuit, assignment, self.operations))
     }
 
     pub(crate) fn finish_stateful(
@@ -208,14 +246,174 @@ impl Builder {
         }
         let input_wires = inputs.iter().map(|state| state.wire).collect();
         let output_wires = outputs.iter().map(|state| state.wire).collect();
-        let (circuit, assignment) = self.finish_structured()?;
+        let (circuit, assignment, operations) = self.finish_structured()?;
         Ok(StatefulRelation {
             circuit,
             assignment,
+            operations,
             inputs: input_wires,
             outputs: output_wires,
         })
     }
+}
+
+fn validate_operations(
+    operations: &[GateOperationShape],
+    circuit: &Circuit,
+) -> Result<(), ReceiptCycleError> {
+    if operations.len() != circuit.gate_count {
+        return Err(ReceiptCycleError::Malformed("builder operation count"));
+    }
+    let mut previous_constraint = None;
+    for (gate_index, operation) in operations.iter().enumerate() {
+        match operation {
+            GateOperationShape::AllocatedValue { unit_constraint } => {
+                validate_operation_indices(
+                    circuit,
+                    &mut previous_constraint,
+                    *unit_constraint,
+                    None,
+                )?;
+                validate_exact_constraint(
+                    circuit,
+                    *unit_constraint,
+                    &[
+                        (WireKind::One, 0, -Scalar::ONE),
+                        (WireKind::Right, gate_index, Scalar::ONE),
+                    ],
+                )?;
+            }
+            GateOperationShape::Boolean {
+                input_constraint,
+                output_constraint,
+            } => {
+                validate_operation_indices(
+                    circuit,
+                    &mut previous_constraint,
+                    *input_constraint,
+                    Some(*output_constraint),
+                )?;
+                validate_exact_constraint(
+                    circuit,
+                    *input_constraint,
+                    &[
+                        (WireKind::Left, gate_index, Scalar::ONE),
+                        (WireKind::Right, gate_index, -Scalar::ONE),
+                    ],
+                )?;
+                validate_exact_constraint(
+                    circuit,
+                    *output_constraint,
+                    &[
+                        (WireKind::Left, gate_index, -Scalar::ONE),
+                        (WireKind::Output, gate_index, Scalar::ONE),
+                    ],
+                )?;
+            }
+            GateOperationShape::Product {
+                left_binding,
+                right_binding,
+            } => {
+                validate_operation_indices(
+                    circuit,
+                    &mut previous_constraint,
+                    *left_binding,
+                    Some(*right_binding),
+                )?;
+                validate_binding_constraint(circuit, *left_binding, gate_index, WireKind::Left)?;
+                validate_binding_constraint(circuit, *right_binding, gate_index, WireKind::Right)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_operation_indices(
+    circuit: &Circuit,
+    previous_constraint: &mut Option<usize>,
+    first: usize,
+    second: Option<usize>,
+) -> Result<(), ReceiptCycleError> {
+    let last = second.unwrap_or(first);
+    if second.is_some_and(|second| first.checked_add(1) != Some(second))
+        || (*previous_constraint).is_some_and(|previous| previous >= first)
+    {
+        return Err(ReceiptCycleError::Malformed(
+            "builder operation constraint order",
+        ));
+    }
+    if last >= circuit.constraints.len() {
+        return Err(ReceiptCycleError::Malformed(
+            "builder operation constraint index",
+        ));
+    }
+    *previous_constraint = Some(last);
+    Ok(())
+}
+
+fn validate_exact_constraint(
+    circuit: &Circuit,
+    constraint_index: usize,
+    expected: &[(WireKind, usize, Scalar)],
+) -> Result<(), ReceiptCycleError> {
+    let constraint =
+        circuit
+            .constraints
+            .get(constraint_index)
+            .ok_or(ReceiptCycleError::Malformed(
+                "builder operation constraint index",
+            ))?;
+    if constraint.len() != expected.len()
+        || constraint
+            .iter()
+            .zip(expected)
+            .any(|(term, &(kind, index, coefficient))| {
+                term.kind != kind || term.index != index || term.coefficient != coefficient
+            })
+    {
+        return Err(ReceiptCycleError::Malformed("builder operation constraint"));
+    }
+    Ok(())
+}
+
+fn validate_binding_constraint(
+    circuit: &Circuit,
+    constraint_index: usize,
+    gate_index: usize,
+    bound_kind: WireKind,
+) -> Result<(), ReceiptCycleError> {
+    let constraint =
+        circuit
+            .constraints
+            .get(constraint_index)
+            .ok_or(ReceiptCycleError::Malformed(
+                "builder operation binding index",
+            ))?;
+    let mut previous = None;
+    let mut found_binding = false;
+    for term in constraint {
+        let key = (term.kind, term.index);
+        if term.coefficient == Scalar::ZERO || previous.is_some_and(|prior| prior >= key) {
+            return Err(ReceiptCycleError::Malformed("builder operation wire"));
+        }
+        if term.kind == WireKind::One {
+            if term.index != 0 {
+                return Err(ReceiptCycleError::Malformed("builder operation wire"));
+            }
+        } else if term.kind == bound_kind && term.index == gate_index {
+            if term.coefficient != Scalar::ONE || found_binding {
+                return Err(ReceiptCycleError::Malformed("builder operation binding"));
+            }
+            found_binding = true;
+        } else if term.index >= gate_index {
+            return Err(ReceiptCycleError::Malformed("builder operation wire"));
+        }
+        previous = Some(key);
+    }
+    if !found_binding {
+        return Err(ReceiptCycleError::Malformed("builder operation binding"));
+    }
+    Ok(())
 }
 
 fn expression_terms(expression: Expression) -> Result<Vec<Term>, ReceiptCycleError> {
@@ -289,24 +487,54 @@ fn encode_assignment(assignment: &Assignment) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    fn product_relation() -> (Builder, [StateVariable; 1], [StateVariable; 1]) {
+    fn product_relation(
+        input_value: u64,
+        swap_operands: bool,
+    ) -> (Builder, [StateVariable; 1], [StateVariable; 1]) {
         let mut builder = Builder::default();
-        let input = builder.allocate_state(Scalar::from(3));
-        let product = builder.multiply(input.expression(), &Expression::constant(Scalar::from(4)));
+        let input = builder.allocate_state(Scalar::from(input_value));
+        let constant = Expression::constant(Scalar::from(4));
+        let product = if swap_operands {
+            builder.multiply(&constant, input.expression())
+        } else {
+            builder.multiply(input.expression(), &constant)
+        };
         let output = builder.expose_state(&product);
         (builder, [input], [output])
     }
 
+    fn finish_product(input_value: u64, swap_operands: bool) -> StatefulRelation {
+        let (builder, inputs, outputs) = product_relation(input_value, swap_operands);
+        builder
+            .finish_stateful(&inputs, &outputs)
+            .expect("stateful relation")
+    }
+
+    fn boolean_relation(value: bool) -> (Builder, [StateVariable; 1], [StateVariable; 1]) {
+        let mut builder = Builder::default();
+        let input = builder.allocate_state(Scalar::from(3));
+        let _boolean = builder.allocate_boolean(value);
+        let output = builder.expose_state(input.expression());
+        (builder, [input], [output])
+    }
+
+    fn finish_boolean(value: bool) -> StatefulRelation {
+        let (builder, inputs, outputs) = boolean_relation(value);
+        builder
+            .finish_stateful(&inputs, &outputs)
+            .expect("stateful relation")
+    }
+
     #[test]
     fn stateful_finish_retains_the_canonical_relation() {
-        let (builder, inputs, outputs) = product_relation();
+        let (builder, inputs, outputs) = product_relation(3, false);
         let input_wires = inputs.each_ref().map(|state| state.wire);
         let output_wires = outputs.each_ref().map(|state| state.wire);
         let relation = builder
             .finish_stateful(&inputs, &outputs)
             .expect("stateful relation");
 
-        let (builder, _, _) = product_relation();
+        let (builder, _, _) = product_relation(3, false);
         let (circuit, assignment) = builder.finish().expect("canonical relation");
         assert_eq!(relation.inputs, input_wires);
         assert_eq!(relation.outputs, output_wires);
@@ -317,5 +545,118 @@ mod tests {
         );
         assert_eq!(encode_circuit(&relation.circuit), circuit);
         assert_eq!(encode_assignment(&relation.assignment), assignment);
+    }
+
+    #[test]
+    fn operation_shape_is_witness_independent() {
+        let first = finish_product(3, false);
+        let second = finish_product(9, false);
+
+        assert_eq!(first.operations, second.operations);
+        assert_eq!(first.circuit, second.circuit);
+        assert_ne!(first.assignment, second.assignment);
+        assert_eq!(
+            encode_circuit(&first.circuit),
+            encode_circuit(&second.circuit)
+        );
+        assert_ne!(
+            encode_assignment(&first.assignment),
+            encode_assignment(&second.assignment)
+        );
+        assert!(matches!(
+            first.operations.as_slice(),
+            [
+                GateOperationShape::AllocatedValue { unit_constraint: 0 },
+                GateOperationShape::Product {
+                    left_binding: 1,
+                    right_binding: 2
+                },
+                GateOperationShape::AllocatedValue { unit_constraint: 3 }
+            ]
+        ));
+
+        let true_relation = finish_boolean(true);
+        let false_relation = finish_boolean(false);
+        assert_eq!(true_relation.operations, false_relation.operations);
+        assert_eq!(true_relation.circuit, false_relation.circuit);
+        assert_ne!(true_relation.assignment, false_relation.assignment);
+    }
+
+    #[test]
+    fn lowering_shape_binds_multiplication_structure() {
+        let normal = finish_product(3, false);
+        let swapped = finish_product(3, true);
+
+        assert_eq!(normal.operations.len(), swapped.operations.len());
+        assert_eq!(normal.operations, swapped.operations);
+        assert_ne!(normal.circuit, swapped.circuit);
+    }
+
+    #[test]
+    fn stateful_finish_rejects_invalid_operation_metadata() {
+        let (mut missing, inputs, outputs) = product_relation(3, false);
+        missing.operations.pop();
+        assert!(matches!(
+            missing.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed("builder operation count"))
+        ));
+
+        let (mut arbitrary, inputs, outputs) = product_relation(3, false);
+        let GateOperationShape::Product {
+            left_binding,
+            right_binding,
+        } = &mut arbitrary.operations[1]
+        else {
+            panic!("product operation");
+        };
+        *left_binding = 3;
+        *right_binding = 4;
+        assert!(matches!(
+            arbitrary.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed("builder operation wire"))
+        ));
+
+        let (mut wrong_coefficient, inputs, outputs) = product_relation(3, false);
+        *wrong_coefficient.constraints[1]
+            .terms
+            .get_mut(&(WireKind::Left, 1))
+            .expect("current-gate binding") = Scalar::from(2);
+        assert!(matches!(
+            wrong_coefficient.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed("builder operation binding"))
+        ));
+
+        let (mut non_prior, inputs, outputs) = product_relation(3, false);
+        non_prior.constraints[1].add_term((WireKind::Right, 1), Scalar::ONE);
+        assert!(matches!(
+            non_prior.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed("builder operation wire"))
+        ));
+    }
+
+    #[test]
+    fn stateful_finish_rejects_changed_allocation_constraint() {
+        let (mut builder, inputs, outputs) = product_relation(3, false);
+        *builder.constraints[0]
+            .terms
+            .get_mut(&(WireKind::Right, 0))
+            .expect("allocation constraint") = Scalar::from(2);
+        assert!(matches!(
+            builder.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed("builder operation constraint"))
+        ));
+    }
+
+    #[test]
+    fn stateful_finish_rejects_changed_boolean_constraint() {
+        let (mut builder, inputs, outputs) = boolean_relation(true);
+        *builder.constraints[1]
+            .terms
+            .get_mut(&(WireKind::Right, 1))
+            .expect("boolean constraint") = Scalar::ONE;
+        assert!(matches!(
+            builder.finish_stateful(&inputs, &outputs),
+            Err(ReceiptCycleError::Malformed("builder operation constraint"))
+        ));
     }
 }

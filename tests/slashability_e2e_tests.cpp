@@ -7,7 +7,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <system_error>
+#include <vector>
 
 #include "canonical_recovery_root_helpers.hpp"
 #include "companion_scalar_escrow_helpers.hpp"
@@ -23,6 +25,138 @@ using purify_test::slashability::make_all_evil_coalition;
 using purify_test::slashability::make_native_accumulation_reference;
 using purify_test::slashability::expose_conflicting_coalition_key;
 using purify_test::slashability::serialize_parent_prover_fixture;
+
+#if defined(PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER)
+#if !defined(PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH)
+#error "receipt-cycle tests require the qualified parent proof path"
+#endif
+
+std::optional<purify::Bytes> load_qualified_parent_proof(
+    TestContext& ctx) {
+    constexpr std::size_t kProofSize =
+        purify::accountable::ConstructionReceiptEnvelope::
+            kParentProofSize;
+    std::ifstream input(
+        PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH,
+        std::ios::binary | std::ios::ate);
+    ctx.expect(input.is_open(),
+               "qualified construction parent proof opens");
+    if (!input.is_open()) return std::nullopt;
+    const auto size = input.tellg();
+    ctx.expect(size == static_cast<std::streamoff>(kProofSize),
+               "qualified construction parent proof has exact size");
+    if (size != static_cast<std::streamoff>(kProofSize)) {
+        return std::nullopt;
+    }
+    input.seekg(0, std::ios::beg);
+    purify::Bytes proof(kProofSize);
+    input.read(reinterpret_cast<char*>(proof.data()),
+               static_cast<std::streamsize>(proof.size()));
+    ctx.expect(input.good(),
+               "qualified construction parent proof reads completely");
+    if (!input.good()) return std::nullopt;
+    return proof;
+}
+
+std::optional<
+    purify::accountable::ConstructionReceiptStatementDigest>
+accept_construction_parent_if_requested(
+    TestContext& ctx,
+    const purify_test::slashability::
+        NativeAccumulationReferenceFixture& construction,
+    purify_secp_context* secp_context) {
+    const char* artifact_path = std::getenv(
+        "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT");
+    if (artifact_path == nullptr) return construction.statement;
+    ctx.expect(artifact_path[0] != '\0',
+               "construction parent artifact path is nonempty");
+    if (artifact_path[0] == '\0') return std::nullopt;
+
+    auto proof = load_qualified_parent_proof(ctx);
+    if (!proof) return std::nullopt;
+    auto envelope =
+        purify::accountable::ConstructionReceiptEnvelope::create(
+            construction.payload, *proof);
+    expect_ok(ctx, envelope,
+              "qualified construction parent envelope constructs");
+    if (!envelope) return std::nullopt;
+    auto verifier =
+        purify::accountable::ConstructionParentVerifier::load(
+            artifact_path);
+    expect_ok(ctx, verifier,
+              "qualified construction parent verifier loads");
+    if (!verifier) return std::nullopt;
+    auto accepted = verifier->verify(
+        construction.setup, *envelope,
+        construction.resolved_entries, construction.accumulator,
+        secp_context);
+    expect_ok(ctx, accepted,
+              "two-anchor construction parent proof accepts");
+    if (!accepted) return std::nullopt;
+    ctx.expect(
+        accepted->statement_digest() == construction.statement &&
+            accepted->anchor_count() == construction.anchors.size(),
+        "accepted construction binds the exact statement and count");
+
+    auto corrupted_proof = *proof;
+    corrupted_proof[corrupted_proof.size() / 2] ^= 1U;
+    auto corrupted_envelope =
+        purify::accountable::ConstructionReceiptEnvelope::create(
+            construction.payload, std::move(corrupted_proof));
+    expect_ok(ctx, corrupted_envelope,
+              "corrupted parent envelope remains canonical transport");
+    if (!corrupted_envelope) return std::nullopt;
+    expect_error(
+        ctx,
+        verifier->verify(
+            construction.setup, *corrupted_envelope,
+            construction.resolved_entries, construction.accumulator,
+            secp_context),
+        purify::ErrorCode::EquationMismatch,
+        "changed construction parent proof is rejected");
+
+    auto changed_reference = construction.resolved_entries;
+    changed_reference[0].anchor_reference[0] ^= 1U;
+    expect_error(
+        ctx,
+        verifier->verify(
+            construction.setup, *envelope, changed_reference,
+            construction.accumulator, secp_context),
+        purify::ErrorCode::EquationMismatch,
+        "construction parent proof cannot rebind an anchor reference");
+
+    std::vector<purify::accountable::ConstructionReceiptEntry>
+        reordered_entries(
+            construction.payload.entries().begin(),
+            construction.payload.entries().end());
+    std::swap(reordered_entries[0], reordered_entries[1]);
+    auto reordered_payload =
+        purify::accountable::ConstructionReceiptPayload::create(
+            construction.payload.recovery_root(),
+            std::move(reordered_entries));
+    expect_ok(ctx, reordered_payload,
+              "reordered construction payload constructs");
+    if (!reordered_payload) return std::nullopt;
+    auto reordered_envelope =
+        purify::accountable::ConstructionReceiptEnvelope::create(
+            std::move(*reordered_payload), *proof);
+    expect_ok(ctx, reordered_envelope,
+              "reordered construction parent envelope constructs");
+    if (!reordered_envelope) return std::nullopt;
+    auto reordered_resolved = construction.resolved_entries;
+    std::swap(reordered_resolved[0], reordered_resolved[1]);
+    expect_error(
+        ctx,
+        verifier->verify(
+            construction.setup, *reordered_envelope,
+            reordered_resolved, construction.accumulator,
+            secp_context),
+        purify::ErrorCode::EquationMismatch,
+        "construction parent proof binds ordered anchors");
+
+    return accepted->statement_digest();
+}
+#endif
 
 void write_parent_prover_fixture_if_requested(
     TestContext& ctx, const purify::Bytes& fixture) {
@@ -230,8 +364,15 @@ void run_slashability_e2e_tests(TestContext& ctx) {
         "construction prover fixture has the exact v1 frame");
     write_parent_prover_fixture_if_requested(ctx, *prover_fixture);
 
+    auto accepted_statement = construction->statement;
+#if defined(PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER)
+    auto parent_statement = accept_construction_parent_if_requested(
+        ctx, *construction, secp.get());
+    if (!parent_statement) return;
+    accepted_statement = *parent_statement;
+#endif
     auto exposed = expose_conflicting_coalition_key(
-        *coalition, construction->statement, secp.get());
+        *coalition, accepted_statement, secp.get());
     expect_ok(ctx, exposed,
               "proof-attested conflicting responses expose a key");
     if (!exposed) return;

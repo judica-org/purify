@@ -11,7 +11,6 @@
 
 #include "purify.hpp"
 #include "purify/puresign/anchor_escrow.hpp"
-#include "purify/puresign/construction_receipt_assembly.hpp"
 #include "../src/puresign/anchor_escrow_internal.hpp"
 #include "purify_test_helpers.hpp"
 
@@ -541,36 +540,6 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, promoted_setup,
               "exact setup reduction promotes to the anchor basis");
     if (!promoted_setup) return;
-    std::vector<purify::accountable::ConstructionReceiptEntry>
-        receipt_entries{{parsed->ciphertext(),
-                         prepared->circuit_precommitment()}};
-    auto receipt_payload =
-        purify::accountable::ConstructionReceiptPayload::create(
-            fixture->roster.recovery_root(),
-            std::move(receipt_entries));
-    expect_ok(ctx, receipt_payload,
-              "one-anchor construction payload creates");
-    if (!receipt_payload) return;
-    purify::accountable::AnchorReference anchor_reference{};
-    anchor_reference.fill(0x71);
-    purify::accountable::ResolvedConstructionReceiptEntry resolved(
-        anchor_reference, anchor->public_key, punishment_key, context);
-    purify::accountable::ResolvedConstructionSetupDigestBytes
-        setup_digest_bytes;
-    setup_digest_bytes.fill(0x72);
-    auto setup_digest =
-        purify::accountable::ResolvedConstructionSetupDigest::create(
-            setup_digest_bytes);
-    expect_ok(ctx, setup_digest,
-              "resolved construction setup digest creates");
-    if (!setup_digest) return;
-    auto expected_statement =
-        purify::accountable::construction_receipt_statement_digest(
-            *receipt_payload, *setup_digest, {&resolved, 1});
-    expect_ok(ctx, expected_statement,
-              "typed assembly statement digest creates");
-    if (!expected_statement) return;
-
     auto mismatched_circuit_precommitment =
         FieldElement::one().to_bytes_be();
     if (mismatched_circuit_precommitment ==
@@ -586,57 +555,6 @@ void test_anchor_escrow(TestContext& ctx) {
             mismatched_circuit_precommitment, *reduction, secp.get()),
         purify::ErrorCode::BindingMismatch,
         "construction rejects a substituted circuit precommitment");
-    auto mismatched_setup =
-        construction_accumulator->verify_setup_reduction(
-            fixture->roster, fixture->roster.recovery_root(),
-            fixture->setup_proof, *setup_reduction, secp.get());
-    expect_ok(ctx, mismatched_setup,
-              "mismatch assembly setup promotes");
-    if (!mismatched_setup) return;
-    std::vector<purify::accountable::ConstructionReceiptEntry>
-        mismatched_entries{{parsed->ciphertext(),
-                            mismatched_circuit_precommitment}};
-    auto mismatched_payload =
-        purify::accountable::ConstructionReceiptPayload::create(
-            fixture->roster.recovery_root(),
-            std::move(mismatched_entries));
-    expect_ok(ctx, mismatched_payload,
-              "mismatched precommitment payload remains canonical");
-    if (!mismatched_payload) return;
-    auto mismatched_assembly =
-        purify::accountable::ConstructionReceiptAssembly::create(
-            std::move(*mismatched_setup),
-            std::move(*mismatched_payload), *setup_digest, {resolved});
-    expect_ok(ctx, mismatched_assembly,
-              "mismatched precommitment assembly constructs");
-    if (!mismatched_assembly) return;
-    expect_error(
-        ctx,
-        mismatched_assembly->verify_anchor_reduction(
-            0, *construction_accumulator, fixture->roster, *parsed,
-            *reduction, secp.get()),
-        purify::ErrorCode::BindingMismatch,
-        "assembly passes its exact circuit precommitment to verification");
-
-    auto assembly =
-        purify::accountable::ConstructionReceiptAssembly::create(
-            std::move(*promoted_setup), std::move(*receipt_payload),
-            std::move(*setup_digest), {resolved});
-    expect_ok(ctx, assembly,
-              "typed construction assembly binds the exact manifest");
-    if (!assembly) return;
-    ctx.expect(assembly->statement_digest() == *expected_statement,
-               "typed assembly owns the exact statement digest");
-    expect_error(ctx, assembly->ordered_leaves(),
-                 purify::ErrorCode::MissingValue,
-                 "incomplete manifests cannot produce ordered leaves");
-    expect_error(
-        ctx,
-        assembly->verify_anchor_reduction(
-            1, *construction_accumulator, fixture->roster, *parsed,
-            *reduction, secp.get()),
-        purify::ErrorCode::IndexOutOfRange,
-        "anchor leaves cannot be added beyond the manifest");
 
     auto changed_manifest_record_bytes = *encoded;
     std::array<unsigned char, 32> changed_manifest_mask{};
@@ -660,71 +578,23 @@ void test_anchor_escrow(TestContext& ctx) {
     if (!changed_manifest_record) return;
     expect_error(
         ctx,
-        assembly->verify_anchor_reduction(
-            0, *construction_accumulator, fixture->roster,
-            *changed_manifest_record, *reduction, secp.get()),
-        purify::ErrorCode::BindingMismatch,
-        "a leaf cannot substitute another payload ciphertext");
+        construction_accumulator->verify_anchor_reduction(
+            *promoted_setup, fixture->roster, anchor->public_key,
+            punishment_key, context, *changed_manifest_record,
+            prepared->circuit_precommitment(), *reduction, secp.get()),
+        purify::ErrorCode::EquationMismatch,
+        "anchor proof rejects a substituted payload ciphertext");
 
-    auto pending = assembly->verify_anchor_reduction(
-        0, *construction_accumulator, fixture->roster, *parsed,
-        *reduction, secp.get());
+    auto pending = construction_accumulator->verify_anchor_reduction(
+        *promoted_setup, fixture->roster, anchor->public_key,
+        punishment_key, context, *parsed,
+        prepared->circuit_precommitment(), *reduction, secp.get());
     expect_ok(ctx, pending,
               "exact anchor reduction yields a pending obligation");
     if (!pending) return;
-    expect_error(
-        ctx,
-        assembly->verify_anchor_reduction(
-            0, *construction_accumulator, fixture->roster, *parsed,
-            *reduction, secp.get()),
-        purify::ErrorCode::BindingMismatch,
-        "one manifest index cannot be proven twice");
     expect_ok(ctx, purify::bppp::accumulation::decide(
                        accumulator->basis(), *pending, secp.get()),
               "final MSM discharges the honest anchor escrow obligation");
-    auto construction_leaves = assembly->ordered_leaves();
-    expect_ok(ctx, construction_leaves,
-              "complete manifest yields setup-first ordered leaves");
-    if (!construction_leaves) return;
-    ctx.expect(construction_leaves->size() == 2 &&
-                   (*construction_leaves)[0].point() ==
-                       assembly->setup().claim().point() &&
-                   (*construction_leaves)[1].point() == pending->point(),
-               "ordered leaves preserve setup and payload order");
-    auto construction_step = purify::bppp::accumulation::prove_step(
-        accumulator->basis(), *construction_leaves, secp.get());
-    expect_ok(ctx, construction_step,
-              "setup and anchor obligations fold into one root");
-    if (!construction_step) return;
-    auto construction_root = purify::bppp::accumulation::verify_step(
-        accumulator->basis(), *construction_leaves,
-        *construction_step, secp.get());
-    expect_ok(ctx, construction_root,
-              "combined construction root remains pending");
-    if (!construction_root) return;
-    auto encoded_construction_root =
-        purify::bppp::accumulation::serialize_root_claim(
-            accumulator->basis(), *construction_root, secp.get());
-    expect_ok(ctx, encoded_construction_root,
-              "combined construction root has a canonical encoding");
-    if (!encoded_construction_root) return;
-    ctx.expect(
-        encoded_construction_root->size() ==
-            purify::accountable::ConstructionReceiptAccumulator::
-                kRootClaimSerializedSize &&
-            encoded_construction_root->size() == 545,
-        "combined construction root is exactly 545 bytes");
-    auto parsed_construction_root =
-        purify::bppp::accumulation::parse_root_claim(
-            accumulator->basis(), *encoded_construction_root,
-            secp.get());
-    expect_ok(ctx, parsed_construction_root,
-              "combined construction root reparses");
-    if (!parsed_construction_root) return;
-    expect_ok(ctx, purify::bppp::accumulation::decide(
-                       accumulator->basis(),
-                       *parsed_construction_root, secp.get()),
-              "final MSM discharges setup and anchor together");
 
     const auto slot = purify::bytes_from_ascii(
         "anchor-escrow/domain=3/epoch=9/slot=4");
@@ -798,7 +668,7 @@ void test_anchor_escrow(TestContext& ctx) {
         "public DLog binding rejects the changed escrow context");
     ctx.expect(
         !construction_accumulator->verify_anchor_reduction(
-            assembly->setup(), fixture->roster, anchor->public_key,
+            *promoted_setup, fixture->roster, anchor->public_key,
             punishment_key, changed_context, *record,
             prepared->circuit_precommitment(),
             *reduction, secp.get()),
@@ -956,7 +826,7 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_error(
         ctx,
         construction_accumulator->verify_anchor_reduction(
-            assembly->setup(), other_fixture->roster,
+            *promoted_setup, other_fixture->roster,
             anchor->public_key, punishment_key, context, *parsed,
             prepared->circuit_precommitment(),
             *reduction,

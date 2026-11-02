@@ -364,7 +364,6 @@ add_library(purify
     src/puresign/recovery_root.cpp
     src/puresign/anchor_escrow.cpp
     src/puresign/construction_receipt.cpp
-    src/puresign/construction_receipt_assembly.cpp
     src/protocol/bppp.cpp
     src/protocol/accumulation.cpp
     src/protocol/coordinate_field.cpp
@@ -559,7 +558,6 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/recovery_root.cpp
         src/puresign/anchor_escrow.cpp
         src/puresign/construction_receipt.cpp
-        src/puresign/construction_receipt_assembly.cpp
         src/protocol/bppp.cpp
         src/protocol/accumulation.cpp
         src/protocol/coordinate_field.cpp

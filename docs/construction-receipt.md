@@ -218,8 +218,8 @@ Rust recurrence now verifies homogeneous public V4 anchor leaves and constrains
 the public DLog equation under the exact resolved punishment key. That key is
 already bound through the construction statement and initial manifest, so the
 migration added no payload field and does not repeat the public setup leaf. The
-historical setup-first native assembly remains useful as a test oracle, not as
-the selected recursive shape.
+selected recurrence begins from the decided setup seed and does not expose a
+setup-first flat assembly API.
 
 The integrated V4 adapter checks the raw-generator bridge, gamma
 residual, coefficient commitment, and compact polynomial terms. Focused

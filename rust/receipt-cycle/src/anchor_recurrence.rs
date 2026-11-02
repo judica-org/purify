@@ -65,6 +65,9 @@ pub(crate) struct AnchorRecurrenceStateWitness {
     pub(crate) manifest: [u8; 32],
     pub(crate) index: u32,
 }
+#[cfg(test)]
+mod tests;
+
 impl AnchorRecurrenceStateWitness {
     /// Returns the recurrence's exact public-state field order.
     pub(crate) fn state_fields(

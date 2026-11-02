@@ -160,7 +160,9 @@ void write_uint512(const UInt512& value, unsigned char* out) {
 }
 
 void write_field_element(const FieldElement& value, unsigned char* out) {
-    const std::array<unsigned char, PURIFY_FIELD_ELEMENT_BYTES> bytes = value.to_bytes_be();
+    std::array<unsigned char, PURIFY_FIELD_ELEMENT_BYTES> bytes =
+        value.to_bytes_be();
+    WipeObjectOnDestruction bytes_guard(bytes);
     std::copy(bytes.begin(), bytes.end(), out);
 }
 
@@ -344,11 +346,14 @@ purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEME
     if (!packed_secret.has_value()) {
         return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
+    purify::capi_detail::WipeObjectOnDestruction packed_secret_guard(
+        *packed_secret);
 
     purify::Result<std::pair<purify::UInt256, purify::UInt256>> unpacked = purify::unpack_secret(*packed_secret);
     if (!unpacked.has_value()) {
         return purify::core_api_detail::to_core_error_code(unpacked.error().code);
     }
+    purify::capi_detail::WipeObjectOnDestruction unpacked_guard(*unpacked);
 
     purify::Result<purify::JacobianPoint> m1 =
         purify::hash_to_curve(purify::capi_detail::tagged_message("Eval/1/", message_bytes), purify::curve1());
@@ -366,13 +371,16 @@ purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEME
     if (!q1.has_value()) {
         return purify::core_api_detail::to_core_error_code(q1.error().code);
     }
+    purify::capi_detail::WipeObjectOnDestruction q1_guard(*q1);
     purify::Result<purify::AffinePoint> q2 =
         purify::curve2().mul_secret_affine(*m2, unpacked->second);
     if (!q2.has_value()) {
         return purify::core_api_detail::to_core_error_code(q2.error().code);
     }
+    purify::capi_detail::WipeObjectOnDestruction q2_guard(*q2);
 
-    const purify::FieldElement output = purify::combine(q1->x, q2->x);
+    purify::FieldElement output = purify::combine(q1->x, q2->x);
+    purify::capi_detail::WipeObjectOnDestruction output_guard(output);
     purify::capi_detail::write_field_element(output, out_field_element);
     return PURIFY_ERROR_OK;
 }

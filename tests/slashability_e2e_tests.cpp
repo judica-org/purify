@@ -32,21 +32,21 @@ using purify_test::slashability::serialize_parent_prover_fixture;
 #if !defined(PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH)
 #error "receipt-cycle tests require the qualified parent proof path"
 #endif
+#if !defined(PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_PROOF_PATH)
+#error "receipt-cycle tests require the nondeciding parent proof path"
+#endif
 
-std::optional<purify::Bytes> load_qualified_parent_proof(
-    TestContext& ctx) {
+std::optional<purify::Bytes> load_parent_proof(
+    TestContext& ctx, const char* path) {
     constexpr std::size_t kProofSize =
         purify::accountable::ConstructionReceiptEnvelope::
             kParentProofSize;
-    std::ifstream input(
-        PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH,
-        std::ios::binary | std::ios::ate);
-    ctx.expect(input.is_open(),
-               "qualified construction parent proof opens");
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    ctx.expect(input.is_open(), "construction parent proof opens");
     if (!input.is_open()) return std::nullopt;
     const auto size = input.tellg();
     ctx.expect(size == static_cast<std::streamoff>(kProofSize),
-               "qualified construction parent proof has exact size");
+               "construction parent proof has exact size");
     if (size != static_cast<std::streamoff>(kProofSize)) {
         return std::nullopt;
     }
@@ -55,7 +55,7 @@ std::optional<purify::Bytes> load_qualified_parent_proof(
     input.read(reinterpret_cast<char*>(proof.data()),
                static_cast<std::streamsize>(proof.size()));
     ctx.expect(input.good(),
-               "qualified construction parent proof reads completely");
+               "construction parent proof reads completely");
     if (!input.good()) return std::nullopt;
     return proof;
 }
@@ -74,7 +74,8 @@ accept_construction_parent_if_requested(
                "construction parent artifact path is nonempty");
     if (artifact_path[0] == '\0') return std::nullopt;
 
-    auto proof = load_qualified_parent_proof(ctx);
+    auto proof = load_parent_proof(
+        ctx, PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH);
     if (!proof) return std::nullopt;
     auto envelope =
         purify::accountable::ConstructionReceiptEnvelope::create(
@@ -155,6 +156,25 @@ accept_construction_parent_if_requested(
             secp_context),
         purify::ErrorCode::EquationMismatch,
         "construction parent proof binds ordered anchors");
+
+    auto nondeciding_proof = load_parent_proof(
+        ctx,
+        PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_PROOF_PATH);
+    if (!nondeciding_proof) return std::nullopt;
+    auto nondeciding_envelope =
+        purify::accountable::ConstructionReceiptEnvelope::create(
+            construction.payload, std::move(*nondeciding_proof));
+    expect_ok(ctx, nondeciding_envelope,
+              "nondeciding parent envelope remains canonical");
+    if (!nondeciding_envelope) return std::nullopt;
+    expect_error(
+        ctx,
+        verifier->verify(
+            construction.setup, *nondeciding_envelope,
+            construction.resolved_entries, construction.accumulator,
+            secp_context),
+        purify::ErrorCode::EquationMismatch,
+        "recursive-valid nondeciding parent root is rejected");
 
     return accepted->statement_digest();
 }

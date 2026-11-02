@@ -713,6 +713,7 @@ if(PURIFY_BUILD_TESTS)
     if(PURIFY_BUILD_RECEIPT_CYCLE)
         target_compile_definitions(purify_tests PRIVATE
             "PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_v1_two_anchor.proof\""
+            "PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_v1_nondeciding.proof\""
         )
         add_executable(purify_receipt_cycle_c_tests
             tests/receipt_cycle_c_tests.c

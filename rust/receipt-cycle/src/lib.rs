@@ -31,6 +31,8 @@ mod anchor_recurrence;
 mod construction_manifest;
 #[allow(dead_code)]
 mod construction_parent_input;
+#[cfg(test)]
+mod construction_parent_prover_fixture;
 // This private ABI returns only a proof-authenticated pending root. The C++
 // acceptance boundary must parse and decide that root before exposing success.
 #[allow(dead_code)]

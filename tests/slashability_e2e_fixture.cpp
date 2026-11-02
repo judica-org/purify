@@ -182,8 +182,8 @@ Result<CoalitionFixture> make_all_evil_coalition(
         std::move(nonce_hosts)};
 }
 
-Result<NativeConstructionWitnessFixture>
-make_native_construction_witness(
+Result<NativeAccumulationReferenceFixture>
+make_native_accumulation_reference(
     const CoalitionFixture& coalition, std::size_t anchor_count,
     purify_secp_context* secp_context) {
     if (anchor_count == 0 || anchor_count > 255) {
@@ -364,7 +364,7 @@ make_native_construction_witness(
     std::copy(encoded_root.begin(), encoded_root.end(),
               root_bytes.begin());
 
-    return NativeConstructionWitnessFixture{
+    return NativeAccumulationReferenceFixture{
         std::move(accumulator), std::move(setup), std::move(payload),
         std::move(resolved_entries), std::move(anchors), statement,
         root_bytes};
@@ -373,6 +373,8 @@ make_native_construction_witness(
 Result<purify::accountable::ExposedCoalitionKey>
 expose_conflicting_coalition_key(
     CoalitionFixture& coalition,
+    const purify::accountable::ConstructionReceiptStatementDigest&
+        first_statement,
     purify_secp_context* secp_context) {
     const auto slot = purify::bytes_from_ascii(
         "slashability-e2e/domain=11/epoch=19/slot=7");
@@ -415,10 +417,10 @@ expose_conflicting_coalition_key(
             &shared_cache),
         "slashability_fixture:nonce_set");
 
-    const auto first_body =
-        purify::bytes_from_ascii("decision/root-a");
-    const auto second_body =
-        purify::bytes_from_ascii("decision/root-b");
+    const purify::Bytes first_body(first_statement.begin(),
+                                   first_statement.end());
+    auto second_body = first_body;
+    second_body.front() ^= 1;
     PURIFY_ASSIGN_OR_RETURN(
         auto first_challenge,
         purify::accountable::signature_challenge(

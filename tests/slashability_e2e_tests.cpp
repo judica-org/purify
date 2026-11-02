@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 
+#include "canonical_recovery_root_helpers.hpp"
 #include "companion_scalar_escrow_helpers.hpp"
 #include "purify_test_helpers.hpp"
 #include "slashability_e2e_fixture.hpp"
@@ -15,7 +16,7 @@ using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
 using purify_test::slashability::make_all_evil_coalition;
-using purify_test::slashability::make_native_construction_witness;
+using purify_test::slashability::make_native_accumulation_reference;
 using purify_test::slashability::expose_conflicting_coalition_key;
 
 void test_hidden_second_generator_rejects(
@@ -56,6 +57,21 @@ void test_hidden_second_generator_rejects(
             honest_public->second != rogue_public->second,
         "rogue root preserves only the first generator component");
 
+    auto rogue_circuit =
+        purify_test::canonical_root::public_setup_circuit(
+            rogue_root->public_key);
+    auto rogue_assignment =
+        purify_test::canonical_root::setup_assignment(
+            rogue_root->public_key, coalition.signing_scalar);
+    expect_ok(ctx, rogue_circuit,
+              "rogue recovery-root relation constructs");
+    expect_ok(ctx, rogue_assignment,
+              "rogue recovery-root witness materializes");
+    if (!rogue_circuit || !rogue_assignment) return;
+    ctx.expect(
+        !rogue_circuit->evaluate(*rogue_assignment),
+        "hidden second component violates the setup circuit");
+
     expect_error(
         ctx,
         purify::accountable::prove_recovery_root_setup(
@@ -80,7 +96,7 @@ void test_hidden_second_generator_rejects(
     }
 }
 
-void test_recovered_punishment_signature(
+void test_recovered_punishment_key_usability(
     TestContext& ctx,
     const purify::accountable::AnchorPunishmentKey& recovered,
     std::size_t index,
@@ -100,13 +116,13 @@ void test_recovered_punishment_signature(
             secp_context, signature.data(), digest.data(),
             digest.size(), recovered.bip340_key().seckey.data(),
             nonce.data()) != 0,
-        "recovered punishment secret signs a slash digest");
+        "recovered punishment secret signs a test digest");
     ctx.expect(
         purify_bip340_verify(
             secp_context, signature.data(), digest.data(),
             digest.size(),
             recovered.public_key().xonly().data()) != 0,
-        "advertised punishment key accepts the slash signature");
+        "advertised punishment key accepts the BIP340 signature");
 }
 
 } // namespace
@@ -127,10 +143,10 @@ void run_slashability_e2e_tests(TestContext& ctx) {
     test_hidden_second_generator_rejects(
         ctx, *coalition, secp.get());
 
-    auto construction = make_native_construction_witness(
+    auto construction = make_native_accumulation_reference(
         *coalition, 2, secp.get());
     expect_ok(ctx, construction,
-              "two-anchor native parent witness decides");
+              "two-anchor native accumulation reference decides");
     if (!construction) return;
     ctx.expect(
         construction->anchors.size() == 2 &&
@@ -161,9 +177,9 @@ void run_slashability_e2e_tests(TestContext& ctx) {
         "parent inputs share a suite but bind each exact anchor");
 
     auto exposed = expose_conflicting_coalition_key(
-        *coalition, secp.get());
+        *coalition, construction->statement, secp.get());
     expect_ok(ctx, exposed,
-              "proof-attested conflicting certificates expose a key");
+              "proof-attested conflicting responses expose a key");
     if (!exposed) return;
     ctx.expect(
         exposed->scalar() == coalition->signing_scalar &&
@@ -192,7 +208,7 @@ void run_slashability_e2e_tests(TestContext& ctx) {
                 recovered->bip340_key().seckey ==
                     anchor.punishment_key.bip340_key().seckey,
             "decryption returns the exact registered punishment key");
-        test_recovered_punishment_signature(
+        test_recovered_punishment_key_usability(
             ctx, *recovered, i, secp.get());
         expect_error(
             ctx,

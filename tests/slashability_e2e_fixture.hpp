@@ -36,18 +36,18 @@ struct EscrowedAnchorFixture {
 };
 
 /**
- * A complete native replay of the witness consumed by the Nova parent.
+ * A native accumulation reference for setup and ordered anchor claims.
  *
- * This is deliberately not a verified construction receipt. The final
- * root proves that the native reference ancestry is internally
- * consistent,
- * but it does not authenticate omitted ancestry. A production test must
- * pass this
- * exact setup, payload, and resolved manifest through
+ * This is neither a verified construction receipt nor a complete replay
+ * of the Nova relation. The decided root checks the native setup
+ * seed, anchor reductions, and ordered accumulation steps. Only Nova
+ * binds the statement, manifest, count, and index transitions. A
+ * production test must pass this exact setup, payload, and resolved
+ * manifest through
  * `ConstructionParentVerifier` before treating the construction as
  * accepted.
  */
-struct NativeConstructionWitnessFixture {
+struct NativeAccumulationReferenceFixture {
     purify::accountable::ConstructionReceiptAccumulator accumulator;
     purify::accountable::ResolvedConstructionSetup setup;
     purify::accountable::ConstructionReceiptPayload payload;
@@ -64,13 +64,22 @@ struct NativeConstructionWitnessFixture {
 [[nodiscard]] purify::Result<CoalitionFixture> make_all_evil_coalition(
     purify_secp_context* secp_context);
 
-[[nodiscard]] purify::Result<NativeConstructionWitnessFixture>
-make_native_construction_witness(
+[[nodiscard]] purify::Result<NativeAccumulationReferenceFixture>
+make_native_accumulation_reference(
     const CoalitionFixture& coalition, std::size_t anchor_count,
     purify_secp_context* secp_context);
 
+/**
+ * Sign one construction statement and one changed body with the same
+ * proved nonces. The changed body has no parent-receipt fixture; this
+ * demonstrates accountable response extraction, not two accepted
+ * construction receipts.
+ */
 [[nodiscard]] purify::Result<purify::accountable::ExposedCoalitionKey>
 expose_conflicting_coalition_key(
-    CoalitionFixture& coalition, purify_secp_context* secp_context);
+    CoalitionFixture& coalition,
+    const purify::accountable::ConstructionReceiptStatementDigest&
+        first_statement,
+    purify_secp_context* secp_context);
 
 } // namespace purify_test::slashability

@@ -340,7 +340,7 @@ function(purify_enable_release_optimizations target)
     target_compile_definitions(${target} PRIVATE NDEBUG)
 endfunction()
 
-add_library(purify
+add_library(purify STATIC
     src/core/core.c
     src/core/curve.c
     src/core/field.c

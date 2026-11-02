@@ -39,6 +39,15 @@ class RecoveryRootSetupProof;
     std::span<const puresign_plusplus::PublicKey> ordered_hosts,
     purify_secp_context* secp_context);
 
+/**
+ * Verify aggregate-key knowledge and the recovery-root relation.
+ *
+ * The circuit wrapper's external-commitment proof establishes knowledge of the
+ * exact final aggregate signing scalar. The root relation derives the exact
+ * registered companion root from that same witness. Success is the sole
+ * cryptographic constructor for `RecoveryBoundSigningRoster`; member consent
+ * is separate application policy.
+ */
 [[nodiscard]] Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
     NonceHostBoundSigningRoster roster, const UInt512& recovery_root,
     const RecoveryRootSetupProof& proof,

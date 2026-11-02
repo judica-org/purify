@@ -1,7 +1,7 @@
 use bulletproofs_cycle::Cycle;
 use ff::Field;
 use golden_halo2curves::Secq256k1Cycle;
-use nova_snark::nova::PublicParams;
+use nova_snark::nova::{PublicParams, PublicParamsShapeMetrics, R1CSShapeMetrics};
 use num_bigint::BigUint;
 
 use super::*;
@@ -37,6 +37,37 @@ const SECP_ORDER: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
     0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
 ];
+
+const SHA_VERIFIER_PAYLOAD_LENGTH: u64 = 3_793_960_104;
+const SHA_VERIFIER_ARTIFACT_LENGTH: u64 = SHA_VERIFIER_PAYLOAD_LENGTH + 64;
+
+// The pinned Nova revision encodes each sparse term as a 32-byte scalar and
+// an eight-byte index. This setup-free estimate must match the produced file.
+fn fixed_bincode_shape_length(metrics: R1CSShapeMetrics) -> u64 {
+    let padded_dimension = metrics
+        .constraints
+        .max(metrics.variables)
+        .next_power_of_two() as u64;
+    let nonzero_terms = (metrics.a_terms + metrics.b_terms + metrics.c_terms) as u64;
+    40 * nonzero_terms + 24 * padded_dimension + 144
+}
+
+fn fixed_bincode_verifier_payload_length(metrics: PublicParamsShapeMetrics) -> u64 {
+    let primary_dimension = metrics
+        .primary
+        .constraints
+        .max(metrics.primary.variables)
+        .next_power_of_two() as u64;
+    let secondary_dimension = metrics
+        .secondary
+        .constraints
+        .max(metrics.secondary.variables)
+        .next_power_of_two() as u64;
+    fixed_bincode_shape_length(metrics.primary)
+        + fixed_bincode_shape_length(metrics.secondary)
+        + 33 * (primary_dimension + secondary_dimension)
+        + 352
+}
 
 fn small_anchor_shape() -> CircuitTranscriptShapeV4 {
     CircuitTranscriptShapeV4 {
@@ -671,6 +702,10 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
     assert_eq!(augmented.secondary.a_terms, 1_676_035);
     assert_eq!(augmented.secondary.b_terms, 736_338);
     assert_eq!(augmented.secondary.c_terms, 1_568_376);
+    assert_eq!(
+        fixed_bincode_verifier_payload_length(augmented),
+        SHA_VERIFIER_PAYLOAD_LENGTH
+    );
 
     let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
         NovaR1csDimensions::new(augmented.primary.constraints, augmented.primary.variables),
@@ -1002,6 +1037,15 @@ fn native_profile_sha_parent_qualification_is_exact() {
     drop(accepted);
     drop(nondeciding);
 
+    let augmented =
+        PublicParams::<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, _>::shape_metrics(
+            &trusted_step,
+        )
+        .expect("preflight qualification verifier shape");
+    let verifier_payload_length = fixed_bincode_verifier_payload_length(augmented);
+    assert_eq!(verifier_payload_length, SHA_VERIFIER_PAYLOAD_LENGTH);
+    eprintln!("sha_parent_qualification: verifier_payload_preflight={verifier_payload_length}");
+
     let setup_started = std::time::Instant::now();
     eprintln!("sha_parent_qualification: constructing transparent parameters");
     let suite = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup(trusted_step)
@@ -1055,6 +1099,7 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let descriptor = verifier
         .write_artifact(&mut artifact)
         .expect("write qualification verifier artifact");
+    assert_eq!(descriptor.encoded_length(), SHA_VERIFIER_ARTIFACT_LENGTH);
     artifact
         .sync_all()
         .expect("sync qualification verifier artifact");

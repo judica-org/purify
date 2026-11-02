@@ -36,6 +36,9 @@ mod ffi;
 mod fixed_serde;
 #[cfg(test)]
 mod nova_compressed_codec_tests;
+// This is an internal fixed-template integration layer, not a receipt API.
+#[allow(dead_code)]
+mod nova_session;
 // This is an internal candidate component, not a receipt acceptance API.
 #[allow(dead_code)]
 mod norm_reduction;

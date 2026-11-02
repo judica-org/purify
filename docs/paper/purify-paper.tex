@@ -831,10 +831,74 @@ x-only outputs, one should think of the likely upside as an unmeasured constant-
 improvement from backend-specific layout choices rather than an already-demonstrated order-of-
 magnitude gain.
 
-\subsection{Public Reduction to One Norm Relation}
+\subsection{Candidate V4 Circuit Leaf}
 
-Let $N$ be the number of multiplication gates in the native circuit, and index the sparse linear rows
-by $j$. V3 first commits, under fixed independent bases, to every raw
+Construction-receipt work now treats V4 as the candidate active circuit
+leaf. V4 replaces proof-dependent SHA-256 challenges with a typed
+Poseidon transcript. Its public precommitment binds the exact circuit
+digest, commitment mode, shape, ordered public points, and raw witness
+commitment. The proof transcript also binds the raw-generator digest,
+reconstructed public terms, batched public-point equation, masking
+equation, and explicit inner-fold challenges.
+
+Native production, preparation, and verification are implemented for
+both public and hidden commitment modes. Matching constrained leaves are
+implemented, as is the native adapter into the algebraic accumulation
+language. Preparation and adaptation produce a pending norm obligation,
+not acceptance. Coefficient reduction, authenticated accumulation
+transitions, and the final native decision remain mandatory.
+
+The measured production-shape relations have 854,293 gates for the
+public setup leaf and 949,880 gates for the historical hidden anchor
+leaf. These are leaf relation sizes, not complete parent costs. Anchor
+escrow record version~3 now uses V4 public mode with one punishment-key
+commitment. The selected public-anchor recurrence constrains that
+commitment's DLog equation and has now been measured end to end as a
+relation: 1,851,594 source gates, 3,813,632 rows, and 14,293,837 terms.
+Its direct Nova lowering has 1,851,594 variables and 1,962,058
+constraints.
+
+The selected parent architecture verifies the heterogeneous public
+setup once through an immutable Bitcoin-replayable registry record and
+stores a canonical construction-basis seed root. A homogeneous Nova
+0.76 recurrence then verifies one public anchor leaf and one ordered
+accumulation transition per step. Its 20-field state carries the pending
+root, rolling manifest, and ordered index. The recurrence, exact-shape
+lowering, canonical compressed-proof codec, verifier-only artifact format,
+and authenticated-root verifier are implemented. Exact setup confirms primary
+and secondary buckets of respectively $2^{21}$ and $2^{14}$, giving a
+12,466-byte canonical proof with 125 fixed sequence lengths. The resulting
+candidate wire size is
+\[
+  69 + 224N + 12{,}466\text{ bytes},
+\]
+or 34,935 bytes for 100 anchors, without a duplicated 545-byte root.
+
+The selected native profile freezes relation ID
+\texttt{ecfd8e56084083ba9a94431fad5a5b1e0991d7597746440e76ccf77924444a66},
+public-parameter digest
+\texttt{b90f7e761288cc1fdb7abd16f4e0abbbe2c8d7c773f315a17f1d7c4f982f7900},
+and suite ID
+\texttt{116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa}.
+Exact setup and one full-scale fold have qualified. No construction receipt is
+activated. The exact payload-plus-proof envelope is syntax-only, and the
+generic artifact loader authenticates an expected length and digest before
+decoding; no production artifact descriptor is frozen or shipped. The latest
+guarded native-profile lifecycle run was aborted after about 1.0 GiB of
+swapout during setup, before compression. This was a resource failure, not a
+cryptographic failure. Full native-profile compression, the C ABI, and the
+root-to-native-decision acceptance path remain.
+
+The remainder of this section through the historical efficiency note
+records the preceding V3 implementation and its measurements. Its
+polynomial argument and transcript analysis are not a security proof for
+V4.
+
+\subsection{Historical V3 Reduction to One Norm Relation}
+
+Let $N$ be the number of multiplication gates in the native circuit, and
+index the sparse linear rows by $j$. V3 first commits, under fixed
+independent bases, to every raw
 $p_i=a_{L,i}+a_{R,i}$, $m_i=a_{L,i}-a_{R,i}$, output coordinate, and hidden linear coordinate.
 Call that point $A_{\rm raw}$. In the masked zero-knowledge wrapper, a random
 zero-coefficient hiding coordinate makes it perfectly hiding; the transparent
@@ -1007,7 +1071,7 @@ and the entire native circuit is equivalent to one public relation
 \]
 with $\mu_k = (\rho^2)^{k+1}$. This is the object the \bppp\ backend proves.
 
-\subsection{Transparent Reduced-Witness Proof}
+\subsection{Historical V3 Transparent Reduced-Witness Proof}
 
 The simplest \bppp\ entry points are:
 \begin{itemize}[nosep]
@@ -1053,10 +1117,11 @@ under that commitment. This framing makes the \bppp\ design easiest to read: it 
 statement as \bp, but only after first compressing the native circuit to the reduced witness
 coordinates $(n,\ell)$.
 
-\subsection{The Masked Zero-Knowledge Wrapper Used Here}
+\subsection{Historical V3 Masked Zero-Knowledge Wrapper}
 
-The repository's zero-knowledge \bppp\ path adds one more layer on top of that transparent reduced
-proof. Starting from the hidden vectors $(n,\ell)$, the prover first fills the zero-coefficient hiding
+The V3 zero-knowledge \bppp\ path adds one more layer on top of that
+transparent reduced proof. Starting from the hidden vectors $(n,\ell)$,
+the prover first fills the zero-coefficient hiding
 slots in $\ell$ with fresh blind scalars and then derives random mask vectors
 \[
 r_n \in \mathbb{F}^{2M}, \qquad r_\ell \in \mathbb{F}^{2M}
@@ -1112,7 +1177,7 @@ same challenge $x$, reconstruct $C_x$, and verify the final norm argument agains
 commitment. The outer protocol is \bp-like, while the inner statement remains the
 \bppp\ weighted norm relation.
 
-\subsection{Public Commitments and PureSign++}
+\subsection{Historical V3 Public Commitments and PureSign++}
 
 The reduction also supports an ``externalized commitments'' mode:
 \begin{itemize}[nosep]
@@ -1132,9 +1197,9 @@ the weighted contribution of those already-public points, so the remaining hidde
 \[
 \ell = \bigl(a_{O,0}, \ldots, a_{O,M-1}, \text{hiding slots}\bigr).
 \]
-PureSign++ uses this hook: some commitment objects remain explicit public
-protocol messages, while the hidden Purify witness is still proved through the same masked
-norm-argument path.
+The legacy V3 PureSign++ codec uses this hook: some commitment objects
+remain explicit public protocol messages, while the hidden Purify
+witness is still proved through the same masked norm-argument path.
 The V3 transcript additionally folds every public point with powers of an
 $A_{\rm raw}$-derived challenge and proves knowledge of the resulting discrete logarithm
 with one 64-byte Schnorr proof. This is a random-linear-combination batch check,
@@ -1148,7 +1213,7 @@ nevertheless never be reused when the assignment can differ under a repeated
 public statement, because the surrounding masking proof also derives its
 randomness from that seed.
 
-\subsection{Efficiency Note on a Bespoke \bppp\ Circuit}
+\subsection{Historical V3 Efficiency Note}
 
 The most plausible bespoke win would be to share selector algebra across the two branches that use
 the same secret scalar: one could compute each signed-window selector basis once for $z_1$ and fan
@@ -1156,11 +1221,12 @@ it out to both the $G_1$ and $M_1$ tables, and likewise once for $z_2$ across th
 tables. That would remove some duplicated lookup products and some generic lowering overhead, but it
 would not change the basic Purify arithmetic.
 
-This matters for expectations about size. In the current benchmark surface the \bppp\ proof payload
-is about $844$ bytes versus about $1124$ bytes for legacy \bp, a roughly $25\%$ reduction. The
-complete generic V3 wrapper is $1006$ bytes: it adds the raw commitment, masking commitment,
-quadratic response, and the amortized 64-byte discrete-log proof. A serialized PureSign++ nonce
-proof is $1072$ bytes after its framing and bound public fields.
+This historical V3 benchmark reports a \bppp\ proof payload of about
+$844$ bytes versus about $1124$ bytes for legacy \bp, a roughly $25\%$
+reduction. The complete generic V3 wrapper is $1006$ bytes: it adds the
+raw commitment, masking commitment, quadratic response, and the
+amortized 64-byte discrete-log proof. A serialized legacy PureSign++
+nonce proof is $1072$ bytes after its framing and bound public fields.
 \bppp\ backend's proof size is logarithmic in the reduced dimensions, so small structural cleanups
 do not necessarily shrink the proof at all. The current reused path pads the native circuit to
 $2048$ gates, and that gate-count padding alone makes the dominant reduced dimension
@@ -1192,15 +1258,26 @@ The repository keeps both \bp\ and \bppp\ because they serve different engineeri
 
 \section{Caveats}
 
-Two caveats are worth stating explicitly:
+Three caveats are worth stating explicitly:
 \begin{enumerate}[nosep]
   \item This repository marks the \bppp\ interfaces as experimental. They are useful for
   research, benchmarking, and higher-level protocol work, but callers should still treat them as an
-  evolving proving path.
-  \item The paper describes one mathematical statement and one masking wrapper, but the concrete
-  \bppp\ prover and verifier still depend on a separate experimental implementation of \bppp. The
-  remaining caveat is therefore about implementation maturity and integration risk, not about a
-  different public statement.
+  evolving proving path. The concrete prover and verifier depend on a
+  separate experimental \bppp\ implementation. Implementation maturity
+  and integration risk therefore remain.
+  \item The detailed reduction, transcript argument, and byte
+  measurements above describe V3. V4 constrains the same underlying
+  Purify circuit but changes its typed Fiat--Shamir transcript and
+  composition boundary. The V3 analysis is not a substitute for
+  independent V4 review.
+  \item Native and constrained V4 leaves exist, and Nova 0.76 is the
+  selected transparent folding backend for construction-receipt work.
+  The public-anchor recurrence migration and canonical Nova session are
+  implemented. The native profile, exact setup, and one full-scale fold are
+  qualified, and the verifier-only artifact and authenticated-root boundary
+  exist. Full native-profile compression, the shipped artifact descriptor,
+  and the C ABI/native acceptance API remain unfinished. Anchor escrow record
+  version~3 already carries a V4 public proof.
 \end{enumerate}
 
 \section{Summary}
@@ -1209,6 +1286,12 @@ Purify is the statement. The native sparse circuit is the common intermediate fo
 circuit directly. \bppp\ first folds the same circuit into a weighted norm argument and then proves
 that reduced relation, wrapped in a \bp-style\ masking transcript. That split is the easiest
 way to understand the design of \texttt{purify-cpp}: one circuit, two proving encodings.
+V4 is the candidate circuit leaf and the registry-seeded homogeneous
+Nova recurrence is the implemented composition direction. The extended V3
+discussion remains its historical implementation baseline. The recurrence
+and exact proof transport are not by themselves an activated construction
+receipt; native-profile full compression, the shipped verifier artifact, and
+the C ABI/native decision boundary still gate deployment.
 
 \appendix
 

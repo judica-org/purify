@@ -25,6 +25,15 @@ certificate validity. It advances
 enabling enrollment. The independent leaf experiment is in
 [#37](https://github.com/judica-org/purify/pull/37).
 
+V4 is the candidate active leaf path for a construction receipt. Native
+V4 proof production, preparation, verification, and the algebraic
+accumulation adapter are implemented. The fixed-size setup record and anchor
+record version 3 both encode V4 proofs. Their historical hidden-output sizes
+and timings below remain useful as an individual-proof baseline. The setup leaf
+is handled once at registry creation, and the record-version-3 public anchor
+leaf has been migrated into the homogeneous parent recurrence. That parent is
+not fully compressed or activated as a production receipt.
+
 ## Groups, keys and canonical encodings
 
 Write `(G,n)` for secp256k1's generator/order and `(Gi,li)` for Purify's
@@ -94,13 +103,18 @@ relevant nonzero sum/difference is at most `2^255`, below both group orders.
 The affine x-denominators do not vanish. Extending the gadget directly to
 256 bits would not inherit that argument.
 
-Finite `Q` fixes `q` modulo `n`. The bound and sign then uniquely fix `a,s`,
-which fixes both recipient points and canonical components. The V3 setup
-proof binds all of those outputs to the same witness. Verification is the
-only constructor for `RecoveryBoundSigningRoster`; anchor escrow creation
-does not accept an arbitrary recipient root. Consequently a roster cannot
-register a hidden second-generator component and later open a different
-recovery root while retaining the typed capability.
+Finite `Q` fixes `q` modulo `n`. The bound and sign then uniquely fix
+`a,s`, which fixes both recipient points and canonical components. The
+legacy V3 setup proof binds all of those outputs to the same witness.
+Verification is the only constructor for `RecoveryBoundSigningRoster`;
+anchor escrow creation does not accept an arbitrary recipient root.
+Consequently a roster cannot register a hidden second-generator
+component and later open a different recovery root while retaining the
+typed capability.
+
+The V4 candidate public setup leaf constrains the same circuit outputs
+and its public-point DLog equation. The current roster constructor still
+uses V3 verification until the fixed-record API is migrated.
 
 ## Encrypt the old root, not the new coalition
 
@@ -119,15 +133,23 @@ The bridge proof jointly constrains:
 - Both plaintext bounds `1 <= di <= floor(li/2)` and the old root's points.
 - Each ephemeral public pair and its shared-point multiplications under `M`.
 - Both `c_j` equations, using exactly those bounded plaintext witnesses.
+- A fixed-domain Purify evaluation of the same plaintext witnesses, normalized
+  to the even-Y BIP340 punishment scalar.
 
 The transcript binds the suite/version, ordered ciphertext, recipient, old
-root and application setup/purpose context. It also binds the roster's even-Y
-`Q`, key-list hash, coalition-core digest, and registered recovery root. The
-circuit has ten companion scalar multiplications: two for the old root and
-four for each pad. Its only output commitment is the public constant one.
-Unlike setup, the anchor proof therefore needs no public-commitment DLog
-fields. Encrypted plaintext relations are native field/curve equations, not
-independently blinded Pedersen output values.
+root, exact canonical punishment key and application setup/purpose context. It
+also binds the roster's even-Y `Q`, key-list hash, coalition-core digest, and
+registered recovery root. The circuit has twelve companion scalar
+multiplications: two for the old root, four for each pad, and two fixed-base
+multiplications for the punishment evaluation. The two evaluation
+multiplications reuse the old-root scalar bits and their bit-only lookup
+products. The circuit's sole output is the normalized punishment scalar,
+bound to canonical `02 || Kx` by V4 public-commitment mode and its 64-byte DLog
+argument. Encrypted plaintext relations remain native field/curve equations,
+not independently blinded Pedersen output values.
+
+The complete V4 transcript and pending norm obligation still require
+reduction, parent authentication, and the final accumulator decision.
 
 `recover_escrowed_anchor` first verifies the bridge and checks that an exposed
 coalition scalar opens the recovery-bound roster's exact `Q` and registered
@@ -192,7 +214,7 @@ an old authority which lacks their required participation. A shared root
 amortizes a bridge only when that common custody/exposure group already
 exists; independently created roots do not become one root for free.
 
-## Measured sizes and cost accounting
+## Historical hidden-output sizes and current cost accounting
 
 The test-local C++20 Release experiments measured:
 
@@ -205,27 +227,27 @@ The test-local C++20 Release experiments measured:
 | Complete proof bytes | 1,006 | 1,072 |
 | Ciphertext bytes | 0 | 192 |
 | Proof plus ciphertext | 1,006 | 1,264 |
-| Versioned fixed record | 1,007 | 1,265 |
+| Historical versioned fixed record | 1,007 | 1,265 |
 
 Setup additionally needs its 64-byte `M` and the registered `Q` (33 bytes
 as a full point, or its existing authenticated x-only representation).
 If `Q` is already registered, setup adds 1,071 bytes including the 64-byte
-root and proof version byte. The anchor escrow is exactly 1,265 bytes. The
-bridge's 192 bytes are two 64-byte ephemeral pairs and two 32-byte field
-elements. The record does not repeat either 64-byte root or the 32-byte
-application-context digest. A standalone envelope carrying both roots and
-that digest would therefore be 1,425 bytes before registry references,
-consents, or transport framing.
+root and proof version byte. The 1,265-byte anchor figure was the historical
+hidden-output record. The current public-commitment anchor record adds the
+32-byte DLog nonce and 32-byte DLog response, for 1,329 bytes. Its 192-byte
+ciphertext is two 64-byte ephemeral pairs and two 32-byte field elements.
+The record does not repeat the 64-byte root, canonical 32-byte punishment
+key, or 32-byte application-context digest; all are authenticated public
+inputs.
 
-With setup shared across `R` independent old roots, incremental cryptographic
-data is `1071 + 1265*R` bytes when roots and context are authenticated by
-reference. One setup plus one bridge is 2,336 bytes. For 100 independent
-anchors under one coalition, amortizing setup gives 1,275.71 bytes per
-anchor before roots, references, consents, and transport framing. This is
-close to, but does not meet, a strict 1 KB per-anchor goal. Permanent anchor
-leaves remain additional historical data.
+With setup shared across `R` independent old roots, current incremental
+cryptographic data is `1071 + 1329*R` bytes when roots, punishment keys, and
+context are authenticated by reference. One setup plus one bridge is 2,400
+bytes. For 100 independent anchors under one coalition, amortizing setup gives
+1,339.71 bytes per anchor before roots, references, consents, and transport
+framing. Permanent anchor leaves remain additional historical data.
 
-One AppleClang 16 / arm64 Release sample of the final tree took about 2.95
+One AppleClang 16 / arm64 Release sample of the V3 tree took about 2.95
 seconds to prove setup and 0.52 seconds to verify it. The first anchor escrow
 in its focused suite took about 9.21 seconds to prove and 2.19 seconds to
 verify. These are centralized honest fixtures run while other sanitizer work
@@ -270,8 +292,13 @@ Recovery of a scalar is not by itself a proof of forced economic loss under
 Bitcoin's spend rules. Enrollment remains disabled while the distributed
 setup and prover are not implemented.
 
-The next [construction receipt experiment](construction-receipt.md) treats
-these setup and encryption proofs as out-of-band inputs to a public assembler.
-The intended on-chain receipt retains the ciphertexts and replaces the child
-proofs with one parent proof. That parent is not yet implemented or measured;
-the individual proof sizes above are not an estimate of its size or prover cost.
+The next [construction receipt experiment](construction-receipt.md)
+treats the setup and encryption proofs as out-of-band inputs to a public
+assembler. V4 is the candidate child relation for that design. The
+intended on-chain receipt retains the ciphertexts and replaces the child
+proofs with one parent proof. The recurrence and selected profile are
+implemented; exact setup and one full-scale fold have qualified, and the proof
+shape and authenticated-root verifier are fixed. Full native-profile
+compression and the C ABI/native acceptance path remain incomplete; the
+historical V3 sizes above are not an estimate of the parent's size or prover
+cost.

@@ -54,6 +54,55 @@ jobs:
           ctest --test-dir build-tagged --output-on-failure
           -R 'purify\.tests\..*|purify\.c_api'
 
+  receipt-cycle:
+    runs-on: ubuntu-latest
+    name: ubuntu-latest / transparent receipt cycle
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: >
+          rustup toolchain install 1.98.1
+          --profile minimal
+          --component clippy
+          --component rustfmt
+
+      - name: Check Rust formatting
+        working-directory: rust/receipt-cycle
+        run: cargo +1.98.1 fmt --all -- --check
+
+      - name: Test Rust backend
+        working-directory: rust/receipt-cycle
+        run: cargo +1.98.1 test --locked
+
+      - name: Lint Rust backend
+        working-directory: rust/receipt-cycle
+        run: cargo +1.98.1 clippy --locked --all-targets -- -D warnings
+
+      - name: Initialize required submodule
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp
+
+      - name: Configure C ABI test
+        run: >
+          cmake -S . -B build-receipt-cycle
+          -DPURIFY_BUILD_TESTS=ON
+          -DPURIFY_BUILD_RECEIPT_CYCLE=ON
+          -DPURIFY_BUILD_CLI=OFF
+          -DPURIFY_BUILD_BENCH=OFF
+          -DPURIFY_BUILD_DOCS=OFF
+          -DPURIFY_BUILD_FUZZ=OFF
+
+      - name: Build C ABI test
+        run: >
+          cmake --build build-receipt-cycle --parallel
+          --target purify_receipt_cycle_c_tests
+
+      - name: Test C ABI
+        run: >
+          ctest --test-dir build-receipt-cycle --output-on-failure
+          -R '^purify\.tests\.receipt_cycle_c$'
+
   build-and-test:
     strategy:
       fail-fast: false

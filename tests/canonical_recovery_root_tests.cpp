@@ -7,6 +7,7 @@
 #include <chrono>
 #include <iostream>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -54,6 +55,29 @@ Result<std::vector<purify::puresign_plusplus::PublicKey>> nonce_hosts(
         out.push_back(std::move(host));
     }
     return out;
+}
+
+Bytes legacy_setup_binding(
+    const purify::accountable::NonceHostBoundSigningRoster& roster,
+    const UInt512& root) {
+    std::array<unsigned char, 8> count{};
+    auto value = roster.members().size();
+    for (std::size_t i = count.size(); i != 0; --i) {
+        count[i - 1] = static_cast<unsigned char>(value & 0xffU);
+        value >>= 8;
+    }
+    PointBytes key{};
+    key[0] = 0x02;
+    std::copy(roster.signing_key().begin(), roster.signing_key().end(),
+              key.begin() + 1);
+    const auto root_bytes = root.to_bytes_be();
+    static const purify::TaggedHash hash(
+        "Purify/Accountable/RecoveryRootSetup/v1");
+    const auto digest = hash.digest_many<6>({
+        roster.key_list_hash(), key, count, root_bytes,
+        roster.coalition_core_digest(), roster.nonce_host_commitment(),
+    });
+    return Bytes(digest.begin(), digest.end());
 }
 
 void test_bounds_and_recoding(TestContext& ctx) {
@@ -182,8 +206,10 @@ void test_setup_and_recovery(TestContext& ctx) {
         "setup proof parsing requires a secp context");
     ctx.expect(encoded_proof->size() == 1007 &&
                    encoded_proof->size() ==
-                       purify::accountable::RecoveryRootSetupProof::kSerializedSize,
-               "setup proof encoding accounts for its fixed V1 fields");
+                       purify::accountable::RecoveryRootSetupProof::
+                           kSerializedSize &&
+                   encoded_proof->front() == 2,
+               "setup proof encoding accounts for its fixed V2 fields");
     auto parsed_proof = purify::accountable::RecoveryRootSetupProof::deserialize(
         *encoded_proof, secp.get());
     expect_ok(ctx, parsed_proof, "canonical setup proof reparses");
@@ -191,6 +217,323 @@ void test_setup_and_recovery(TestContext& ctx) {
     auto reencoded_proof = parsed_proof->serialize(secp.get());
     ctx.expect(reencoded_proof && *reencoded_proof == *encoded_proof,
                "setup proof encoding round-trips exactly");
+    auto construction_accumulator = purify::accountable::
+        ConstructionReceiptAccumulator::create(secp.get());
+    expect_ok(ctx, construction_accumulator,
+              "construction receipt fixed accumulation bases create");
+    if (!construction_accumulator) return;
+    purify::accountable::ResolvedConstructionSetupDigestBytes
+        resolved_digest_bytes{};
+    resolved_digest_bytes.fill(0x5d);
+    auto resolved_digest = purify::accountable::
+        ResolvedConstructionSetupDigest::create(
+            resolved_digest_bytes);
+    expect_ok(ctx, resolved_digest,
+              "resolved setup registry digest is nonzero");
+    if (!resolved_digest) return;
+    const auto* setup_accumulator = &construction_accumulator->setup();
+    ctx.expect(
+        setup_accumulator->basis().n_vec_len() ==
+                purify::accountable::RecoveryRootSetupAccumulator::
+                    kNormVectorLength &&
+            setup_accumulator->basis().l_vec_len() ==
+                purify::accountable::RecoveryRootSetupAccumulator::
+                    kNormVectorLength,
+        "recovery-root setup accumulation fixes both norm dimensions");
+    auto setup_prepared = setup_accumulator->prepare(
+        *bound_roster, root->public_key, *parsed_proof, secp.get());
+    expect_ok(ctx, setup_prepared,
+              "typed adapter prepares the exact setup statement");
+    if (!setup_prepared) return;
+    auto setup_reduction =
+        purify::bppp::accumulation::prove_algebraic_norm_reduction(
+            setup_accumulator->basis(), *setup_prepared, secp.get());
+    expect_ok(ctx, setup_reduction,
+              "recovery-root setup coefficient opening proves");
+    if (!setup_reduction) return;
+    auto encoded_setup_reduction =
+        purify::bppp::accumulation::
+            serialize_algebraic_norm_reduction(
+                setup_accumulator->basis(), *setup_reduction,
+                secp.get());
+    expect_ok(ctx, encoded_setup_reduction,
+              "setup reduction has a canonical local encoding");
+    if (!encoded_setup_reduction) return;
+    ctx.expect(encoded_setup_reduction->size() == 890,
+               "setup reduction local replay is exactly 890 bytes");
+    auto setup_pending =
+        purify::bppp::accumulation::verify_algebraic_norm_reduction(
+            setup_accumulator->basis(), *setup_prepared,
+            *setup_reduction, secp.get());
+    expect_ok(ctx, setup_pending,
+              "recovery-root setup reduction stays pending");
+    if (!setup_pending) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       setup_accumulator->basis(), *setup_pending,
+                       secp.get()),
+              "final MSM discharges the honest setup obligation");
+    auto promoted_setup =
+        construction_accumulator->verify_setup_reduction(
+            *bound_roster, root->public_key, *parsed_proof,
+            *setup_reduction, secp.get());
+    expect_ok(ctx, promoted_setup,
+              "exact setup reduction promotes to the construction basis");
+    if (!promoted_setup) return;
+    const auto& promoted_claim = promoted_setup->claim();
+    const auto same_polynomial = [&] {
+        if (promoted_claim.polynomial().size() !=
+            setup_pending->polynomial().size()) {
+            return false;
+        }
+        for (std::size_t i = 0;
+             i < setup_pending->polynomial().size(); ++i) {
+            const auto& promoted = promoted_claim.polynomial()[i];
+            const auto& setup = setup_pending->polynomial()[i];
+            if (promoted.scale != setup.scale ||
+                promoted.offset != setup.offset ||
+                promoted.factors != setup.factors) {
+                return false;
+            }
+        }
+        return true;
+    };
+    ctx.expect(
+        promoted_claim.point() == setup_pending->point() &&
+            same_polynomial() &&
+            promoted_claim.basis_digest() ==
+                construction_accumulator->anchors().basis().digest() &&
+            promoted_claim.basis_digest() !=
+                setup_accumulator->basis().digest(),
+        "promotion changes only the authenticated basis digest");
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       construction_accumulator->anchors().basis(),
+                       promoted_claim, secp.get()),
+              "construction basis preserves the setup obligation");
+    const std::span<const purify::bppp::accumulation::PendingClaim>
+        promoted_claims(&promoted_claim, 1);
+    auto construction_step =
+        purify::bppp::accumulation::prove_algebraic_step(
+            construction_accumulator->anchors().basis(),
+            promoted_claims, secp.get());
+    expect_ok(ctx, construction_step,
+              "promoted setup claim folds into an algebraic seed");
+    if (!construction_step) return;
+    auto encoded_construction_step =
+        purify::bppp::accumulation::serialize_algebraic_step(
+            construction_accumulator->anchors().basis(),
+            *construction_step, secp.get());
+    expect_ok(ctx, encoded_construction_step,
+              "setup seed step has a canonical local encoding");
+    if (!encoded_construction_step) return;
+    ctx.expect(encoded_construction_step->size() == 1056,
+               "setup seed local replay is exactly 1056 bytes");
+    auto construction_root =
+        purify::bppp::accumulation::verify_algebraic_step(
+            construction_accumulator->anchors().basis(),
+            promoted_claims, *construction_step, secp.get());
+    expect_ok(ctx, construction_root,
+              "construction root remains a pending obligation");
+    if (!construction_root) return;
+    auto encoded_construction_root =
+        purify::bppp::accumulation::serialize_root_claim(
+            construction_accumulator->anchors().basis(),
+            *construction_root, secp.get());
+    expect_ok(ctx, encoded_construction_root,
+              "construction root has a canonical encoding");
+    if (!encoded_construction_root) return;
+    ctx.expect(
+        encoded_construction_root->size() ==
+            purify::accountable::ConstructionReceiptAccumulator::
+                kRootClaimSerializedSize &&
+            encoded_construction_root->size() == 545,
+        "construction root encoding is exactly 545 bytes");
+    auto parsed_construction_root =
+        purify::bppp::accumulation::parse_root_claim(
+            construction_accumulator->anchors().basis(),
+            *encoded_construction_root, secp.get());
+    expect_ok(ctx, parsed_construction_root,
+              "construction root reparses against its fixed basis");
+    if (!parsed_construction_root) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       construction_accumulator->anchors().basis(),
+                       *parsed_construction_root, secp.get()),
+              "final MSM discharges the parsed construction root");
+    ctx.expect(
+        parsed_construction_root->polynomial().size() == 1 &&
+            parsed_construction_root->polynomial()[0].factors.size() ==
+                purify::accountable::ConstructionReceiptAccumulator::
+                    kRootClaimRounds,
+        "resolved setup seed has exactly fifteen factors");
+
+    purify::bppp::ExperimentalCircuitCache setup_cache;
+    auto resolved_setup = construction_accumulator->resolve_setup_record(
+        *bound_roster, root->public_key, *parsed_proof,
+        *resolved_digest, secp.get(), &setup_cache);
+    expect_ok(ctx, resolved_setup,
+              "setup resolver replays the complete decided ancestry");
+    if (!resolved_setup) return;
+    const auto resolved_seed = resolved_setup->seed_root();
+    const auto resolved_members = resolved_setup->roster().members();
+    const auto expected_members = bound_roster->members();
+    const bool exact_members =
+        resolved_members.size() == expected_members.size() &&
+        std::equal(
+            resolved_members.begin(), resolved_members.end(),
+            expected_members.begin(),
+            [](const purify::accountable::SigningRosterMember& left,
+               const purify::accountable::SigningRosterMember& right) {
+                return left.public_key == right.public_key &&
+                       left.coefficient == right.coefficient;
+            });
+    ctx.expect(
+        resolved_seed.size() ==
+                purify::accountable::ResolvedConstructionSetup::
+                    kSeedRootSize &&
+            std::equal(resolved_seed.begin(), resolved_seed.end(),
+                       encoded_construction_root->begin()) &&
+            resolved_setup->roster().recovery_root() ==
+                root->public_key &&
+            resolved_setup->roster().signing_key() ==
+                bound_roster->signing_key() &&
+            resolved_setup->roster().key_list_hash() ==
+                bound_roster->key_list_hash() &&
+            resolved_setup->roster().aggregate_was_negated() ==
+                bound_roster->aggregate_was_negated() &&
+            resolved_setup->roster().coalition_core_digest() ==
+                bound_roster->coalition_core_digest() &&
+            resolved_setup->roster().nonce_host_commitment() ==
+                bound_roster->nonce_host_commitment() &&
+            resolved_setup->resolved_digest().bytes() ==
+                resolved_digest_bytes && exact_members,
+        "resolved setup owns the exact roster, registry digest, and seed");
+    auto parsed_resolved_seed =
+        purify::bppp::accumulation::parse_root_claim(
+            construction_accumulator->anchors().basis(),
+            resolved_seed, secp.get());
+    expect_ok(ctx, parsed_resolved_seed,
+              "resolved setup seed reparses against the anchor basis");
+    if (!parsed_resolved_seed) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       construction_accumulator->anchors().basis(),
+                       *parsed_resolved_seed, secp.get()),
+              "resolved setup seed independently reaches final decision");
+
+    auto false_setup_bytes = *encoded_proof;
+    std::array<unsigned char, 32> false_terminal_n_bytes{};
+    std::copy_n(false_setup_bytes.end() - 64,
+                false_terminal_n_bytes.size(),
+                false_terminal_n_bytes.begin());
+    auto false_terminal_n =
+        FieldElement::try_from_bytes32(false_terminal_n_bytes);
+    expect_ok(ctx, false_terminal_n,
+              "setup terminal norm scalar is canonical");
+    if (!false_terminal_n) return;
+    false_terminal_n_bytes =
+        (*false_terminal_n + FieldElement::one()).to_bytes_be();
+    std::copy(false_terminal_n_bytes.begin(),
+              false_terminal_n_bytes.end(),
+              false_setup_bytes.end() - 64);
+    auto false_setup =
+        purify::accountable::RecoveryRootSetupProof::deserialize(
+            false_setup_bytes, secp.get());
+    expect_ok(ctx, false_setup,
+              "changed setup inner proof remains canonical");
+    if (!false_setup) return;
+    ctx.expect(
+        !construction_accumulator->resolve_setup_record(
+            *bound_roster, root->public_key, *false_setup,
+            *resolved_digest, secp.get()),
+        "setup resolver rejects a canonical false setup proof");
+    auto false_setup_prepared = setup_accumulator->prepare(
+        *bound_roster, root->public_key, *false_setup, secp.get());
+    expect_ok(ctx, false_setup_prepared,
+              "changed setup proof remains a pending obligation");
+    if (!false_setup_prepared) return;
+    auto false_setup_reduction =
+        purify::bppp::accumulation::prove_algebraic_norm_reduction(
+            setup_accumulator->basis(), *false_setup_prepared,
+            secp.get());
+    expect_ok(ctx, false_setup_reduction,
+              "changed setup proof has a coefficient opening");
+    if (!false_setup_reduction) return;
+    auto false_promoted_setup =
+        construction_accumulator->verify_setup_reduction(
+            *bound_roster, root->public_key, *false_setup,
+            *false_setup_reduction, secp.get());
+    expect_ok(ctx, false_promoted_setup,
+              "short verifier keeps the changed setup proof pending");
+    if (!false_promoted_setup) return;
+    ctx.expect(!purify::bppp::accumulation::decide(
+                   construction_accumulator->anchors().basis(),
+                   false_promoted_setup->claim(), secp.get()),
+               "basis promotion preserves a false setup obligation");
+
+    auto legacy_circuit = public_setup_circuit(root->public_key);
+    auto legacy_assignment = setup_assignment(root->public_key, q);
+    expect_ok(ctx, legacy_circuit, "legacy setup circuit reconstructs");
+    expect_ok(ctx, legacy_assignment, "legacy setup witness reconstructs");
+    if (!legacy_circuit || !legacy_assignment) return;
+    std::array<unsigned char, 32> legacy_seed{};
+    legacy_seed.fill(0x42);
+    const std::array<PointBytes, 1> legacy_outputs{key};
+    const auto legacy_binding =
+        legacy_setup_binding(*bound_roster, root->public_key);
+    auto legacy_proof = purify::bppp::
+        prove_experimental_circuit_zk_norm_arg_with_public_commitments(
+            *legacy_circuit, *legacy_assignment, legacy_seed,
+            legacy_outputs, secp.get(), legacy_binding);
+    expect_ok(ctx, legacy_proof, "legacy V3 setup proof constructs");
+    if (!legacy_proof) return;
+    auto legacy_valid = purify::bppp::
+        verify_experimental_circuit_zk_norm_arg_with_public_commitments(
+            *legacy_circuit, *legacy_proof, legacy_outputs, secp.get(),
+            legacy_binding);
+    ctx.expect(legacy_valid && *legacy_valid,
+               "legacy V3 setup proof verifies in its own protocol");
+    Bytes version_flipped_legacy;
+    version_flipped_legacy.reserve(
+        purify::accountable::RecoveryRootSetupProof::kSerializedSize);
+    version_flipped_legacy.push_back(
+        purify::accountable::RecoveryRootSetupProof::
+            kSerializationVersion);
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(),
+        legacy_proof->a_commitment.begin(),
+        legacy_proof->a_commitment.end());
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(),
+        legacy_proof->s_commitment.begin(),
+        legacy_proof->s_commitment.end());
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(), legacy_proof->t2.begin(),
+        legacy_proof->t2.end());
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(),
+        legacy_proof->public_commitment_dlog_nonce.begin(),
+        legacy_proof->public_commitment_dlog_nonce.end());
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(),
+        legacy_proof->public_commitment_dlog_response.begin(),
+        legacy_proof->public_commitment_dlog_response.end());
+    version_flipped_legacy.insert(
+        version_flipped_legacy.end(), legacy_proof->proof.begin(),
+        legacy_proof->proof.end());
+    ctx.expect(
+        version_flipped_legacy.size() ==
+            purify::accountable::RecoveryRootSetupProof::kSerializedSize,
+        "legacy V3 body has the setup record's fixed shape");
+    auto parsed_version_flipped =
+        purify::accountable::RecoveryRootSetupProof::deserialize(
+            version_flipped_legacy, secp.get());
+    expect_ok(ctx, parsed_version_flipped,
+              "version-flipped V3 body remains structurally canonical");
+    if (!parsed_version_flipped) return;
+    ctx.expect(
+        !purify::accountable::verify_recovery_root_setup(
+            *bound_roster, root->public_key,
+            *parsed_version_flipped, secp.get()),
+        "V4 setup semantics reject a version-flipped V3 proof");
+
     auto changed_encoding = *encoded_proof;
     changed_encoding[0] ^= 1;
     expect_error(ctx,
@@ -217,14 +560,14 @@ void test_setup_and_recovery(TestContext& ctx) {
     expect_error(ctx,
                  purify::accountable::RecoveryRootSetupProof::deserialize(
                      changed_encoding, secp.get()),
-                 purify::ErrorCode::RangeViolation,
+                 purify::ErrorCode::BackendRejectedInput,
                  "invalid setup proof A commitment rejects");
     changed_encoding = *encoded_proof;
     std::fill_n(changed_encoding.begin() + 34, 33, 0);
     expect_error(ctx,
                  purify::accountable::RecoveryRootSetupProof::deserialize(
                      changed_encoding, secp.get()),
-                 purify::ErrorCode::RangeViolation,
+                 purify::ErrorCode::BackendRejectedInput,
                  "invalid setup proof S commitment rejects");
     changed_encoding = *encoded_proof;
     std::fill_n(changed_encoding.begin() + 67, 32, 0xff);
@@ -238,7 +581,7 @@ void test_setup_and_recovery(TestContext& ctx) {
     expect_error(ctx,
                  purify::accountable::RecoveryRootSetupProof::deserialize(
                      changed_encoding, secp.get()),
-                 purify::ErrorCode::RangeViolation,
+                 purify::ErrorCode::BackendRejectedInput,
                  "invalid DLog nonce encoding rejects");
     changed_encoding = *encoded_proof;
     std::fill_n(changed_encoding.begin() + 131, 32, 0);
@@ -254,6 +597,27 @@ void test_setup_and_recovery(TestContext& ctx) {
                      changed_encoding, secp.get()),
                  purify::ErrorCode::RangeViolation,
                  "non-canonical setup proof DLog response rejects");
+    changed_encoding = *encoded_proof;
+    changed_encoding[163] = 4;
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::RangeViolation,
+                 "non-canonical setup round parity rejects");
+    changed_encoding = *encoded_proof;
+    std::copy_n(changed_encoding.begin() + 34, 33,
+                changed_encoding.begin() + 1);
+    auto changed_raw_proof =
+        purify::accountable::RecoveryRootSetupProof::deserialize(
+            changed_encoding, secp.get());
+    expect_ok(ctx, changed_raw_proof,
+              "changed finite setup raw commitment reparses");
+    if (!changed_raw_proof) return;
+    ctx.expect(
+        !purify::accountable::verify_recovery_root_setup(
+            *bound_roster, root->public_key, *changed_raw_proof,
+            secp.get()),
+        "V4 setup precommitment binds the exact raw commitment");
     auto verified = purify::accountable::verify_recovery_root_setup(
         *bound_roster, root->public_key, *parsed_proof, secp.get());
     const auto checked = std::chrono::steady_clock::now();
@@ -326,6 +690,20 @@ void test_setup_and_recovery(TestContext& ctx) {
                    *bound_roster, other_root->public_key,
                    *proof, secp.get()),
                "unchanged setup proof rejects another recovery root");
+    expect_error(
+        ctx,
+        setup_accumulator->prepare(
+            *bound_roster, other_root->public_key, *parsed_proof,
+            secp.get()),
+        purify::ErrorCode::EquationMismatch,
+        "typed adapter rejects a setup proof for another recovery root");
+    expect_error(
+        ctx,
+        construction_accumulator->verify_setup_reduction(
+            *bound_roster, other_root->public_key, *parsed_proof,
+            *setup_reduction, secp.get()),
+        purify::ErrorCode::EquationMismatch,
+        "construction promotion authenticates the exact setup statement");
     auto changed_members = member_keys;
     auto changed_member = secp_point(
         FieldElement::from_u64(5), secp.get());
@@ -406,8 +784,8 @@ void test_setup_and_recovery(TestContext& ctx) {
     }
     const auto proof_payload_bytes = encoded_proof->size() - 1;
     std::cout << "canonical_root_honest_setup"
-              << " inner_proof_bytes="
-              << purify::accountable::RecoveryRootSetupProof::kInnerProofSize
+              << " norm_proof_bytes="
+              << purify::accountable::RecoveryRootSetupProof::kNormProofSize
               << " proof_payload_bytes=" << proof_payload_bytes
               << " wire_proof_bytes=" << encoded_proof->size()
               << " root_bytes=64 total_wire_with_root_and_full_Q="

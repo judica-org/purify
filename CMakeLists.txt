@@ -96,6 +96,13 @@ set(PURIFY_SANITIZER_LIST "address,undefined" CACHE STRING
 option(PURIFY_BUILD_CBMC "Enable optional CBMC proof harnesses for the pure C wide-integer core." OFF)
 option(PURIFY_BUILD_CBMC_EXTENDED "Enable heavier experimental CBMC proofs that are not part of the default CI suite." OFF)
 option(PURIFY_BUILD_VALGRIND_TESTS "Enable optional Valgrind-backed memcheck and constant-time tests." OFF)
+option(PURIFY_BUILD_RECEIPT_CYCLE
+    "Build the transparent Secq256k1 parent-receipt backend."
+    OFF
+)
+set(PURIFY_RECEIPT_CYCLE_CARGO_TARGET "" CACHE STRING
+    "Optional Rust target triple for the parent-receipt backend."
+)
 
 if(PURIFY_BUILD_CLI AND NOT PURIFY_HAVE_CLI_SOURCES)
     message(FATAL_ERROR "PURIFY_BUILD_CLI=ON requires cli/main.cpp")
@@ -326,8 +333,15 @@ add_library(purify
     src/puresign/slash_adaptor.cpp
     src/puresign/recovery_root.cpp
     src/puresign/anchor_escrow.cpp
+    src/puresign/construction_receipt.cpp
+    src/puresign/construction_receipt_batch.cpp
+    src/puresign/construction_receipt_assembly.cpp
     src/protocol/bppp.cpp
     src/protocol/accumulation.cpp
+    src/protocol/coordinate_field.cpp
+    src/protocol/poseidon.cpp
+    src/protocol/algebraic_transcript.cpp
+    src/protocol/algebraic_circuit_transcript.cpp
     src/bridge/bppp_bridge.c
 )
 
@@ -335,6 +349,75 @@ add_library(purify::purify ALIAS purify)
 add_library(purify_bppp_support ALIAS purify)
 
 purify_configure_library_target(purify)
+
+if(PURIFY_BUILD_RECEIPT_CYCLE)
+    find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
+    set(PURIFY_RECEIPT_CYCLE_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/rust/receipt-cycle"
+    )
+    set(PURIFY_RECEIPT_CYCLE_TARGET_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/receipt-cycle-target"
+    )
+    file(GLOB_RECURSE PURIFY_RECEIPT_CYCLE_SOURCES
+        CONFIGURE_DEPENDS
+        "${PURIFY_RECEIPT_CYCLE_DIR}/src/*.rs"
+    )
+    set(PURIFY_RECEIPT_CYCLE_CARGO_ARGS build --locked --release)
+    set(PURIFY_RECEIPT_CYCLE_ARCHIVE_DIR
+        "${PURIFY_RECEIPT_CYCLE_TARGET_DIR}/release"
+    )
+    if(PURIFY_RECEIPT_CYCLE_CARGO_TARGET)
+        list(APPEND PURIFY_RECEIPT_CYCLE_CARGO_ARGS
+            --target "${PURIFY_RECEIPT_CYCLE_CARGO_TARGET}"
+        )
+        set(PURIFY_RECEIPT_CYCLE_ARCHIVE_DIR
+            "${PURIFY_RECEIPT_CYCLE_TARGET_DIR}/${PURIFY_RECEIPT_CYCLE_CARGO_TARGET}/release"
+        )
+    elseif(CMAKE_CROSSCOMPILING)
+        message(FATAL_ERROR
+            "Cross-compiling the receipt backend requires "
+            "PURIFY_RECEIPT_CYCLE_CARGO_TARGET."
+        )
+    endif()
+    set(PURIFY_RECEIPT_CYCLE_ARCHIVE
+        "${PURIFY_RECEIPT_CYCLE_ARCHIVE_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}purify_receipt_cycle${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    )
+    add_custom_command(
+        OUTPUT "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
+        COMMAND "${CMAKE_COMMAND}" -E env
+            --unset=MAKEFLAGS
+            --unset=MFLAGS
+            --unset=CARGO_MAKEFLAGS
+            "CARGO_TARGET_DIR=${PURIFY_RECEIPT_CYCLE_TARGET_DIR}"
+            "${PURIFY_CARGO_EXECUTABLE}" ${PURIFY_RECEIPT_CYCLE_CARGO_ARGS}
+        DEPENDS
+            "${PURIFY_RECEIPT_CYCLE_DIR}/Cargo.lock"
+            "${PURIFY_RECEIPT_CYCLE_DIR}/Cargo.toml"
+            "${PURIFY_RECEIPT_CYCLE_DIR}/rust-toolchain.toml"
+            ${PURIFY_RECEIPT_CYCLE_SOURCES}
+        WORKING_DIRECTORY "${PURIFY_RECEIPT_CYCLE_DIR}"
+        COMMENT "Building transparent Secq256k1 receipt backend"
+        VERBATIM
+    )
+    add_custom_target(purify_receipt_cycle_build ALL
+        DEPENDS "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
+    )
+    add_library(purify_receipt_cycle_backend STATIC IMPORTED GLOBAL)
+    set_target_properties(purify_receipt_cycle_backend PROPERTIES
+        IMPORTED_LOCATION "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
+    )
+    add_dependencies(purify_receipt_cycle_backend
+        purify_receipt_cycle_build
+    )
+    if(UNIX AND NOT APPLE)
+        find_package(Threads REQUIRED)
+        target_link_libraries(purify_receipt_cycle_backend INTERFACE
+            Threads::Threads
+            ${CMAKE_DL_LIBS}
+            m
+        )
+    endif()
+endif()
 
 if(WIN32)
     target_link_libraries(purify PUBLIC bcrypt)
@@ -421,8 +504,15 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/slash_adaptor.cpp
         src/puresign/recovery_root.cpp
         src/puresign/anchor_escrow.cpp
+        src/puresign/construction_receipt.cpp
+        src/puresign/construction_receipt_batch.cpp
+        src/puresign/construction_receipt_assembly.cpp
         src/protocol/bppp.cpp
         src/protocol/accumulation.cpp
+        src/protocol/coordinate_field.cpp
+        src/protocol/poseidon.cpp
+        src/protocol/algebraic_transcript.cpp
+        src/protocol/algebraic_circuit_transcript.cpp
         src/bridge/bppp_bridge.c
     )
 
@@ -510,6 +600,18 @@ if(PURIFY_BUILD_VALGRIND_TESTS)
 endif()
 
 if(PURIFY_BUILD_TESTS)
+    add_executable(purify_opening_base_vector_tests
+        tests/opening_base_vector_tests.cpp
+    )
+    target_link_libraries(purify_opening_base_vector_tests
+        PRIVATE purify::purify
+    )
+    purify_enable_warnings(purify_opening_base_vector_tests)
+    purify_enable_sanitizers(purify_opening_base_vector_tests)
+    add_test(NAME purify.tests.opening_base_vector
+        COMMAND purify_opening_base_vector_tests
+    )
+
     set(PURIFY_HEADER_HYGIENE_SOURCES
         tests/public_header_hygiene_c_then_cpp.cpp
         tests/public_header_hygiene_cpp_then_c.cpp
@@ -534,7 +636,13 @@ if(PURIFY_BUILD_TESTS)
         tests/companion_scalar_escrow_helpers.cpp
         tests/construction_receipt_helpers.cpp
         tests/construction_receipt_tests.cpp
+        tests/construction_receipt_codec_tests.cpp
+        tests/construction_receipt_batch_tests.cpp
         tests/receipt_sha256_tests.cpp
+        tests/coordinate_field_tests.cpp
+        tests/poseidon_tests.cpp
+        tests/algebraic_transcript_tests.cpp
+        tests/algebraic_circuit_transcript_tests.cpp
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
@@ -551,6 +659,23 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_sanitizers(purify_tests)
     purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
 
+    if(PURIFY_BUILD_RECEIPT_CYCLE)
+        add_executable(purify_receipt_cycle_c_tests
+            tests/receipt_cycle_c_tests.c
+        )
+        target_link_libraries(purify_receipt_cycle_c_tests
+            PRIVATE purify_receipt_cycle_backend
+        )
+        target_include_directories(purify_receipt_cycle_c_tests
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        )
+        purify_enable_warnings(purify_receipt_cycle_c_tests)
+        purify_enable_sanitizers(purify_receipt_cycle_c_tests)
+        add_test(NAME purify.tests.receipt_cycle_c
+            COMMAND purify_receipt_cycle_c_tests
+        )
+    endif()
+
     function(purify_add_cpp_suite_test suite_name)
         add_test(NAME "purify.tests.${suite_name}" COMMAND purify_tests --suite "${suite_name}")
     endfunction()
@@ -564,10 +689,30 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(circuit_soundness)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME purify.tests.opening_base_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_algebraic_opening_base.py")
+        set_tests_properties(purify.tests.opening_base_reference
+            PROPERTIES TIMEOUT 30)
         add_test(NAME purify.tests.norm_accumulation_reference
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_norm_accumulation.py")
         set_tests_properties(purify.tests.norm_accumulation_reference PROPERTIES TIMEOUT 30)
+        add_test(NAME purify.tests.algebraic_accumulation_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_algebraic_accumulation.py")
+        set_tests_properties(purify.tests.algebraic_accumulation_reference
+            PROPERTIES TIMEOUT 30)
+        add_test(NAME purify.tests.poseidon_transcript_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_poseidon_transcript.py")
+        set_tests_properties(purify.tests.poseidon_transcript_reference
+            PROPERTIES TIMEOUT 30)
+        add_test(NAME purify.tests.algebraic_circuit_v4_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_algebraic_circuit_v4.py")
+        set_tests_properties(purify.tests.algebraic_circuit_v4_reference
+            PROPERTIES TIMEOUT 30)
     endif()
     purify_add_cpp_suite_test(accountable_signature)
     purify_add_cpp_suite_test(accountable_roster)
@@ -577,7 +722,13 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(anchor_escrow)
     purify_add_cpp_suite_test(companion_scalar_escrow)
     purify_add_cpp_suite_test(construction_receipt)
+    purify_add_cpp_suite_test(construction_receipt_codec)
+    purify_add_cpp_suite_test(construction_receipt_batch)
     purify_add_cpp_suite_test(receipt_sha256)
+    purify_add_cpp_suite_test(coordinate_field)
+    purify_add_cpp_suite_test(poseidon)
+    purify_add_cpp_suite_test(algebraic_transcript)
+    purify_add_cpp_suite_test(algebraic_circuit_transcript)
 
     # These proof experiments saturate sanitizer runners. Keep their work
     # out of the property suites' bounded execution time.

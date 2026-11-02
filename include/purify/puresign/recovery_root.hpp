@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <utility>
 
@@ -13,12 +14,14 @@
 
 namespace purify::accountable {
 
+class RecoveryRootSetupAccumulator;
+
 /** Transparent proof linking the aggregate signing scalar to a recovery root. */
 class RecoveryRootSetupProof {
 public:
-    static constexpr unsigned char kSerializationVersion = 1;
-    static constexpr std::size_t kInnerProofSize = 844;
-    static constexpr std::size_t kSerializedSize = 163 + kInnerProofSize;
+    static constexpr unsigned char kSerializationVersion = 2;
+    static constexpr std::size_t kNormProofSize = 844;
+    static constexpr std::size_t kSerializedSize = 163 + kNormProofSize;
 
     RecoveryRootSetupProof(const RecoveryRootSetupProof&) = default;
     RecoveryRootSetupProof& operator=(const RecoveryRootSetupProof&) = default;
@@ -34,14 +37,16 @@ public:
 
 private:
     RecoveryRootSetupProof() = default;
-    explicit RecoveryRootSetupProof(
-        bppp::ExperimentalCircuitZkNormArgProof proof)
-        : circuit_proof_(std::move(proof)) {}
 
     [[nodiscard]] Status validate_encoding(
         purify_secp_context* secp_context) const;
 
-    bppp::ExperimentalCircuitZkNormArgProof circuit_proof_;
+    bppp::PointBytes raw_commitment_{};
+    bppp::PointBytes mask_commitment_{};
+    bppp::ScalarBytes t2_{};
+    std::array<unsigned char, 32> public_commitment_dlog_nonce_{};
+    bppp::ScalarBytes public_commitment_dlog_response_{};
+    Bytes norm_proof_;
 
     friend Result<RecoveryRootSetupProof> prove_recovery_root_setup(
         const NonceHostBoundSigningRoster&, const UInt512&,
@@ -50,7 +55,10 @@ private:
     friend Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
         NonceHostBoundSigningRoster, const UInt512&,
         const RecoveryRootSetupProof&, purify_secp_context*);
+    friend class RecoveryRootSetupAccumulator;
 };
+
+static_assert(RecoveryRootSetupProof::kSerializedSize == 1007);
 
 /** Derive the canonical companion-curve recovery key from an extracted q. */
 [[nodiscard]] Result<GeneratedKey> derive_recovery_root(
@@ -70,20 +78,6 @@ private:
     const UInt512& recovery_root, const FieldElement& signing_scalar,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache = nullptr);
-
-/**
- * Verify aggregate-key knowledge and the recovery-root relation.
- *
- * The circuit wrapper's external-commitment proof establishes knowledge of the
- * exact final aggregate signing scalar. The root relation derives the exact
- * registered companion root from that same witness. Success is the sole
- * cryptographic constructor for `RecoveryBoundSigningRoster`; member consent is
- * separate application policy.
- */
-[[nodiscard]] Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
-    NonceHostBoundSigningRoster roster, const UInt512& recovery_root,
-    const RecoveryRootSetupProof& proof,
-    purify_secp_context* secp_context);
 
 /** Validate an exposed scalar and recover the exact registered companion key. */
 [[nodiscard]] Result<GeneratedKey> recover_registered_root(

@@ -296,6 +296,13 @@ make_native_accumulation_reference(
                     accumulator.anchors().basis(), prepared.norm(),
                     reduction, secp_context),
             "slashability_fixture:verify_anchor_reduction");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto reduction_proof,
+            purify::bppp::accumulation::
+                serialize_algebraic_norm_reduction(
+                    accumulator.anchors().basis(), reduction,
+                    secp_context),
+            "slashability_fixture:serialize_anchor_reduction");
         const std::array claims{current, leaf};
         PURIFY_ASSIGN_OR_RETURN(
             auto step,
@@ -308,6 +315,11 @@ make_native_accumulation_reference(
                 accumulator.anchors().basis(), claims, step,
                 secp_context),
             "slashability_fixture:verify_parent_step");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto parent_step_proof,
+            purify::bppp::accumulation::serialize_algebraic_step(
+                accumulator.anchors().basis(), step, secp_context),
+            "slashability_fixture:serialize_parent_step");
         current = std::move(next);
 
         const auto reference = anchor_reference(i);
@@ -319,7 +331,8 @@ make_native_accumulation_reference(
         anchors.push_back(
             {std::move(recovery_key), std::move(punishment_key),
              context, std::move(record), reference, precommitment,
-             std::move(parent_constants)});
+             std::move(parent_constants), std::move(reduction_proof),
+             std::move(parent_step_proof)});
     }
 
     PURIFY_ASSIGN_OR_RETURN(

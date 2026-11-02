@@ -175,6 +175,15 @@ void run_slashability_e2e_tests(TestContext& ctx) {
             construction->anchors[1].parent_constants
                 .circuit_binding_digest,
         "parent inputs share a suite but bind each exact anchor");
+    ctx.expect(
+        std::all_of(
+            construction->anchors.begin(),
+            construction->anchors.end(),
+            [](const auto& anchor) {
+                return anchor.reduction_proof.size() == 1'022 &&
+                       anchor.parent_step_proof.size() == 1'056;
+            }),
+        "construction retains canonical recursive witness proofs");
 
     auto exposed = expose_conflicting_coalition_key(
         *coalition, construction->statement, secp.get());

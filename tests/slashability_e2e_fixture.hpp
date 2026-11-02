@@ -33,6 +33,8 @@ struct EscrowedAnchorFixture {
     purify::accountable::AnchorReference reference;
     purify::bppp::ScalarBytes circuit_precommitment;
     purify::accountable::AnchorEscrowParentConstants parent_constants;
+    purify::Bytes reduction_proof;
+    purify::Bytes parent_step_proof;
 };
 
 /**

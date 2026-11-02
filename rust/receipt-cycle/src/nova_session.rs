@@ -844,10 +844,10 @@ impl<const ARITY: usize> DirectNovaProverSession<'_, ARITY> {
             if verified.as_slice() != self.current_state {
                 return Err(DirectNovaSessionError::FinalState);
             }
-            let compressed = DirectCompressedSnark::<ARITY>::prove(
+            let compressed = DirectCompressedSnark::<ARITY>::prove_owned(
                 &self.suite.public_params,
                 &self.suite.prover_key,
-                &recursive,
+                recursive,
             )?;
             Ok(self
                 .suite

@@ -103,6 +103,9 @@ option(PURIFY_BUILD_RECEIPT_CYCLE
 set(PURIFY_RECEIPT_CYCLE_CARGO_TARGET "" CACHE STRING
     "Optional Rust target triple for the parent-receipt backend."
 )
+set(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT "" CACHE FILEPATH
+    "Qualified construction-parent verifier artifact for opt-in tests."
+)
 
 if(PURIFY_BUILD_CLI AND NOT PURIFY_HAVE_CLI_SOURCES)
     message(FATAL_ERROR "PURIFY_BUILD_CLI=ON requires cli/main.cpp")
@@ -146,6 +149,33 @@ endif()
 
 if(PURIFY_BUILD_VALGRIND_TESTS AND WIN32)
     message(FATAL_ERROR "PURIFY_BUILD_VALGRIND_TESTS is not supported on Windows")
+endif()
+
+if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+    if(NOT PURIFY_BUILD_TESTS)
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
+            "PURIFY_BUILD_TESTS=ON."
+        )
+    endif()
+    if(NOT PURIFY_BUILD_RECEIPT_CYCLE)
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
+            "PURIFY_BUILD_RECEIPT_CYCLE=ON."
+        )
+    endif()
+    get_filename_component(
+        PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT
+        "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+        ABSOLUTE BASE_DIR "${CMAKE_BINARY_DIR}"
+    )
+    if(NOT EXISTS "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+       OR IS_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}")
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT must name an "
+            "existing regular file."
+        )
+    endif()
 endif()
 
 if(NOT PURIFY_CXX_STANDARD MATCHES "^(20|23)$")
@@ -783,6 +813,13 @@ if(PURIFY_BUILD_TESTS)
         purify.tests.slashability_e2e
         PROPERTIES RUN_SERIAL TRUE
     )
+    if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+        set_tests_properties(purify.tests.slashability_e2e PROPERTIES
+            ENVIRONMENT
+                "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+            TIMEOUT 3600
+        )
+    endif()
     purify_add_cpp_suite_test(aggregate_nonce)
     purify_add_cpp_suite_test(aggregate_nonce_100)
     purify_add_cpp_suite_test(nonce_batch)

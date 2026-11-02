@@ -263,81 +263,12 @@ the native decision, so it is rejected before acceptance. These results do not
 activate consensus, qualify operation at 100 to 1,000 anchors, or make the
 roughly 609 MiB verifier convenient to bundle.
 
-## Historical V2 public-prehashing experiment
+## Full verifier circuits and accumulation are different designs
 
-The earlier V2 transcript separated statement-only preprocessing from
-proof-dependent hashing. In that obsolete reduction, `rho`, the ordered
-generators and the coefficient vector depended only on the circuit and public
-statement. They did not depend on the child's `A`, `S`, `t2` or folding
-messages. Its digest was:
-
-```
-D = TaggedHash("Purify/BPPP/NormArg/PublicDataV1",
-    rho32 || norm_count64le || generator_count64le || generators33[]
-    || coefficient_count64le || coefficients32[])
-```
-
-Points use canonical compressed SEC1 encodings; scalars use canonical big-endian
-32-byte encodings. The norm transcript starts with a different domain tag,
-`Purify/BPPP/NormArg/TranscriptV1`, followed by `D || commitment33`. Existing
-ordered round messages and challenge extraction then continue normally.
-
-The native V2 verifier recomputed `D`; it did not accept an unchecked
-assembler-supplied digest. That split was not a soundness repair. V3 fixes the
-raw witness before sampling its folding challenges, so its dependencies differ
-from the profiler below. Static generators and genuinely statement-fixed data
-can still be prehashed where a final verifier authenticates them, but the V2
-counts must not be used as a V4 recursive-verifier estimate.
-
-Source-derived SHA-256 compression counts for that obsolete wrapper,
-including challenge forks and the first outer challenge attempt, are:
-
-| Child | Padded gates | Public bytes hashed outside | Previous layout | Factored layout |
-| --- | ---: | ---: | ---: | ---: |
-| Recipient setup | 2,048 | 536,632 | 8,414 | 30 |
-| One root encryption | 8,192 | 2,146,360 | 33,570 | 34 |
-
-For that wrapper, one setup plus two encryption children went from 75,554 to
-98 proof-dependent blocks; 100 encryption children go from 3,365,414 to 3,430.
-Those counts do not imply that a V4 receipt needs only 98 or 3,430
-blocks. They rely on the obsolete statement-only reduction
-coefficients and a superseded transcript. Public hashing moved; it did
-not disappear, and
-it remains part of full verifier cost. Tagged midstates were treated as
-constants. These are historical source-derived workloads, not measured parent
-gates or a final proof-size estimate.
-
-The previous layout placed the variable commitment before the public arrays,
-so those arrays could not be prehashed as an independent SHA-256 prefix. The
-profiler retains that historical layout only for comparison, not compatibility.
-
-Purify's key/nonce relation avoids hashing secret material by combining public
-hash-to-curve preprocessing with constrained secret scalar multiplication. It
-does not remove the proof system's Fiat-Shamir hash. An off-chain child proof
-becomes a witness to its parent, so the child's proof-dependent challenges
-still require constrained derivation. The SHA-256 experiment measures that
-part of the existing verifier; it does not select SHA-256 for the final parent.
-A reviewed circuit-friendly transcript hash could remove the SHA-256-specific
-gadget, but requires an explicit suite, parameters and security argument.
-Purify's PRF security alone does not justify substituting Purify for this
-random-oracle role.
-
-The verifier also performs secp256k1 group operations. Its coordinate field is
-different from the scalar field used by the existing Purify arithmetic circuit.
-The companion-curve gadgets cannot be substituted for secp256k1 point arithmetic.
-Canonical non-native arithmetic and complete handling of group edge cases are
-additional work; SHA-256 alone is not a recursive verifier.
-
-The historical inner checks had 12,288 setup and 49,152 encryption
-fixed-generator terms before any separately reviewed batch optimization. A
-parent backend must satisfy the transparent-setup requirement; its feasibility
-does not follow from the small child transcripts.
-
-### Full verifier circuits and accumulation are different designs
-
-These counts describe executing the current child verifier. They are not a
-lower bound for transparent recursive composition. In particular, they do not
-model Halo-style accumulation of an inner-product verification obligation.
+Executing every child verifier inside the recursive circuit is not required
+for transparent composition. The selected design instead authenticates an
+inner-product accumulation transition and discharges its remaining linear
+obligation in the final native decision.
 
 An IPA verifier's expensive final generator combination can be represented as
 a commitment to a polynomial whose evaluation is cheap to compute from the
@@ -362,8 +293,7 @@ requires all child statements and transition transcripts. It does not implement
 their recursive authentication by itself. The selected Rust recurrence now
 constrains that ancestry, and the C++ acceptance path completes the final native
 decision. The concrete protocol still requires independent cryptographic
-review. The historical workload profiler does not model those recursive
-transitions. Neither native accumulation nor batch verification alone is a
+review. Neither native accumulation nor batch verification alone is a
 compressed construction receipt.
 
 The selected implementation boundary and its mandatory explicit root claim are
@@ -404,24 +334,22 @@ replacing it.
 
 1. Completed: share the setup and encryption verifiers and exercise assembly
    using only public child packets.
-2. Completed as a historical cost study: profile verifier hashing and implement
-   a constrained SHA-256 experiment with independently checked outputs.
-3. Completed for individual V4 leaves: native production and
+2. Completed for individual V4 leaves: native production and
    verification, matching Rust relations, and the typed native
    accumulator adapter.
    Reduction verification and final `decide()` remain mandatory.
-4. Completed internally: the fixed homogeneous public-anchor recurrence,
+3. Completed internally: the fixed homogeneous public-anchor recurrence,
    canonical Nova codec, verifier-derived initial and expected final states,
    exact-step enforcement, and allocation-light exact-shape witness reuse.
-5. Completed for the selected native profile: static relation, parameter and
+4. Completed for the selected native profile: static relation, parameter and
    suite identities, exact setup, two ordered full-scale folds, Spartan IPA
    compression, canonical verification, artifact serialization, and reload.
-6. Completed for library acceptance: the exact `payload || proof` envelope,
+5. Completed for library acceptance: the exact `payload || proof` envelope,
    frozen external verifier identity, private C ABI, and public C++ API which
    completes native `decide()` before returning a capability. Checked-in
    positive and recursive-valid/nondeciding proofs exercise both sides of that
    boundary.
-7. Remaining: independently review V4 composition and correlated-key
+6. Remaining: independently review V4 composition and correlated-key
    confidentiality; implement distributed setup, custody, and share-preserving
    child proving; qualify resource use at 100 to 1,000 anchors; reduce or
    operationalize the roughly 609 MiB verifier; and integrate the accepted
@@ -450,31 +378,11 @@ public statement, including full roots, the coalition point, context and framing
 Its recipient and ciphertext portion is 448 bytes. No final proof is included
 because this historical fixture predates and does not invoke the Nova session.
 
-The SHA-256 fixture constrains symbolic input bits and bounded 32-bit additions,
-checks padding boundaries against the independent C hash, and produces a V3
-proof for that standalone relation. A recursive verifier must also connect
-those input bits to the exact child transcript; the standalone hash relation is
-insufficient.
-
-An earlier AppleClang 16 / arm64 C++20 Release run measured the `abc` relation
-at 32,768 padded gates and a 1,267-byte V2 transcript, with about 13.76 seconds
-generating it and 5.40 seconds running its acceptance predicate. Those timings
-exclude circuit/witness construction and must not be attributed to V3. Message
-lengths 0, 3 and 55 use 32,768 padded gates; lengths 56 and 64 require two SHA-256
-blocks and 65,536 gates. These are historical standalone hash-relation
-measurements, not an extrapolated size or runtime for a complete receipt.
-
 The larger honest circuit exposed a fixed 16 MiB BP++ scratch allocation that
 could not hold its live vector copies. The accompanying resource fix reserves
 an overflow-checked dimension-dependent frame in addition to MSM work space,
 for both cached and uncached calls. It changes allocation capacity, not the
 proof relation or transcript.
-
-```
-python3 tests/reference_receipt_verifier_cost.py --self-test --roots 2
-python3 tests/reference_receipt_verifier_cost.py --roots 100
-ctest --test-dir build -R 'construction_receipt|receipt_sha256' --output-on-failure
-```
 
 The general composition approach is described in
 [Recursive Proof Composition without a Trusted Setup](https://eprint.iacr.org/2019/1021).

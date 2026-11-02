@@ -207,9 +207,8 @@ Purify's constant-time secret prover. The smallest complete migration is:
    agreement tests pass. Remove the obsolete SHA transcript at cutover instead
    of retaining proof-wrapper aliases.
 
-The current exact SHA gadget costs 30,952 multipliers per compression block.
-The existing proof-dependent path uses about 34 such blocks per anchor, or
-roughly 1.05 million SHA multipliers before group and scalar checks. Even four
-Poseidon permutations per BPPP round would cost only 1,056 multipliers per
-round. Exact transcript costs must be measured after the framing above is
-frozen rather than inferred from the permutation alone.
+The removed prototype SHA gadget cost 30,952 multipliers per compression
+block. Its proof-dependent path used about 34 such blocks per anchor, or
+roughly 1.05 million SHA multipliers before group and scalar checks. Those
+historical costs motivated the typed V4 transcript; they are not part of the
+selected construction-parent relation.

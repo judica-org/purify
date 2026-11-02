@@ -84,6 +84,18 @@ serialize_parent_prover_fixture(
     purify_secp_context* secp_context);
 
 /**
+ * Serializes the same public construction with one false pending obligation.
+ *
+ * The resulting recurrence witness is valid, but its authenticated final
+ * root must fail the native decision. Public header and descriptor bytes are
+ * identical to serialize_parent_prover_fixture().
+ */
+[[nodiscard]] purify::Result<purify::Bytes>
+serialize_nondeciding_parent_prover_fixture(
+    const NativeAccumulationReferenceFixture& fixture,
+    purify_secp_context* secp_context);
+
+/**
  * Sign one construction statement and one changed body with the same
  * proved nonces. The changed body has no parent-receipt fixture; this
  * demonstrates accountable response extraction, not two accepted

@@ -24,6 +24,8 @@ using purify_test::expect_ok;
 using purify_test::slashability::make_all_evil_coalition;
 using purify_test::slashability::make_native_accumulation_reference;
 using purify_test::slashability::expose_conflicting_coalition_key;
+using purify_test::slashability::
+    serialize_nondeciding_parent_prover_fixture;
 using purify_test::slashability::serialize_parent_prover_fixture;
 
 #if defined(PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER)
@@ -159,9 +161,9 @@ accept_construction_parent_if_requested(
 #endif
 
 void write_parent_prover_fixture_if_requested(
-    TestContext& ctx, const purify::Bytes& fixture) {
-    const char* output_path =
-        std::getenv("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE_OUT");
+    TestContext& ctx, const purify::Bytes& fixture,
+    const char* environment_name) {
+    const char* output_path = std::getenv(environment_name);
     if (output_path == nullptr) return;
     if (output_path[0] == '\0') {
         ctx.expect(false, "parent prover fixture output path is nonempty");
@@ -362,7 +364,51 @@ void run_slashability_e2e_tests(TestContext& ctx) {
                            'o', 'v', 'a', '/', 'W', 'i', 't', '1'}
                            .begin()),
         "construction prover fixture has the exact v1 frame");
-    write_parent_prover_fixture_if_requested(ctx, *prover_fixture);
+    write_parent_prover_fixture_if_requested(
+        ctx, *prover_fixture,
+        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE_OUT");
+
+    auto nondeciding_fixture =
+        serialize_nondeciding_parent_prover_fixture(
+            *construction, secp.get());
+    expect_ok(ctx, nondeciding_fixture,
+              "nondeciding parent prover fixture constructs");
+    if (!nondeciding_fixture) return;
+    constexpr std::size_t kProverHeaderSize = 629;
+    constexpr std::size_t kProverAnchorSize = 3'570;
+    constexpr std::size_t kPublicAnchorPrefixSize = 130 + 33;
+    constexpr std::size_t kRecordPublicPrefixSize = 1 + 192;
+    constexpr std::size_t kFinalRootSize = 545;
+    bool same_public_inputs =
+        nondeciding_fixture->size() == prover_fixture->size() &&
+        std::equal(
+            prover_fixture->begin(),
+            prover_fixture->begin() + kProverHeaderSize,
+            nondeciding_fixture->begin());
+    for (std::size_t index = 0;
+         same_public_inputs && index < construction->anchors.size();
+         ++index) {
+        const auto anchor_offset =
+            kProverHeaderSize + index * kProverAnchorSize;
+        same_public_inputs = std::equal(
+            prover_fixture->begin() + anchor_offset,
+            prover_fixture->begin() + anchor_offset +
+                kPublicAnchorPrefixSize + kRecordPublicPrefixSize,
+            nondeciding_fixture->begin() + anchor_offset);
+    }
+    ctx.expect(
+        same_public_inputs,
+        "nondeciding witness preserves every public construction input");
+    ctx.expect(
+        *nondeciding_fixture != *prover_fixture &&
+            !std::equal(
+                prover_fixture->end() - kFinalRootSize,
+                prover_fixture->end(),
+                nondeciding_fixture->end() - kFinalRootSize),
+        "nondeciding witness authenticates a distinct false root");
+    write_parent_prover_fixture_if_requested(
+        ctx, *nondeciding_fixture,
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE_OUT");
 
     auto accepted_statement = construction->statement;
 #if defined(PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER)

@@ -289,6 +289,16 @@ void check_pending_norm_equation(TestContext& ctx) {
     malformed[0] = 0;
     ctx.expect(purify_bppp_public_msm(secp.get(), malformed.data(), one.data(), 1,
         expected.data()) == 0, "public MSM rejects noncanonical infinity");
+    bool malformed_batch_rejected = true;
+    for (std::size_t i = 0; i < 256; ++i) {
+        expected.fill(0xa5);
+        malformed_batch_rejected &=
+            purify_bppp_public_msm(secp.get(), malformed.data(), one.data(),
+                                   1, expected.data()) == 0
+            && expected == infinity;
+    }
+    ctx.expect(malformed_batch_rejected,
+               "small malformed MSMs reject without retaining output state");
 }
 
 } // namespace

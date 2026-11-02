@@ -641,6 +641,10 @@ if(PURIFY_BUILD_TESTS)
             "${PURIFY_VALGRIND_INCLUDE_DIR}"
         )
 
+        target_compile_definitions(purify_valgrind_tests PRIVATE
+            PURIFY_VALGRIND_TESTING=1
+        )
+
         set_target_properties(purify_valgrind_tests PROPERTIES
             LINKER_LANGUAGE CXX
         )
@@ -653,6 +657,7 @@ if(PURIFY_BUILD_TESTS)
         purify_add_valgrind_test(purify.valgrind.consttime_affine purify_valgrind_tests affine)
         purify_add_valgrind_test(purify.valgrind.consttime_inverse purify_valgrind_tests inverse)
         purify_add_valgrind_test(purify.valgrind.consttime_packed_secret purify_valgrind_tests packed_secret)
+        purify_add_valgrind_test(purify.valgrind.consttime_uint purify_valgrind_tests uint)
     endif()
 
     if(PURIFY_BUILD_BENCH)

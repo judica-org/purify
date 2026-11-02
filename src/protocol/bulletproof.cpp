@@ -147,10 +147,10 @@ std::uint32_t narrow_symbol_index(std::size_t index) {
 
 struct ResolvedValues {
     WitnessAssignments witness;
-    std::vector<std::optional<FieldElement>> left;
-    std::vector<std::optional<FieldElement>> right;
-    std::vector<std::optional<FieldElement>> output;
-    std::vector<std::optional<FieldElement>> commitment;
+    WitnessAssignments left;
+    WitnessAssignments right;
+    WitnessAssignments output;
+    WitnessAssignments commitment;
 
     ResolvedValues(std::size_t witness_count, std::size_t gate_count, std::size_t commitment_count)
         : witness(witness_count), left(gate_count), right(gate_count), output(gate_count), commitment(commitment_count) {}
@@ -298,7 +298,7 @@ std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes, s
     return value;
 }
 
-Bytes flatten_scalars32(const std::vector<FieldElement>& values) {
+Bytes flatten_scalars32(std::span<const FieldElement> values) {
     Bytes out;
     best_effort_reserve_mul(out, values.size(), 32);
     for (const FieldElement& value : values) {
@@ -330,6 +330,10 @@ Status append_row_family_digest_generic(Bytes& out, std::size_t row_count, const
 Result<Bytes> circuit_binding_digest(const purify::NativeBulletproofCircuit& circuit,
                                      std::span<const unsigned char> statement_binding) {
     static const purify::TaggedHash kCircuitBindingTag("Purify/ExperimentalBulletproof/CircuitV1");
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions,
+                                "circuit_binding_digest:native_shape");
+    }
     std::size_t reserve_size = 0;
     if (!checked_mul_size(circuit.c.size(), 32, reserve_size)
         || !checked_add_size(64, reserve_size, reserve_size)) {
@@ -388,6 +392,10 @@ Result<Bytes> circuit_binding_digest(const purify::NativeBulletproofCircuit& cir
 
 Result<Bytes> circuit_binding_digest(const PackedCircuit& circuit, std::span<const unsigned char> statement_binding) {
     static const purify::TaggedHash kCircuitBindingTag("Purify/ExperimentalBulletproof/CircuitV1");
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions,
+                                "circuit_binding_digest:packed_shape");
+    }
     std::size_t reserve_size = 0;
     if (!checked_mul_size(circuit.constraint_count(), 32, reserve_size)
         || !checked_add_size(64, reserve_size, reserve_size)) {
@@ -887,7 +895,7 @@ Result<Bytes> BulletproofAssignmentData::serialize() const {
             out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
         }
     };
-    auto write_column = [&](const std::vector<FieldElement>& column) {
+    auto write_column = [&](std::span<const FieldElement> column) {
         for (const FieldElement& value : column) {
             out.push_back(static_cast<unsigned char>(0x20));
             std::array<unsigned char, 32> bytes = value.to_bytes_le();
@@ -927,10 +935,26 @@ void NativeBulletproofCircuit::resize(std::size_t gates, std::size_t commitments
 }
 
 bool NativeBulletproofCircuit::has_valid_shape() const {
-    return wl.size() == n_gates
-        && wr.size() == n_gates
-        && wo.size() == n_gates
-        && wv.size() == n_commitments;
+    if (wl.size() != n_gates
+        || wr.size() != n_gates
+        || wo.size() != n_gates
+        || wv.size() != n_commitments) {
+        return false;
+    }
+    const auto rows_are_valid = [&](const std::vector<NativeBulletproofCircuitRow>& rows) {
+        for (const NativeBulletproofCircuitRow& row : rows) {
+            for (const NativeBulletproofCircuitTerm& entry : row.entries) {
+                if (entry.idx >= c.size()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    return rows_are_valid(wl)
+        && rows_are_valid(wr)
+        && rows_are_valid(wo)
+        && rows_are_valid(wv);
 }
 
 std::size_t NativeBulletproofCircuit::add_constraint(const FieldElement& constant) {
@@ -973,7 +997,7 @@ bool NativeBulletproofCircuit::evaluate(const BulletproofAssignmentData& assignm
 
     std::vector<FieldElement> acc(c.size(), FieldElement::zero());
     auto accumulate = [&](const std::vector<NativeBulletproofCircuitRow>& rows,
-                          const std::vector<FieldElement>& values,
+                          std::span<const FieldElement> values,
                           bool negate_values = false) {
         if (rows.size() != values.size()) {
             return false;
@@ -1167,6 +1191,12 @@ bool NativeBulletproofCircuit::PackedWithSlack::has_valid_shape() const noexcept
         }
         if (term_cursor > term_capacity_ || header.capacity > term_capacity_ - term_cursor) {
             return false;
+        }
+        const NativeBulletproofCircuitTerm* terms = term_data();
+        for (std::size_t j = 0; j < header.size; ++j) {
+            if (terms[header.offset + j].idx >= constraint_size_) {
+                return false;
+            }
         }
         term_cursor += header.capacity;
     }
@@ -1379,7 +1409,8 @@ bool NativeBulletproofCircuit::PackedWithSlack::evaluate(const BulletproofAssign
 
     std::vector<FieldElement> acc(constraint_size_, FieldElement::zero());
     const NativeBulletproofCircuitTerm* all_terms = term_data();
-    auto accumulate = [&](RowFamily family, std::size_t row_count, const std::vector<FieldElement>& values,
+    auto accumulate = [&](RowFamily family, std::size_t row_count,
+                          std::span<const FieldElement> values,
                           bool negate_values = false) {
         if (values.size() != row_count) {
             return false;
@@ -2272,8 +2303,8 @@ Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data_impl(co
     assignment.right.reserve(n_muls_);
     assignment.output.reserve(n_muls_);
     assignment.commitments.reserve(n_commitments_);
-    auto read_column = [&](const std::vector<std::optional<FieldElement>>& source,
-                           std::vector<FieldElement>& column) -> Status {
+    auto read_column = [&](const WitnessAssignments& source,
+                           BulletproofWitnessColumn& column) -> Status {
         for (const auto& value : source) {
             if (!value.has_value()) {
                 return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:column_value");
@@ -2423,8 +2454,16 @@ Expr circuit_ec_add_x(Transcript& transcript, const ExprPoint& p1, const ExprPoi
         .build();
 }
 
-Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
-                           const JacobianPoint& point, const std::vector<Expr>& bits) {
+namespace {
+
+enum class CircuitEcMultiplyOutput {
+    XOnly,
+    FullPoint,
+};
+
+ExprPoint circuit_ec_multiply_impl(const EllipticCurve& curve, Transcript& transcript,
+                                   const JacobianPoint& point, const std::vector<Expr>& bits,
+                                   CircuitEcMultiplyOutput output) {
     std::vector<JacobianPoint> powers;
     powers.reserve(bits.size());
     powers.push_back(point);
@@ -2471,7 +2510,28 @@ Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
     for (std::size_t i = 1; i + 1 < lookups.size(); ++i) {
         out = circuit_ec_add(transcript, out, lookups[i]);
     }
-    return circuit_ec_add_x(transcript, out, lookups.back());
+    if (output == CircuitEcMultiplyOutput::FullPoint) {
+        return circuit_ec_add(transcript, out, lookups.back());
+    }
+    // Keep the historical x-only circuit byte-for-byte stable. Computing an
+    // unused final y-coordinate would append one multiplication gate and
+    // change every existing circuit transcript and proof vector.
+    return {circuit_ec_add_x(transcript, out, lookups.back()), Expr(0)};
+}
+
+}  // namespace
+
+ExprPoint circuit_ec_multiply_point(const EllipticCurve& curve, Transcript& transcript,
+                                    const JacobianPoint& point, const std::vector<Expr>& bits) {
+    return circuit_ec_multiply_impl(curve, transcript, point, bits,
+                                    CircuitEcMultiplyOutput::FullPoint);
+}
+
+Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
+                           const JacobianPoint& point, const std::vector<Expr>& bits) {
+    return circuit_ec_multiply_impl(curve, transcript, point, bits,
+                                    CircuitEcMultiplyOutput::XOnly)
+        .first;
 }
 
 Expr circuit_combine(Transcript& transcript, const Expr& x1, const Expr& x2) {

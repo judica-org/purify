@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-#include "purify/numeric.hpp"
+#include "purify/secret.hpp"
 
 namespace purify {
 
@@ -60,7 +60,9 @@ inline bool operator<(const Symbol& lhs, const Symbol& rhs) noexcept {
 }
 
 /** @brief Partial witness assignment vector indexed by transcript witness id. */
-using WitnessAssignments = std::vector<std::optional<FieldElement>>;
+using WitnessAssignment = std::optional<FieldElement>;
+using WitnessAssignments =
+    std::vector<WitnessAssignment, detail::SecureAllocator<WitnessAssignment>>;
 
 /**
  * @brief Symbolic affine expression over indexed variables and field coefficients.

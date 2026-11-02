@@ -15,6 +15,11 @@ purify_error_code purify_core_seed_secret_key(unsigned char out_secret_key[PURIF
                                               const unsigned char* seed,
                                               size_t seed_len);
 
+#if defined(PURIFY_VALGRIND_TESTING)
+int purify_core_compare_be_test(const unsigned char* lhs,
+                                const unsigned char* rhs, size_t size);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

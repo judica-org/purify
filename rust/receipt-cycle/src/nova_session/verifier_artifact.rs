@@ -18,7 +18,9 @@ const VERIFIER_ARTIFACT_MAGIC: [u8; 16] = *b"Purify/Nova/VK1\0";
 const VERIFIER_ARTIFACT_ENCODING_VERSION: u32 = 1;
 const VERIFIER_ARTIFACT_DIGEST_TAG: &[u8] = b"Purify/Accountable/DirectNovaVerifierArtifact/v1";
 const VERIFIER_ARTIFACT_HEADER_LENGTH: usize = 64;
-const MAX_VERIFIER_KEY_PAYLOAD_LENGTH: usize = 2 * 1024 * 1024 * 1024;
+// The SHA-256 production suite is expected to encode below this local-only
+// ceiling. Production still accepts exactly one compiled-in length and digest.
+const MAX_VERIFIER_KEY_PAYLOAD_LENGTH: usize = 4_000_000_000;
 
 const VERSION_OFFSET: usize = 16;
 const SUITE_ID_OFFSET: usize = 20;
@@ -156,13 +158,16 @@ impl<const ARITY: usize> SelectedDirectNovaVerifier<ARITY> {
         destination.seek(SeekFrom::Start(0))?;
         destination.write_all(&[0u8; VERIFIER_ARTIFACT_HEADER_LENGTH])?;
 
-        let payload_length = bincode::serde::encode_into_std_write(
-            &self.inner.verifier_key,
-            destination,
-            bincode::config::legacy()
-                .with_little_endian()
-                .with_fixed_int_encoding(),
-        )?;
+        let payload_length = {
+            let mut bounded = PayloadWriter::new(destination, MAX_VERIFIER_KEY_PAYLOAD_LENGTH);
+            bincode::serde::encode_into_std_write(
+                &self.inner.verifier_key,
+                &mut bounded,
+                bincode::config::legacy()
+                    .with_little_endian()
+                    .with_fixed_int_encoding(),
+            )?
+        };
         let payload_length =
             u64::try_from(payload_length).map_err(|_| DirectNovaVerifierArtifactError::Length)?;
         let header = ArtifactHeader::new::<ARITY>(*self.expected.suite_id.bytes(), payload_length)?;
@@ -310,6 +315,38 @@ fn tagged_artifact_hasher() -> Sha256 {
     digest
 }
 
+struct PayloadWriter<'a, W> {
+    destination: &'a mut W,
+    remaining: usize,
+}
+
+impl<'a, W> PayloadWriter<'a, W> {
+    fn new(destination: &'a mut W, limit: usize) -> Self {
+        Self {
+            destination,
+            remaining: limit,
+        }
+    }
+}
+
+impl<W: Write> Write for PayloadWriter<'_, W> {
+    fn write(&mut self, buffer: &[u8]) -> Result<usize, io::Error> {
+        if buffer.len() > self.remaining {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "direct Nova verifier artifact exceeds payload limit",
+            ));
+        }
+        let written = self.destination.write(buffer)?;
+        self.remaining -= written;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
+        self.destination.flush()
+    }
+}
+
 struct ArtifactDigestingReader<R> {
     source: R,
     digest: Sha256,
@@ -383,5 +420,24 @@ mod tests {
             ArtifactHeader::decode(&encoded).expect("decode exact header"),
             header
         );
+        assert!(
+            ArtifactHeader::new::<20>(suite_id, MAX_VERIFIER_KEY_PAYLOAD_LENGTH as u64 + 1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn payload_writer_rejects_before_crossing_limit() {
+        let mut encoded = Vec::new();
+        let mut writer = PayloadWriter::new(&mut encoded, 4);
+        writer.write_all(&[1, 2, 3]).expect("write within limit");
+        let error = writer
+            .write_all(&[4, 5])
+            .expect_err("reject write crossing limit");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(writer.destination.as_slice(), [1, 2, 3]);
+        writer.write_all(&[4]).expect("write exactly to limit");
+        drop(writer);
+        assert_eq!(encoded, [1, 2, 3, 4]);
     }
 }

@@ -22,8 +22,9 @@ use thiserror::Error;
 #[allow(dead_code)]
 mod circuit_norm_leaf;
 mod ffi;
+// This is an internal proof-codec foundation, not a receipt parser.
 #[allow(dead_code)]
-mod sha256_circuit_transcript;
+mod fixed_serde;
 // This is an internal candidate component, not a receipt acceptance API.
 #[allow(dead_code)]
 mod norm_reduction;
@@ -38,6 +39,8 @@ mod relation_builder;
 pub mod secp_scalar;
 #[allow(dead_code)]
 mod sha256_builder;
+#[allow(dead_code)]
+mod sha256_circuit_transcript;
 #[allow(dead_code)]
 mod sha256_transcript;
 

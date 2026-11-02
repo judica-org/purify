@@ -590,23 +590,34 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the deterministic C++ slashability fixture"]
-    fn exported_fixture_parses_without_private_openings() {
-        let path = std::env::var_os("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE")
-            .expect("set PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
-        let bytes = std::fs::read(path).expect("read construction prover fixture");
-        assert_eq!(bytes.len(), 8_314);
-        assert_eq!(
-            Sha256::digest(&bytes).as_slice(),
-            QUALIFIED_PROVER_FIXTURE_SHA256
+    #[ignore = "requires both deterministic C++ slashability fixtures"]
+    fn exported_fixtures_parse_without_private_openings() {
+        let parse = |environment, expected_sha256| {
+            let path = std::env::var_os(environment).unwrap_or_else(|| panic!("set {environment}"));
+            let bytes = std::fs::read(path).expect("read construction prover fixture");
+            assert_eq!(bytes.len(), 8_314);
+            assert_eq!(Sha256::digest(&bytes).as_slice(), expected_sha256);
+            ConstructionParentProverFixture::parse(&bytes)
+                .expect("parse deterministic construction prover fixture")
+        };
+        let accepted = parse(
+            "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
+            QUALIFIED_PROVER_FIXTURE_SHA256,
         );
-        let fixture = ConstructionParentProverFixture::parse(&bytes)
-            .expect("parse deterministic construction prover fixture");
-        assert_eq!(fixture.anchors.len(), 2);
-        assert_eq!(fixture.inputs.anchors().len(), 2);
+        let nondeciding = parse(
+            "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
+            NONDECIDING_PROVER_FIXTURE_SHA256,
+        );
+        assert_eq!(accepted.anchors.len(), 2);
+        assert_eq!(nondeciding.anchors.len(), accepted.anchors.len());
+        assert_eq!(accepted.inputs.anchors(), nondeciding.inputs.anchors());
         assert_eq!(
-            fixture.expected_root.canonical_bytes().len(),
+            accepted.expected_root.canonical_bytes().len(),
             CONSTRUCTION_ROOT_BYTES
+        );
+        assert_ne!(
+            accepted.expected_root.canonical_bytes(),
+            nondeciding.expected_root.canonical_bytes()
         );
     }
 }

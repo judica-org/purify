@@ -813,18 +813,21 @@ fn exported_parent_fixture_reconstructs_two_step_relation() {
     assert_eq!(second_step.relation_id(), first_step.relation_id());
 }
 
-#[test]
-#[ignore = "run explicitly under the native no-swap resource gate"]
-fn native_profile_anchor_nova_lifecycle_is_exact() {
+fn run_native_profile_anchor_nova_lifecycle(
+    fixture_environment: &str,
+    expected_fixture_sha256: [u8; 32],
+    proof_output_environment: &str,
+    verifier_artifact_output_environment: Option<&str>,
+) {
     let total_started = std::time::Instant::now();
     eprintln!("native_profile_nova: decoding deterministic C++ fixture");
-    let fixture_path = std::env::var_os("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE")
-        .expect("set PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
+    let fixture_path =
+        std::env::var_os(fixture_environment).expect("set construction parent prover fixture");
     let fixture_bytes =
         std::fs::read(fixture_path).expect("read construction parent prover fixture");
     assert_eq!(
         Sha256::digest(&fixture_bytes).as_slice(),
-        QUALIFIED_PROVER_FIXTURE_SHA256
+        expected_fixture_sha256
     );
     let fixture = ConstructionParentProverFixture::parse(&fixture_bytes)
         .expect("parse construction parent prover fixture");
@@ -968,7 +971,7 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         .verify_exact(&z0, step_count, &z_final, &proof)
         .expect("exact compressed native-profile proof");
 
-    if let Some(path) = std::env::var_os("PURIFY_CONSTRUCTION_PARENT_PROOF_OUT") {
+    if let Some(path) = std::env::var_os(proof_output_environment) {
         use std::io::Write;
 
         let path = std::path::PathBuf::from(path);
@@ -988,7 +991,7 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         );
     }
 
-    if let Some(path) = std::env::var_os("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT") {
+    if let Some(path) = verifier_artifact_output_environment.and_then(std::env::var_os) {
         let path = std::path::PathBuf::from(path);
         let mut artifact = std::fs::OpenOptions::new()
             .read(true)
@@ -1034,6 +1037,17 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         verify_started.elapsed().as_secs_f64(),
         total_started.elapsed().as_secs_f64(),
         proof.len()
+    );
+}
+
+#[test]
+#[ignore = "run explicitly under the native no-swap resource gate"]
+fn native_profile_anchor_nova_lifecycle_is_exact() {
+    run_native_profile_anchor_nova_lifecycle(
+        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
+        QUALIFIED_PROVER_FIXTURE_SHA256,
+        "PURIFY_CONSTRUCTION_PARENT_PROOF_OUT",
+        Some("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT"),
     );
 }
 

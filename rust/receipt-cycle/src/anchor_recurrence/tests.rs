@@ -580,6 +580,23 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
         "relation_id={:02x?}\n{metrics:#?}",
         metrics.relation_id.bytes()
     );
+    assert_eq!(
+        metrics.relation_id.bytes(),
+        &[
+            0x84, 0x94, 0xab, 0x8c, 0xa7, 0xe6, 0x04, 0x2e, 0x24, 0x5e, 0x1e, 0xe1, 0xa5, 0x5b,
+            0x91, 0x50, 0x89, 0xb9, 0xf2, 0xe3, 0xfc, 0x16, 0x1c, 0x47, 0x85, 0x23, 0x5d, 0x1f,
+            0xac, 0x46, 0x51, 0xb2,
+        ]
+    );
+    assert_eq!(metrics.source_gates, 10_428_979);
+    assert_eq!(metrics.source_constraints, 21_056_835);
+    assert_eq!(metrics.source_terms, 66_078_014);
+    assert_eq!(metrics.direct_variables, 10_428_979);
+    assert_eq!(metrics.direct_constraints, 10_627_876);
+    assert_eq!(metrics.direct_nnz_upper_bound, 55_847_972);
+    assert_eq!(metrics.direct_power_of_two_bucket, 1 << 24);
+    assert_eq!(metrics.direct_bucket_headroom, 6_149_340);
+    assert_eq!(metrics.direct_rounds, 24);
 
     assert_eq!(
         metrics.source_gates,
@@ -644,6 +661,16 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
     assert!(augmented.primary.variables > metrics.direct_variables);
     assert!(augmented.secondary.constraints > 0);
     assert!(augmented.secondary.variables > 0);
+    assert_eq!(augmented.primary.constraints, 12_392_865);
+    assert_eq!(augmented.primary.variables, 12_192_189);
+    assert_eq!(augmented.primary.a_terms, 36_494_260);
+    assert_eq!(augmented.primary.b_terms, 14_798_793);
+    assert_eq!(augmented.primary.c_terms, 14_173_431);
+    assert_eq!(augmented.secondary.constraints, 728_974);
+    assert_eq!(augmented.secondary.variables, 728_211);
+    assert_eq!(augmented.secondary.a_terms, 1_676_035);
+    assert_eq!(augmented.secondary.b_terms, 736_338);
+    assert_eq!(augmented.secondary.c_terms, 1_568_376);
 
     let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
         NovaR1csDimensions::new(augmented.primary.constraints, augmented.primary.variables),
@@ -661,6 +688,8 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
         proof_shape.encoded_len(),
         proof_shape.sequence_count(),
     );
+    assert_eq!(proof_shape.encoded_len(), 15_076);
+    assert_eq!(proof_shape.sequence_count(), 152);
 }
 
 struct BoundQualificationFixture {

@@ -8,6 +8,9 @@
 #include "algebraic_transcript.hpp"
 #include "bppp_bridge.h"
 #include "bppp_internal.hpp"
+#if defined(PURIFY_INTERNAL_TEST_SUPPORT)
+#include "accumulation_test_support.hpp"
+#endif
 
 namespace purify::bppp::accumulation {
 
@@ -2082,6 +2085,7 @@ Result<PendingClaim> verify_algebraic_step(
         {std::move(folded)});
 }
 
+#if defined(PURIFY_INTERNAL_TEST_SUPPORT)
 namespace test_support {
 
 Result<PointBytes> algebraic_step_equation_residual(
@@ -2114,6 +2118,7 @@ Result<PointBytes> algebraic_step_equation_residual(
 }
 
 } // namespace test_support
+#endif
 
 Status decide(const Basis& basis, const PendingClaim& claim, purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),

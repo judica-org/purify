@@ -8,7 +8,11 @@
 
 namespace purify::bppp::accumulation::test_support {
 
-/** Returns the short-verifier residual without accepting the step. */
+/**
+ * Returns the short-verifier residual without accepting the step.
+ *
+ * This symbol exists only when Purify is built with its test suite.
+ */
 [[nodiscard]] Result<PointBytes> algebraic_step_equation_residual(
     const Basis& basis, std::span<const PendingClaim> claims,
     const AlgebraicStepProof& proof, purify_secp_context* context);

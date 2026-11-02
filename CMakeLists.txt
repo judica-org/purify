@@ -380,6 +380,12 @@ add_library(purify_bppp_support ALIAS purify)
 
 purify_configure_library_target(purify)
 
+if(PURIFY_BUILD_TESTS)
+    target_compile_definitions(purify PRIVATE
+        PURIFY_INTERNAL_TEST_SUPPORT=1
+    )
+endif()
+
 if(PURIFY_BUILD_RECEIPT_CYCLE)
     find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
     set(PURIFY_RECEIPT_CYCLE_DIR

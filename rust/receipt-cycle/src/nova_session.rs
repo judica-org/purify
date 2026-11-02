@@ -340,6 +340,11 @@ impl ExpectedDirectNovaSuite {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) const fn suite_id(&self) -> DirectNovaSuiteId {
+        self.suite_id
+    }
+
     fn precheck_relation(
         &self,
         relation_id: DirectRelationId,
@@ -455,6 +460,48 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
         trusted_step: DirectNovaStep<ARITY>,
     ) -> Result<Self, DirectNovaSessionError> {
         Self::setup_prepared(trusted_step)
+    }
+
+    /// Promotes setup output only inside the offline qualification test.
+    ///
+    /// Production callers cannot compile this path and must use one frozen
+    /// [`ExpectedDirectNovaSuite`] through [`Self::setup_exact`].
+    #[cfg(test)]
+    pub(crate) fn select_observed_construction_parent_for_qualification(
+        self,
+    ) -> Result<SelectedDirectNovaSuite<ARITY>, DirectNovaSessionError> {
+        let construction_versions = DirectNovaConstructionVersions::new(
+            ConstructionPayloadVersion::new(2),
+            ConstructionStatementVersion::new(3),
+            ConstructionManifestVersion::new(2),
+            ConstructionNativeDecisionVersion::new(1),
+        );
+        let metadata = self.verifier.metadata;
+        let proof_shape = self.verifier.proof_shape.clone();
+        let suite_id = metadata.suite_id::<ARITY>(&proof_shape, construction_versions)?;
+        let expected = Box::leak(Box::new(ExpectedDirectNovaSuite::new(
+            construction_versions,
+            *metadata.relation_id.bytes(),
+            metadata.public_parameter_digest,
+            FrozenNovaDimensions::new(
+                suite_u64(metadata.primary_constraints, "primary constraints")?,
+                suite_u64(metadata.primary_variables, "primary variables")?,
+            ),
+            FrozenNovaDimensions::new(
+                suite_u64(metadata.secondary_constraints, "secondary constraints")?,
+                suite_u64(metadata.secondary_variables, "secondary variables")?,
+            ),
+            FrozenNovaProofMetrics::new(
+                suite_u64(metadata.proof_length, "proof length")?,
+                suite_u32(metadata.codec_sequence_count, "codec sequence count")?,
+            ),
+            suite_id,
+        )));
+        expected.validate::<ARITY>(&metadata, &proof_shape)?;
+        Ok(SelectedDirectNovaSuite {
+            expected,
+            inner: self,
+        })
     }
 
     /// Builds a suite only after its relation and complete resulting metadata

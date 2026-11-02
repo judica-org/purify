@@ -10,10 +10,16 @@ use crate::construction_manifest::{
     derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestStepInput,
     ConstructionRoot, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
 };
+use crate::construction_parent_prover_fixture::{
+    ConstructionParentProverFixture, NONDECIDING_PROVER_FIXTURE_SHA256,
+    QUALIFIED_PROVER_FIXTURE_SHA256,
+};
 use crate::direct_nova::{
-    direct_nova_raw_metrics, DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, DirectNovaTemplate,
+    direct_nova_raw_metrics, nova_state_to_source, source_state_to_nova, DirectNovaPrimaryEngine,
+    DirectNovaScalar, DirectNovaSecondaryEngine, DirectNovaStep, DirectNovaTemplate,
 };
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
+use crate::nova_session::{DirectNovaSuite, SelectedDirectNovaSuite, SelectedDirectNovaVerifier};
 use crate::parent_relation::{
     add_point_values, derive_candidate_folded_generator, CandidatePendingClaimWitness,
     CandidatePolynomialTermWitness, ConstrainedPendingClaim, EncodedSecpPoint, PointValue,
@@ -25,6 +31,7 @@ use crate::sha256_circuit_transcript::{
     install_transcript, CircuitPointPairWitnessV4, CircuitTranscriptShapeV4,
 };
 use crate::{Assignment, Circuit, WireKind};
+use sha2::{Digest, Sha256};
 
 const SECP_ORDER: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
@@ -653,6 +660,403 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
          compressed_proof_sequence_count={}",
         proof_shape.encoded_len(),
         proof_shape.sequence_count(),
+    );
+}
+
+struct BoundQualificationFixture {
+    initial_state: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    final_state: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    steps: Vec<DirectNovaStep<ANCHOR_RECURRENCE_STATE_ARITY>>,
+}
+
+fn read_qualification_fixture(
+    environment: &str,
+    expected_sha256: [u8; 32],
+) -> ConstructionParentProverFixture {
+    let path = std::env::var_os(environment)
+        .unwrap_or_else(|| panic!("set {environment} before qualification"));
+    let bytes = std::fs::read(path).expect("read construction parent prover fixture");
+    assert_eq!(bytes.len(), 8_314);
+    assert_eq!(Sha256::digest(&bytes).as_slice(), expected_sha256);
+    ConstructionParentProverFixture::parse(&bytes)
+        .expect("parse construction parent prover fixture")
+}
+
+fn assert_matching_public_fixtures(
+    accepted: &ConstructionParentProverFixture,
+    nondeciding: &ConstructionParentProverFixture,
+) {
+    assert_eq!(accepted.anchors.len(), 2);
+    assert_eq!(nondeciding.anchors.len(), accepted.anchors.len());
+    assert_eq!(accepted.inputs.anchors(), nondeciding.inputs.anchors());
+    assert_eq!(
+        accepted
+            .inputs
+            .seed()
+            .initial_state_fields()
+            .expect("accepted initial state"),
+        nondeciding
+            .inputs
+            .seed()
+            .initial_state_fields()
+            .expect("nondeciding initial state")
+    );
+    for (accepted_anchor, nondeciding_anchor) in accepted.anchors.iter().zip(&nondeciding.anchors) {
+        assert_eq!(accepted_anchor.statement, nondeciding_anchor.statement);
+        assert_eq!(
+            accepted_anchor.transcript.public_commitments,
+            nondeciding_anchor.transcript.public_commitments
+        );
+    }
+    assert_ne!(
+        accepted.expected_root.canonical_bytes(),
+        nondeciding.expected_root.canonical_bytes()
+    );
+}
+
+fn bind_qualification_fixture(
+    template: &DirectNovaTemplate<ANCHOR_RECURRENCE_STATE_ARITY>,
+    fixture: &ConstructionParentProverFixture,
+    mut first_step: Option<DirectNovaStep<ANCHOR_RECURRENCE_STATE_ARITY>>,
+) -> BoundQualificationFixture {
+    let initial_state = fixture
+        .inputs
+        .seed()
+        .initial_state_fields()
+        .expect("verifier-derived qualification z0");
+    let expected_suffix = fixture
+        .inputs
+        .seed()
+        .derive_expected_final(fixture.inputs.anchors())
+        .expect("independent final construction manifest")
+        .state_suffix_fields()
+        .expect("final construction manifest fields");
+    let mut state = fixture
+        .inputs
+        .seed()
+        .initial_recurrence_witness()
+        .expect("initial qualification recurrence witness");
+    assert_eq!(
+        state.state_fields().expect("initial recurrence state"),
+        initial_state
+    );
+
+    let mut expected_input = initial_state;
+    let mut steps = Vec::with_capacity(fixture.anchors.len());
+    for (index, anchor) in fixture.anchors.iter().enumerate() {
+        eprintln!(
+            "sha_parent_qualification: binding recurrence {}/{}",
+            index + 1,
+            fixture.anchors.len()
+        );
+        let (step, output) = if index == 0 {
+            if let Some(step) = first_step.take() {
+                assert_eq!(
+                    nova_state_to_source(*step.input_state())
+                        .expect("trusted qualification input state"),
+                    expected_input
+                );
+                let output = nova_state_to_source(*step.output_state())
+                    .expect("trusted qualification output state");
+                (step, output)
+            } else {
+                bind_qualification_step(template, &state, anchor, expected_input)
+            }
+        } else {
+            bind_qualification_step(template, &state, anchor, expected_input)
+        };
+        state = recurrence_state_from_fields(
+            output,
+            u32::try_from(index + 1).expect("qualification anchor index fits u32"),
+        );
+        expected_input = output;
+        steps.push(step);
+    }
+
+    assert_eq!(
+        &expected_input[CONSTRUCTION_ROOT_STATE_ARITY..],
+        expected_suffix.as_slice()
+    );
+    assert_eq!(
+        registry_seed_root(&state.root).canonical_bytes(),
+        fixture.expected_root.canonical_bytes()
+    );
+    BoundQualificationFixture {
+        initial_state,
+        final_state: expected_input,
+        steps,
+    }
+}
+
+fn bind_qualification_step(
+    template: &DirectNovaTemplate<ANCHOR_RECURRENCE_STATE_ARITY>,
+    state: &AnchorRecurrenceStateWitness,
+    anchor: &crate::construction_parent_prover_fixture::ConstructionParentProverAnchor,
+    expected_input: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+) -> (
+    DirectNovaStep<ANCHOR_RECURRENCE_STATE_ARITY>,
+    [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+) {
+    let relation = build_anchor_recurrence_relation_with_builder(
+        template.matching_builder(),
+        state,
+        anchor.statement,
+        &anchor.transcript,
+        &anchor.reduction,
+        &anchor.step,
+    )
+    .expect("matching qualification recurrence");
+    assert_eq!(
+        relation_state(&relation, &relation.shape.inputs),
+        expected_input
+    );
+    let output = relation_state(&relation, &relation.shape.outputs);
+    let step = template
+        .bind_relation(relation)
+        .expect("bind matching qualification recurrence");
+    (step, output)
+}
+
+fn bind_both_qualification_fixtures(
+    accepted: &ConstructionParentProverFixture,
+    nondeciding: &ConstructionParentProverFixture,
+) -> (
+    DirectNovaStep<ANCHOR_RECURRENCE_STATE_ARITY>,
+    BoundQualificationFixture,
+    BoundQualificationFixture,
+) {
+    assert_matching_public_fixtures(accepted, nondeciding);
+    let accepted_initial = accepted
+        .inputs
+        .seed()
+        .initial_recurrence_witness()
+        .expect("trusted qualification recurrence witness");
+    let trusted_anchor = &accepted.anchors[0];
+    let trusted_relation = build_anchor_recurrence_relation(
+        &accepted_initial,
+        trusted_anchor.statement,
+        &trusted_anchor.transcript,
+        &trusted_anchor.reduction,
+        &trusted_anchor.step,
+    )
+    .expect("trusted qualification recurrence");
+    eprintln!(
+        "sha_parent_qualification: source_gates={} source_constraints={} source_terms={}",
+        trusted_relation.shape.circuit.gate_count,
+        trusted_relation.shape.circuit.constraints.len(),
+        trusted_relation
+            .shape
+            .circuit
+            .constraints
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>(),
+    );
+    let (template, trusted_step) =
+        DirectNovaTemplate::<ANCHOR_RECURRENCE_STATE_ARITY>::from_relation(trusted_relation)
+            .expect("qualification direct Nova template");
+    let accepted_bound =
+        bind_qualification_fixture(&template, accepted, Some(trusted_step.clone()));
+    let nondeciding_bound = bind_qualification_fixture(&template, nondeciding, None);
+    assert_eq!(
+        accepted_bound.initial_state,
+        nondeciding_bound.initial_state
+    );
+    assert_ne!(accepted_bound.final_state, nondeciding_bound.final_state);
+    let relation_id = trusted_step.relation_id();
+    assert!(accepted_bound
+        .steps
+        .iter()
+        .chain(&nondeciding_bound.steps)
+        .all(|step| step.relation_id() == relation_id));
+    drop(template);
+    (trusted_step, accepted_bound, nondeciding_bound)
+}
+
+fn produce_qualification_proof(
+    suite: &SelectedDirectNovaSuite<ANCHOR_RECURRENCE_STATE_ARITY>,
+    initial_state: [DirectNovaScalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    steps: Vec<DirectNovaStep<ANCHOR_RECURRENCE_STATE_ARITY>>,
+) -> Vec<u8> {
+    let step_count = steps.len();
+    let mut session = suite
+        .start(initial_state, step_count)
+        .expect("start qualification proof session");
+    for (index, step) in steps.into_iter().enumerate() {
+        eprintln!(
+            "sha_parent_qualification: folding recurrence {}/{}",
+            index + 1,
+            step_count
+        );
+        session = session
+            .add_step(step)
+            .expect("fold qualification recurrence");
+    }
+    session
+        .finish()
+        .expect("verify and compress qualification proof")
+}
+
+fn qualification_output_path(environment: &str) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(
+        std::env::var_os(environment)
+            .unwrap_or_else(|| panic!("set {environment} before qualification")),
+    );
+    assert!(!path.as_os_str().is_empty(), "{environment} is empty");
+    assert!(!path.exists(), "{environment} already exists");
+    path
+}
+
+fn write_new_qualification_output(path: &std::path::Path, bytes: &[u8]) {
+    use std::io::Write;
+
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .expect("create new qualification output");
+    output
+        .write_all(bytes)
+        .expect("write complete qualification output");
+    output.sync_all().expect("sync qualification output");
+    eprintln!(
+        "sha_parent_qualification: output={} bytes={}",
+        path.display(),
+        bytes.len()
+    );
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[test]
+#[ignore = "requires both fixtures and builds production recurrences"]
+fn exported_sha_parent_fixtures_reconstruct_one_shape() {
+    let accepted = read_qualification_fixture(
+        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
+        QUALIFIED_PROVER_FIXTURE_SHA256,
+    );
+    let nondeciding = read_qualification_fixture(
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
+        NONDECIDING_PROVER_FIXTURE_SHA256,
+    );
+    let (trusted_step, accepted_bound, nondeciding_bound) =
+        bind_both_qualification_fixtures(&accepted, &nondeciding);
+    assert_eq!(accepted_bound.steps.len(), accepted.anchors.len());
+    assert_eq!(nondeciding_bound.steps.len(), nondeciding.anchors.len());
+    assert_eq!(
+        trusted_step.relation_id(),
+        accepted_bound.steps[0].relation_id()
+    );
+}
+
+#[test]
+#[ignore = "run explicitly under the native no-swap resource gate"]
+fn native_profile_sha_parent_qualification_is_exact() {
+    let total_started = std::time::Instant::now();
+    let accepted_proof_path = qualification_output_path("PURIFY_CONSTRUCTION_PARENT_PROOF_OUT");
+    let nondeciding_proof_path =
+        qualification_output_path("PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROOF_OUT");
+    let artifact_path =
+        qualification_output_path("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT");
+    let accepted = read_qualification_fixture(
+        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
+        QUALIFIED_PROVER_FIXTURE_SHA256,
+    );
+    let nondeciding = read_qualification_fixture(
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
+        NONDECIDING_PROVER_FIXTURE_SHA256,
+    );
+    let (trusted_step, accepted_bound, nondeciding_bound) =
+        bind_both_qualification_fixtures(&accepted, &nondeciding);
+    drop(accepted);
+    drop(nondeciding);
+
+    let setup_started = std::time::Instant::now();
+    eprintln!("sha_parent_qualification: constructing transparent parameters");
+    let suite = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup(trusted_step)
+        .expect("unselected production qualification suite");
+    let selected = suite
+        .select_observed_construction_parent_for_qualification()
+        .expect("select observed production qualification suite");
+    let metadata = selected.metadata();
+    eprintln!(
+        "sha_parent_qualification: setup_seconds={:.3}\n\
+         relation_id={}\npublic_parameter_digest={}\n\
+         suite_id={}\nmetadata={metadata:#?}",
+        setup_started.elapsed().as_secs_f64(),
+        hex(metadata.relation_id.bytes()),
+        hex(&metadata.public_parameter_digest),
+        hex(selected.expected().suite_id().bytes()),
+    );
+
+    let z0 = source_state_to_nova(accepted_bound.initial_state).expect("qualification Nova z0");
+    let accepted_final =
+        source_state_to_nova(accepted_bound.final_state).expect("accepted Nova final state");
+    let nondeciding_final =
+        source_state_to_nova(nondeciding_bound.final_state).expect("nondeciding Nova final state");
+    let step_count = accepted_bound.steps.len();
+    assert_eq!(nondeciding_bound.steps.len(), step_count);
+
+    let accepted_proof = produce_qualification_proof(&selected, z0, accepted_bound.steps);
+    let nondeciding_proof = produce_qualification_proof(&selected, z0, nondeciding_bound.steps);
+    assert_eq!(accepted_proof.len(), metadata.proof_length);
+    assert_eq!(nondeciding_proof.len(), metadata.proof_length);
+    eprintln!(
+        "accepted_proof_sha256={}\nnondeciding_proof_sha256={}",
+        hex(&Sha256::digest(&accepted_proof)),
+        hex(&Sha256::digest(&nondeciding_proof)),
+    );
+
+    let verifier = selected.into_verifier();
+    let expected_suite = verifier.expected();
+    verifier
+        .verify_exact(&z0, step_count, &accepted_final, &accepted_proof)
+        .expect("verify accepted qualification proof");
+    verifier
+        .verify_exact(&z0, step_count, &nondeciding_final, &nondeciding_proof)
+        .expect("verify nondeciding qualification proof");
+    let mut artifact = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&artifact_path)
+        .expect("create new qualification verifier artifact");
+    let descriptor = verifier
+        .write_artifact(&mut artifact)
+        .expect("write qualification verifier artifact");
+    artifact
+        .sync_all()
+        .expect("sync qualification verifier artifact");
+    eprintln!(
+        "verifier_artifact={}\nartifact_bytes={}\nartifact_tagged_digest={}",
+        artifact_path.display(),
+        descriptor.encoded_length(),
+        hex(&descriptor.digest()),
+    );
+    drop(artifact);
+    drop(verifier);
+
+    let mut artifact = std::fs::File::open(&artifact_path)
+        .expect("open qualification verifier artifact for reload");
+    let loaded = SelectedDirectNovaVerifier::<ANCHOR_RECURRENCE_STATE_ARITY>::from_artifact_reader(
+        &mut artifact,
+        expected_suite,
+        &descriptor,
+    )
+    .expect("reload qualification verifier artifact");
+    loaded
+        .verify_exact(&z0, step_count, &accepted_final, &accepted_proof)
+        .expect("reloaded verifier accepts qualification proof");
+    loaded
+        .verify_exact(&z0, step_count, &nondeciding_final, &nondeciding_proof)
+        .expect("reloaded verifier accepts nondeciding proof");
+    write_new_qualification_output(&accepted_proof_path, &accepted_proof);
+    write_new_qualification_output(&nondeciding_proof_path, &nondeciding_proof);
+    eprintln!(
+        "sha_parent_qualification: total_seconds={:.3}",
+        total_started.elapsed().as_secs_f64()
     );
 }
 

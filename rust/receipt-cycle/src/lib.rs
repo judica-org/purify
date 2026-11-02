@@ -20,7 +20,13 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[allow(dead_code)]
+mod anchor_recurrence;
+#[allow(dead_code)]
 mod circuit_norm_leaf;
+#[allow(dead_code)]
+mod construction_manifest;
+#[allow(dead_code)]
+mod construction_parent_input;
 mod ffi;
 // This is an internal proof-codec foundation, not a receipt parser.
 #[allow(dead_code)]

@@ -102,6 +102,9 @@ Flags can be combined with commas or pipes, for example:
 ```
 
 The vendored export always excludes the optional `reference/` subtrees, including the `jonasnick` reference checkout.
+Every export includes the receipt-cycle Rust sources, locked dependency graph,
+and pinned toolchain so downstream builds can enable
+`PURIFY_BUILD_RECEIPT_CYCLE` without returning to the source checkout.
 Pruned exports also auto-disable missing optional CMake targets by default, while still failing fast if a caller explicitly enables a target whose source tree is absent.
 
 ### Benchmarks

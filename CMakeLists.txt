@@ -417,6 +417,16 @@ if(PURIFY_BUILD_RECEIPT_CYCLE)
             m
         )
     endif()
+
+    target_sources(purify PRIVATE
+        src/puresign/construction_parent_verifier.cpp
+    )
+    target_link_libraries(purify PUBLIC
+        $<BUILD_INTERFACE:purify_receipt_cycle_backend>
+    )
+    target_compile_definitions(purify PUBLIC
+        PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
+    )
 endif()
 
 if(WIN32)

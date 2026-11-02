@@ -12,7 +12,9 @@ use crate::construction_manifest::{
     derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestStepInput,
     ConstructionRoot, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
 };
-use crate::construction_parent_prover_fixture::ConstructionParentProverFixture;
+use crate::construction_parent_prover_fixture::{
+    ConstructionParentProverFixture, QUALIFIED_PROVER_FIXTURE_SHA256,
+};
 use crate::direct_nova::{direct_nova_raw_metrics, source_state_to_nova, DirectNovaTemplate};
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
 use crate::nova_session::{DirectNovaSuite, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE};
@@ -24,6 +26,7 @@ use crate::parent_relation::{
 use crate::relation_builder::{circuit_digest, Builder, StateWire};
 use crate::secp_scalar::SecpScalarVar;
 use crate::{Assignment, Circuit, WireKind};
+use sha2::{Digest, Sha256};
 
 const PRODUCTION_DIRECT_NOVA_RELATION_ID: [u8; 32] = [
     0xec, 0xfd, 0x8e, 0x56, 0x08, 0x40, 0x83, 0xba, 0x9a, 0x94, 0x43, 0x1f, 0xad, 0x5a, 0x5b, 0x1e,
@@ -819,6 +822,10 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         .expect("set PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
     let fixture_bytes =
         std::fs::read(fixture_path).expect("read construction parent prover fixture");
+    assert_eq!(
+        Sha256::digest(&fixture_bytes).as_slice(),
+        QUALIFIED_PROVER_FIXTURE_SHA256
+    );
     let fixture = ConstructionParentProverFixture::parse(&fixture_bytes)
         .expect("parse construction parent prover fixture");
     let step_count = fixture.anchors.len();

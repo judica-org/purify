@@ -65,6 +65,11 @@ const SECP_ORDER: [u8; 32] = [
     0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
 ];
 
+pub(crate) const QUALIFIED_PROVER_FIXTURE_SHA256: [u8; 32] = [
+    0xb3, 0x24, 0x64, 0xf8, 0x3d, 0x01, 0xe9, 0x37, 0x77, 0xeb, 0x3f, 0xdf, 0xd5, 0xf0, 0x0d, 0xfb,
+    0xca, 0x4a, 0xd4, 0xe5, 0x37, 0xcf, 0x7c, 0x87, 0x22, 0x85, 0x78, 0x9e, 0xe2, 0xc4, 0xf4, 0x1d,
+];
+
 #[derive(Debug, Error, Eq, PartialEq)]
 pub(crate) enum ConstructionParentProverFixtureError {
     #[error(transparent)]
@@ -558,12 +563,6 @@ mod tests {
 
     use super::*;
 
-    const QUALIFIED_FIXTURE_SHA256: [u8; 32] = [
-        0xb3, 0x24, 0x64, 0xf8, 0x3d, 0x01, 0xe9, 0x37, 0x77, 0xeb, 0x3f, 0xdf, 0xd5, 0xf0, 0x0d,
-        0xfb, 0xca, 0x4a, 0xd4, 0xe5, 0x37, 0xcf, 0x7c, 0x87, 0x22, 0x85, 0x78, 0x9e, 0xe2, 0xc4,
-        0xf4, 0x1d,
-    ];
-
     #[test]
     fn fixture_frame_rejects_truncation_and_wrong_magic() {
         assert_eq!(
@@ -593,7 +592,10 @@ mod tests {
             .expect("set PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
         let bytes = std::fs::read(path).expect("read construction prover fixture");
         assert_eq!(bytes.len(), 8_314);
-        assert_eq!(Sha256::digest(&bytes).as_slice(), QUALIFIED_FIXTURE_SHA256);
+        assert_eq!(
+            Sha256::digest(&bytes).as_slice(),
+            QUALIFIED_PROVER_FIXTURE_SHA256
+        );
         let fixture = ConstructionParentProverFixture::parse(&bytes)
             .expect("parse deterministic construction prover fixture");
         assert_eq!(fixture.anchors.len(), 2);

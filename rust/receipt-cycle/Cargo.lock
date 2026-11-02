@@ -624,7 +624,7 @@ dependencies = [
 [[package]]
 name = "nova-snark"
 version = "0.76.0"
-source = "git+https://github.com/JeremyRubin/Nova?rev=ef88da858d1b7ade8fe4b36b585436adbde672ae#ef88da858d1b7ade8fe4b36b585436adbde672ae"
+source = "git+https://github.com/JeremyRubin/Nova?rev=95674092501fe4a52dfc9e3c9f6667e3bd128c6c#95674092501fe4a52dfc9e3c9f6667e3bd128c6c"
 dependencies = [
  "bincode",
  "bitvec",
@@ -644,6 +644,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_with",
+ "sha2",
  "sha3",
  "subtle",
  "thiserror",

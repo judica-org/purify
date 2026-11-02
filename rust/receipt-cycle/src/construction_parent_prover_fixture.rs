@@ -73,7 +73,6 @@ pub(crate) enum ConstructionParentProverFixtureError {
     State(#[from] ReceiptCycleError),
 }
 
-#[allow(dead_code)]
 pub(crate) struct ConstructionParentProverAnchor {
     pub(crate) statement: ManifestBoundAnchorLeafStatementV4,
     pub(crate) transcript: CircuitProofTranscriptWitnessV4,

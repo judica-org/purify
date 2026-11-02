@@ -13,6 +13,7 @@ use crate::construction_manifest::{
     ConstructionManifestStepInput, ConstructionRoot, CONSTRUCTION_ROOT_BYTES,
     CONSTRUCTION_ROOT_STATE_ARITY,
 };
+use crate::construction_parent_prover_fixture::ConstructionParentProverFixture;
 use crate::direct_nova::{direct_nova_raw_metrics, source_state_to_nova, DirectNovaTemplate};
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
 use crate::nova_session::{DirectNovaSuite, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE};
@@ -396,6 +397,29 @@ fn relation_state(
     })
 }
 
+fn recurrence_state_from_fields(
+    fields: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    expected_index: u32,
+) -> AnchorRecurrenceStateWitness {
+    let root_fields = fields[..CONSTRUCTION_ROOT_STATE_ARITY]
+        .try_into()
+        .expect("fixed construction root state");
+    let root = ConstructionRoot::from_state_fields(root_fields)
+        .expect("authenticated construction root fields");
+    let manifest_field = fields[CONSTRUCTION_ROOT_STATE_ARITY];
+    let mut manifest = Secq256k1Cycle::scalar_to_canonical(&manifest_field);
+    manifest.reverse();
+    assert_eq!(
+        fields[CONSTRUCTION_ROOT_STATE_ARITY + 1],
+        Scalar::from(u64::from(expected_index))
+    );
+    AnchorRecurrenceStateWitness {
+        root: root.claim(),
+        manifest,
+        index: expected_index,
+    }
+}
+
 fn build_fixture(fixture: &Fixture) -> StatefulRelation {
     build_anchor_recurrence_relation_inner(
         Builder::default(),
@@ -693,6 +717,98 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
         .bind_relation(matching)
         .expect("matching production direct Nova step");
     assert_eq!(second.relation_id(), relation_id);
+}
+
+#[test]
+#[ignore = "requires the deterministic C++ slashability fixture"]
+fn exported_parent_fixture_reconstructs_two_step_relation() {
+    let path = std::env::var_os("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE")
+        .expect("set PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
+    let bytes = std::fs::read(path).expect("read construction parent prover fixture");
+    let fixture = ConstructionParentProverFixture::parse(&bytes)
+        .expect("parse construction parent prover fixture");
+    assert_eq!(fixture.anchors.len(), 2);
+
+    let expected_suffix = fixture
+        .inputs
+        .seed()
+        .derive_expected_final(fixture.inputs.anchors())
+        .expect("derive exact final construction manifest")
+        .state_suffix_fields()
+        .expect("final construction manifest fields");
+    let source_z0 = fixture
+        .inputs
+        .seed()
+        .initial_state_fields()
+        .expect("verifier-derived fixture z0");
+    let initial_state = fixture.inputs.seed().initial_recurrence_witness();
+    assert_eq!(
+        initial_state.state_fields().expect("initial state fields"),
+        source_z0
+    );
+
+    eprintln!("exported_parent_fixture: building first recurrence");
+    let first_anchor = &fixture.anchors[0];
+    let first_relation = build_anchor_recurrence_relation(
+        &initial_state,
+        first_anchor.statement,
+        &first_anchor.transcript,
+        &first_anchor.reduction,
+        &first_anchor.step,
+    )
+    .expect("first exported anchor recurrence");
+    assert_eq!(
+        relation_state(&first_relation, &first_relation.shape.inputs),
+        source_z0
+    );
+    assert!(structured_relation_satisfied(
+        &first_relation.shape.circuit,
+        &first_relation.assignment
+    ));
+    let source_z1 = relation_state(&first_relation, &first_relation.shape.outputs);
+    let second_state = recurrence_state_from_fields(source_z1, 1);
+    let (template, first_step) =
+        DirectNovaTemplate::<ANCHOR_RECURRENCE_STATE_ARITY>::from_relation(first_relation)
+            .expect("exported construction direct Nova template");
+    assert_eq!(
+        first_step.relation_id().bytes(),
+        &PRODUCTION_DIRECT_NOVA_RELATION_ID
+    );
+
+    eprintln!("exported_parent_fixture: building second recurrence");
+    let second_anchor = &fixture.anchors[1];
+    let second_relation = build_anchor_recurrence_relation_with_builder(
+        template.matching_builder(),
+        &second_state,
+        second_anchor.statement,
+        &second_anchor.transcript,
+        &second_anchor.reduction,
+        &second_anchor.step,
+    )
+    .expect("second exported anchor recurrence");
+    assert_eq!(
+        relation_state(&second_relation, &second_relation.shape.inputs),
+        source_z1
+    );
+    assert!(structured_relation_satisfied(
+        &second_relation.shape.circuit,
+        &second_relation.assignment
+    ));
+    let source_z2 = relation_state(&second_relation, &second_relation.shape.outputs);
+    assert_eq!(
+        &source_z2[CONSTRUCTION_ROOT_STATE_ARITY..],
+        expected_suffix.as_slice()
+    );
+    let final_state = recurrence_state_from_fields(source_z2, 2);
+    let final_root = registry_seed_root(&final_state.root);
+    assert_eq!(
+        final_root.canonical_bytes(),
+        fixture.expected_root.canonical_bytes()
+    );
+    let second_step = template
+        .bind_relation(second_relation)
+        .expect("matching exported construction direct Nova step");
+    assert_eq!(second_step.relation_id(), first_step.relation_id());
 }
 
 #[test]

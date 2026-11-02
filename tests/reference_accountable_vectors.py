@@ -68,13 +68,16 @@ def vectors():
         key = mul(q)
     r = 6
     host = bytes(range(32))
+    coalition_core = bytes(range(32, 64))
     slot = b"domain=7;epoch=13;slot=2"
-    context = scalar_bytes(key[0]) + host + length_prefixed(slot)
+    context = (scalar_bytes(key[0]) + host + coalition_core
+               + length_prefixed(slot))
     out = {
         "signing_key": scalar_bytes(key[0]).hex(),
         "host_commitment": host.hex(),
+        "coalition_core_digest": coalition_core.hex(),
         "slot": slot.decode("ascii"),
-        "nonce_input": tagged_hash("Purify/Accountable/Nonce/v1", context).hex(),
+        "nonce_input": tagged_hash("Purify/Accountable/Nonce/v2", context).hex(),
         "normalized_test_secret": scalar_bytes(q).hex(),
         "raw_test_nonce": scalar_bytes(r).hex(),
         "nonce_point": point_bytes(mul(r)).hex(),
@@ -82,7 +85,8 @@ def vectors():
     }
     for body in (b"accept:root-a", b"accept:root-b"):
         challenge = int.from_bytes(tagged_hash(
-            "Purify/Accountable/Challenge/v1", context + length_prefixed(body)), "big") % N
+            "Purify/Accountable/Challenge/v2",
+            context + length_prefixed(body)), "big") % N
         assert challenge != 0
         sigma = (r + challenge * q) % N
         assert add(mul(sigma), mul(N - challenge, key)) == mul(r)

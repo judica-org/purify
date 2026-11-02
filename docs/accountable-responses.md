@@ -1,68 +1,107 @@
-# Public partial-response equations
+# Verified coalition nonce responses
 
-The response helpers extend the experimental [scalar transcript](accountable-signatures.md)
-and [ordered signing roster](accountable-rosters.md) with public algebra checks.
-They do not generate secret partials or validate a Purify proof, enrollment,
-member consent, a certificate, or a penalty. A point chosen by the sender does
-not become an authorized deterministic nonce merely because its partial
-equation holds.
+The accountable response API connects the ordered signing roster,
+PureSign++ deterministic-nonce proofs, scalar-only responses, and conflict
+extraction. Production acceptance uses capability types with private
+constructors; a caller cannot promote an arbitrary nonce point or scalar into
+an accepted response. The optional recovery-root escrow setup is not required
+for this path.
 
-## Exact equations and ordering
+## Registered nonce hosts
 
-For roster member `i`, let `P_i` be its full compressed public key and `b_i` its
-effective coefficient, which already includes aggregate-key normalization.
-The caller supplies the usual `Q/U/T/body` context. Its aggregate `Q` must equal
-the roster's even-Y key. Derive the existing nonzero challenge `e` once.
+Each roster member has one ordered `puresign_plusplus::PublicKey` bundle. The
+32-byte `NonceHostCommitment` hashes a domain-separated fixed encoding of the
+roster key, list hash, member count, every full 33-byte member key, and every
+96-byte host bundle. Construction rejects:
 
-`PartialResponse` contains the canonical scalar `sigma_i` and the full compressed
-raw nonce `R_i`. The verifier checks:
+- a host/member count mismatch;
+- duplicate Purify roots;
+- malformed bundle keys; and
+- any member key other than the even point `02 || bundle.bip340_pubkey`.
+
+`bind_nonce_hosts` validates the ordered host bundles, computes this exact
+commitment, and returns `NonceHostBoundSigningRoster`. The capability retains
+the coalition core digest alongside the roster and host commitment. The
+optional recovery-root setup produces the stronger
+`RecoveryBoundSigningRoster`, which is also usable anywhere the base
+nonce-host-bound capability is required.
+
+## Proof-attested full nonces
+
+For one `ConflictContext`, `nonce_evaluation_input` derives the 32-byte
+PureSign++ topic from the exact aggregate key `Q`, host commitment `U`,
+coalition core digest, and slot. `verify_coalition_nonce_set` first requires
+all three registry values to match its nonce-host-bound roster, then requires
+exactly one topic `NonceProof` for every ordered host and verifies all of them.
+It retains each proof's full 33-byte `commitment_point`, sums those exact
+points, and rejects an aggregate at infinity.
+
+Success returns `VerifiedCoalitionNonceSet`. Its constructor is private and it
+stores the roster and topic bindings, so it cannot be reused with another
+roster, `Q`, `U`, coalition core, or slot. X-only equality is insufficient: an
+opposite-Y point is a different nonce and rejects.
+
+PureSign++ exposes two nonce-scalar views deliberately. `scalar()` is the
+even-Y BIP340 normalization. `raw_scalar()` is the scalar for the proof's full
+compressed `commitment_point`; it negates the normalized scalar for an odd
+point. Accountable response creation must use `raw_scalar()`.
+
+## Scalar-only response acceptance
+
+`PartialResponse` contains only the canonical scalar `sigma_i`. For member
+`i`, with full public key `P_i`, effective roster coefficient `b_i`, verified
+raw nonce `R_i`, and statement challenge `e`, acceptance checks:
 
 ```text
 R_i = sigma_i*G - (e*b_i)*P_i
 ```
 
-The member index selects the coefficient and public key from the immutable
-roster. Individual key parity, aggregate-key parity in `b_i`, and the raw nonce
-sign are distinct: no additional sign adjustment is applied to either `b_i` or
-`R_i`. Invalid nonce encodings and identity points reject. A zero scalar response
-is allowed when its equation holds against a nonidentity raw nonce.
-
-`aggregate_responses` requires exactly one response in each member's roster
-position, validates every equation under the same context/challenge, and returns:
+`aggregate_responses` requires one partial in roster order, checks every
+equation against the verified nonce set, sums the scalars, and reconstructs:
 
 ```text
-sigma = sum_i sigma_i modulo n
-R     = sigma*G - e*Q = sum_i R_i
+sigma = sum_i sigma_i mod n
+R     = sigma*G - e*Q
 ```
 
-The returned `ScalarSignature` serializes to exactly 32 bytes. Partial-session
-nonces are not appended to that final scalar. A final nonce at infinity rejects;
-intermediate cancellation is harmless when the final sum is nonidentity. The
-function rejects an empty roster, including an empty moved-from value, before
-aggregation. It allocates no temporary per-member buffers and hashes the
-challenge only once.
+The reconstructed full point must equal the set's exact aggregate nonce.
+Success returns `VerifiedScalarResponse`, not a naked accepted scalar. The
+wire response remains 32 bytes; nonce proofs and host bundles belong to the
+certificate material prepared outside that scalar.
 
-## Caller obligations
+`verify_scalar_response` performs the same final acceptance when a caller
+already has an aggregate scalar. This closes the all-malicious-roster attack:
+even if every signer computes a fresh valid-looking nonce for a conflicting
+body, the scalar reconstructs a different full point and cannot produce a
+second accepted response for the fixed proof set.
 
-Before treating a response as authorized, the surrounding protocol must
-authenticate the roster, `U`, slot, body, and the nonce commitments/proofs at the
-specified session stage. After aggregation, the final verifier still needs a
-reviewed proof of the deterministic Purify relation against exactly the point
-reconstructed from the scalar. A successful partial-equation check is not a
-replacement for either requirement.
+## Typed conflict extraction
 
-There is no proof-backend callback or secret signing operation in this API.
-The existing experimental BP++ wrapper is not silently selected as a verifier.
-The complete signature/proof composition, malicious-member security, private
-prover, and durable authorization/release boundary remain open work.
+`recover_verified_same_slot_key` accepts only two `VerifiedScalarResponse`
+values. It requires identical `Q`, `U`, coalition digest, slot, and exact full
+aggregate nonce, plus distinct bodies/challenges. It then performs the public
+extraction equation and verifies the exact point `qG = Q`. The result is an
+`ExposedCoalitionKey` suitable for slash-adaptor completion. Deployments that
+also registered a recovery root can validate its scalar against the stronger
+`RecoveryBoundSigningRoster` before companion-key or anchor recovery.
 
-## Validation scope
+The lower-level `reconstruct_nonce` and `recover_same_slot_key` helpers remain
+available for algebraic vectors. They do not create the production capability
+types and must not be used as certificate acceptance shortcuts.
 
-The focused suite uses centralized public toy keys and nonces for N=1,2,3.
-It checks raw odd nonce parity, an aggregate key requiring negation, partial
-verification and scalar aggregation, zero responses, member order and count,
-altered contexts and equations, and final versus intermediate nonce cancellation.
-It also aggregates two same-slot toy statements and recovers the exact
-parity-adjusted aggregate scalar through the public extraction helper. The
-fixtures exercise algebra, not complete cryptographic certificates or
-adversarial proof generation.
+## Remaining protocol obligations
+
+These APIs establish deterministic-nonce proof acceptance, exact response
+composition, and cryptographic conflict extraction. They do not by themselves
+establish registration authorization, member consent, semantic conflict,
+liability, durable pre-release signing state, or transport policy. The
+optional recovery-root setup prover currently receives the aggregate scalar
+centrally; a distributed setup protocol is a separate requirement for
+deployments that choose the experimental general-escrow path. It is not a
+dependency of accountable response extraction or slash-adaptor receipts.
+
+The focused tests cover honest singleton and multi-member flows, odd raw nonce
+parity, missing/swapped/reordered proofs and hosts, duplicate hosts, changed
+`Q`/`U`/core/slot, replay across separately bound cores with the same `Q` and
+`U`, opposite full-point parity, scalar-only aggregation, attempted fresh
+nonces by an all-malicious roster, typed extraction, and recovery-root opening.

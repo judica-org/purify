@@ -78,6 +78,12 @@ private:
     std::array<PolynomialTerm, 2> polynomial_;
 
     friend Result<PreparedNorm> prepare_norm(const Basis&, const NormArgProof&, purify_secp_context*);
+    friend Result<PreparedNorm>
+    prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+        const Basis&, const NativeBulletproofCircuit&,
+        const ExperimentalCircuitZkNormArgProof&,
+        std::span<const PointBytes>, purify_secp_context*,
+        std::span<const unsigned char>, ExperimentalCircuitBackend*);
 };
 
 /**
@@ -137,6 +143,21 @@ Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> 
 /** Parses the norm transcript and computes C_c from its exact required public coefficients. */
 Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,
                                   purify_secp_context* context);
+
+/**
+ * Reconstructs a V3 circuit proof and prepares its inner norm obligation on
+ * the stable raw circuit basis. The batched public-output DLog proof is
+ * checked and the outer transcript is replayed before a pending obligation is
+ * returned.
+ */
+Result<PreparedNorm>
+prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+    const Basis& basis, const NativeBulletproofCircuit& circuit,
+    const ExperimentalCircuitZkNormArgProof& proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context* context,
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitBackend* cache = nullptr);
 
 /** Constructs the tensor opening using only the prepared public c-vector and transcript. */
 Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const PreparedNorm& norm,

@@ -806,9 +806,9 @@ compressed relation.
 The \bppp\ path starts from \emph{the same native circuit and the same witness assignment} as
 Section~3. What changes is the public encoding handed to the backend. Instead of proving the full
 native gate-and-row system directly, the repository first reduces it to one weighted norm relation
-of the form
+of the form, where $M$ is the padded virtual-gate count defined below,
 \[
-\sum_{k=0}^{4N-1} \mu_k n_k^2 + \langle \ell, c \rangle = T,
+\sum_{k=0}^{2M-1} \mu_k n_k^2 + \langle \ell, c \rangle = T,
 \qquad
 \mu_k = (\rho^2)^{k+1},
 \]
@@ -834,14 +834,28 @@ magnitude gain.
 \subsection{Public Reduction to One Norm Relation}
 
 Let $N$ be the number of multiplication gates in the native circuit, and index the sparse linear rows
-by $j$. The helper
-\texttt{build\_circuit\_norm\_arg\_public\_data(...)} first hashes the circuit-binding digest to
-derive:
+by $j$. V3 first commits, under fixed independent bases, to every raw
+$p_i=a_{L,i}+a_{R,i}$, $m_i=a_{L,i}-a_{R,i}$, output coordinate, and hidden linear coordinate.
+Call that point $A_{\rm raw}$. In the masked zero-knowledge wrapper, a random
+zero-coefficient hiding coordinate makes it perfectly hiding; the transparent
+unmasked helper makes no such claim. Only after $A_{\rm raw}$ is fixed does
+\texttt{build\_circuit\_norm\_arg\_public\_data(...)} hash the circuit statement and
+$A_{\rm raw}$ to derive:
 \begin{itemize}[nosep]
   \item a non-zero challenge $\rho$,
-  \item one weight $\lambda_i$ for each multiplication gate, and
-  \item one weight $\sigma_j$ for each linear row.
+  \item independent non-zero challenges $\lambda$, $z$, and $y$,
+  \item gate weights $\alpha_i=4(\lambda z^i)^2$, and
+  \item row weights $\sigma_j=y^{j+1}$.
 \end{itemize}
+Committing first is the soundness boundary: a malicious prover cannot choose
+gate or row residuals after learning their polynomial-evaluation weights.
+If $F(z)$ is the gate-residual polynomial and $G(y)$ the row-residual
+polynomial, the folded residual has the separated form
+$\lambda^2F(z)+G(y)$. Its total degree is at most
+$\max(2M,R)$ for $M$ virtual gates and $R$ linear rows. Unless every native
+residual is zero, this is a nonzero polynomial, so the random-oracle
+Schwartz--Zippel failure bound is at most $\max(2M,R)/(q-1)$ when the
+domain-separated challenges are sampled from $\mathbb{F}_q^*$.
 
 \medskip\noindent\textbf{Row aggregation.}
 For row $j$, write the original affine check as
@@ -902,7 +916,7 @@ In the implementation, these collapsed coefficient vectors are
 The gate weights then fold in the multiplicative constraints
 $a_{L,i} a_{R,i} = a_{O,i}$ by adding the weighted equations
 \[
-\lambda_i(a_{L,i} a_{R,i} - a_{O,i}) = 0.
+\alpha_i(a_{L,i} a_{R,i} - a_{O,i}) = 0.
 \]
 Using
 \[
@@ -939,66 +953,57 @@ s_i^+ = \frac{e_i^+}{2 d_i^+}, \qquad s_i^- = \frac{e_i^-}{2 d_i^-}.
 \]
 The reduction stores these shifts as \texttt{plus\_shift[i]} and \texttt{minus\_shift[i]}.
 
-\medskip\noindent\textbf{Ordinary-square form.}
-The target norm relation uses a weighted sum of \emph{ordinary} squares with fixed public weights
-$\mu_k = (\rho^2)^{k+1}$. To fit that shape, the helper \texttt{two\_square\_terms(...)} splits
-each completed-square coefficient into two ordinary square coordinates. If one branch contributes
+\medskip\noindent\textbf{Ordinary-square form and reciprocal bases.}
+Write $t_i=\lambda z^i$ and choose the canonical field element $\xi$ with
+$\xi^2=-1$. Gate $i$ needs exactly two norm coordinates:
 \[
-d z^2,
+n_{2i}=\frac{t_i(p_i+s_i^+)}{\rho^{2i+1}}, \qquad
+n_{2i+1}=\frac{\xi t_i(m_i+s_i^-)}{\rho^{2i+2}}.
 \]
-the helper chooses two field elements $t_1,t_2$ such that
+Under the backend weights $\mu_k=(\rho^2)^{k+1}$, these contribute
 \[
-t_1^2 + t_2^2 = d.
+t_i^2(p_i+s_i^+)^2-t_i^2(m_i+s_i^-)^2,
 \]
-Concretely, writing $\xi^2 = -1$ in $\mathbb{F}_P$, the reduction sets
+whose unshifted quadratic term is
+$4t_i^2a_{L,i}a_{R,i}=\alpha_i a_{L,i}a_{R,i}$.
+
+The corresponding norm bases are reciprocal-scaled from the fixed raw bases:
 \[
-t_1 = \frac{d+1}{2}, \qquad t_2 = \xi \frac{d-1}{2},
+G'_{2i}=G_{2i}\frac{\rho^{2i+1}}{t_i}, \qquad
+G'_{2i+1}=G_{2i+1}\frac{\rho^{2i+2}}{\xi t_i}.
 \]
-so indeed
+Consequently $n_{2i}G'_{2i}=(p_i+s_i^+)G_{2i}$ and likewise for the minus
+coordinate. The reduced commitment therefore opens the already-fixed
+$A_{\rm raw}$ plus public shift points; it is not a fresh witness commitment
+chosen after the fold weights.
+
+The implementation uses $M=\operatorname{pow2}(\max(N,C+1))$ virtual gates,
+where $C$ is the number of hidden commitment wires (zero in externalized mode).
+It sets both norm and linear lengths to $2M$. Honest virtual gates are zero,
+while their precommitted residuals remain coefficients of the same random
+polynomial, so they cannot provide adaptive quadratic slack. Thus
+\texttt{reduce\_experimental\_circuit\_to\_norm\_arg(...)} outputs
 \[
-t_1^2 + t_2^2
-= \frac{(d+1)^2}{4} - \frac{(d-1)^2}{4}
-= d.
-\]
-When the reduction places these two coordinates in positions $k$ and $k+1$ of the norm vector, it stores
-them proportional to $t_1 z \rho^{-(k+1)}$ and $t_2 z \rho^{-(k+2)}$, so the explicit $\rho^{-1}$ factors cancel the
-backend's fixed weights $\mu_k = (\rho^2)^{k+1}$. After the verifier applies those fixed public
-weights, the two coordinates contribute
-exactly
-\[
-t_1^2 z^2 + t_2^2 z^2 = d z^2.
-\]
-\texttt{two\_square\_terms(...)} is therefore just a field-level decomposition of one coefficient-weighted
-square into two ordinary squares. That is why every original
-gate contributes \emph{four} entries to the reduced norm vector: two from the ``plus'' branch and
-two from the ``minus'' branch. Concretely,
-\texttt{reduce\_experimental\_circuit\_to\_norm\_arg(...)} outputs:
-\[
-n \in \mathbb{F}^{4N}, \qquad \ell \in \mathbb{F}^{T}.
+n \in \mathbb{F}^{2M}, \qquad \ell \in \mathbb{F}^{2M}.
 \]
 
-The vector $n$ contains the four square coordinates derived from the shifted
-$a_{L,i}+a_{R,i}$ and $a_{L,i}-a_{R,i}$ values for each gate. The vector $\ell$ carries the
+The vector $n$ contains the two shifted square coordinates for each virtual gate. The vector $\ell$ carries the
 remaining linear witness data. In the default mode its layout is
 \[
 \ell =
-\bigl(a_{O,0}, \ldots, a_{O,N-1}, v_0, \ldots, v_{C-1}, \text{zk slack variable slots}\bigr),
+\bigl(a_{O,0}, \ldots, a_{O,M-1}, v_0, \ldots, v_{C-1}, \text{hiding slots}\bigr),
 \]
-where the final tail consists of zk slack variable slots: coordinates that the reduction introduces by rounding the $\ell$-vector
-length up to a power of two after it places the used coordinates. This is distinct from the
-earlier gate-count padding of the native circuit. In the basic reduction these zk slack variable
-slots start at zero; in the masked wrapper the prover reuses them as blinding slots. The extra ``$+1$'' in the
-implementation ensures that this rounded $\ell$ length always leaves at least some slack beyond the
-used coordinates. The coefficient vector $c$ has the same shape: the first $N$ entries weight the
-output-wire part, the next $C$ entries weight the commitment-wire part, and the zk slack variable slots are zero.
+and $M\ge C+1$ guarantees at least one zero-coefficient hiding slot. The
+coefficient vector $c$ has the same shape: the first $M$ entries weight output
+wires, the next $C$ entries weight commitment wires, and the hiding slots are zero.
 
 The public side then supplies
 \[
-c \in \mathbb{F}^{T}, \qquad T \in \mathbb{F},
+c \in \mathbb{F}^{2M}, \qquad T \in \mathbb{F},
 \]
 and the entire native circuit is equivalent to one public relation
 \[
-\sum_{k=0}^{4N-1} \mu_k n_k^2 + \langle \ell, c \rangle = T,
+\sum_{k=0}^{2M-1} \mu_k n_k^2 + \langle \ell, c \rangle = T,
 \]
 with $\mu_k = (\rho^2)^{k+1}$. This is the object the \bppp\ backend proves.
 
@@ -1012,19 +1017,20 @@ The simplest \bppp\ entry points are:
 \end{itemize}
 
 These functions expose the reduction in its simplest form.
-The witness-commit helper first reduces the native assignment to the hidden vectors $(n,\ell)$ and
-computes a witness-only commitment
+The witness-commit helper first commits the fixed raw coordinates $(p,m,\ell)$ before any
+reduction challenge exists:
 \[
-C_{\mathrm{wit}} = \mathsf{Com}(n,\ell).
+A_{\rm raw} = \mathsf{Com}(p,m,\ell).
 \]
-The prover then anchors that commitment to the public target by offsetting it with $T$:
+The prover derives the V3 challenges, maps the reduced opening back to that point with reciprocal
+bases, adds the public square-completion shifts, and anchors the result to the public target:
 \[
-C = C_{\mathrm{wit}} + [T]G.
+C = A_{\rm raw} + A_{\rm shifts} + [T]G.
 \]
 \texttt{prove\_experimental\_circuit\_norm\_arg(...)} therefore returns exactly two public
 objects:
 \begin{itemize}[nosep]
-  \item the reduced-witness commitment $C_{\mathrm{wit}}$, and
+  \item the raw-coordinate commitment $A_{\rm raw}$, and
   \item the inner \bppp\ proof bytes.
 \end{itemize}
 
@@ -1033,16 +1039,15 @@ scalar. The output remains the commitment-wire value $v_0$, and in the reduction
 only as one hidden coordinate inside $\ell$. The public vectors $c$ and the public target $T$ are
 derived from the circuit shape and statement-binding bytes; they do not reveal the witness values.
 The verifier therefore never receives a separate field element for $o$, only one group commitment to the
-entire reduced witness together with a proof that the committed witness satisfies the norm relation.
-That said, this subsection presents only the minimal reduced-witness argument. The next subsection
+raw coordinates together with a proof that its reciprocal-basis opening satisfies the norm relation.
+That said, this subsection presents only the minimal transparent argument. The next subsection
 describes the full witness-hiding wrapper that the actual zero-knowledge API uses.
 
-The verifier reruns the same \emph{public} reduction from the circuit and the statement-binding
-bytes, reconstructs the same anchored commitment $C$ from the transmitted
-$C_{\mathrm{wit}}$, and checks a norm-argument proof for
+The verifier derives the same public reduction from the circuit, statement bytes, and transmitted
+$A_{\rm raw}$, reconstructs the anchored commitment $C$, and checks a norm-argument proof for
 \[
 \exists (n,\ell)\ \text{such that}\
-\sum_{k=0}^{4N-1} \mu_k n_k^2 + \langle \ell, c \rangle = T
+\sum_{k=0}^{2M-1} \mu_k n_k^2 + \langle \ell, c \rangle = T
 \]
 under that commitment. This framing makes the \bppp\ design easiest to read: it proves the same Purify
 statement as \bp, but only after first compressing the native circuit to the reduced witness
@@ -1051,17 +1056,19 @@ coordinates $(n,\ell)$.
 \subsection{The Masked Zero-Knowledge Wrapper Used Here}
 
 The repository's zero-knowledge \bppp\ path adds one more layer on top of that transparent reduced
-proof. Starting from the hidden vectors $(n,\ell)$, the prover first fills the zk slack variable
+proof. Starting from the hidden vectors $(n,\ell)$, the prover first fills the zero-coefficient hiding
 slots in $\ell$ with fresh blind scalars and then derives random mask vectors
 \[
-r_n \in \mathbb{F}^{4N}, \qquad r_\ell \in \mathbb{F}^{T}
+r_n \in \mathbb{F}^{2M}, \qquad r_\ell \in \mathbb{F}^{2M}
 \]
-from the statement digest plus a prover nonce. It next computes
+from the statement digest plus a secret prover seed. Publishing that seed compromises witness
+hiding through the deterministic masking responses, even though the separately described batched
+Schnorr nonce is also hedged with its witness scalar. It next computes
 \[
-t_2 = \sum_{k=0}^{4N-1} \mu_k r_{n,k}^2,
+t_2 = \sum_{k=0}^{2M-1} \mu_k r_{n,k}^2,
 \]
 \[
-t_1 = 2 \sum_{k=0}^{4N-1} \mu_k n_k r_{n,k} + \langle r_\ell, c \rangle.
+t_1 = 2 \sum_{k=0}^{2M-1} \mu_k n_k r_{n,k} + \langle r_\ell, c \rangle.
 \]
 These are exactly the coefficients that appear when the verifier later checks the masked witness
 \[
@@ -1072,19 +1079,19 @@ masking step hides $o$ in exactly the same way it hides every other reduced witn
 verifier never sees $\ell$ itself, only commitments to the masked combinations.
 Indeed,
 \[
-\sum_{k=0}^{4N-1} \mu_k (n_k + x r_{n,k})^2 + \langle \ell + x r_\ell, c \rangle
+\sum_{k=0}^{2M-1} \mu_k (n_k + x r_{n,k})^2 + \langle \ell + x r_\ell, c \rangle
 = T + x t_1 + x^2 t_2.
 \]
 
 The outer transcript then mirrors the standard \bp\ masking pattern:
 \begin{enumerate}
-  \item commit to the hidden reduced witness,
+  \item commit to the fixed raw coordinates before deriving $\rho,\lambda,z,y$,
   \[
-  A_{\mathrm{wit}} = \mathsf{Com}(n,\ell),
+  A_{\rm raw} = \mathsf{Com}(p,m,\ell),
   \]
-  \item anchor that witness commitment to the public statement,
+  \item map that point to the reciprocal-basis reduced commitment, add public shifts, and anchor it,
   \[
-  A = A_{\mathrm{wit}} + [T]G,
+  A = A_{\rm raw} + A_{\rm shifts} + [T]G,
   \]
   \item commit to the mask vectors together with the linear correction term,
   \[
@@ -1123,11 +1130,23 @@ The prover side also checks that the supplied public commitment points really ma
 scalars in the witness assignment. When constructing the anchored $A$ commitment, the implementation subtracts
 the weighted contribution of those already-public points, so the remaining hidden witness is only
 \[
-\ell = \bigl(a_{O,0}, \ldots, a_{O,N-1}, \text{zk slack variable slots}\bigr).
+\ell = \bigl(a_{O,0}, \ldots, a_{O,M-1}, \text{hiding slots}\bigr).
 \]
 PureSign++ uses this hook: some commitment objects remain explicit public
 protocol messages, while the hidden Purify witness is still proved through the same masked
 norm-argument path.
+The V3 transcript additionally folds every public point with powers of an
+$A_{\rm raw}$-derived challenge and proves knowledge of the resulting discrete logarithm
+with one 64-byte Schnorr proof. This is a random-linear-combination batch check,
+not a literal independent proof for every opening. In the random-oracle and
+algebraic-group model, extraction of all $m$ openings has an additional
+soundness loss of approximately $(m-1)/q$, where $q$ is the secp256k1 subgroup
+order. The Schnorr nonce is derived from the secret prover seed, the canonical
+batched opening, and the public challenge transcript, so disclosure of the seed
+alone does not reveal the batched opening from the response. The same seed must
+nevertheless never be reused when the assignment can differ under a repeated
+public statement, because the surrounding masking proof also derives its
+randomness from that seed.
 
 \subsection{Efficiency Note on a Bespoke \bppp\ Circuit}
 
@@ -1138,18 +1157,20 @@ tables. That would remove some duplicated lookup products and some generic lower
 would not change the basic Purify arithmetic.
 
 This matters for expectations about size. In the current benchmark surface the \bppp\ proof payload
-is about $909$ bytes versus about $1124$ bytes for legacy \bp, a roughly $20\%$ reduction. The
+is about $844$ bytes versus about $1124$ bytes for legacy \bp, a roughly $25\%$ reduction. The
+complete generic V3 wrapper is $1006$ bytes: it adds the raw commitment, masking commitment,
+quadratic response, and the amortized 64-byte discrete-log proof. A serialized PureSign++ nonce
+proof is $1072$ bytes after its framing and bound public fields.
 \bppp\ backend's proof size is logarithmic in the reduced dimensions, so small structural cleanups
 do not necessarily shrink the proof at all. The current reused path pads the native circuit to
 $2048$ gates, and that gate-count padding alone makes the dominant reduced dimension
-$4 \cdot 2048 = 8192$, landing exactly on the $909$-byte size tier. A bespoke path that merely
-avoided this native-circuit padding would likely move to about $4 \cdot 2030 = 8120$, which is
-enough to drop one tier to about $844$ bytes. This estimate is about the norm-vector dimension $4N$;
-it does not require removing the separate zk slack variable slots later used in $\ell$ for the
-masked wrapper.
+$2 \cdot 2048 = 4096$, landing exactly on the $844$-byte size tier. The V3 raw precommitment uses
+one coordinate for $L+R$ and one for $L-R$; reciprocal-scaled generators bind those coordinates
+before the folding challenges exist. Merely trimming a few native gates does not cross another
+power-of-two tier because the virtual-gate shape remains padded to 2048.
 
-The \emph{next} proof-size drop would require pushing the dominant reduced dimension below $4096$,
-which would mean something much more aggressive than just removing bookkeeping. The realistic upside
+The \emph{next} proof-size drop would require pushing the dominant reduced dimension to $2048$,
+which would mean reducing the padded gate count to $1024$. The realistic upside
 is therefore probably a modest additional byte reduction and some prover speedup, not a second
 dramatic proof-size collapse.
 

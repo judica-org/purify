@@ -5,6 +5,7 @@
 #include "purify/accumulation.hpp"
 
 #include "bppp_bridge.h"
+#include "bppp_internal.hpp"
 
 namespace purify::bppp::accumulation {
 namespace {
@@ -17,6 +18,8 @@ const TaggedHash kOpeningBaseHash("Purify/BPPP/AccumOpeningBaseV1");
 const TaggedHash kOpeningHash("Purify/BPPP/AccumOpeningV1");
 const TaggedHash kRoundHash("Purify/BPPP/AccumRoundV1");
 const TaggedHash kNormBindingHash("Purify/BPPP/NormReduction/StatementV1");
+const TaggedHash kCircuitNormBindingHash(
+    "Purify/BPPP/CircuitNormReduction/StatementV3");
 const TaggedHash kNormOpeningBaseHash("Purify/BPPP/NormReduction/OpeningBaseV1");
 const TaggedHash kNormOpeningHash("Purify/BPPP/NormReduction/OpeningV1");
 const TaggedHash kNormFusionHash("Purify/BPPP/NormReduction/FusionV1");
@@ -31,6 +34,15 @@ void append_size(Bytes& out, std::size_t value) {
 
 void append(Bytes& out, std::span<const unsigned char> bytes) {
     out.insert(out.end(), bytes.begin(), bytes.end());
+}
+
+Digest generator_digest(std::span<const PointBytes> generators) {
+    Digest out{};
+    const auto bytes = std::as_bytes(generators);
+    purify_sha256(out.data(),
+                  reinterpret_cast<const unsigned char*>(bytes.data()),
+                  bytes.size());
+    return out;
 }
 
 std::size_t log2_dimension(std::size_t size) {
@@ -616,6 +628,136 @@ Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,
     append(encoded, proof.proof);
     return PreparedNorm(basis.digest(), kNormBindingHash.digest(encoded), proof.c_vec,
                         commitment, residual, {std::move(g), std::move(h)});
+}
+
+Result<PreparedNorm>
+prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+    const Basis& basis, const NativeBulletproofCircuit& circuit,
+    const ExperimentalCircuitZkNormArgProof& proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context* context,
+    std::span<const unsigned char> statement_binding,
+    ExperimentalCircuitBackend* cache) {
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(context, "accumulation:circuit_context"),
+        "accumulation:circuit_context");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis),
+                           "accumulation:circuit_basis");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto prepared,
+        detail::prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+            circuit, proof, public_commitments, context, statement_binding,
+            cache),
+        "accumulation:circuit_prepare");
+    if (!prepared.has_value()) {
+        return unexpected_error(ErrorCode::EquationMismatch,
+                                "accumulation:circuit_public_dlog");
+    }
+    const auto& norm = prepared->norm;
+    if (norm.n_vec_len != basis.n_vec_len() ||
+        norm.c_vec.size() != basis.l_vec_len() ||
+        norm.generators.size() !=
+            basis.n_vec_len() + basis.l_vec_len() ||
+        prepared->raw_generator_digest !=
+            generator_digest(basis.norm_generators())) {
+        return unexpected_error(ErrorCode::BindingMismatch,
+                                "accumulation:circuit_raw_basis");
+    }
+
+    const auto rounds = log2_dimension(basis.n_vec_len());
+    std::vector<ScalarBytes> gammas(rounds);
+    ScalarBytes n_bytes{}, l_bytes{};
+    PointBytes residual{};
+    if (purify_bppp_prepare_norm_arg_claim(
+            context, norm.rho.data(),
+            reinterpret_cast<const unsigned char*>(norm.generators.data()),
+            norm.generators.size(),
+            reinterpret_cast<const unsigned char*>(norm.c_vec.data()),
+            norm.c_vec.size(), norm.n_vec_len, norm.commitment.data(),
+            norm.proof.data(), norm.proof.size(), n_bytes.data(),
+            l_bytes.data(),
+            reinterpret_cast<unsigned char*>(gammas.data()), gammas.size(),
+            residual.data()) == 0) {
+        return unexpected_error(ErrorCode::BackendRejectedInput,
+                                "accumulation:circuit_inner_norm");
+    }
+
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& n, FieldElement::try_from_bytes32(n_bytes),
+        "accumulation:circuit_norm_n");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& l, FieldElement::try_from_bytes32(l_bytes),
+        "accumulation:circuit_norm_l");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& rho, FieldElement::try_from_bytes32(norm.rho),
+        "accumulation:circuit_norm_rho");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& sqrt_minus_one,
+        detail::canonical_sqrt_minus_one(),
+        "accumulation:circuit_sqrt_minus_one");
+
+    PolynomialTerm g{
+        n * pow_size(rho, basis.n_vec_len()) *
+            prepared->mul_scale.inverse(),
+        0,
+        {}};
+    PolynomialTerm h{l, basis.n_vec_len(), {}};
+    const auto h_rounds = log2_dimension(basis.l_vec_len());
+    auto ratio_inv_power = prepared->mul_ratio.inverse();
+    for (std::size_t j = 0; j < rounds; ++j) {
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto& gamma, FieldElement::try_from_bytes32(gammas[j]),
+            "accumulation:circuit_norm_gamma");
+        if (j == 0) {
+            g.factors.push_back(gamma * sqrt_minus_one.inverse());
+        } else {
+            g.factors.push_back(gamma * ratio_inv_power);
+            ratio_inv_power = ratio_inv_power * ratio_inv_power;
+        }
+        if (j < h_rounds) h.factors.push_back(gamma);
+    }
+
+    std::vector<FieldElement> coefficients;
+    coefficients.reserve(norm.c_vec.size());
+    for (const auto& encoded : norm.c_vec) {
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto& coefficient,
+            FieldElement::try_from_bytes32(encoded),
+            "accumulation:circuit_norm_coefficient");
+        coefficients.push_back(coefficient);
+    }
+    const auto h_basis = std::span(basis.points())
+                             .subspan(basis.n_vec_len(),
+                                      basis.l_vec_len());
+    PURIFY_ASSIGN_OR_RETURN(
+        auto coefficient_commitment,
+        msm(h_basis, coefficients, context),
+        "accumulation:circuit_coefficient_commitment");
+
+    Bytes encoded;
+    append(encoded, basis.digest());
+    append(encoded, prepared->raw_generator_digest);
+    append(encoded, prepared->challenge_digest);
+    append(encoded, norm.rho);
+    append(encoded, prepared->mul_scale.to_bytes_be());
+    append(encoded, prepared->mul_ratio.to_bytes_be());
+    append_size(encoded, statement_binding.size());
+    append(encoded, statement_binding);
+    append_size(encoded, public_commitments.size());
+    for (const auto& point : public_commitments) append(encoded, point);
+    append(encoded, proof.a_commitment);
+    append(encoded, proof.s_commitment);
+    append(encoded, proof.t2);
+    append(encoded, proof.public_commitment_dlog_nonce);
+    append(encoded, proof.public_commitment_dlog_response);
+    append(encoded, norm.commitment);
+    for (const auto& coefficient : norm.c_vec) append(encoded, coefficient);
+    append(encoded, coefficient_commitment);
+    append_size(encoded, norm.proof.size());
+    append(encoded, norm.proof);
+    return PreparedNorm(
+        basis.digest(), kCircuitNormBindingHash.digest(encoded), norm.c_vec,
+        coefficient_commitment, residual, {std::move(g), std::move(h)});
 }
 
 Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const PreparedNorm& norm,

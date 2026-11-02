@@ -19,6 +19,164 @@ using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
 
+void check_secret_msm_zero_terms(TestContext& ctx) {
+    using namespace purify::bppp;
+    auto secp = purify::make_secp_context();
+    ctx.expect(secp != nullptr, "secret MSM boundary context creates");
+    if (!secp) return;
+
+    const ScalarBytes zero{};
+    const auto one = FieldElement::one().to_bytes_be();
+    const ScalarBytes negative_one{
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+        0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b,
+        0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x40};
+    const auto base = base_generator(secp.get());
+    PointBytes base_point{};
+    ctx.expect(purify_bppp_generators_to_points(
+                   secp.get(), base.data(), 1, base_point.data()) != 0,
+               "base generator converts to a point");
+
+    PointBytes result{};
+    ctx.expect(purify_point_scale(
+                   secp.get(), base_point.data(), one.data(), result.data()) != 0
+                   && result == base_point,
+               "secret point scaling preserves a unit term");
+    result.fill(0xa5);
+    ctx.expect(purify_point_scale(
+                   secp.get(), base_point.data(), zero.data(), result.data()) == 0
+                   && result == PointBytes{},
+               "secret point scaling clears an identity result");
+    ctx.expect(purify_bppp_offset_commitment(
+                   secp.get(), base_point.data(), zero.data(), result.data()) != 0
+                   && result == base_point,
+               "secret commitment offset skips a zero term");
+    result.fill(0xa5);
+    ctx.expect(purify_bppp_offset_commitment(
+                   secp.get(), base_point.data(), negative_one.data(),
+                   result.data()) == 0
+                   && result == PointBytes{},
+               "secret commitment offset clears an identity result");
+
+    ctx.expect(purify_pedersen_commit_char(
+                   secp.get(), zero.data(), one.data(), base.data(),
+                   base.data(), result.data()) != 0
+                   && result == base_point,
+               "Pedersen commitment skips a zero blind term");
+    ctx.expect(purify_pedersen_commit_char(
+                   secp.get(), one.data(), zero.data(), base.data(),
+                   base.data(), result.data()) != 0
+                   && result == base_point,
+               "Pedersen commitment skips a zero value term");
+    result.fill(0xa5);
+    ctx.expect(purify_pedersen_commit_char(
+                   secp.get(), zero.data(), zero.data(), base.data(),
+                   base.data(), result.data()) == 0
+                   && result == PointBytes{},
+               "Pedersen commitment clears an identity result");
+
+    auto generators = create_generators(2, secp.get());
+    expect_ok(ctx, generators, "secret MSM boundary generators create");
+    if (!generators) return;
+    std::array<PointBytes, 2> generator_points{};
+    ctx.expect(purify_bppp_generators_to_points(
+                   secp.get(),
+                   reinterpret_cast<const unsigned char*>(generators->data()),
+                   generators->size(),
+                   reinterpret_cast<unsigned char*>(generator_points.data())) != 0,
+               "secret MSM generators convert to points");
+    ctx.expect(purify_bppp_commit_witness_only(
+                   secp.get(),
+                   reinterpret_cast<const unsigned char*>(generators->data()),
+                   generators->size(), zero.data(), 1, one.data(), 1,
+                   result.data()) != 0
+                   && result == generator_points[1],
+               "secret MSM skips a zero norm coordinate");
+    ctx.expect(purify_bppp_commit_witness_only(
+                   secp.get(),
+                   reinterpret_cast<const unsigned char*>(generators->data()),
+                   generators->size(), one.data(), 1, zero.data(), 1,
+                   result.data()) != 0
+                   && result == generator_points[0],
+               "secret MSM skips a zero linear coordinate");
+    ctx.expect(purify_bppp_commit_witness_only(
+                   secp.get(),
+                   reinterpret_cast<const unsigned char*>(generators->data()),
+                   generators->size(), zero.data(), 1, zero.data(), 1,
+                   result.data()) == 0,
+               "secret MSM rejects an identity commitment");
+
+    const auto alternate = value_generator_h(secp.get());
+    std::array<PointBytes, 4> cancellation_generators{
+        base, base, alternate, alternate};
+    const std::array<ScalarBytes, 2> cancellation_n{one, negative_one};
+    const std::array<ScalarBytes, 2> cancellation_l{one, zero};
+    PointBytes alternate_point{};
+    ctx.expect(purify_bppp_generators_to_points(
+                   secp.get(), alternate.data(), 1,
+                   alternate_point.data()) != 0,
+               "alternate generator converts to a point");
+    const int cancellation_ok = purify_bppp_commit_witness_only(
+        secp.get(),
+        reinterpret_cast<const unsigned char*>(
+            cancellation_generators.data()),
+        cancellation_generators.size(),
+        reinterpret_cast<const unsigned char*>(cancellation_n.data()),
+        cancellation_n.size(),
+        reinterpret_cast<const unsigned char*>(cancellation_l.data()),
+        cancellation_l.size(), result.data());
+    ctx.expect(cancellation_ok != 0,
+               "secret MSM accepts intermediate cancellation");
+    if (cancellation_ok != 0) {
+        ctx.expect(result == alternate_point,
+                   "secret MSM recovers after intermediate cancellation");
+    }
+
+    auto differential_generators = create_generators(8, secp.get());
+    expect_ok(ctx, differential_generators,
+              "secret MSM differential generators create");
+    if (!differential_generators) return;
+    std::array<PointBytes, 8> differential_points{};
+    ctx.expect(purify_bppp_generators_to_points(
+                   secp.get(),
+                   reinterpret_cast<const unsigned char*>(
+                       differential_generators->data()),
+                   differential_generators->size(),
+                   reinterpret_cast<unsigned char*>(
+                       differential_points.data())) != 0,
+               "secret MSM differential generators convert");
+    bool differential_match = true;
+    for (std::size_t sample = 0; sample < 16; ++sample) {
+        std::array<ScalarBytes, 8> scalars{};
+        for (std::size_t i = 0; i < scalars.size(); ++i) {
+            if ((sample + i) % 5 != 0) {
+                scalars[i] = FieldElement::from_u64(
+                    (sample + 1) * (i + 3)).to_bytes_be();
+            }
+        }
+        PointBytes secret_result{};
+        PointBytes public_result{};
+        differential_match &= purify_bppp_commit_witness_only(
+            secp.get(),
+            reinterpret_cast<const unsigned char*>(
+                differential_generators->data()),
+            differential_generators->size(),
+            reinterpret_cast<const unsigned char*>(scalars.data()), 4,
+            reinterpret_cast<const unsigned char*>(scalars.data() + 4), 4,
+            secret_result.data()) != 0;
+        differential_match &= purify_bppp_public_msm(
+            secp.get(),
+            reinterpret_cast<const unsigned char*>(
+                differential_points.data()),
+            reinterpret_cast<const unsigned char*>(scalars.data()),
+            scalars.size(), public_result.data()) != 0;
+        differential_match &= secret_result == public_result;
+    }
+    ctx.expect(differential_match,
+               "secret MSM matches public MSM across mixed zero terms");
+}
+
 void check_public_digest_transcript(TestContext& ctx) {
     auto secp = purify::make_secp_context();
     ctx.expect(secp != nullptr, "factored norm transcript context creates");
@@ -193,8 +351,19 @@ void check_norm_length_boundary(TestContext& ctx) {
     expect_error(ctx, purify::bppp::prove_norm_arg_to_commitment(inputs, *commitment, secp.get()),
                purify::ErrorCode::InvalidDimensions,
                "anchored prover rejects norm length below linear length");
-    purify::bppp::NormArgProof unsupported{
-        inputs.rho, *generators, inputs.c_vec, 2, *commitment, purify::Bytes(259, 0)};
+    // Start from an honest proof using the current public-data transcript.
+    // Change only its public shape, keeping its commitment and proof bytes.
+    // This checks rejection, not whether the dimension guard alone rejects it.
+    purify::bppp::NormArgInputs supported_inputs{inputs.rho, *generators,
+        std::vector(8, one), std::vector(2, one), std::vector(2, one)};
+    auto supported = purify::bppp::prove_norm_arg(supported_inputs, secp.get());
+    expect_ok(ctx, supported, "supported norm shape produces an honest proof");
+    if (!supported) return;
+    ctx.expect(purify::bppp::verify_norm_arg(*supported, secp.get()),
+               "honest norm proof verifies before its public shape changes");
+    auto unsupported = *supported;
+    unsupported.n_vec_len = 2;
+    unsupported.c_vec = inputs.c_vec;
     ctx.expect(!purify::bppp::verify_norm_arg(unsupported, secp.get()),
                "ordinary verifier rejects unsupported dimensions before proof parsing");
 
@@ -211,7 +380,7 @@ void check_norm_length_boundary(TestContext& ctx) {
     ctx.expect(resources != nullptr, "cached norm length resources create");
     if (!resources) return;
     ctx.expect(purify_bppp_verify_norm_arg_with_resources(
-        resources.get(), inputs.rho.data(), c_bytes.data(), 8, 2, commitment->data(),
+        resources.get(), inputs.rho.data(), c_bytes.data(), 8, 2, unsupported.commitment.data(),
         unsupported.proof.data(), unsupported.proof.size()) == 0,
         "cached verification applies the same norm length boundary");
 }
@@ -278,11 +447,22 @@ void check_pending_norm_equation(TestContext& ctx) {
     malformed[0] = 0;
     ctx.expect(purify_bppp_public_msm(secp.get(), malformed.data(), one.data(), 1,
         expected.data()) == 0, "public MSM rejects noncanonical infinity");
+    bool malformed_batch_rejected = true;
+    for (std::size_t i = 0; i < 256; ++i) {
+        expected.fill(0xa5);
+        malformed_batch_rejected &=
+            purify_bppp_public_msm(secp.get(), malformed.data(), one.data(),
+                                   1, expected.data()) == 0
+            && expected == infinity;
+    }
+    ctx.expect(malformed_batch_rejected,
+               "small malformed MSMs reject without retaining output state");
 }
 
 } // namespace
 
 void run_norm_protocol_tests(TestContext& ctx) {
+    check_secret_msm_zero_terms(ctx);
     check_public_digest_transcript(ctx);
     check_initial_point_boundary(ctx);
     check_norm_length_boundary(ctx);

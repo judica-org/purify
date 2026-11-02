@@ -92,7 +92,7 @@ Result<PublishedFixtures> publish_independent_roots(const Bytes& context, purify
 
 Result<FieldElement> toy_extracted_scalar(const receipt::PointBytes& coalition, purify_secp_context* secp) {
     const auto slot = purify::bytes_from_ascii("receipt/toy/domain/epoch/slot");
-    purify::accountable::ConflictContext conflict{{}, {}, slot};
+    purify::accountable::ConflictContext conflict{{}, {}, {}, slot};
     std::copy(coalition.begin() + 1, coalition.end(), conflict.signing_key.begin());
     const auto first_body = purify::bytes_from_ascii("first toy decision");
     const auto second_body = purify::bytes_from_ascii("second toy decision");

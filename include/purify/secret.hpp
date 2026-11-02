@@ -28,6 +28,49 @@ inline void secure_clear_bytes(void* data, std::size_t size) noexcept {
     }
 }
 
+/**
+ * @brief Allocator that clears an allocation immediately before releasing it.
+ *
+ * Standard containers destroy their elements before calling `deallocate()`. The
+ * element bytes remain addressable through the allocation at that point, so the
+ * allocator can clear both live-container storage and superseded storage from a
+ * vector reallocation.
+ */
+template <typename T>
+class SecureAllocator {
+public:
+    using value_type = T;
+    using is_always_equal = std::true_type;
+    using propagate_on_container_move_assignment = std::true_type;
+
+    SecureAllocator() noexcept = default;
+
+    template <typename U>
+    SecureAllocator(const SecureAllocator<U>&) noexcept {}
+
+    [[nodiscard]] T* allocate(std::size_t count) {
+        return std::allocator<T>{}.allocate(count);
+    }
+
+    void deallocate(T* data, std::size_t count) noexcept {
+        if (data == nullptr) {
+            return;
+        }
+        secure_clear_bytes(data, count * sizeof(T));
+        std::allocator<T>{}.deallocate(data, count);
+    }
+
+    template <typename U>
+    struct rebind {
+        using other = SecureAllocator<U>;
+    };
+};
+
+template <typename T, typename U>
+bool operator==(const SecureAllocator<T>&, const SecureAllocator<U>&) noexcept {
+    return true;
+}
+
 struct SecureUInt512Deleter {
     void operator()(UInt512* value) const noexcept {
         if (value == nullptr) {

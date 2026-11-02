@@ -21,6 +21,7 @@ namespace {
 using namespace purify_test::canonical_root;
 
 using purify_test::TestContext;
+using purify_test::expect_error;
 using purify_test::expect_ok;
 using purify::Bytes;
 using purify::Expr;
@@ -30,6 +31,30 @@ using purify::UInt256;
 using purify::UInt512;
 using PointPair = std::pair<purify::JacobianPoint, purify::JacobianPoint>;
 using PointBytes = purify::bppp::PointBytes;
+
+Result<std::vector<purify::puresign_plusplus::PublicKey>> nonce_hosts(
+    std::span<const PointBytes> member_keys,
+    purify_secp_context* secp_context) {
+    std::vector<purify::puresign_plusplus::PublicKey> out;
+    out.reserve(member_keys.size());
+    for (std::size_t i = 0; i < member_keys.size(); ++i) {
+        std::array<unsigned char, 32> seed{};
+        seed[0] = 0x91;
+        seed[1] = static_cast<unsigned char>(i);
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto& generated, purify::generate_key(seed),
+            "recovery_root_test:nonce_host_secret");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto host,
+            purify::puresign_plusplus::PublicKey::from_secret(
+                generated.secret, secp_context),
+            "recovery_root_test:nonce_host");
+        std::copy(member_keys[i].begin() + 1, member_keys[i].end(),
+                  host.bip340_pubkey.begin());
+        out.push_back(std::move(host));
+    }
+    return out;
+}
 
 void test_bounds_and_recoding(TestContext& ctx) {
     auto bound = half_secp_order();
@@ -83,7 +108,9 @@ void test_setup_and_recovery(TestContext& ctx) {
         expect_ok(ctx, circuit, "public setup relation constructs");
         expect_ok(ctx, assignment, "honest setup assignment constructs");
         if (!circuit || !assignment) return;
-        ctx.expect(circuit->evaluate(*assignment), "small and maximum magnitudes satisfy the public relation");
+        ctx.expect(
+            circuit->evaluate(*assignment),
+            "small and maximum magnitudes satisfy the public relation");
         if (a == half_secp_order()) {
             auto scalars = purify::unpack_secret(root->secret.packed());
             expect_ok(ctx, scalars, "upper-bound root uses canonical companion secrets");
@@ -94,53 +121,247 @@ void test_setup_and_recovery(TestContext& ctx) {
     ctx.expect(saw_positive && saw_negative, "honest assignments exercise both private sign branches");
     ctx.expect(!root_from_scalar(FieldElement::zero()), "zero coalition scalar has no recovery root");
 
-    // q=-6 has an even-Y secp point and exercises the negative magnitude branch.
-    const auto q = FieldElement::from_u64(6).negate();
-    auto key = secp_point(q, secp.get());
+    std::array member_scalars{
+        FieldElement::from_u64(3), FieldElement::from_u64(6)};
+    std::array<PointBytes, 2> member_keys{};
+    for (std::size_t i = 0; i < member_keys.size(); ++i) {
+        auto member_key = secp_point(member_scalars[i], secp.get());
+        expect_ok(ctx, member_key, "setup member key derives");
+        if (!member_key) return;
+        member_keys[i] = *member_key;
+        if (member_keys[i][0] == 0x03) {
+            member_keys[i][0] = 0x02;
+            member_scalars[i] = member_scalars[i].negate();
+        }
+    }
+    auto raw_roster = purify::accountable::SigningRoster::aggregate(
+        member_keys, secp.get());
+    expect_ok(ctx, raw_roster, "setup roster aggregates");
+    if (!raw_roster) return;
+    auto q = FieldElement::zero();
+    for (std::size_t i = 0; i < member_scalars.size(); ++i) {
+        q = q + raw_roster->members()[i].coefficient * member_scalars[i];
+    }
+    PointBytes key{};
+    key[0] = 0x02;
+    std::copy(raw_roster->signing_key().begin(), raw_roster->signing_key().end(),
+              key.begin() + 1);
     auto root = root_from_scalar(q);
-    expect_ok(ctx, key, "proof fixture has a full coalition point");
     expect_ok(ctx, root, "proof fixture has a canonical companion root");
-    if (!key || !root) return;
-    auto circuit = public_setup_circuit(root->public_key);
-    auto assignment = setup_assignment(root->public_key, q);
-    expect_ok(ctx, circuit, "proof circuit builds from the public root");
-    expect_ok(ctx, assignment, "proof witness builds from the toy scalar");
-    if (!circuit || !assignment) return;
+    if (!root) return;
     const auto context = purify::bytes_from_ascii("public toy canonical-root setup/context");
-    const std::array<PointBytes, 1> outputs{*key};
-    purify::bppp::ScalarBytes nonce{};
-    nonce.fill(0x81);
+    purify::accountable::CoalitionCoreDigest coalition_core_digest =
+        purify::TaggedHash("Purify/Test/RecoveryRootRegistration/v1")
+            .digest(context);
+    auto hosts = nonce_hosts(member_keys, secp.get());
+    expect_ok(ctx, hosts, "setup nonce hosts derive");
+    if (!hosts) return;
+    auto bound_roster = purify::accountable::bind_nonce_hosts(
+        *raw_roster, coalition_core_digest, *hosts, secp.get());
+    expect_ok(ctx, bound_roster,
+              "setup roster binds its exact nonce hosts");
+    if (!bound_roster) return;
     const auto start = std::chrono::steady_clock::now();
-    auto proof = purify::bppp::prove_experimental_circuit_zk_norm_arg_with_public_commitments(
-        *circuit, *assignment, nonce, outputs, secp.get(), binding(*key, root->public_key, context));
+    auto proof = purify::accountable::prove_recovery_root_setup(
+        *bound_roster, root->public_key, q, secp.get());
     const auto proved = std::chrono::steady_clock::now();
-    expect_ok(ctx, proof, "experimental backend proves the honest canonical-root relation");
+    expect_ok(ctx, proof, "production API proves the canonical-root setup relation");
     if (!proof) return;
-    auto verified = verify_setup(*key, root->public_key, context, *proof, secp.get());
+    auto encoded_proof = proof->serialize(secp.get());
+    expect_ok(ctx, encoded_proof,
+              "recovery-root setup proof has a canonical encoding");
+    if (!encoded_proof) return;
+    expect_error(ctx, proof->serialize(nullptr),
+                 purify::ErrorCode::MissingValue,
+                 "setup proof serialization requires a secp context");
+    expect_error(
+        ctx,
+        purify::accountable::RecoveryRootSetupProof::deserialize(
+            *encoded_proof, nullptr),
+        purify::ErrorCode::MissingValue,
+        "setup proof parsing requires a secp context");
+    ctx.expect(encoded_proof->size() == 1007 &&
+                   encoded_proof->size() ==
+                       purify::accountable::RecoveryRootSetupProof::kSerializedSize,
+               "setup proof encoding accounts for its fixed V1 fields");
+    auto parsed_proof = purify::accountable::RecoveryRootSetupProof::deserialize(
+        *encoded_proof, secp.get());
+    expect_ok(ctx, parsed_proof, "canonical setup proof reparses");
+    if (!parsed_proof) return;
+    auto reencoded_proof = parsed_proof->serialize(secp.get());
+    ctx.expect(reencoded_proof && *reencoded_proof == *encoded_proof,
+               "setup proof encoding round-trips exactly");
+    auto changed_encoding = *encoded_proof;
+    changed_encoding[0] ^= 1;
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::UnsupportedSymbol,
+                 "unknown setup proof version rejects");
+    changed_encoding = *encoded_proof;
+    changed_encoding.pop_back();
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "truncated setup proof rejects");
+    changed_encoding = *encoded_proof;
+    changed_encoding.push_back(0);
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "oversized setup proof rejects");
+    changed_encoding = *encoded_proof;
+    std::fill_n(changed_encoding.begin() + 1, 33, 0);
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::RangeViolation,
+                 "invalid setup proof A commitment rejects");
+    changed_encoding = *encoded_proof;
+    std::fill_n(changed_encoding.begin() + 34, 33, 0);
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::RangeViolation,
+                 "invalid setup proof S commitment rejects");
+    changed_encoding = *encoded_proof;
+    std::fill_n(changed_encoding.begin() + 67, 32, 0xff);
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::RangeViolation,
+                 "non-canonical setup proof t2 rejects");
+    changed_encoding = *encoded_proof;
+    std::fill_n(changed_encoding.begin() + 99, 32, 0xff);
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::RangeViolation,
+                 "invalid DLog nonce encoding rejects");
+    changed_encoding = *encoded_proof;
+    std::fill_n(changed_encoding.begin() + 131, 32, 0);
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::RangeViolation,
+                 "zero setup proof DLog response rejects");
+    changed_encoding = *encoded_proof;
+    std::fill_n(changed_encoding.begin() + 131, 32, 0xff);
+    expect_error(ctx,
+                 purify::accountable::RecoveryRootSetupProof::deserialize(
+                     changed_encoding, secp.get()),
+                 purify::ErrorCode::RangeViolation,
+                 "non-canonical setup proof DLog response rejects");
+    auto verified = purify::accountable::verify_recovery_root_setup(
+        *bound_roster, root->public_key, *parsed_proof, secp.get());
     const auto checked = std::chrono::steady_clock::now();
-    expect_ok(ctx, verified, "setup verifier accepts well-formed public inputs");
-    if (verified) ctx.expect(*verified, "honest canonical-root proof verifies");
-    auto changed = context;
-    changed.push_back(0);
-    auto wrong_context = verify_setup(*key, root->public_key, changed, *proof, secp.get());
-    ctx.expect(!wrong_context || !*wrong_context, "unchanged setup proof rejects changed context");
+    expect_ok(ctx, verified,
+              "setup verifier returns a knowledge-bound roster");
+    if (!verified) return;
+    expect_error(
+        ctx,
+        purify::accountable::prove_recovery_root_setup(
+            *bound_roster, root->public_key, q.negate(), secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "prover rejects a scalar that opens the opposite full point");
+    expect_error(
+        ctx,
+        purify::accountable::prove_recovery_root_setup(
+            *bound_roster, root->public_key, FieldElement::zero(),
+            secp.get()),
+        purify::ErrorCode::RangeViolation,
+        "prover rejects the zero aggregate scalar");
+    expect_error(
+        ctx,
+        purify::accountable::prove_recovery_root_setup(
+            *bound_roster, root->public_key, q, nullptr),
+        purify::ErrorCode::MissingValue,
+        "prover requires a secp context");
+    auto changed_digest = coalition_core_digest;
+    changed_digest[0] ^= 1;
+    auto changed_core_roster = purify::accountable::bind_nonce_hosts(
+        *raw_roster, changed_digest, *hosts, secp.get());
+    expect_ok(ctx, changed_core_roster,
+              "changed-core nonce hosts remain well formed");
+    if (!changed_core_roster) return;
+    ctx.expect(!purify::accountable::verify_recovery_root_setup(
+                   *changed_core_roster, root->public_key, *proof,
+                   secp.get()),
+               "unchanged setup proof rejects changed coalition core");
+    auto changed_hosts = *hosts;
+    std::array<unsigned char, 32> changed_host_seed{};
+    changed_host_seed.fill(0x92);
+    auto changed_host_secret = purify::generate_key(changed_host_seed);
+    expect_ok(ctx, changed_host_secret,
+              "changed nonce-host secret derives");
+    if (!changed_host_secret) return;
+    auto changed_host = purify::puresign_plusplus::PublicKey::from_secret(
+        changed_host_secret->secret, secp.get());
+    expect_ok(ctx, changed_host, "changed nonce host derives");
+    if (!changed_host) return;
+    std::copy(member_keys[0].begin() + 1, member_keys[0].end(),
+              changed_host->bip340_pubkey.begin());
+    changed_hosts[0] = std::move(*changed_host);
+    auto changed_host_roster = purify::accountable::bind_nonce_hosts(
+        *raw_roster, coalition_core_digest, changed_hosts, secp.get());
+    expect_ok(ctx, changed_host_roster,
+              "changed nonce host remains well formed");
+    if (!changed_host_roster) return;
+    ctx.expect(!purify::accountable::verify_recovery_root_setup(
+                   *changed_host_roster, root->public_key, *proof,
+                   secp.get()),
+               "unchanged setup proof rejects changed nonce hosts");
     auto other_root = root_from_scalar(FieldElement::from_u64(3));
-    auto other_key = secp_point(FieldElement::from_u64(3), secp.get());
     expect_ok(ctx, other_root, "substitution root fixture derives");
-    expect_ok(ctx, other_key, "substitution key fixture derives");
-    if (!other_root || !other_key) return;
-    auto wrong_root = verify_setup(*key, other_root->public_key, context, *proof, secp.get());
-    auto wrong_key = verify_setup(*other_key, root->public_key, context, *proof, secp.get());
-    auto odd_key = *key;
-    odd_key[0] = 0x03;
-    ctx.expect(!wrong_root || !*wrong_root, "unchanged setup proof rejects another root");
-    ctx.expect(!wrong_key || !*wrong_key, "unchanged setup proof rejects another coalition key");
-    ctx.expect(!verify_setup(odd_key, root->public_key, context, *proof, secp.get()), "odd coalition key rejects");
-    ctx.expect(!public_setup_circuit(purify::packed_public_key_space_size()), "noncanonical root rejects");
+    if (!other_root) return;
+    expect_error(
+        ctx,
+        purify::accountable::prove_recovery_root_setup(
+            *bound_roster, other_root->public_key, q, secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "prover rejects a recovery root unrelated to its scalar");
+    ctx.expect(!purify::accountable::verify_recovery_root_setup(
+                   *bound_roster, other_root->public_key,
+                   *proof, secp.get()),
+               "unchanged setup proof rejects another recovery root");
+    auto changed_members = member_keys;
+    auto changed_member = secp_point(
+        FieldElement::from_u64(5), secp.get());
+    expect_ok(ctx, changed_member, "changed member point derives");
+    if (!changed_member) return;
+    if ((*changed_member)[0] == 0x03) {
+        (*changed_member)[0] = 0x02;
+    }
+    changed_members[0] = *changed_member;
+    auto changed_roster = purify::accountable::SigningRoster::aggregate(
+        changed_members, secp.get());
+    expect_ok(ctx, changed_roster, "changed member roster remains valid");
+    if (!changed_roster) return;
+    auto changed_member_hosts = *hosts;
+    std::copy(changed_members[0].begin() + 1, changed_members[0].end(),
+              changed_member_hosts[0].bip340_pubkey.begin());
+    auto changed_bound_roster = purify::accountable::bind_nonce_hosts(
+        *changed_roster, coalition_core_digest, changed_member_hosts,
+        secp.get());
+    expect_ok(ctx, changed_bound_roster,
+              "changed member binds its matching nonce host");
+    if (!changed_bound_roster) return;
+    ctx.expect(!purify::accountable::verify_recovery_root_setup(
+                   *changed_bound_roster, root->public_key,
+                   *proof, secp.get()),
+               "unchanged setup proof rejects another coalition roster");
+    ctx.expect(!purify::accountable::verify_recovery_root_setup(
+                   *bound_roster,
+                   purify::packed_public_key_space_size(), *proof,
+                   secp.get()),
+               "noncanonical recovery root rejects");
 
     const auto slot = purify::bytes_from_ascii("canonical-root/domain=1/epoch=2/slot=3");
-    purify::accountable::ConflictContext conflict{{}, {}, slot};
-    std::copy(key->begin() + 1, key->end(), conflict.signing_key.begin());
+    purify::accountable::ConflictContext conflict{
+        bound_roster->signing_key(), bound_roster->nonce_host_commitment(),
+        coalition_core_digest, slot};
     const auto first_body = purify::bytes_from_ascii("toy decision A");
     const auto second_body = purify::bytes_from_ascii("toy decision B");
     auto first_challenge = purify::accountable::signature_challenge(conflict, first_body, secp.get());
@@ -157,11 +378,14 @@ void test_setup_and_recovery(TestContext& ctx) {
     auto extracted = purify::accountable::recover_same_slot_key(conflict, first_body, *first, second_body, *second, secp.get());
     expect_ok(ctx, extracted, "existing accountable algebra extracts the exact coalition scalar");
     if (!extracted) return;
-    auto recovered = recover_root(FieldElement::from_bytes32(*extracted), *key, root->public_key, secp.get());
+    auto recovered = purify::accountable::recover_registered_root(
+        *verified, FieldElement::from_bytes32(*extracted), secp.get());
     expect_ok(ctx, recovered, "extracted scalar recovers the exact registered companion root");
     if (!recovered) return;
     ctx.expect(recovered->secret == root->secret, "recovery preserves both canonical companion scalars");
-    ctx.expect(!recover_root(q.negate(), *key, root->public_key, secp.get()), "wrong scalar sign rejects before root recovery");
+    ctx.expect(!purify::accountable::recover_registered_root(
+                   *verified, q.negate(), secp.get()),
+               "wrong scalar sign rejects before root recovery");
     for (unsigned char marker : {0x23, 0x45}) {
         std::array<unsigned char, 32> seed{};
         seed.fill(marker);
@@ -180,10 +404,14 @@ void test_setup_and_recovery(TestContext& ctx) {
         ctx.expect(*owned == *unlocked && owned_point && unlocked_point && *owned_point == *unlocked_point,
                    "extracted coalition scalar unlocks each exact leaf scalar and full point");
     }
-    const auto proof_bytes = proof->proof.size() + proof->a_commitment.size() + proof->s_commitment.size() + proof->t2.size();
-    std::cout << "canonical_root_honest_setup gates=" << circuit->n_gates << " constraints=" << circuit->c.size()
-              << " inner_proof_bytes=" << proof->proof.size() << " complete_proof_bytes=" << proof_bytes
-              << " root_bytes=64 total_with_root_and_full_Q=" << proof_bytes + 64 + key->size()
+    const auto proof_payload_bytes = encoded_proof->size() - 1;
+    std::cout << "canonical_root_honest_setup"
+              << " inner_proof_bytes="
+              << purify::accountable::RecoveryRootSetupProof::kInnerProofSize
+              << " proof_payload_bytes=" << proof_payload_bytes
+              << " wire_proof_bytes=" << encoded_proof->size()
+              << " root_bytes=64 total_wire_with_root_and_full_Q="
+              << encoded_proof->size() + 64 + key.size()
               << " prove_ms=" << std::chrono::duration<double, std::milli>(proved - start).count()
               << " verify_ms=" << std::chrono::duration<double, std::milli>(checked - proved).count() << '\n';
 }

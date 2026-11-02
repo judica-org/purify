@@ -86,8 +86,10 @@ it does not establish the complete signature construction's no-framing or
 extraction claims. Tests do not engineer hash preimages for zero coefficients
 or cancellation of adversarially selected weighted keys.
 
-The [public response helpers](accountable-responses.md) check partial equations
-and aggregate scalars using this roster. The reviewed nonce relation, secret
-signing, certificate acceptance and conflict extraction, role separation,
-malicious enrollment argument, and durable authorization/release boundaries
-remain separate work. Key coefficients alone do not establish those properties.
+The [verified response helpers](accountable-responses.md) bind this roster to an
+ordered PureSign++ host commitment, verify each deterministic full nonce, check
+scalar-only partials, and return typed aggregate responses and extracted keys.
+Secret signing, registration authorization, role separation, the malicious
+enrollment argument, and durable authorization/release boundaries remain
+separate protocol work. Key coefficients alone do not establish those
+properties.

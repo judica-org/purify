@@ -40,6 +40,15 @@ int purify_bppp_value_generator_h(purify_secp_context* context, unsigned char ou
  */
 int purify_bppp_create_generators(purify_secp_context* context, size_t count, unsigned char* out, size_t* out_len);
 
+int purify_bppp_scale_generator(purify_secp_context* context,
+                                const unsigned char generator33[33],
+                                const unsigned char scalar32[32],
+                                unsigned char out33[33]);
+
+int purify_bppp_generator_to_point(purify_secp_context* context,
+                                   const unsigned char generator33[33],
+                                   unsigned char out33[33]);
+
 purify_bppp_backend_resources* purify_bppp_backend_resources_create(purify_secp_context* context,
                                                                     const unsigned char* generators33,
                                                                     size_t generators_count);
@@ -240,56 +249,61 @@ purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_creat
 purify_bulletproof_backend_resources* purify_bulletproof_backend_resources_clone(
     const purify_bulletproof_backend_resources* resources);
 void purify_bulletproof_backend_resources_destroy(purify_bulletproof_backend_resources* resources);
+size_t purify_bulletproof_backend_resources_scratch_capacity(const purify_bulletproof_backend_resources* resources);
 
+/* Commitment buffers contain circuit->n_commits packed 33-byte points. A non-null
+ * blinds32 buffer contains circuit->n_commits packed 32-byte scalars; NULL uses
+ * zero blinds. The caller owns and sizes these buffers from the circuit.
+ */
 int purify_bulletproof_prove_circuit(purify_secp_context* context,
                                      const purify_bulletproof_circuit_view* circuit,
                                      const purify_bulletproof_assignment_view* assignment,
-                                     const unsigned char* blind32,
+                                     const unsigned char* blinds32,
                                      const unsigned char value_gen33[33],
                                      const unsigned char nonce32[32],
                                      const unsigned char* extra_commit,
                                      size_t extra_commit_len,
-                                     unsigned char commitment_out33[33],
+                                     unsigned char* commitments_out33,
                                      unsigned char* proof_out,
                                      size_t* proof_len);
 int purify_bulletproof_prove_circuit_with_resources(purify_bulletproof_backend_resources* resources,
                                                     const purify_bulletproof_circuit_view* circuit,
                                                     const purify_bulletproof_assignment_view* assignment,
-                                                    const unsigned char* blind32,
+                                                    const unsigned char* blinds32,
                                                     const unsigned char value_gen33[33],
                                                     const unsigned char nonce32[32],
                                                     const unsigned char* extra_commit,
                                                     size_t extra_commit_len,
-                                                    unsigned char commitment_out33[33],
+                                                    unsigned char* commitments_out33,
                                                     unsigned char* proof_out,
                                                     size_t* proof_len);
 
 int purify_bulletproof_prove_circuit_assume_valid(purify_secp_context* context,
                                                   const purify_bulletproof_circuit_view* circuit,
                                                   const purify_bulletproof_assignment_view* assignment,
-                                                  const unsigned char* blind32,
+                                                  const unsigned char* blinds32,
                                                   const unsigned char value_gen33[33],
                                                   const unsigned char nonce32[32],
                                                   const unsigned char* extra_commit,
                                                   size_t extra_commit_len,
-                                                  unsigned char commitment_out33[33],
+                                                  unsigned char* commitments_out33,
                                                   unsigned char* proof_out,
                                                   size_t* proof_len);
 int purify_bulletproof_prove_circuit_assume_valid_with_resources(purify_bulletproof_backend_resources* resources,
                                                                  const purify_bulletproof_circuit_view* circuit,
                                                                  const purify_bulletproof_assignment_view* assignment,
-                                                                 const unsigned char* blind32,
+                                                                 const unsigned char* blinds32,
                                                                  const unsigned char value_gen33[33],
                                                                  const unsigned char nonce32[32],
                                                                  const unsigned char* extra_commit,
                                                                  size_t extra_commit_len,
-                                                                 unsigned char commitment_out33[33],
+                                                                 unsigned char* commitments_out33,
                                                                  unsigned char* proof_out,
                                                                  size_t* proof_len);
 
 int purify_bulletproof_verify_circuit(purify_secp_context* context,
                                       const purify_bulletproof_circuit_view* circuit,
-                                      const unsigned char commitment33[33],
+                                      const unsigned char* commitments33,
                                       const unsigned char value_gen33[33],
                                       const unsigned char* extra_commit,
                                       size_t extra_commit_len,
@@ -297,7 +311,7 @@ int purify_bulletproof_verify_circuit(purify_secp_context* context,
                                       size_t proof_len);
 int purify_bulletproof_verify_circuit_with_resources(purify_bulletproof_backend_resources* resources,
                                                      const purify_bulletproof_circuit_view* circuit,
-                                                     const unsigned char commitment33[33],
+                                                     const unsigned char* commitments33,
                                                      const unsigned char value_gen33[33],
                                                      const unsigned char* extra_commit,
                                                      size_t extra_commit_len,

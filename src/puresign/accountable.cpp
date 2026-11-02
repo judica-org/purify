@@ -52,10 +52,11 @@ Result<ScalarSignature> ScalarSignature::deserialize(std::span<const unsigned ch
 Result<std::array<unsigned char, 32>> nonce_evaluation_input(
     const ConflictContext& context, purify_secp_context* secp_context) {
     PURIFY_RETURN_IF_ERROR(validate_context(context, secp_context), "accountable:nonce_input");
-    static const TaggedHash hash("Purify/Accountable/Nonce/v1");
+    static const TaggedHash hash("Purify/Accountable/Nonce/v2");
     const auto slot_length = encode_length(context.slot.size());
-    return hash.digest_many<4>({context.signing_key, context.host_commitment,
-                               slot_length, context.slot});
+    return hash.digest_many<5>({context.signing_key, context.host_commitment,
+                               context.coalition_core_digest, slot_length,
+                               context.slot});
 }
 
 Result<FieldElement> signature_challenge(
@@ -65,11 +66,13 @@ Result<FieldElement> signature_challenge(
     if (!size_fits_u64(canonical_body.size())) {
         return unexpected_error(ErrorCode::RangeViolation, "accountable:body_length");
     }
-    static const TaggedHash hash("Purify/Accountable/Challenge/v1");
+    static const TaggedHash hash("Purify/Accountable/Challenge/v2");
     const auto slot_length = encode_length(context.slot.size());
     const auto body_length = encode_length(canonical_body.size());
-    const auto digest = hash.digest_many<6>({context.signing_key, context.host_commitment,
-                                           slot_length, context.slot, body_length, canonical_body});
+    const auto digest = hash.digest_many<7>({
+        context.signing_key, context.host_commitment,
+        context.coalition_core_digest, slot_length, context.slot,
+        body_length, canonical_body});
     purify_scalar reduced;
     purify_scalar_set_b32(&reduced, digest.data(), nullptr);
     const auto challenge = purify::detail::FieldElementAccess::from_raw(reduced);

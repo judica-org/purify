@@ -13,6 +13,8 @@
 #include <array>
 #include <span>
 #include <string_view>
+#include <type_traits>
+#include <vector>
 
 #include "detail/common.hpp"
 #include "purify/secp_bridge.h"
@@ -22,9 +24,9 @@ namespace purify::puresign_plusplus {
 namespace api_impl {
 
 Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
-                                             PreparedNonce&& prepared, purify_secp_context* secp_context);
+                                             PreparedNonce prepared, purify_secp_context* secp_context);
 Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
-                                           PreparedNonce&& prepared, purify_secp_context* secp_context);
+                                           PreparedNonce prepared, purify_secp_context* secp_context);
 
 }  // namespace api_impl
 
@@ -38,6 +40,21 @@ constexpr std::string_view kMessageProofTag = "PureSign/BPPP/Proof/Message/V1";
 constexpr std::string_view kTopicProofTag = "PureSign/BPPP/Proof/Topic/V1";
 
 using Scope = PreparedNonce::Scope;
+
+class BurnScalarOnDestruction {
+public:
+    explicit BurnScalarOnDestruction(Scalar32& scalar) noexcept
+        : scalar_(&scalar) {}
+    BurnScalarOnDestruction(const BurnScalarOnDestruction&) = delete;
+    BurnScalarOnDestruction& operator=(
+        const BurnScalarOnDestruction&) = delete;
+    ~BurnScalarOnDestruction() {
+        detail::secure_clear_bytes(scalar_->data(), scalar_->size());
+    }
+
+private:
+    Scalar32* scalar_;
+};
 
 const TaggedHash& binding_tagged_hash(Scope scope) {
     static const TaggedHash kMessageBindingTaggedHash(kMessageBindingTag);
@@ -82,16 +99,41 @@ Bytes proof_statement_binding(Scope scope) {
     return bytes_from_ascii(proof_tag_for_scope(scope));
 }
 
-Scalar32 derive_proof_nonce_seed(const SecretKey& secret, Scope scope, std::span<const unsigned char> eval_input) {
-    std::array<unsigned char, 64> secret_bytes = secret.packed().to_bytes_be();
-    Scalar32 out{};
+struct SecretProofSeed {
+    Scalar32 value{};
+
+    SecretProofSeed() = default;
+    SecretProofSeed(const SecretProofSeed&) = delete;
+    SecretProofSeed& operator=(const SecretProofSeed&) = delete;
+    ~SecretProofSeed() {
+        detail::secure_clear_bytes(value.data(), value.size());
+    }
+};
+
+struct SecretPackedKeyBytes {
+    std::array<unsigned char, 64> value{};
+
+    SecretPackedKeyBytes() = default;
+    SecretPackedKeyBytes(const SecretPackedKeyBytes&) = delete;
+    SecretPackedKeyBytes& operator=(const SecretPackedKeyBytes&) = delete;
+    ~SecretPackedKeyBytes() {
+        detail::secure_clear_bytes(value.data(), value.size());
+    }
+};
+
+void derive_secret_prover_seed(const SecretKey& secret, Scope scope,
+                               std::span<const unsigned char> eval_input,
+                               SecretProofSeed& out) {
+    SecretPackedKeyBytes secret_bytes;
+    ::purify::detail::BigUIntCBridge<8>::to_bytes_be(
+        secret_bytes.value.data(), secret.packed().limbs.data());
     std::array digest_segments{
-        std::span<const unsigned char>(secret_bytes.data(), secret_bytes.size()),
+        std::span<const unsigned char>(secret_bytes.value.data(), secret_bytes.value.size()),
         eval_input,
     };
-    out = proof_tagged_hash(scope).digest_many(digest_segments);
-    detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
-    return out;
+    Scalar32 digest = proof_tagged_hash(scope).digest_many(digest_segments);
+    out.value = digest;
+    detail::secure_clear_bytes(digest.data(), digest.size());
 }
 
 Status validate_public_key_bundle(const PublicKey& public_key, purify_secp_context* secp_context) {
@@ -121,6 +163,59 @@ struct DerivedNonceData {
     XOnly32 signer_pubkey{};
     XOnly32 binding_digest{};
     Bytes eval_input;
+
+    DerivedNonceData() = default;
+    DerivedNonceData(const DerivedNonceData&) = delete;
+    DerivedNonceData& operator=(const DerivedNonceData&) = delete;
+    DerivedNonceData(DerivedNonceData&& other) noexcept
+        : scope(other.scope), scalar(other.scalar), nonce(other.nonce),
+          signer_pubkey(other.signer_pubkey), binding_digest(other.binding_digest),
+          eval_input(std::move(other.eval_input)) {
+        other.clear();
+    }
+    DerivedNonceData& operator=(DerivedNonceData&& other) noexcept {
+        if (this != &other) {
+            clear();
+            scope = other.scope;
+            scalar = other.scalar;
+            nonce = other.nonce;
+            signer_pubkey = other.signer_pubkey;
+            binding_digest = other.binding_digest;
+            eval_input = std::move(other.eval_input);
+            other.clear();
+        }
+        return *this;
+    }
+    ~DerivedNonceData() { clear(); }
+
+private:
+    void clear() noexcept {
+        detail::secure_clear_bytes(scalar.data(), scalar.size());
+    }
+};
+
+struct SecretWitnessDataWiper {
+    BulletproofWitnessData* witness;
+
+    explicit SecretWitnessDataWiper(BulletproofWitnessData& value) noexcept
+        : witness(&value) {
+        static_assert(std::is_trivially_destructible_v<FieldElement>);
+    }
+    SecretWitnessDataWiper(const SecretWitnessDataWiper&) = delete;
+    SecretWitnessDataWiper& operator=(const SecretWitnessDataWiper&) = delete;
+    ~SecretWitnessDataWiper() {
+        detail::secure_clear_bytes(&witness->output, sizeof(witness->output));
+        clear(witness->assignment.left);
+        clear(witness->assignment.right);
+        clear(witness->assignment.output);
+        clear(witness->assignment.commitments);
+    }
+
+private:
+    static void clear(BulletproofWitnessColumn& values) noexcept {
+        detail::secure_clear_bytes(values.data(),
+                                   values.size() * sizeof(FieldElement));
+    }
 };
 
 Result<DerivedNonceData> derive_nonce_data(const SecretKey& secret,
@@ -139,11 +234,20 @@ Result<DerivedNonceData> derive_nonce_data(const SecretKey& secret,
     out.binding_digest = binding_digest(binding_hash, input);
     out.eval_input = detail::tagged_eval_input(nonce_tag, input);
 
-    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_value, eval(secret, out.eval_input), "derive_nonce_data:eval");
-    out.scalar = nonce_value.to_bytes_be();
-    if (std::all_of(out.scalar.begin(), out.scalar.end(), [](unsigned char byte) { return byte == 0; })) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "derive_nonce_data:zero_nonce");
+    auto nonce_value = eval(secret, out.eval_input);
+    if (!nonce_value.has_value()) {
+        return unexpected_error(nonce_value.error(), "derive_nonce_data:eval");
     }
+    if (nonce_value->is_zero()) {
+        detail::secure_clear_bytes(&*nonce_value, sizeof(*nonce_value));
+        return unexpected_error(ErrorCode::BackendRejectedInput,
+                                "derive_nonce_data:zero_nonce");
+    }
+    static_assert(std::is_trivially_destructible_v<FieldElement>);
+    purify_scalar_get_b32(
+        out.scalar.data(),
+        &::purify::detail::FieldElementAccess::raw(*nonce_value));
+    detail::secure_clear_bytes(&*nonce_value, sizeof(*nonce_value));
 
     PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "derive_nonce_data:secp_context"),
                            "derive_nonce_data:secp_context");
@@ -193,8 +297,13 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
                                                    const NativeBulletproofCircuitTemplate& circuit_template,
                                                    purify_secp_context* secp_context,
                                                    bppp::ExperimentalCircuitBackend* circuit_cache) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(detail::copy_bytes(eval_input), secret),
-                            "build_nonce_proof_from_template:prove_assignment_data");
+    auto witness_result = prove_assignment_data(detail::copy_bytes(eval_input), secret);
+    if (!witness_result.has_value()) {
+        return unexpected_error(witness_result.error(),
+                                "build_nonce_proof_from_template:prove_assignment_data");
+    }
+    BulletproofWitnessData& witness = *witness_result;
+    SecretWitnessDataWiper witness_wiper(witness);
     PURIFY_ASSIGN_OR_RETURN(auto partial_ok, circuit_template.partial_evaluate(witness.assignment),
                             "build_nonce_proof_from_template:partial_evaluate");
     if (!partial_ok) {
@@ -212,13 +321,15 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
 
     PURIFY_ASSIGN_OR_RETURN(auto commitment_point, commitment_point_from_scalar(witness.assignment.commitments.front(), secp_context),
                             "build_nonce_proof_from_template:commitment_point_from_scalar");
-    Scalar32 proof_nonce = derive_proof_nonce_seed(secret, scope, eval_input);
+    SecretProofSeed secret_prover_seed;
+    derive_secret_prover_seed(secret, scope, eval_input, secret_prover_seed);
     Bytes statement_binding = proof_statement_binding(scope);
     std::array<bppp::PointBytes, 1> public_commitments{commitment_point};
     PURIFY_ASSIGN_OR_RETURN(
         auto proof,
         bppp::prove_experimental_circuit_zk_norm_arg_with_public_commitments(
-            circuit, witness.assignment, proof_nonce, public_commitments, secp_context, statement_binding, circuit_cache),
+            circuit, witness.assignment, secret_prover_seed.value,
+            public_commitments, secp_context, statement_binding, circuit_cache),
         "build_nonce_proof_from_template:prove_experimental_circuit_zk_norm_arg_with_public_commitments");
 
     NonceProof out{};
@@ -301,7 +412,9 @@ Result<TopicProofCache> TopicProofCache::build(std::span<const unsigned char> to
 
 PreparedNonce::PreparedNonce(Scope scope, const Scalar32& scalar, const Nonce& nonce,
                              const XOnly32& signer_pubkey, const XOnly32& binding_digest)
-    : scope_(scope), scalar_(scalar), nonce_(nonce), signer_pubkey_(signer_pubkey), binding_digest_(binding_digest) {}
+    : scope_(scope), scalar_(scalar), nonce_(nonce),
+      signer_pubkey_(signer_pubkey), binding_digest_(binding_digest),
+      available_(true) {}
 
 PreparedNonce PreparedNonce::from_parts(Scope scope, const Scalar32& scalar, const Nonce& nonce,
                                         const XOnly32& signer_pubkey, const XOnly32& binding_digest) {
@@ -310,7 +423,8 @@ PreparedNonce PreparedNonce::from_parts(Scope scope, const Scalar32& scalar, con
 
 PreparedNonce::PreparedNonce(PreparedNonce&& other) noexcept
     : scope_(other.scope_), scalar_(other.scalar_), nonce_(other.nonce_),
-      signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_) {
+      signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_),
+      available_(other.available_) {
     other.clear();
 }
 
@@ -322,6 +436,7 @@ PreparedNonce& PreparedNonce::operator=(PreparedNonce&& other) noexcept {
         nonce_ = other.nonce_;
         signer_pubkey_ = other.signer_pubkey_;
         binding_digest_ = other.binding_digest_;
+        available_ = other.available_;
         other.clear();
     }
     return *this;
@@ -332,12 +447,19 @@ PreparedNonce::~PreparedNonce() {
 }
 
 void PreparedNonce::clear() noexcept {
-    std::fill(scalar_.begin(), scalar_.end(), static_cast<unsigned char>(0));
+    detail::secure_clear_bytes(scalar_.data(), scalar_.size());
+    available_ = false;
 }
 
 Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
                                               std::span<const unsigned char> message,
                                               purify_secp_context* secp_context) && {
+    if (!available_) {
+        return unexpected_error(ErrorCode::UninitializedState,
+                                "PreparedNonce::sign_message:consumed");
+    }
+    available_ = false;
+    BurnScalarOnDestruction burn(scalar_);
     if (scope_ != Scope::Message) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_message:scope");
     }
@@ -368,6 +490,12 @@ Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
 Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
                                                     std::span<const unsigned char> message,
                                                     purify_secp_context* secp_context) && {
+    if (!available_) {
+        return unexpected_error(ErrorCode::UninitializedState,
+                                "PreparedNonce::sign_topic_message:consumed");
+    }
+    available_ = false;
+    BurnScalarOnDestruction burn(scalar_);
     if (scope_ != Scope::Topic) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_topic_message:scope");
     }
@@ -395,6 +523,43 @@ Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
 
 PreparedNonceWithProof PreparedNonceWithProof::from_parts(PreparedNonce prepared, NonceProof proof) {
     return PreparedNonceWithProof(std::move(prepared), std::move(proof));
+}
+
+Result<Scalar32> PreparedNonceWithProof::raw_scalar() const {
+    if (!prepared_.available()) {
+        return unexpected_error(ErrorCode::UninitializedState,
+                                "PreparedNonceWithProof::raw_scalar:consumed");
+    }
+    if (proof_.commitment_point[0] != 0x02 &&
+        proof_.commitment_point[0] != 0x03) {
+        return unexpected_error(ErrorCode::RangeViolation,
+                                "PreparedNonceWithProof::raw_scalar:point");
+    }
+    if (!std::equal(proof_.commitment_point.begin() + 1,
+                    proof_.commitment_point.end(),
+                    prepared_.public_nonce().xonly.begin())) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "PreparedNonceWithProof::raw_scalar:nonce_mismatch");
+    }
+    PURIFY_ASSIGN_OR_RETURN(auto out, prepared_.scalar(),
+                            "PreparedNonceWithProof::raw_scalar:scalar");
+    if (proof_.commitment_point[0] == 0x03) {
+        purify_scalar scalar{};
+        int overflow = 0;
+        purify_scalar_set_b32(&scalar, out.data(), &overflow);
+        if (overflow != 0 || purify_scalar_is_zero(&scalar) != 0) {
+            detail::secure_clear_bytes(&scalar, sizeof(scalar));
+            detail::secure_clear_bytes(out.data(), out.size());
+            return unexpected_error(
+                ErrorCode::InternalMismatch,
+                "PreparedNonceWithProof::raw_scalar:normalized_scalar");
+        }
+        purify_scalar_negate(&scalar, &scalar);
+        purify_scalar_get_b32(out.data(), &scalar);
+        detail::secure_clear_bytes(&scalar, sizeof(scalar));
+    }
+    return out;
 }
 
 Result<ProvenSignature> PreparedNonceWithProof::sign_message(const SecretKey& secret,
@@ -532,7 +697,7 @@ Result<Signature> sign_message(const SecretKey& secret, std::span<const unsigned
 }
 
 Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
-                                             PreparedNonce&& prepared, purify_secp_context* secp_context) {
+                                             PreparedNonce prepared, purify_secp_context* secp_context) {
     PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret, secp_context), "sign_message_with_prepared:derive_bip340_key");
     return std::move(prepared).sign_message(signer, message, secp_context);
 }
@@ -552,7 +717,7 @@ Result<Signature> sign_with_topic(const SecretKey& secret, std::span<const unsig
 }
 
 Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
-                                           PreparedNonce&& prepared, purify_secp_context* secp_context) {
+                                           PreparedNonce prepared, purify_secp_context* secp_context) {
     PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret, secp_context), "sign_with_prepared_topic:derive_bip340_key");
     return std::move(prepared).sign_topic_message(signer, message, secp_context);
 }
@@ -852,8 +1017,8 @@ Result<Signature> KeyPair::sign_message(std::span<const unsigned char> message,
 Result<Signature> KeyPair::sign_message_with_prepared(std::span<const unsigned char> message,
                                                       PreparedNonce&& prepared,
                                                       purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret_, secp_context), "KeyPair::sign_message_with_prepared:derive_bip340_key");
-    return std::move(prepared).sign_message(signer, message, secp_context);
+    return api_impl::sign_message_with_prepared(
+        secret_, message, std::move(prepared), secp_context);
 }
 
 Result<ProvenSignature> KeyPair::sign_message_with_prepared_proof(std::span<const unsigned char> message,
@@ -872,8 +1037,8 @@ Result<Signature> KeyPair::sign_with_topic(std::span<const unsigned char> messag
 Result<Signature> KeyPair::sign_with_prepared_topic(std::span<const unsigned char> message,
                                                     PreparedNonce&& prepared,
                                                     purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret_, secp_context), "KeyPair::sign_with_prepared_topic:derive_bip340_key");
-    return std::move(prepared).sign_topic_message(signer, message, secp_context);
+    return api_impl::sign_with_prepared_topic(
+        secret_, message, std::move(prepared), secp_context);
 }
 
 Result<ProvenSignature> KeyPair::sign_with_prepared_topic_proof(std::span<const unsigned char> message,

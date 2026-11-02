@@ -274,7 +274,10 @@ void test_sha256_circuit(TestContext& ctx) {
         auto rejected = purify::bppp::verify_experimental_circuit_zk_norm_arg_with_public_commitments(
             other_relation->native_circuit(), *proof, outputs, secp.get(), binding(length, other_digest));
         ctx.expect(!rejected || !*rejected, "unchanged SHA256 proof rejects a changed public digest");
-        const auto size = proof->proof.size() + proof->a_commitment.size() + proof->s_commitment.size() + proof->t2.size();
+        const auto size = proof->proof.size() + proof->a_commitment.size() +
+            proof->s_commitment.size() + proof->t2.size() +
+            proof->public_commitment_dlog_nonce.size() +
+            proof->public_commitment_dlog_response.size();
         std::cout << "receipt_sha256_proof message_bytes=3 complete_proof_bytes=" << size
                   << " prove_ms=" << std::chrono::duration<double, std::milli>(proved - start).count()
                   << " verify_ms=" << std::chrono::duration<double, std::milli>(checked - proved).count() << std::endl;

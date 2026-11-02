@@ -9,11 +9,13 @@ that equation. The helper never receives the original norm witnesses.
 This is an accumulation component, not a compressed construction receipt.
 Native callers still replay the child partial verifiers and every accumulation
 transition. A future recursive proof must authenticate those computations
-before their transcripts can be discarded. The existing experimental
-arithmetic-circuit wrapper's soundness defects remain a separate prerequisite;
-this implementation does not use that wrapper to prove accumulation.
-It operates on already-public proof data and does not turn the standalone
-norm argument into a zero-knowledge leaf.
+before their transcripts can be discarded. V3 circuit leaves first commit raw
+coordinates and then reciprocal-scale their norm bases, so every leaf has
+statement-dependent inner generators. The separately typed
+`prepare_experimental_circuit_zk_norm_arg_with_public_commitments` adapter
+reconstructs that exact transcript and maps its compact scale pattern back to
+the deterministic raw basis. This implementation does not turn the native
+accumulation root into a recursive construction receipt.
 
 ## Exact grouping rule
 
@@ -23,6 +25,36 @@ deterministic generator stream. Both lengths are nonzero powers of two and
 commitments and witnesses may share this basis. Different dimensions or
 semantic domains may not. This does not combine different proof types by
 silently interpreting their statements as equivalent.
+
+The V3 adapter accepts only the circuit API with explicit public commitment
+points. It verifies the mandatory batched DLog proof before producing a
+`PreparedNorm`, validates that the circuit's raw generator-stream digest equals
+the selected basis, and replays the complete outer transcript. The inner norm
+equation remains pending until the normal coefficient opening and final
+decision run. The generic `prepare_norm` API still requires its proof generators
+to equal the basis directly and cannot be used to bypass the typed checks.
+
+For norm index `i`, V3 uses the fixed even `s` with `s^2=-1` and the
+public scales:
+
+```
+T_(2k)   = lambda z^k
+T_(2k+1) = s lambda z^k
+G'_i     = rho^(i+1) T_i^-1 G_i
+```
+
+If `a` is the terminal norm scalar and `gamma_j` are the inner folding
+challenges, the adapter represents the same obligation on raw `G_i` with:
+
+```
+f_G(X) = a rho^g lambda^-1
+         (1 + gamma_0 s^-1 X)
+         product_(j>=1)(1 + gamma_j z^(-2^(j-1)) X^(2^j))
+```
+
+The `H` polynomial is unchanged. This compact mapping permits independently
+published V3 proofs with different `rho,lambda,z` values to enter one raw-basis
+accumulation bucket without accepting caller-supplied generator scales.
 
 Each child has a public coefficient-opening argument. Native preparation
 reconstructs its coefficient commitment from the child's exact canonical `c`;
@@ -126,6 +158,11 @@ uses `Purify/BPPP/NormReduction/StatementV1` over that digest, `rho`, the initia
 commitment, all `h` canonical coefficients, computed `Cc`, and the length-framed
 original proof. Sizes are unsigned 64-bit little-endian; scalars are 32-byte
 big-endian. Basis-authenticated dimensions fix the coefficient array's length.
+Typed V3 preparation instead uses
+`Purify/BPPP/CircuitNormReduction/StatementV3` and additionally binds the raw
+generator digest, V3 challenge digest, `rho,lambda,z`, statement binding,
+ordered public commitments, every outer proof field, reconstructed inner
+commitment, coefficient vector and inner proof.
 The coefficient opening and fusion have separate `OpeningBaseV1`, `OpeningV1`
 and `FusionV1` tags under `Purify/BPPP/NormReduction/`. Fusion includes the
 complete opening bytes and both complete pending equations before sampling
@@ -198,7 +235,7 @@ authenticate omitted ancestors or application metadata.
 
 ```
 authenticate exact child statements and intended coverage
-prepare_norm for each completed child
+prepare_norm for each standalone child, or the typed V3 circuit adapter
 verify_norm_reduction for each public coefficient-opening proof
 verify every public accumulation transition
 decide the final pending claim
@@ -358,12 +395,12 @@ canonical reduction SHA256 is
 the final step SHA256 is
 `b3a14ad17548fed019e02a5d90063be232826750d1f5987a72b22013585f7b1b`.
 
-Remaining work for construction receipts is specific: repair/select a sound
-leaf circuit argument; authenticate the frontend's coefficient derivation; constrain
+Remaining work for construction receipts is specific: independently review the
+V3 leaf argument; authenticate the frontend's coefficient derivation; constrain
 partial verification and accumulation transitions in a recursive proof; bind
-exact registry coverage; and enforce final accumulator decision. Encryption
-privacy and signing security remain their own protocol obligations. Daybreak
-work remains deferred.
+exact registry coverage; and enforce the final accumulator decision. Encryption
+privacy, distributed proving and signing security remain their own protocol
+obligations.
 
 Publishing a coefficient seed and binding it to the child transcript remains
 a possible byte/preprocessing tradeoff. It requires a sound outer transcript

@@ -245,6 +245,17 @@ Example:
 
 ## Benchmarking
 
+The [aggregate nonce baseline](docs/aggregate-nonce.md) adds a separate
+`bench_aggregate_nonce --members N` tool for one summed-nonce proof over up
+to 100 independent hosts. It is centralized and uses the imported arithmetic
+backend; it does not implement MPC or use the experimental BP++ wrapper.
+
+`bench_nonce_batch --coalitions N --members M --topics P --domains K`
+creates one multi-topic proof per coalition, then verifies the completed proofs
+using only public inputs. It reports proof payload and separate preparation,
+proving, and verification timings. This public stage retains the coalition
+proofs; it does not perform succinct post-coalition compression.
+
 `bench_purify` measures:
 
 - native circuit construction time
@@ -279,14 +290,14 @@ commitments=1
 circuit_size_bytes=5878528
 cache_eval_input_bytes=27
 experimental_proof_size_bytes=1124
-experimental_bppp_proof_size_bytes=909
+experimental_bppp_proof_size_bytes=844
 norm_arg_n_vec_len=2048
 norm_arg_l_vec_len=2048
 norm_arg_c_vec_len=2048
 norm_arg_proof_size_bytes=779
 puresign_signature_size_bytes=64
-puresign_legacy_proven_signature_size_bytes=1268
-puresign_plusplus_proven_signature_size_bytes=1146
+puresign_legacy_proven_signature_size_bytes=1272
+puresign_plusplus_proven_signature_size_bytes=1137
 ```
 
 Nanobench now groups related rows by explicit unit, so the output is split into separate tables such as:

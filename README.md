@@ -13,8 +13,9 @@ Upstream reference material is available under [`reference/`](reference/) as opt
 
 ## Paper
 
-A repo-local technical note describing Purify and the two proving paths implemented here is available at [`docs/paper/purify-paper.pdf`](docs/paper/purify-paper.pdf).
-The published copy lives at <https://judica.org/purify/paper/> and the site landing page lives at <https://judica.org/purify/>.
+The published technical note describing Purify and the two proving paths
+implemented here lives at <https://judica.org/purify/paper/>. The site landing
+page lives at <https://judica.org/purify/>.
 API documentation is published at <https://judica.org/purify/docs/>.
 
 The LaTeX source lives at [`docs/paper/purify-paper.tex`](docs/paper/purify-paper.tex), and you can rebuild the PDF locally with:
@@ -54,6 +55,61 @@ Top-level builds enable the CLI, benchmark, and docs targets by default. When th
 Top-level builds also enable the regression test target by default.
 
 For multi-config generators such as Xcode, build benchmarks with `--config Release`.
+
+### Construction parent verifier
+
+The selected construction-parent verifier is an opt-in Rust-backed component.
+It requires the Rust 1.98.1 toolchain pinned by
+[`rust/receipt-cycle/rust-toolchain.toml`](rust/receipt-cycle/rust-toolchain.toml):
+
+```sh
+cmake -S . -B build-parent \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPURIFY_BUILD_RECEIPT_CYCLE=ON \
+  -DPURIFY_BUILD_TESTS=OFF
+cmake --build build-parent --parallel
+```
+
+The roughly 609 MiB verifier artifact is deliberately not stored in Git. Its
+immutable release identity is recorded in
+[`release/construction-parent-v1.json`](release/construction-parent-v1.json).
+Provision the matching artifact separately and pass its local path to
+`ConstructionParentVerifier::load()`. The path selects storage only: the
+library authenticates the compiled-in length and tagged digest before decoding
+the artifact.
+
+To exercise the artifact-backed acceptance boundary, configure the exact
+artifact path while enabling tests:
+
+```sh
+cmake -S . -B build-parent \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPURIFY_BUILD_RECEIPT_CYCLE=ON \
+  -DPURIFY_BUILD_TESTS=ON \
+  -DPURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=/path/to/purify-construction-parent-v1-ef88da8.nvk
+cmake --build build-parent --parallel
+ctest --test-dir build-parent --output-on-failure \
+  -R 'slashability_e2e|installed_package'
+```
+
+Building this component selects a qualified library verifier; it does not
+activate any application or consensus rule. See
+[`docs/construction-receipt.md`](docs/construction-receipt.md) for the native
+acceptance boundary and
+[`docs/recursive-parent-receipt.md`](docs/recursive-parent-receipt.md) for the
+recursive relation and qualification record.
+
+### Generic receipt-cycle transport
+
+[`include/purify/recursive/receipt_cycle.h`](include/purify/recursive/receipt_cycle.h)
+is a low-level C transport for proving a caller-supplied canonical R1CS. Its
+success means only that the supplied circuit and statement verify. It neither
+selects the construction relation nor folds anchors, authenticates the frozen
+construction suite, or performs the mandatory native accumulation decision.
+
+Applications validating construction receipts must use the purpose-specific
+`ConstructionParentVerifier` API instead. The generic transport remains useful
+for relation testing, standalone application circuits, and prototyping.
 
 ### Using as a submodule
 

@@ -844,11 +844,12 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         drop(artifact);
         drop(verifier);
 
-        let artifact = std::fs::read(&path).expect("read native-profile verifier artifact");
+        let mut artifact =
+            std::fs::File::open(&path).expect("open native-profile verifier artifact for reload");
         let loaded = crate::nova_session::SelectedDirectNovaVerifier::<
             ANCHOR_RECURRENCE_STATE_ARITY,
-        >::from_artifact(
-            &artifact,
+        >::from_artifact_reader(
+            &mut artifact,
             &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
             &descriptor,
         )

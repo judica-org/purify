@@ -32,6 +32,10 @@ const PRODUCTION_DIRECT_NOVA_RELATION_ID: [u8; 32] = [
     0xec, 0xfd, 0x8e, 0x56, 0x08, 0x40, 0x83, 0xba, 0x9a, 0x94, 0x43, 0x1f, 0xad, 0x5a, 0x5b, 0x1e,
     0x09, 0x91, 0xd7, 0x59, 0x77, 0x46, 0x44, 0x0e, 0x76, 0xcc, 0xf7, 0x79, 0x24, 0x44, 0x4a, 0x66,
 ];
+const NONDECIDING_PROVER_FIXTURE_SHA256: [u8; 32] = [
+    0xda, 0x7a, 0x9f, 0x02, 0xa4, 0x01, 0x63, 0x27, 0x25, 0xca, 0x31, 0x06, 0x88, 0xae, 0x5d, 0x76,
+    0xac, 0x4a, 0xc4, 0xff, 0xbd, 0x24, 0x82, 0x60, 0x1a, 0x3c, 0x8d, 0xd3, 0x66, 0xac, 0x46, 0x26,
+];
 const PRODUCTION_DIRECT_NOVA_VARIABLES: usize = 1_851_594;
 const PRODUCTION_DIRECT_NOVA_CONSTRAINTS: usize = 1_962_058;
 
@@ -1048,6 +1052,17 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         QUALIFIED_PROVER_FIXTURE_SHA256,
         "PURIFY_CONSTRUCTION_PARENT_PROOF_OUT",
         Some("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT"),
+    );
+}
+
+#[test]
+#[ignore = "run explicitly under the native no-swap resource gate"]
+fn native_profile_nondeciding_parent_is_recursive_valid() {
+    run_native_profile_anchor_nova_lifecycle(
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
+        NONDECIDING_PROVER_FIXTURE_SHA256,
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROOF_OUT",
+        None,
     );
 }
 

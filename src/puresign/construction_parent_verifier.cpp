@@ -35,9 +35,9 @@ Unexpected<Error> load_error(
     case PURIFY_CONSTRUCTION_PARENT_MALFORMED:
         return unexpected_error(ErrorCode::RangeViolation,
                                 "construction_parent:artifact_path");
-    case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_IO:
+    case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_OPEN_FAILED:
         return unexpected_error(ErrorCode::IoOpenFailed,
-                                "construction_parent:artifact_io");
+                                "construction_parent:artifact_open");
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_REJECTED:
         return unexpected_error(ErrorCode::InternalMismatch,
                                 "construction_parent:artifact_identity");
@@ -62,7 +62,7 @@ Unexpected<Error> verify_error(
         return unexpected_error(ErrorCode::EquationMismatch,
                                 "construction_parent:proof");
     case PURIFY_CONSTRUCTION_PARENT_BUFFER_TOO_SMALL:
-    case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_IO:
+    case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_OPEN_FAILED:
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_REJECTED:
     case PURIFY_CONSTRUCTION_PARENT_INTERNAL_ERROR:
     case PURIFY_CONSTRUCTION_PARENT_OK:

@@ -17,7 +17,6 @@ use crate::construction_parent_verifier::{
     load_qualified_construction_parent_verifier, verify_construction_parent,
     ConstructionParentVerifierError,
 };
-use crate::nova_session::verifier_artifact::DirectNovaVerifierArtifactError;
 use crate::nova_session::SelectedDirectNovaVerifier;
 
 /// Stable values mirrored by the private construction-parent bridge header.
@@ -28,7 +27,7 @@ pub(crate) enum PurifyConstructionParentStatus {
     Malformed = 1,
     ProofRejected = 2,
     BufferTooSmall = 3,
-    ArtifactIo = 4,
+    ArtifactOpenFailed = 4,
     ArtifactRejected = 5,
     InternalError = 6,
 }
@@ -98,21 +97,6 @@ unsafe fn read_array<const N: usize>(
     Ok(output)
 }
 
-fn artifact_status(error: DirectNovaVerifierArtifactError) -> PurifyConstructionParentStatus {
-    match error {
-        DirectNovaVerifierArtifactError::Io(_) => PurifyConstructionParentStatus::ArtifactIo,
-        DirectNovaVerifierArtifactError::DestinationNotEmpty
-        | DirectNovaVerifierArtifactError::Length
-        | DirectNovaVerifierArtifactError::Digest
-        | DirectNovaVerifierArtifactError::Header(_)
-        | DirectNovaVerifierArtifactError::Encode(_)
-        | DirectNovaVerifierArtifactError::Decode(_)
-        | DirectNovaVerifierArtifactError::Suite(_) => {
-            PurifyConstructionParentStatus::ArtifactRejected
-        }
-    }
-}
-
 fn verifier_status(error: ConstructionParentVerifierError) -> PurifyConstructionParentStatus {
     match error {
         ConstructionParentVerifierError::Suite => PurifyConstructionParentStatus::InternalError,
@@ -155,11 +139,11 @@ pub(crate) unsafe extern "C" fn purify_construction_parent_verifier_load(
     };
     let mut artifact = match std::fs::File::open(artifact_path) {
         Ok(value) => value,
-        Err(_) => return PurifyConstructionParentStatus::ArtifactIo,
+        Err(_) => return PurifyConstructionParentStatus::ArtifactOpenFailed,
     };
     let verifier = match load_qualified_construction_parent_verifier(&mut artifact) {
         Ok(value) => value,
-        Err(error) => return artifact_status(error),
+        Err(_) => return PurifyConstructionParentStatus::ArtifactRejected,
     };
     let verifier = Box::into_raw(Box::new(PurifyConstructionParentVerifier { verifier }));
     // SAFETY: output validation established one writable pointer, and the Box
@@ -321,6 +305,8 @@ pub(crate) unsafe extern "C" fn purify_construction_parent_verifier_destroy(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
 
     #[test]
@@ -363,8 +349,39 @@ mod tests {
                 &mut verifier,
             )
         };
-        assert_eq!(status, PurifyConstructionParentStatus::ArtifactIo);
+        assert_eq!(status, PurifyConstructionParentStatus::ArtifactOpenFailed);
         assert!(verifier.is_null());
+    }
+
+    #[test]
+    fn loader_treats_post_open_storage_failure_as_rejection() {
+        let path = std::env::temp_dir().join(format!(
+            "purify-rejected-construction-parent-{}",
+            std::process::id()
+        ));
+        let mut artifact = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create malformed verifier artifact");
+        artifact
+            .write_all(&[0u8; 64])
+            .expect("write malformed verifier artifact");
+        drop(artifact);
+
+        let path_bytes = path.to_string_lossy();
+        let mut verifier = ptr::dangling_mut::<PurifyConstructionParentVerifier>();
+        // SAFETY: the path and output identify live allocations.
+        let status = unsafe {
+            purify_construction_parent_verifier_load(
+                path_bytes.as_bytes().as_ptr(),
+                path_bytes.len(),
+                &mut verifier,
+            )
+        };
+        assert_eq!(status, PurifyConstructionParentStatus::ArtifactRejected);
+        assert!(verifier.is_null());
+        std::fs::remove_file(path).expect("remove malformed verifier artifact");
     }
 
     #[test]

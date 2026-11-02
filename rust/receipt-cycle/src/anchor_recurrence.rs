@@ -40,9 +40,9 @@ use crate::secp_scalar::{
 };
 use crate::{ReceiptCycleError, Scalar};
 
-const ANCHOR_GATE_COUNT: usize = 8_192;
-const ANCHOR_NORM_LENGTH: usize = 16_384;
-const ANCHOR_LEAF_ROUNDS: usize = 14;
+pub(crate) const ANCHOR_GATE_COUNT: usize = 8_192;
+pub(crate) const ANCHOR_NORM_LENGTH: usize = 16_384;
+pub(crate) const ANCHOR_LEAF_ROUNDS: usize = 14;
 pub(crate) const ANCHOR_RECURRENCE_STATE_ARITY: usize = CONSTRUCTION_STATE_ARITY;
 
 /// SHA256 of the exact 32,768 raw V4 generator encodings selected by the

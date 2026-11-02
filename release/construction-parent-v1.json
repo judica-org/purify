@@ -1,0 +1,36 @@
+{
+  "schema": "purify-verifier-artifact-manifest-v1",
+  "protocol": "purify-construction-parent-v1",
+  "artifact": {
+    "filename": "purify-construction-parent-v1-ef88da8.nvk",
+    "bytes": 638174560,
+    "sha256": "c07e9f621f7501a502cdf0ea4cde8f8100bc934723cdd037f9f5e6e330639e62",
+    "tagged_sha256": {
+      "tag": "Purify/Accountable/DirectNovaVerifierArtifact/v1",
+      "digest": "7b2fcafb6475c870925c2c00b0ab9eba539bc540e34db14678cf005213bdebd5"
+    }
+  },
+  "suite": {
+    "relation_id": "ecfd8e56084083ba9a94431fad5a5b1e0991d7597746440e76ccf77924444a66",
+    "public_parameter_digest": "b90f7e761288cc1fdb7abd16f4e0abbbe2c8d7c773f315a17f1d7c4f982f7900",
+    "suite_id": "116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa",
+    "state_arity": 20,
+    "proof_bytes": 12466
+  },
+  "source": {
+    "purify_qualification_commit": "c1a8bb83e37cbf5baa67c2d7a7744e5333ea19b1",
+    "purify_identity_commit": "479cdcb653b0776757562af6606169f3fb695614",
+    "nova_repository": "https://github.com/JeremyRubin/Nova",
+    "nova_commit": "ef88da858d1b7ade8fe4b36b585436adbde672ae"
+  },
+  "qualification_vectors": {
+    "accepted": {
+      "path": "tests/vectors/construction_parent_v1_two_anchor.proof",
+      "sha256": "c2a5fea4805eaa308a61f3374142bc95e6f7d983f5bf32e392983ab8c0a21b86"
+    },
+    "recursive_valid_native_rejected": {
+      "path": "tests/vectors/construction_parent_v1_nondeciding.proof",
+      "sha256": "0dcdb66e11a0f9df2996ab0da2fa8fd79dcdc63877c5f20e9ef50949b17ae4f8"
+    }
+  }
+}

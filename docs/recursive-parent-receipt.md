@@ -1,15 +1,27 @@
 # Recursive construction receipt boundary
 
-> Implementation note: the production recurrence now uses the record-version-3
+> Implementation note: the production recurrence uses the record-version-3
 > public V4 anchor leaf and constrains its canonical punishment-key DLog
-> equation. This completes the hidden-to-public relation migration. The native
-> profile, exact setup, and one full-scale fold are qualified, but full
-> native-profile compression, the shipped verifier artifact, and end-to-end
-> native acceptance remain deliberately absent.
+> equation. A deterministic two-anchor fixture has qualified the complete
+> selected lifecycle: exact production-profile setup, two ordered full-scale
+> folds, Spartan IPA compression, canonical verification, verifier-artifact
+> serialization, and artifact reload. The external verifier artifact identity,
+> private C ABI, and public C++ recursive-plus-native acceptance boundary are
+> implemented. This is library acceptance, not consensus or enrollment
+> activation.
 
 This document fixes the selected boundary between a transparent Nova parent
-proof and the native BP++ accumulator. It is an implementation map, not a
-claim that construction receipts are accepted yet.
+proof and the native BP++ accumulator. It is an implementation map for the
+library acceptance path, not a claim that construction receipts are active in
+consensus or that coalition enrollment is safe to enable.
+
+The acceptance result is a validity and ancestry result. It does not supply a
+distributed setup or share-preserving child prover, resolve custody of a shared
+coalition scalar, or prove pre-conflict confidentiality for the correlated
+secp256k1 and companion-group keys. Those security obligations are separate
+from recursive verification. Operational proving bounds at 100 to 1,000 anchors
+and reduction or practical distribution of the roughly 609 MiB verifier also
+remain open.
 
 The parent must authenticate independently published anchor-escrow proofs. The
 assembler learns no anchor or coalition secret. Child proof bodies, norm
@@ -18,7 +30,8 @@ can disappear after the final receipt is published.
 
 ## Target acceptance rule
 
-A future receipt may be accepted only when all three checks succeed:
+The public C++ verifier returns an acceptance capability only when all three
+checks succeed:
 
 1. the setup reference resolves to one immutable, previously verified setup
    record and its canonical construction-basis seed claim;
@@ -143,10 +156,14 @@ canonical compressed-proof codec, fixed-template Nova session, verifier-only
 artifact format, and authenticated-root verifier are also implemented.
 Canonical suite-ID framing and exact static setup selection reject a changed
 relation, parameter digest, matrix dimensions, codec schedule, or
-construction-version tuple. The native profile, exact setup, and one
-full-scale fold are qualified. Full native-profile compression, a frozen
-production artifact descriptor, the C ABI, and the native acceptance boundary
-remain.
+construction-version tuple. The qualified two-anchor fixture executes exact
+setup, both full-scale folds, full Spartan IPA compression, canonical proof
+verification, artifact serialization, and artifact reload. The artifact's
+frozen external identity is 638,174,560 bytes (roughly 609 MiB) with its
+expected tagged digest compiled into the loader. A private C ABI can return
+only the proof-authenticated pending root; the public C++ API parses that root
+against the fixed native basis and completes `decide()` before minting an
+acceptance capability.
 
 The historical secq SHA-256 gadget costs 30,952 multipliers per
 compression block, plus eight multipliers per private input byte.
@@ -155,9 +172,10 @@ Replaying V3 required approximately 34 blocks per anchor, or about
 transition constraints. That fallback did not meet the hundred-member
 budget. V4 now has native and Rust typed Poseidon implementations, so
 these SHA counts are not V4 estimates.
-V4 is still not a construction receipt. Independently published child proofs
-remain off-chain witnesses. The candidate payload carries each 192-byte anchor
-ciphertext and its 32-byte nonzero V4 precommitment. The verifier derives the
+A V4 leaf by itself is still not a construction receipt. Independently
+published child proofs remain off-chain witnesses. The candidate payload
+carries each 192-byte anchor ciphertext and its 32-byte nonzero V4
+precommitment. The verifier derives the
 leaf's expected coefficient commitment and anchored offset from that
 precommitment and the exact resolved statement, while the recurrence manifest
 binds those same constrained values. This gives a 224-byte entry before the
@@ -202,12 +220,12 @@ typed transcript, distinct proof types and codecs, and reject V1 encodings.
 The standalone relation is cross-checked against the vendored native map and
 is composed directly into the candidate step; no caller supplies an opening
 point. The V4 leaf and typed native prepared-obligation adapter are
-implemented. The production suite and one fold are selected and qualified.
-Remaining receipt work is full native-profile compression qualification,
-shipping the authenticated verifier artifact, and the final C ABI and
-root-to-decision acceptance boundary. The internal Nova session already checks
-the verifier-derived initial state, exact step count, state continuity, and
-expected final state before and after compression.
+implemented. The selected production suite has completed the two-anchor
+lifecycle through compression and canonical verification. The internal Nova
+session checks the verifier-derived initial state, exact step count, state
+continuity, and expected final state before and after compression. The private
+C ABI exposes only the authenticated pending root, and the public C++ verifier
+completes the mandatory native decision before returning acceptance.
 
 The candidate coefficient reduction consumes an internal
 `ConstrainedPreparedNorm`; there is no production constructor from raw claim
@@ -268,9 +286,12 @@ fixed-length Spartan IPA proof against the exact initial and final states.
 Canonical decoding rejects the wrong length, sequence schedule, malformed
 field or point encodings, trailing bytes, and noncanonical re-encoding.
 The suite can be consumed into a verifier-only context and serialized as a
-versioned deployment artifact. Loading first authenticates an expected total
-length and tagged digest, then checks the suite ID, arity, payload length, and
-exact local profile. No production artifact length or digest is frozen yet.
+versioned deployment artifact. Loading first authenticates the frozen
+638,174,560-byte length and tagged digest
+`7b2fcafb6475c870925c2c00b0ab9eba539bc540e34db14678cf005213bdebd5`,
+then checks the suite ID, arity, payload length, and exact local profile. The
+artifact remains an external deployment object; its roughly 609 MiB footprint
+is not yet suitable for convenient embedding in the main binary.
 
 Nova 0.76's fixed arity-20 wrapper adds exactly 13,566 primary constraints and
 13,596 primary variables to this recurrence. The production primary
@@ -296,30 +317,32 @@ Its suite ID is:
 116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa
 ```
 
-Exact setup and one full-scale fold have qualified against the relation,
-parameter digest, dimensions, complete codec schedule, and explicit
-payload/statement/manifest/native-decision versions. This is a selected static
-profile, not an activated or shipped suite. Full native-profile compression
-has not qualified.
+Exact setup, two ordered full-scale folds, Spartan IPA compression, and
+canonical verification have qualified against the relation, parameter digest,
+dimensions, complete codec schedule, and explicit
+payload/statement/manifest/native-decision versions. The resulting positive
+proof is 12,466 bytes. This is a selected library suite, not consensus or
+enrollment activation.
 
-The real 20-state, two-step session fixture exercises setup, folding, recursive
-verification, compression, canonical encode/decode, and compressed
-verification. Its primary shape is 13,606 constraints and 13,636 variables;
-its secondary shape is 10,787 constraints and 10,769 variables. Its canonical
-proof is 10,436 bytes with 104 sequence lengths. Pinning the bounded-memory
+The separate reduced-size 20-state, two-step session fixture exercises setup,
+folding, recursive verification, compression, canonical encode/decode, and
+compressed verification. Its primary shape is 13,606 constraints and 13,636
+variables; its secondary shape is 10,787 constraints and 10,769 variables. Its
+canonical proof is 10,436 bytes with 104 sequence lengths. Pinning the bounded-memory
 Nova fork left its relation ID, public-parameter digest, dimensions, proof
 length, and codec schedule unchanged.
 
-Cargo pins the bounded-memory fork at revision
-`206f4ce388d80de6421ca484f7d72c80c4c7ac67`. It releases `ShapeCS` before
+Cargo pins the qualified bounded-memory fork at revision
+`ef88da858d1b7ade8fe4b36b585436adbde672ae`. It releases `ShapeCS` before
 commitment-key generation, shares one padded Spartan shape between
 setup-created prover and verifier keys, and replaces duplicated sparse-matrix
 field-element caches with compact classes over the existing CSR entries. Its
 tests preserve the key bytes and verifier-key digest and pass the real
 non-preprocessing Spartan IPA compression path. The exact-shape witness builder
 also streams every later operation and row against the immutable template
-instead of materializing a second relation. These memory reductions do not by
-themselves qualify the native-profile lifecycle.
+instead of materializing a second relation. The two-anchor production
+lifecycle qualified with this revision; those results do not establish proving
+throughput or peak-memory bounds at 100 to 1,000 anchors.
 
 A staged setup-only harness preserves the production ratios of variables,
 constraints, and nonzeros. Every synthetic stage through `2^20` passed under
@@ -337,12 +360,14 @@ The secondary shape remained fixed at 10,787 constraints and 10,769 variables.
 Each stage also froze its deterministic public-parameter digest. These are
 synthetic setup results, not production proofs.
 
-Exact native-profile setup and one full-scale fold have qualified. The latest
-guarded attempt to complete the lifecycle with the compact-cache fork was
-aborted during setup after about 1.0 GiB of swapout, before compression. That
-run exposed a resource failure, not a cryptographic failure. Full Spartan
-compression and canonical verification for this native profile remain the next
-no-swap resource and correctness gate.
+The guarded production run completed exact native-profile setup, two ordered
+folds, recursive verification, Spartan IPA compression, canonical compressed
+verification, artifact serialization, and artifact reload. Qualification is
+deliberately narrow: it proves the complete two-anchor path and freezes its
+12,466-byte proof and external verifier identity. It does not measure issuance
+at 100 to 1,000 anchors, provide a public issuance workflow or the distributed
+child proving needed for shared custody, or make the roughly 609 MiB verifier
+practical to embed.
 
 For historical context, the earlier pre-canonical scaling probe used
 independent multiplication gates and noncanonical bincode proof-object sizes:
@@ -402,9 +427,10 @@ its parser establishes canonical syntax only. The proof shape is independent
 of the number of folded steps. At 100 anchors the candidate total is therefore
 34,935 bytes: 22,469 payload bytes plus the proof. No separate 545-byte root is
 included. The Rust verifier returns that pending root only after checking the
-proof and payload-derived final state, but native `decide()` remains mandatory.
-Neither the compact size nor the selected profile activates consensus
-acceptance.
+proof and payload-derived final state. The public C++ verifier then parses it
+against the fixed basis and completes mandatory native `decide()` before
+returning `VerifiedConstructionReceipt`. Neither the compact size nor library
+acceptance activates consensus.
 
 ## Standalone secq verifier randomization
 
@@ -452,7 +478,14 @@ Before activation, end-to-end tests must reject at least:
 - a parent proof rebound to another root claim; and
 - a valid parent proof followed by a false final native decision.
 
+The checked-in two-anchor adversarial vector covers the final case directly.
+It preserves the positive vector's public construction inputs and passes the
+selected recursive verifier, but authenticates a distinct pending root which
+fails native `decide()`. The public C++ API rejects it before an acceptance
+capability can be constructed.
+
 Benchmarks must separately report public-parameter generation, folding,
 compression setup, compression, recursive verification, compressed
 verification, peak RSS, canonical proof bytes, payload bytes, root bytes, and
-native-decision time for 1, 2, and 100 anchors.
+native-decision time for 1, 2, 100, and intended upper-bound workloads such as
+1,000 anchors. Only the two-anchor full lifecycle is currently qualified.

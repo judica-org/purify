@@ -115,3 +115,35 @@ fn authenticated_final_state_rejects_malformed_pending_roots() {
         ))
     ));
 }
+
+#[test]
+fn qualified_verifier_artifact_identity_is_frozen() {
+    assert_eq!(
+        QUALIFIED_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT.encoded_length(),
+        638_174_560
+    );
+    assert_eq!(
+        QUALIFIED_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT.digest(),
+        [
+            0x7b, 0x2f, 0xca, 0xfb, 0x64, 0x75, 0xc8, 0x70, 0x92, 0x5c, 0x2c, 0x00, 0xb0, 0xab,
+            0x9e, 0xba, 0x53, 0x9b, 0xc5, 0x40, 0xe3, 0x4d, 0xb1, 0x46, 0x78, 0xcf, 0x00, 0x52,
+            0x13, 0xbd, 0xeb, 0xd5,
+        ]
+    );
+}
+
+#[test]
+#[ignore = "requires the separately qualified 609 MiB verifier artifact"]
+fn qualified_verifier_artifact_loads_exactly() {
+    let path = std::env::var_os("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT")
+        .expect("qualified verifier artifact path");
+    let mut artifact = std::fs::File::open(path).expect("open qualified verifier artifact");
+    let verifier = load_qualified_construction_parent_verifier(&mut artifact)
+        .expect("authenticate and load qualified verifier artifact");
+    assert_eq!(
+        verifier.expected(),
+        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE
+    );
+    assert_eq!(verifier.metadata().proof_length, 12_466);
+    assert_eq!(verifier.metadata().codec_sequence_count, 125);
+}

@@ -1,4 +1,5 @@
 /build/
+/build-*/
 /build-docs/
 /build-pages/
 /docs/paper/build/

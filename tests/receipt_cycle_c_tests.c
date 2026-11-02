@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "purify/recursive/receipt_cycle.h"
+#include "../src/bridge/construction_parent_bridge.h"
 
 static int expect(int condition, const char* message) {
     if (condition) {
@@ -94,5 +95,27 @@ int main(void) {
             circuit, sizeof(circuit), statement, sizeof(statement) - 1,
             proof, written) != PURIFY_RECEIPT_CYCLE_OK,
         "C transport rejects a mutated proof");
+
+    purify_construction_parent_verifier* verifier =
+        (purify_construction_parent_verifier*)(uintptr_t)1;
+    ok &= expect(
+        purify_construction_parent_verifier_load(
+            NULL, 0, &verifier) == PURIFY_CONSTRUCTION_PARENT_MALFORMED,
+        "construction parent rejects an empty artifact path");
+    ok &= expect(verifier == NULL,
+                 "construction parent clears rejected verifier output");
+
+    uint8_t pending_root[PURIFY_CONSTRUCTION_PARENT_ROOT_SIZE];
+    memset(pending_root, 0xa5, sizeof(pending_root));
+    ok &= expect(
+        purify_construction_parent_verify(
+            NULL, NULL, NULL, NULL, 0, NULL, NULL, 0, NULL, 0,
+            NULL, 0, pending_root, sizeof(pending_root)) ==
+            PURIFY_CONSTRUCTION_PARENT_MALFORMED,
+        "construction parent rejects a null verifier");
+    for (size_t i = 0; i < sizeof(pending_root); ++i) {
+        ok &= expect(pending_root[i] == 0,
+                     "construction parent clears rejected root output");
+    }
     return ok ? 0 : 1;
 }

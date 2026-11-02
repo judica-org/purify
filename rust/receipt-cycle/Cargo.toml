@@ -2,7 +2,7 @@
 name = "purify-receipt-cycle"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.93"
+rust-version = "1.98.1"
 license = "MIT"
 publish = false
 
@@ -15,7 +15,7 @@ bulletproofs-cycle = { version = "=0.4.1" }
 ff = { version = "0.13", default-features = false }
 golden-halo2curves = { version = "=0.4.1" }
 merlin = { version = "3", default-features = false }
-nova-snark = { git = "https://github.com/JeremyRubin/Nova", rev = "cae3e56c6b5420451ec3b971b8c377df467edf3c", version = "=0.76.0", default-features = false }
+nova-snark = { git = "https://github.com/JeremyRubin/Nova", rev = "ef88da858d1b7ade8fe4b36b585436adbde672ae", version = "=0.76.0", default-features = false }
 num-bigint = { version = "=0.4.8", default-features = false }
 num-traits = { version = "=0.2.19", default-features = false }
 rand_chacha = "0.3"

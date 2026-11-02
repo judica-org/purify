@@ -19,14 +19,13 @@ void run_norm_accumulation_tests(TestContext& ctx);
 void run_accountable_signature_tests(TestContext& ctx);
 void run_accountable_roster_tests(TestContext& ctx);
 void run_accountable_response_tests(TestContext& ctx);
+void run_slashability_e2e_tests(TestContext& ctx);
 void run_slash_adaptor_tests(TestContext& ctx);
 void run_canonical_recovery_root_tests(TestContext& ctx);
 void run_anchor_escrow_tests(TestContext& ctx);
 void run_companion_scalar_escrow_tests(TestContext& ctx);
 void run_construction_receipt_tests(TestContext& ctx);
 void run_construction_receipt_codec_tests(TestContext& ctx);
-void run_construction_receipt_batch_tests(TestContext& ctx);
-void run_receipt_sha256_tests(TestContext& ctx);
 void run_coordinate_field_tests(TestContext& ctx);
 void run_poseidon_tests(TestContext& ctx);
 void run_algebraic_transcript_tests(TestContext& ctx);
@@ -46,7 +45,7 @@ struct SuiteSpec {
     SuiteFn run;
 };
 
-constexpr std::array<SuiteSpec, 26> kSuites{{
+constexpr std::array<SuiteSpec, 25> kSuites{{
     {"core", &run_purify_tests},
     {"puresign", &run_puresign_tests},
     {"legacy_bulletproof", &run_legacy_bulletproof_tests},
@@ -56,14 +55,13 @@ constexpr std::array<SuiteSpec, 26> kSuites{{
     {"accountable_signature", &run_accountable_signature_tests},
     {"accountable_roster", &run_accountable_roster_tests},
     {"accountable_response", &run_accountable_response_tests},
+    {"slashability_e2e", &run_slashability_e2e_tests},
     {"slash_adaptor", &run_slash_adaptor_tests},
     {"canonical_recovery_root", &run_canonical_recovery_root_tests},
     {"anchor_escrow", &run_anchor_escrow_tests},
     {"companion_scalar_escrow", &run_companion_scalar_escrow_tests},
     {"construction_receipt", &run_construction_receipt_tests},
     {"construction_receipt_codec", &run_construction_receipt_codec_tests},
-    {"construction_receipt_batch", &run_construction_receipt_batch_tests},
-    {"receipt_sha256", &run_receipt_sha256_tests},
     {"coordinate_field", &run_coordinate_field_tests},
     {"poseidon", &run_poseidon_tests},
     {"algebraic_transcript", &run_algebraic_transcript_tests},

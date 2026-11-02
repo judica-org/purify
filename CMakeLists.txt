@@ -103,6 +103,9 @@ option(PURIFY_BUILD_RECEIPT_CYCLE
 set(PURIFY_RECEIPT_CYCLE_CARGO_TARGET "" CACHE STRING
     "Optional Rust target triple for the parent-receipt backend."
 )
+set(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT "" CACHE FILEPATH
+    "Qualified construction-parent verifier artifact for opt-in tests."
+)
 
 if(PURIFY_BUILD_CLI AND NOT PURIFY_HAVE_CLI_SOURCES)
     message(FATAL_ERROR "PURIFY_BUILD_CLI=ON requires cli/main.cpp")
@@ -146,6 +149,33 @@ endif()
 
 if(PURIFY_BUILD_VALGRIND_TESTS AND WIN32)
     message(FATAL_ERROR "PURIFY_BUILD_VALGRIND_TESTS is not supported on Windows")
+endif()
+
+if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+    if(NOT PURIFY_BUILD_TESTS)
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
+            "PURIFY_BUILD_TESTS=ON."
+        )
+    endif()
+    if(NOT PURIFY_BUILD_RECEIPT_CYCLE)
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
+            "PURIFY_BUILD_RECEIPT_CYCLE=ON."
+        )
+    endif()
+    get_filename_component(
+        PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT
+        "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+        ABSOLUTE BASE_DIR "${CMAKE_BINARY_DIR}"
+    )
+    if(NOT EXISTS "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+       OR IS_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}")
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT must name an "
+            "existing regular file."
+        )
+    endif()
 endif()
 
 if(NOT PURIFY_CXX_STANDARD MATCHES "^(20|23)$")
@@ -310,7 +340,7 @@ function(purify_enable_release_optimizations target)
     target_compile_definitions(${target} PRIVATE NDEBUG)
 endfunction()
 
-add_library(purify
+add_library(purify STATIC
     src/core/core.c
     src/core/curve.c
     src/core/field.c
@@ -334,8 +364,6 @@ add_library(purify
     src/puresign/recovery_root.cpp
     src/puresign/anchor_escrow.cpp
     src/puresign/construction_receipt.cpp
-    src/puresign/construction_receipt_batch.cpp
-    src/puresign/construction_receipt_assembly.cpp
     src/protocol/bppp.cpp
     src/protocol/accumulation.cpp
     src/protocol/coordinate_field.cpp
@@ -349,6 +377,12 @@ add_library(purify::purify ALIAS purify)
 add_library(purify_bppp_support ALIAS purify)
 
 purify_configure_library_target(purify)
+
+if(PURIFY_BUILD_TESTS)
+    target_compile_definitions(purify PRIVATE
+        PURIFY_INTERNAL_TEST_SUPPORT=1
+    )
+endif()
 
 if(PURIFY_BUILD_RECEIPT_CYCLE)
     find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
@@ -417,6 +451,20 @@ if(PURIFY_BUILD_RECEIPT_CYCLE)
             m
         )
     endif()
+
+    target_sources(purify PRIVATE
+        src/puresign/construction_parent_verifier.cpp
+    )
+    target_link_libraries(purify PUBLIC
+        $<BUILD_INTERFACE:purify_receipt_cycle_backend>
+        $<INSTALL_INTERFACE:purify::receipt_cycle_backend>
+    )
+    target_compile_definitions(purify PUBLIC
+        PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
+    )
+    install(FILES "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
 endif()
 
 if(WIN32)
@@ -443,6 +491,11 @@ install(
 )
 
 set(PURIFY_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/purify")
+
+set(PURIFY_CONFIG_WITH_RECEIPT_CYCLE ${PURIFY_BUILD_RECEIPT_CYCLE})
+get_filename_component(PURIFY_CONFIG_RECEIPT_CYCLE_ARCHIVE_NAME
+    "${PURIFY_RECEIPT_CYCLE_ARCHIVE}" NAME
+)
 
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/purifyConfig.cmake.in"
@@ -505,8 +558,6 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/recovery_root.cpp
         src/puresign/anchor_escrow.cpp
         src/puresign/construction_receipt.cpp
-        src/puresign/construction_receipt_batch.cpp
-        src/puresign/construction_receipt_assembly.cpp
         src/protocol/bppp.cpp
         src/protocol/accumulation.cpp
         src/protocol/coordinate_field.cpp
@@ -628,6 +679,8 @@ if(PURIFY_BUILD_TESTS)
         tests/accountable_signature_tests.cpp
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
+        tests/slashability_e2e_fixture.cpp
+        tests/slashability_e2e_tests.cpp
         tests/slash_adaptor_tests.cpp
         tests/canonical_recovery_root_tests.cpp
         tests/canonical_recovery_root_helpers.cpp
@@ -637,8 +690,6 @@ if(PURIFY_BUILD_TESTS)
         tests/construction_receipt_helpers.cpp
         tests/construction_receipt_tests.cpp
         tests/construction_receipt_codec_tests.cpp
-        tests/construction_receipt_batch_tests.cpp
-        tests/receipt_sha256_tests.cpp
         tests/coordinate_field_tests.cpp
         tests/poseidon_tests.cpp
         tests/algebraic_transcript_tests.cpp
@@ -660,6 +711,10 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
 
     if(PURIFY_BUILD_RECEIPT_CYCLE)
+        target_compile_definitions(purify_tests PRIVATE
+            "PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_v1_two_anchor.proof\""
+            "PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_v1_nondeciding.proof\""
+        )
         add_executable(purify_receipt_cycle_c_tests
             tests/receipt_cycle_c_tests.c
         )
@@ -674,6 +729,26 @@ if(PURIFY_BUILD_TESTS)
         add_test(NAME purify.tests.receipt_cycle_c
             COMMAND purify_receipt_cycle_c_tests
         )
+
+        if(NOT CMAKE_CROSSCOMPILING)
+            add_test(NAME purify.tests.installed_package
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_CMAKE_COMMAND=${CMAKE_COMMAND}"
+                    "-DTEST_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+                    "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+                    "-DTEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+                    "-DTEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+                    "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                    "-DTEST_CONFIG=$<CONFIG>"
+                    "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installed_package/run.cmake"
+            )
+            set_tests_properties(purify.tests.installed_package
+                PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
+            )
+        endif()
     endif()
 
     function(purify_add_cpp_suite_test suite_name)
@@ -717,14 +792,13 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_signature)
     purify_add_cpp_suite_test(accountable_roster)
     purify_add_cpp_suite_test(accountable_response)
+    purify_add_cpp_suite_test(slashability_e2e)
     purify_add_cpp_suite_test(slash_adaptor)
     purify_add_cpp_suite_test(canonical_recovery_root)
     purify_add_cpp_suite_test(anchor_escrow)
     purify_add_cpp_suite_test(companion_scalar_escrow)
     purify_add_cpp_suite_test(construction_receipt)
     purify_add_cpp_suite_test(construction_receipt_codec)
-    purify_add_cpp_suite_test(construction_receipt_batch)
-    purify_add_cpp_suite_test(receipt_sha256)
     purify_add_cpp_suite_test(coordinate_field)
     purify_add_cpp_suite_test(poseidon)
     purify_add_cpp_suite_test(algebraic_transcript)
@@ -734,9 +808,16 @@ if(PURIFY_BUILD_TESTS)
     # out of the property suites' bounded execution time.
     set_tests_properties(
         purify.tests.construction_receipt
-        purify.tests.receipt_sha256
+        purify.tests.slashability_e2e
         PROPERTIES RUN_SERIAL TRUE
     )
+    if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+        set_tests_properties(purify.tests.slashability_e2e PROPERTIES
+            ENVIRONMENT
+                "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+            TIMEOUT 3600
+        )
+    endif()
     purify_add_cpp_suite_test(aggregate_nonce)
     purify_add_cpp_suite_test(aggregate_nonce_100)
     purify_add_cpp_suite_test(nonce_batch)

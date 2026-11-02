@@ -101,7 +101,7 @@ impl ConstructionRoot {
         &self.encoded
     }
 
-    fn claim(&self) -> CandidateRootClaim {
+    pub(crate) fn claim(&self) -> CandidateRootClaim {
         self.claim.clone()
     }
 

@@ -8,6 +8,9 @@
 #include "algebraic_transcript.hpp"
 #include "bppp_bridge.h"
 #include "bppp_internal.hpp"
+#if defined(PURIFY_INTERNAL_TEST_SUPPORT)
+#include "accumulation_test_support.hpp"
+#endif
 
 namespace purify::bppp::accumulation {
 
@@ -697,8 +700,13 @@ Result<StepProof> prove_ipa(
         context);
 }
 
+struct IpaVerification {
+    PolynomialTerm folded;
+    PointBytes residual;
+};
+
 template <typename Proof, typename RoundChallenge>
-Result<PolynomialTerm> verify_ipa_with_challenges(
+Result<IpaVerification> evaluate_ipa_with_challenges(
     std::size_t dimension, const Proof& proof,
     const PolynomialTerm& weights, const PointBytes& commitment,
     const FieldElement& evaluation, const PointBytes& opening_base,
@@ -737,10 +745,27 @@ Result<PolynomialTerm> verify_ipa_with_challenges(
     scalars.push_back(a.negate());
     PURIFY_ASSIGN_OR_RETURN(auto residual, msm(points, scalars, context),
                             "accumulation:verify_equation");
-    if (residual != PointBytes{}) {
-        return unexpected_error(ErrorCode::EquationMismatch, "accumulation:step_equation");
+    return IpaVerification{std::move(folded), residual};
+}
+
+template <typename Proof, typename RoundChallenge>
+Result<PolynomialTerm> verify_ipa_with_challenges(
+    std::size_t dimension, const Proof& proof,
+    const PolynomialTerm& weights, const PointBytes& commitment,
+    const FieldElement& evaluation, const PointBytes& opening_base,
+    RoundChallenge&& round_challenge, purify_secp_context* context) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto verified,
+        evaluate_ipa_with_challenges(
+            dimension, proof, weights, commitment, evaluation,
+            opening_base, std::forward<RoundChallenge>(round_challenge),
+            context),
+        "accumulation:evaluate_ipa");
+    if (verified.residual != PointBytes{}) {
+        return unexpected_error(
+            ErrorCode::EquationMismatch, "accumulation:step_equation");
     }
-    return folded;
+    return std::move(verified.folded);
 }
 
 Result<PolynomialTerm> verify_ipa(
@@ -780,13 +805,13 @@ Result<AlgebraicStepProof> prove_algebraic_ipa(
         context);
 }
 
-Result<PolynomialTerm> verify_algebraic_ipa(
+Result<IpaVerification> evaluate_algebraic_ipa(
     std::size_t dimension, const AlgebraicStepProof& proof,
     const PolynomialTerm& weights, const PointBytes& commitment,
     const FieldElement& evaluation, const PointBytes& opening_base,
     candidate::AlgebraicTranscript& transcript,
     std::uint64_t first_round, purify_secp_context* context) {
-    return verify_ipa_with_challenges(
+    return evaluate_ipa_with_challenges(
         dimension, proof, weights, commitment, evaluation, opening_base,
         [&transcript, first_round](
             std::size_t round, const PointBytes& left,
@@ -802,6 +827,25 @@ Result<PolynomialTerm> verify_algebraic_ipa(
                 first_round + static_cast<std::uint64_t>(round));
         },
         context);
+}
+
+Result<PolynomialTerm> verify_algebraic_ipa(
+    std::size_t dimension, const AlgebraicStepProof& proof,
+    const PolynomialTerm& weights, const PointBytes& commitment,
+    const FieldElement& evaluation, const PointBytes& opening_base,
+    candidate::AlgebraicTranscript& transcript,
+    std::uint64_t first_round, purify_secp_context* context) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto verified,
+        evaluate_algebraic_ipa(
+            dimension, proof, weights, commitment, evaluation,
+            opening_base, transcript, first_round, context),
+        "accumulation:evaluate_algebraic_ipa");
+    if (verified.residual != PointBytes{}) {
+        return unexpected_error(
+            ErrorCode::EquationMismatch, "accumulation:step_equation");
+    }
+    return std::move(verified.folded);
 }
 
 struct NormOpeningContext {
@@ -2040,6 +2084,41 @@ Result<PendingClaim> verify_algebraic_step(
         basis.digest(), proof.folded_generator,
         {std::move(folded)});
 }
+
+#if defined(PURIFY_INTERNAL_TEST_SUPPORT)
+namespace test_support {
+
+Result<PointBytes> algebraic_step_equation_residual(
+    const Basis& basis, std::span<const PendingClaim> claims,
+    const AlgebraicStepProof& proof,
+    purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(
+        validate_basis(basis), "accumulation:test_basis");
+    const auto rounds = log2_dimension(basis.dimension());
+    if (proof.left.size() != rounds ||
+        proof.right.size() != rounds) {
+        return unexpected_error(
+            ErrorCode::SizeMismatch,
+            "accumulation:test_step_rounds");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto state,
+        make_algebraic_step_context(basis, claims, context),
+        "accumulation:test_step_context");
+    const auto weights =
+        geometric_tensor(state.x, basis.dimension());
+    PURIFY_ASSIGN_OR_RETURN(
+        auto evaluated,
+        evaluate_algebraic_ipa(
+            basis.dimension(), proof, weights,
+            state.commitment, state.y, state.opening_base,
+            state.transcript, 2, context),
+        "accumulation:test_step_evaluate");
+    return evaluated.residual;
+}
+
+} // namespace test_support
+#endif
 
 Status decide(const Basis& basis, const PendingClaim& claim, purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),

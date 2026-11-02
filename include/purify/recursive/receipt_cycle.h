@@ -4,12 +4,13 @@
 
 /**
  * @file recursive/receipt_cycle.h
- * @brief C transport for the transparent Secq256k1 parent-proof backend.
+ * @brief C transport for a caller-supplied transparent Secq256k1 R1CS.
  *
- * This API proves an authenticated R1CS transport. A successful call does
- * not by itself mean that a coalition receipt is valid. Receipt callers must
- * reconstruct the purpose-specific circuit from its public statement and
- * then invoke this backend with that exact canonical circuit.
+ * This API does not select a purpose-specific relation or recursively fold
+ * receipts. A successful call means only that the supplied canonical circuit
+ * and statement verify. It does not authenticate the qualified construction
+ * suite or perform the final native accumulation decision. Construction
+ * receipt callers must use ConstructionParentVerifier instead.
  */
 
 #ifndef PURIFY_RECURSIVE_RECEIPT_CYCLE_H

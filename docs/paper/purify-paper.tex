@@ -880,14 +880,30 @@ public-parameter digest
 \texttt{b90f7e761288cc1fdb7abd16f4e0abbbe2c8d7c773f315a17f1d7c4f982f7900},
 and suite ID
 \texttt{116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa}.
-Exact setup and one full-scale fold have qualified. No construction receipt is
-activated. The exact payload-plus-proof envelope is syntax-only, and the
-generic artifact loader authenticates an expected length and digest before
-decoding; no production artifact descriptor is frozen or shipped. The latest
-guarded native-profile lifecycle run was aborted after about 1.0 GiB of
-swapout during setup, before compression. This was a resource failure, not a
-cryptographic failure. Full native-profile compression, the C ABI, and the
-root-to-native-decision acceptance path remain.
+The deterministic two-anchor fixture has qualified the complete selected
+lifecycle: exact production-profile setup, two ordered full-scale folds,
+Spartan IPA compression, canonical compressed-proof verification,
+verifier-artifact serialization, and artifact reload. The 12,466-byte positive
+proof and a separate recursive-valid/nondeciding negative proof are checked in.
+The production verifier identity is frozen as a 638,174,560-byte external
+artifact (roughly 609 MiB), with its expected length and tagged digest compiled
+into the loader. The artifact remains external because its current size is not
+practical for convenient embedding.
+
+A private C ABI returns only the proof-authenticated pending root. The public
+C++ acceptance API reconstructs the exact typed statement and descriptors,
+invokes the recursive verifier, parses the returned root against the fixed
+native basis, and completes the mandatory native decision before returning an
+acceptance capability. The negative vector preserves the public two-anchor
+statement and passes recursive verification, but its pending root fails the
+native decision, directly exercising this boundary.
+
+This is library-level receipt acceptance, not consensus or enrollment
+activation. Qualification covers a two-anchor lifecycle and does not establish
+100--1,000-anchor prover throughput or memory bounds. Production issuance still
+lacks a public parent-prover workflow. Distributed setup and custody, and the
+share-preserving child proving they require, remain unresolved, as does the
+correlated-key confidentiality argument for companion-scalar escrow.
 
 The remainder of this section through the historical efficiency note
 records the preceding V3 implementation and its measurements. Its
@@ -1271,13 +1287,16 @@ Three caveats are worth stating explicitly:
   composition boundary. The V3 analysis is not a substitute for
   independent V4 review.
   \item Native and constrained V4 leaves exist, and Nova 0.76 is the
-  selected transparent folding backend for construction-receipt work.
-  The public-anchor recurrence migration and canonical Nova session are
-  implemented. The native profile, exact setup, and one full-scale fold are
-  qualified, and the verifier-only artifact and authenticated-root boundary
-  exist. Full native-profile compression, the shipped artifact descriptor,
-  and the C ABI/native acceptance API remain unfinished. Anchor escrow record
-  version~3 already carries a V4 public proof.
+  selected transparent folding backend for construction-receipt work. The
+  public-anchor recurrence, complete qualified two-anchor compression
+  lifecycle, frozen external verifier identity, private C ABI, and public C++
+  recursive-plus-native acceptance boundary are implemented. A
+  recursive-valid/nondeciding vector establishes that recursive verification
+  alone cannot mint acceptance. These results do not provide distributed
+  custody or share-preserving child proving, resolve correlated-key
+  confidentiality, qualify 100--1,000-anchor operating bounds, reduce the
+  roughly 609 MiB verifier enough for convenient embedding, or activate
+  enrollment. Anchor escrow record version~3 carries the V4 public proof.
 \end{enumerate}
 
 \section{Summary}
@@ -1289,9 +1308,13 @@ way to understand the design of \texttt{purify-cpp}: one circuit, two proving en
 V4 is the candidate circuit leaf and the registry-seeded homogeneous
 Nova recurrence is the implemented composition direction. The extended V3
 discussion remains its historical implementation baseline. The recurrence
-and exact proof transport are not by themselves an activated construction
-receipt; native-profile full compression, the shipped verifier artifact, and
-the C ABI/native decision boundary still gate deployment.
+has completed its two-anchor compressed lifecycle, and the C++ acceptance path
+combines recursive verification with the mandatory native decision. The
+checked-in negative vector demonstrates that the latter is indispensable.
+Deployment is instead gated by distributed custody and proving, review of
+correlated-key confidentiality and V4 composition, operational qualification at
+intended anchor counts, practical distribution or reduction of the roughly
+609 MiB verifier artifact, and application or consensus integration.
 
 \appendix
 

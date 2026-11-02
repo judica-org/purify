@@ -9,9 +9,11 @@ use crate::algebraic_circuit_transcript::{
     install_transcript, CircuitPointPairWitnessV4, CircuitTranscriptShapeV4,
 };
 use crate::construction_manifest::{
-    derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestSeed,
-    ConstructionManifestStepInput, ConstructionRoot, CONSTRUCTION_ROOT_BYTES,
-    CONSTRUCTION_ROOT_STATE_ARITY,
+    derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestStepInput,
+    ConstructionRoot, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
+};
+use crate::construction_parent_prover_fixture::{
+    ConstructionParentProverFixture, QUALIFIED_PROVER_FIXTURE_SHA256,
 };
 use crate::direct_nova::{direct_nova_raw_metrics, source_state_to_nova, DirectNovaTemplate};
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
@@ -24,10 +26,15 @@ use crate::parent_relation::{
 use crate::relation_builder::{circuit_digest, Builder, StateWire};
 use crate::secp_scalar::SecpScalarVar;
 use crate::{Assignment, Circuit, WireKind};
+use sha2::{Digest, Sha256};
 
 const PRODUCTION_DIRECT_NOVA_RELATION_ID: [u8; 32] = [
     0xec, 0xfd, 0x8e, 0x56, 0x08, 0x40, 0x83, 0xba, 0x9a, 0x94, 0x43, 0x1f, 0xad, 0x5a, 0x5b, 0x1e,
     0x09, 0x91, 0xd7, 0x59, 0x77, 0x46, 0x44, 0x0e, 0x76, 0xcc, 0xf7, 0x79, 0x24, 0x44, 0x4a, 0x66,
+];
+const NONDECIDING_PROVER_FIXTURE_SHA256: [u8; 32] = [
+    0xda, 0x7a, 0x9f, 0x02, 0xa4, 0x01, 0x63, 0x27, 0x25, 0xca, 0x31, 0x06, 0x88, 0xae, 0x5d, 0x76,
+    0xac, 0x4a, 0xc4, 0xff, 0xbd, 0x24, 0x82, 0x60, 0x1a, 0x3c, 0x8d, 0xd3, 0x66, 0xac, 0x46, 0x26,
 ];
 const PRODUCTION_DIRECT_NOVA_VARIABLES: usize = 1_851_594;
 const PRODUCTION_DIRECT_NOVA_CONSTRAINTS: usize = 1_962_058;
@@ -396,6 +403,29 @@ fn relation_state(
     })
 }
 
+fn recurrence_state_from_fields(
+    fields: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    expected_index: u32,
+) -> AnchorRecurrenceStateWitness {
+    let root_fields = fields[..CONSTRUCTION_ROOT_STATE_ARITY]
+        .try_into()
+        .expect("fixed construction root state");
+    let root = ConstructionRoot::from_state_fields(root_fields)
+        .expect("authenticated construction root fields");
+    let manifest_field = fields[CONSTRUCTION_ROOT_STATE_ARITY];
+    let mut manifest = Secq256k1Cycle::scalar_to_canonical(&manifest_field);
+    manifest.reverse();
+    assert_eq!(
+        fields[CONSTRUCTION_ROOT_STATE_ARITY + 1],
+        Scalar::from(u64::from(expected_index))
+    );
+    AnchorRecurrenceStateWitness {
+        root: root.claim(),
+        manifest,
+        index: expected_index,
+    }
+}
+
 fn build_fixture(fixture: &Fixture) -> StatefulRelation {
     build_anchor_recurrence_relation_inner(
         Builder::default(),
@@ -696,72 +726,193 @@ fn production_public_anchor_recurrence_reports_direct_shape() {
 }
 
 #[test]
-#[ignore = "pending native-profile full compression qualification"]
-fn native_profile_anchor_nova_lifecycle_is_exact() {
-    // Setup and one full-scale fold are qualified for the native relation
-    // constants. Full Spartan compression remains pending under the no-swap
-    // resource gate. This test is not construction-receipt acceptance.
-    let total_started = std::time::Instant::now();
-    eprintln!("native_profile_nova: deriving fixture and verifier seed");
-    let mut fixture = fixture_for_shape(
-        production_anchor_shape(),
-        0x31,
-        1,
-        generator(),
-        SecpEncodedPointWitness::identity(),
-        generator(),
-    );
-    let seed = ConstructionManifestSeed::new(
-        [0x91; 32],
-        [0xa2; 32],
-        registry_seed_root(&fixture.state.root),
-        1,
-    )
-    .expect("one-anchor construction manifest seed");
-    fixture.state = seed.initial_recurrence_witness();
-    let source_z0 = seed.initial_state_fields().expect("verifier-derived z0");
+#[ignore = "requires the deterministic C++ slashability fixture"]
+fn exported_parent_fixture_reconstructs_two_step_relation() {
+    let path = std::env::var_os("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE")
+        .expect("set PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
+    let bytes = std::fs::read(path).expect("read construction parent prover fixture");
+    let fixture = ConstructionParentProverFixture::parse(&bytes)
+        .expect("parse construction parent prover fixture");
+    assert_eq!(fixture.anchors.len(), 2);
+
+    let expected_suffix = fixture
+        .inputs
+        .seed()
+        .derive_expected_final(fixture.inputs.anchors())
+        .expect("derive exact final construction manifest")
+        .state_suffix_fields()
+        .expect("final construction manifest fields");
+    let source_z0 = fixture
+        .inputs
+        .seed()
+        .initial_state_fields()
+        .expect("verifier-derived fixture z0");
+    let initial_state = fixture.inputs.seed().initial_recurrence_witness();
     assert_eq!(
-        fixture.state.state_fields().expect("fixture state fields"),
+        initial_state.state_fields().expect("initial state fields"),
         source_z0
     );
-    let expected_suffix = seed
-        .derive_expected_final(&[fixture.manifest_anchor])
+
+    eprintln!("exported_parent_fixture: building first recurrence");
+    let first_anchor = &fixture.anchors[0];
+    let first_relation = build_anchor_recurrence_relation(
+        &initial_state,
+        first_anchor.statement,
+        &first_anchor.transcript,
+        &first_anchor.reduction,
+        &first_anchor.step,
+    )
+    .expect("first exported anchor recurrence");
+    assert_eq!(
+        relation_state(&first_relation, &first_relation.shape.inputs),
+        source_z0
+    );
+    assert!(structured_relation_satisfied(
+        &first_relation.shape.circuit,
+        &first_relation.assignment
+    ));
+    let source_z1 = relation_state(&first_relation, &first_relation.shape.outputs);
+    let second_state = recurrence_state_from_fields(source_z1, 1);
+    let (template, first_step) =
+        DirectNovaTemplate::<ANCHOR_RECURRENCE_STATE_ARITY>::from_relation(first_relation)
+            .expect("exported construction direct Nova template");
+    assert_eq!(
+        first_step.relation_id().bytes(),
+        &PRODUCTION_DIRECT_NOVA_RELATION_ID
+    );
+
+    eprintln!("exported_parent_fixture: building second recurrence");
+    let second_anchor = &fixture.anchors[1];
+    let second_relation = build_anchor_recurrence_relation_with_builder(
+        template.matching_builder(),
+        &second_state,
+        second_anchor.statement,
+        &second_anchor.transcript,
+        &second_anchor.reduction,
+        &second_anchor.step,
+    )
+    .expect("second exported anchor recurrence");
+    assert_eq!(
+        relation_state(&second_relation, &second_relation.shape.inputs),
+        source_z1
+    );
+    assert!(structured_relation_satisfied(
+        &second_relation.shape.circuit,
+        &second_relation.assignment
+    ));
+    let source_z2 = relation_state(&second_relation, &second_relation.shape.outputs);
+    assert_eq!(
+        &source_z2[CONSTRUCTION_ROOT_STATE_ARITY..],
+        expected_suffix.as_slice()
+    );
+    let final_state = recurrence_state_from_fields(source_z2, 2);
+    let final_root = registry_seed_root(&final_state.root);
+    assert_eq!(
+        final_root.canonical_bytes(),
+        fixture.expected_root.canonical_bytes()
+    );
+    let second_step = template
+        .bind_relation(second_relation)
+        .expect("matching exported construction direct Nova step");
+    assert_eq!(second_step.relation_id(), first_step.relation_id());
+}
+
+fn run_native_profile_anchor_nova_lifecycle(
+    fixture_environment: &str,
+    expected_fixture_sha256: [u8; 32],
+    proof_output_environment: &str,
+    verifier_artifact_output_environment: Option<&str>,
+) {
+    let total_started = std::time::Instant::now();
+    eprintln!("native_profile_nova: decoding deterministic C++ fixture");
+    let fixture_path =
+        std::env::var_os(fixture_environment).expect("set construction parent prover fixture");
+    let fixture_bytes =
+        std::fs::read(fixture_path).expect("read construction parent prover fixture");
+    assert_eq!(
+        Sha256::digest(&fixture_bytes).as_slice(),
+        expected_fixture_sha256
+    );
+    let fixture = ConstructionParentProverFixture::parse(&fixture_bytes)
+        .expect("parse construction parent prover fixture");
+    let step_count = fixture.anchors.len();
+    assert_eq!(step_count, 2);
+
+    let source_z0 = fixture
+        .inputs
+        .seed()
+        .initial_state_fields()
+        .expect("verifier-derived z0");
+    let initial_state = fixture.inputs.seed().initial_recurrence_witness();
+    assert_eq!(
+        initial_state.state_fields().expect("fixture state fields"),
+        source_z0
+    );
+    let expected_suffix = fixture
+        .inputs
+        .seed()
+        .derive_expected_final(fixture.inputs.anchors())
         .expect("independent final manifest")
         .state_suffix_fields()
         .expect("final manifest state suffix");
 
     eprintln!("native_profile_nova: building trusted recurrence");
-    let relation = build_anchor_recurrence_relation(
-        &fixture.state,
-        fixture.statement,
-        &fixture.witness,
-        &fixture.reduction,
-        &fixture.proof,
+    let trusted_anchor = &fixture.anchors[0];
+    let trusted_relation = build_anchor_recurrence_relation(
+        &initial_state,
+        trusted_anchor.statement,
+        &trusted_anchor.transcript,
+        &trusted_anchor.reduction,
+        &trusted_anchor.step,
     )
     .expect("full-scale fixture anchor recurrence");
-
     let (template, trusted_step) =
-        DirectNovaTemplate::<ANCHOR_RECURRENCE_STATE_ARITY>::from_relation(relation)
+        DirectNovaTemplate::<ANCHOR_RECURRENCE_STATE_ARITY>::from_relation(trusted_relation)
             .expect("full-scale direct Nova template");
-    eprintln!("native_profile_nova: building matching recurrence");
-    let matching = build_anchor_recurrence_relation_with_builder(
-        template.matching_builder(),
-        &fixture.state,
-        fixture.statement,
-        &fixture.witness,
-        &fixture.reduction,
-        &fixture.proof,
-    )
-    .expect("matching full-scale anchor recurrence");
-    assert_eq!(relation_state(&matching, &matching.shape.inputs), source_z0);
-    let source_z1 = relation_state(&matching, &matching.shape.outputs);
+
+    let mut state = initial_state;
+    let mut expected_input = source_z0;
+    let mut matching_steps = Vec::with_capacity(step_count);
+    for (index, anchor) in fixture.anchors.iter().enumerate() {
+        eprintln!(
+            "native_profile_nova: building matching recurrence {}/{}",
+            index + 1,
+            step_count
+        );
+        let matching = build_anchor_recurrence_relation_with_builder(
+            template.matching_builder(),
+            &state,
+            anchor.statement,
+            &anchor.transcript,
+            &anchor.reduction,
+            &anchor.step,
+        )
+        .expect("matching full-scale anchor recurrence");
+        assert_eq!(
+            relation_state(&matching, &matching.shape.inputs),
+            expected_input
+        );
+        let output = relation_state(&matching, &matching.shape.outputs);
+        state = recurrence_state_from_fields(
+            output,
+            u32::try_from(index + 1).expect("fixture anchor index fits u32"),
+        );
+        expected_input = output;
+        matching_steps.push(
+            template
+                .bind_relation(matching)
+                .expect("matching full-scale direct Nova step"),
+        );
+    }
+    let source_final = expected_input;
     assert_eq!(
-        &source_z1[CONSTRUCTION_ROOT_STATE_ARITY..],
+        &source_final[CONSTRUCTION_ROOT_STATE_ARITY..],
         expected_suffix.as_slice()
     );
-    let matching_step = template
-        .bind_relation(matching)
-        .expect("matching full-scale direct Nova step");
+    assert_eq!(
+        registry_seed_root(&state.root).canonical_bytes(),
+        fixture.expected_root.canonical_bytes()
+    );
     drop(template);
     drop(fixture);
 
@@ -785,15 +936,22 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
     assert_eq!(metadata.codec_sequence_count, 125);
 
     let z0 = source_state_to_nova(source_z0).expect("Nova z0");
-    let z1 = source_state_to_nova(source_z1).expect("Nova z1");
+    let z_final = source_state_to_nova(source_final).expect("Nova final state");
 
     let fold_started = std::time::Instant::now();
-    eprintln!("native_profile_nova: folding one matching recurrence");
-    let session = selected
-        .start(z0, 1)
-        .expect("one-step native-profile session")
-        .add_step(matching_step)
-        .expect("native-profile recurrence fold");
+    let mut session = selected
+        .start(z0, step_count)
+        .expect("native-profile prover session");
+    for (index, step) in matching_steps.into_iter().enumerate() {
+        eprintln!(
+            "native_profile_nova: folding recurrence {}/{}",
+            index + 1,
+            step_count
+        );
+        session = session
+            .add_step(step)
+            .expect("native-profile recurrence fold");
+    }
     eprintln!(
         "native_profile_nova: fold complete in {:.3}s",
         fold_started.elapsed().as_secs_f64()
@@ -814,10 +972,30 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
     let verify_started = std::time::Instant::now();
     eprintln!("native_profile_nova: verifying canonical compressed proof");
     verifier
-        .verify_exact(&z0, 1, &z1, &proof)
+        .verify_exact(&z0, step_count, &z_final, &proof)
         .expect("exact compressed native-profile proof");
 
-    if let Some(path) = std::env::var_os("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT") {
+    if let Some(path) = std::env::var_os(proof_output_environment) {
+        use std::io::Write;
+
+        let path = std::path::PathBuf::from(path);
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create new construction parent proof");
+        output
+            .write_all(&proof)
+            .expect("write construction parent proof");
+        output.sync_all().expect("sync construction parent proof");
+        eprintln!(
+            "native_profile_nova: proof path={} bytes={}",
+            path.display(),
+            proof.len()
+        );
+    }
+
+    if let Some(path) = verifier_artifact_output_environment.and_then(std::env::var_os) {
         let path = std::path::PathBuf::from(path);
         let mut artifact = std::fs::OpenOptions::new()
             .read(true)
@@ -844,17 +1022,18 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         drop(artifact);
         drop(verifier);
 
-        let artifact = std::fs::read(&path).expect("read native-profile verifier artifact");
+        let mut artifact =
+            std::fs::File::open(&path).expect("open native-profile verifier artifact for reload");
         let loaded = crate::nova_session::SelectedDirectNovaVerifier::<
             ANCHOR_RECURRENCE_STATE_ARITY,
-        >::from_artifact(
-            &artifact,
+        >::from_artifact_reader(
+            &mut artifact,
             &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
             &descriptor,
         )
         .expect("reload native-profile verifier artifact");
         loaded
-            .verify_exact(&z0, 1, &z1, &proof)
+            .verify_exact(&z0, step_count, &z_final, &proof)
             .expect("loaded verifier accepts native-profile proof");
     }
     eprintln!(
@@ -862,6 +1041,28 @@ fn native_profile_anchor_nova_lifecycle_is_exact() {
         verify_started.elapsed().as_secs_f64(),
         total_started.elapsed().as_secs_f64(),
         proof.len()
+    );
+}
+
+#[test]
+#[ignore = "run explicitly under the native no-swap resource gate"]
+fn native_profile_anchor_nova_lifecycle_is_exact() {
+    run_native_profile_anchor_nova_lifecycle(
+        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
+        QUALIFIED_PROVER_FIXTURE_SHA256,
+        "PURIFY_CONSTRUCTION_PARENT_PROOF_OUT",
+        Some("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT"),
+    );
+}
+
+#[test]
+#[ignore = "run explicitly under the native no-swap resource gate"]
+fn native_profile_nondeciding_parent_is_recursive_valid() {
+    run_native_profile_anchor_nova_lifecycle(
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
+        NONDECIDING_PROVER_FIXTURE_SHA256,
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROOF_OUT",
+        None,
     );
 }
 

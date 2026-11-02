@@ -423,9 +423,13 @@ if(PURIFY_BUILD_RECEIPT_CYCLE)
     )
     target_link_libraries(purify PUBLIC
         $<BUILD_INTERFACE:purify_receipt_cycle_backend>
+        $<INSTALL_INTERFACE:purify::receipt_cycle_backend>
     )
     target_compile_definitions(purify PUBLIC
         PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
+    )
+    install(FILES "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
     )
 endif()
 
@@ -453,6 +457,11 @@ install(
 )
 
 set(PURIFY_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/purify")
+
+set(PURIFY_CONFIG_WITH_RECEIPT_CYCLE ${PURIFY_BUILD_RECEIPT_CYCLE})
+get_filename_component(PURIFY_CONFIG_RECEIPT_CYCLE_ARCHIVE_NAME
+    "${PURIFY_RECEIPT_CYCLE_ARCHIVE}" NAME
+)
 
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/purifyConfig.cmake.in"
@@ -686,6 +695,26 @@ if(PURIFY_BUILD_TESTS)
         add_test(NAME purify.tests.receipt_cycle_c
             COMMAND purify_receipt_cycle_c_tests
         )
+
+        if(NOT CMAKE_CROSSCOMPILING)
+            add_test(NAME purify.tests.installed_package
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_CMAKE_COMMAND=${CMAKE_COMMAND}"
+                    "-DTEST_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+                    "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+                    "-DTEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+                    "-DTEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+                    "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                    "-DTEST_CONFIG=$<CONFIG>"
+                    "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installed_package/run.cmake"
+            )
+            set_tests_properties(purify.tests.installed_package
+                PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
+            )
+        endif()
     endif()
 
     function(purify_add_cpp_suite_test suite_name)

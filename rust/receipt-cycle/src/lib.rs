@@ -48,7 +48,6 @@ mod ffi;
 // This is an internal proof-codec foundation, not a receipt parser.
 #[allow(dead_code)]
 mod fixed_serde;
-mod gadgets;
 #[cfg(test)]
 mod nova_compressed_codec_tests;
 // This is an internal fixed-template integration layer, not a receipt API.

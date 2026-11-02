@@ -20,6 +20,14 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 mod ffi;
+#[allow(dead_code)]
+mod relation_builder;
+#[allow(dead_code)]
+pub mod secp_scalar;
+#[allow(dead_code)]
+mod sha256_builder;
+#[allow(dead_code)]
+mod sha256_transcript;
 
 pub(crate) type Scalar = <Secq256k1Cycle as Cycle>::Scalar;
 

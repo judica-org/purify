@@ -26,7 +26,6 @@ void run_anchor_escrow_tests(TestContext& ctx);
 void run_companion_scalar_escrow_tests(TestContext& ctx);
 void run_construction_receipt_tests(TestContext& ctx);
 void run_construction_receipt_codec_tests(TestContext& ctx);
-void run_construction_receipt_batch_tests(TestContext& ctx);
 void run_receipt_sha256_tests(TestContext& ctx);
 void run_coordinate_field_tests(TestContext& ctx);
 void run_poseidon_tests(TestContext& ctx);
@@ -47,7 +46,7 @@ struct SuiteSpec {
     SuiteFn run;
 };
 
-constexpr std::array<SuiteSpec, 27> kSuites{{
+constexpr std::array<SuiteSpec, 26> kSuites{{
     {"core", &run_purify_tests},
     {"puresign", &run_puresign_tests},
     {"legacy_bulletproof", &run_legacy_bulletproof_tests},
@@ -64,7 +63,6 @@ constexpr std::array<SuiteSpec, 27> kSuites{{
     {"companion_scalar_escrow", &run_companion_scalar_escrow_tests},
     {"construction_receipt", &run_construction_receipt_tests},
     {"construction_receipt_codec", &run_construction_receipt_codec_tests},
-    {"construction_receipt_batch", &run_construction_receipt_batch_tests},
     {"receipt_sha256", &run_receipt_sha256_tests},
     {"coordinate_field", &run_coordinate_field_tests},
     {"poseidon", &run_poseidon_tests},

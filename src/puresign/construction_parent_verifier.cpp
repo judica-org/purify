@@ -59,7 +59,7 @@ Unexpected<Error> verify_error(
         return unexpected_error(ErrorCode::BackendRejectedInput,
                                 "construction_parent:malformed");
     case PURIFY_CONSTRUCTION_PARENT_PROOF_REJECTED:
-        return unexpected_error(ErrorCode::EquationMismatch,
+        return unexpected_error(ErrorCode::BackendRejectedInput,
                                 "construction_parent:proof");
     case PURIFY_CONSTRUCTION_PARENT_BUFFER_TOO_SMALL:
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_OPEN_FAILED:

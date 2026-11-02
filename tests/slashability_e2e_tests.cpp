@@ -115,7 +115,7 @@ accept_construction_parent_if_requested(
             construction.setup, *corrupted_envelope,
             construction.resolved_entries, construction.accumulator,
             secp_context),
-        purify::ErrorCode::EquationMismatch,
+        purify::ErrorCode::BackendRejectedInput,
         "changed construction parent proof is rejected");
 
     auto changed_reference = construction.resolved_entries;
@@ -125,7 +125,7 @@ accept_construction_parent_if_requested(
         verifier->verify(
             construction.setup, *envelope, changed_reference,
             construction.accumulator, secp_context),
-        purify::ErrorCode::EquationMismatch,
+        purify::ErrorCode::BackendRejectedInput,
         "construction parent proof cannot rebind an anchor reference");
 
     std::vector<purify::accountable::ConstructionReceiptEntry>
@@ -154,7 +154,7 @@ accept_construction_parent_if_requested(
             construction.setup, *reordered_envelope,
             reordered_resolved, construction.accumulator,
             secp_context),
-        purify::ErrorCode::EquationMismatch,
+        purify::ErrorCode::BackendRejectedInput,
         "construction parent proof binds ordered anchors");
 
     auto nondeciding_proof = load_parent_proof(

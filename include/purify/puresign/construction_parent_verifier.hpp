@@ -74,6 +74,10 @@ public:
     /**
      * Verifies exact payload ancestry and completes the final native decision
      * before returning an acceptance capability.
+     *
+     * Recursive proof rejection returns BackendRejectedInput. An
+     * authenticated pending root that fails the native decision returns
+     * EquationMismatch.
      */
     [[nodiscard]] Result<VerifiedConstructionReceipt> verify(
         const ResolvedConstructionSetup& setup,

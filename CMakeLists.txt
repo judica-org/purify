@@ -629,6 +629,7 @@ if(PURIFY_BUILD_TESTS)
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
         tests/slashability_e2e_fixture.cpp
+        tests/slashability_e2e_tests.cpp
         tests/slash_adaptor_tests.cpp
         tests/canonical_recovery_root_tests.cpp
         tests/canonical_recovery_root_helpers.cpp
@@ -718,6 +719,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_signature)
     purify_add_cpp_suite_test(accountable_roster)
     purify_add_cpp_suite_test(accountable_response)
+    purify_add_cpp_suite_test(slashability_e2e)
     purify_add_cpp_suite_test(slash_adaptor)
     purify_add_cpp_suite_test(canonical_recovery_root)
     purify_add_cpp_suite_test(anchor_escrow)
@@ -736,6 +738,7 @@ if(PURIFY_BUILD_TESTS)
     set_tests_properties(
         purify.tests.construction_receipt
         purify.tests.receipt_sha256
+        purify.tests.slashability_e2e
         PROPERTIES RUN_SERIAL TRUE
     )
     purify_add_cpp_suite_test(aggregate_nonce)

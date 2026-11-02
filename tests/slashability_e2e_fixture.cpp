@@ -414,9 +414,25 @@ make_native_accumulation_reference(
         root_bytes};
 }
 
-Result<purify::Bytes> serialize_parent_prover_fixture(
+namespace {
+
+struct ParentProverAnchorWitness {
+    const purify::accountable::AnchorEscrowRecord* record;
+    std::span<const unsigned char> reduction_proof;
+    std::span<const unsigned char> parent_step_proof;
+};
+
+Result<purify::Bytes> serialize_parent_prover_fixture_impl(
     const NativeAccumulationReferenceFixture& fixture,
+    std::span<const ParentProverAnchorWitness> witnesses,
+    std::span<const unsigned char> final_root,
     purify_secp_context* secp_context) {
+    constexpr std::size_t kHeaderSize =
+        kParentProverFixtureMagic.size() + 32 + 32 +
+        purify::accountable::ResolvedConstructionSetup::kSeedRootSize + 4;
+    constexpr std::size_t kFinalRootSize =
+        purify::accountable::ConstructionReceiptAccumulator::
+            kRootClaimSerializedSize;
     const auto anchor_count = fixture.anchors.size();
     if (anchor_count == 0 ||
         anchor_count >
@@ -427,17 +443,13 @@ Result<purify::Bytes> serialize_parent_prover_fixture(
             "slashability_fixture:prover_anchor_count");
     }
     if (fixture.payload.entries().size() != anchor_count ||
-        fixture.resolved_entries.size() != anchor_count) {
+        fixture.resolved_entries.size() != anchor_count ||
+        witnesses.size() != anchor_count ||
+        final_root.size() != kFinalRootSize) {
         return purify::unexpected_error(
             purify::ErrorCode::SizeMismatch,
             "slashability_fixture:prover_anchor_alignment");
     }
-    constexpr std::size_t kHeaderSize =
-        kParentProverFixtureMagic.size() + 32 + 32 +
-        purify::accountable::ResolvedConstructionSetup::kSeedRootSize + 4;
-    constexpr std::size_t kFinalRootSize =
-        purify::accountable::ConstructionReceiptAccumulator::
-            kRootClaimSerializedSize;
     if (anchor_count >
         (std::numeric_limits<std::size_t>::max() - kHeaderSize -
          kFinalRootSize) / kParentProverAnchorSize) {
@@ -457,13 +469,16 @@ Result<purify::Bytes> serialize_parent_prover_fixture(
 
     const auto& raw_generator_digest =
         fixture.anchors.front().parent_constants.raw_generator_digest;
-    for (const auto& anchor : fixture.anchors) {
+    for (std::size_t index = 0; index < anchor_count; ++index) {
+        const auto& anchor = fixture.anchors[index];
+        const auto& witness = witnesses[index];
         if (anchor.parent_constants.raw_generator_digest !=
                 raw_generator_digest ||
-            anchor.reduction_proof.size() != kReductionProofSize ||
-            anchor.parent_step_proof.size() != kParentStepProofSize ||
-            anchor.reduction_proof.front() != 2 ||
-            anchor.parent_step_proof.front() != 2) {
+            witness.record == nullptr ||
+            witness.reduction_proof.size() != kReductionProofSize ||
+            witness.parent_step_proof.size() != kParentStepProofSize ||
+            witness.reduction_proof.front() != 2 ||
+            witness.parent_step_proof.front() != 2) {
             return purify::unexpected_error(
                 purify::ErrorCode::BindingMismatch,
                 "slashability_fixture:prover_witness_shape");
@@ -483,7 +498,7 @@ Result<purify::Bytes> serialize_parent_prover_fixture(
         append(encoded, punishment_point);
 
         PURIFY_ASSIGN_OR_RETURN(
-            auto record, anchor.record.serialize(secp_context),
+            auto record, witness.record->serialize(secp_context),
             "slashability_fixture:serialize_prover_record");
         if (record.size() !=
             purify::accountable::AnchorEscrowRecord::kSerializedSize) {
@@ -492,10 +507,10 @@ Result<purify::Bytes> serialize_parent_prover_fixture(
                 "slashability_fixture:prover_record_size");
         }
         append(encoded, record);
-        append(encoded, anchor.reduction_proof);
-        append(encoded, anchor.parent_step_proof);
+        append(encoded, witness.reduction_proof);
+        append(encoded, witness.parent_step_proof);
     }
-    append(encoded, fixture.decided_reference_root);
+    append(encoded, final_root);
     if (encoded.size() !=
         kHeaderSize + anchor_count * kParentProverAnchorSize +
             kFinalRootSize) {
@@ -504,6 +519,23 @@ Result<purify::Bytes> serialize_parent_prover_fixture(
             "slashability_fixture:prover_encoded_size");
     }
     return encoded;
+}
+
+} // namespace
+
+Result<purify::Bytes> serialize_parent_prover_fixture(
+    const NativeAccumulationReferenceFixture& fixture,
+    purify_secp_context* secp_context) {
+    std::vector<ParentProverAnchorWitness> witnesses;
+    witnesses.reserve(fixture.anchors.size());
+    for (const auto& anchor : fixture.anchors) {
+        witnesses.push_back(
+            {&anchor.record, anchor.reduction_proof,
+             anchor.parent_step_proof});
+    }
+    return serialize_parent_prover_fixture_impl(
+        fixture, witnesses, fixture.decided_reference_root,
+        secp_context);
 }
 
 Result<purify::accountable::ExposedCoalitionKey>

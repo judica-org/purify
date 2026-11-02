@@ -20,6 +20,16 @@ extern "C" {
 typedef struct purify_bppp_backend_resources purify_bppp_backend_resources;
 
 /**
+ * Supplies one protocol-owned folding challenge after a proof point pair is
+ * public. The callback must write one canonical nonzero secp256k1 scalar.
+ */
+typedef int (*purify_bppp_round_challenge_callback)(
+    void* callback_data,
+    const unsigned char point_pair65[65],
+    size_t round,
+    unsigned char challenge32[32]);
+
+/**
  * @brief Computes the maximum serialized size of a BPPP norm proof.
  * @param n_vec_len Length of the n vector.
  * @param c_vec_len Length of the c vector.
@@ -89,6 +99,14 @@ int purify_point_add(purify_secp_context* context,
                      const unsigned char lhs33[33], const unsigned char rhs33[33],
                      unsigned char out33[33]);
 
+int purify_point_add_allow_infinity(
+    purify_secp_context* context, const unsigned char lhs33[33],
+    const unsigned char rhs33[33], unsigned char out33[33]);
+
+int purify_point_subtract_allow_infinity(
+    purify_secp_context* context, const unsigned char lhs33[33],
+    const unsigned char rhs33[33], unsigned char out33[33]);
+
 /**
  * @brief Computes a Pedersen commitment to an arbitrary 32-byte scalar value.
  * @param blind32 Blinding factor in big-endian scalar form.
@@ -146,6 +164,30 @@ int purify_bppp_prove_norm_arg_to_commitment_with_resources(purify_bppp_backend_
                                                             unsigned char* proof_out, size_t* proof_len);
 
 /**
+ * Produces a norm proof using challenges owned by the surrounding protocol.
+ *
+ * The callback is invoked exactly once for every serialized proof point pair,
+ * in round order. The bridge validates every returned challenge before it can
+ * influence the secret witness fold.
+ */
+int purify_bppp_prove_norm_arg_to_commitment_with_callback(
+    purify_secp_context* context,
+    const unsigned char rho32[32],
+    const unsigned char* generators33,
+    size_t generators_count,
+    const unsigned char* n_vec32,
+    size_t n_vec_len,
+    const unsigned char* l_vec32,
+    size_t l_vec_len,
+    const unsigned char* c_vec32,
+    size_t c_vec_len,
+    const unsigned char commitment33[33],
+    purify_bppp_round_challenge_callback challenge_callback,
+    void* callback_data,
+    unsigned char* proof_out,
+    size_t* proof_len);
+
+/**
  * @brief Verifies a standalone BPPP norm argument.
  * @param rho32 Fiat-Shamir seed.
  * @param generators33 Serialized generator list.
@@ -169,6 +211,25 @@ int purify_bppp_verify_norm_arg_with_resources(purify_bppp_backend_resources* re
                                                size_t proof_len);
 
 /**
+ * Verifies a norm proof with already authenticated folding challenges.
+ * gamma_count must equal the proof round count and every scalar must be
+ * canonical and nonzero.
+ */
+int purify_bppp_verify_norm_arg_with_challenges(
+    purify_secp_context* context,
+    const unsigned char rho32[32],
+    const unsigned char* generators33,
+    size_t generators_count,
+    const unsigned char* c_vec32,
+    size_t c_vec_len,
+    size_t n_vec_len,
+    const unsigned char commitment33[33],
+    const unsigned char* proof,
+    size_t proof_len,
+    const unsigned char* gammas32,
+    size_t gamma_count);
+
+/**
  * Prepares a pending polynomial-commitment claim from a public norm proof.
  *
  * Success checks encodings and computes the exact transcript and short group
@@ -189,6 +250,27 @@ int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
                                      unsigned char residual33[33]);
 
 /**
+ * Prepares the same pending claim using protocol-authenticated challenges.
+ * This does not verify the coefficient opening or discharge the claim.
+ */
+int purify_bppp_prepare_norm_arg_claim_with_challenges(
+    purify_secp_context* context,
+    const unsigned char rho32[32],
+    const unsigned char* generators33,
+    size_t generators_count,
+    const unsigned char* c_vec32,
+    size_t c_vec_len,
+    size_t n_vec_len,
+    const unsigned char commitment33[33],
+    const unsigned char* proof,
+    size_t proof_len,
+    const unsigned char* gammas32,
+    size_t gamma_count,
+    unsigned char terminal_n32[32],
+    unsigned char terminal_l32[32],
+    unsigned char residual33[33]);
+
+/**
  * Converts a nonempty generator stream to finite canonical SEC1 points.
  * The caller authenticates the stream's derivation and protocol role.
  */
@@ -204,6 +286,15 @@ int purify_bppp_generators_to_points(purify_secp_context* context,
 int purify_bppp_public_msm(purify_secp_context* context,
                          const unsigned char* points33, const unsigned char* scalars32,
                          size_t count, unsigned char out33[33]);
+
+/**
+ * Parses one canonical public accumulator point.
+ *
+ * Points use compressed SEC1 or the unique all-zero33 identity encoding.
+ * This variable-time helper must never process secret data.
+ */
+int purify_bppp_public_point_validate(
+    const unsigned char point33[33]);
 
 /**
  * Hashes framed public input to a finite point using the vendored generator map.

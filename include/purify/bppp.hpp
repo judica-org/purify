@@ -382,8 +382,10 @@ Result<bool> verify_experimental_circuit_zk_norm_arg(
  *
  * This variant removes circuit commitment scalars from the hidden witness and binds them through
  * caller-supplied compressed secp256k1 points. Each point must equal the exact public commitment
- * `assignment.commitments[i] * G`. One 64-byte Schnorr proof checks a
- * transcript-derived random linear combination of all points.
+ * `assignment.commitments[i] * G`. One 64-byte Schnorr proof checks a transcript-derived random
+ * linear combination of all points; it is not a literal independent proof of every opening. In
+ * the random-oracle/algebraic-group model, extracting all `m` openings incurs an additional batch
+ * soundness loss of approximately `(m - 1) / q`, where `q` is the secp256k1 subgroup order.
  * @param secret_prover_seed A secret, uniformly unpredictable 32-byte seed. Reuse is permitted
  * only for the identical assignment and statement. Supply a fresh independent seed whenever the
  * assignment may differ, even under the same public statement. The batched Schnorr nonce is also
@@ -404,7 +406,9 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
  *
  * The verifier checks the transcript-derived random-linear-combination DLog proof, derives
  * structured reduction coefficients from `proof.a_commitment`, reconstructs the anchored outer
- * commitment, and checks the inner BPPP proof.
+ * commitment, and checks the inner BPPP proof. Treat opening knowledge as a batched ROM/algebraic-
+ * group claim with the soundness loss documented on the proving API, not as independent Schnorr
+ * proofs for every commitment.
  */
 Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
     const NativeBulletproofCircuit& circuit,

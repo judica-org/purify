@@ -1895,7 +1895,9 @@ static int purify_bppp_rangeproof_norm_product_prove_secret(
     secp256k1_scalar* l_vec,
     size_t l_vec_len,
     secp256k1_scalar* c_vec,
-    size_t c_vec_len) {
+    size_t c_vec_len,
+    purify_bppp_round_challenge_callback challenge_callback,
+    void* callback_data) {
     secp256k1_scalar mu_f, rho_f = *rho;
     size_t proof_idx = 0;
     ecmult_x_cb_data x_cb_data;
@@ -1990,9 +1992,22 @@ static int purify_bppp_rangeproof_norm_product_prove_secret(
         secp256k1_bppp_serialize_points(
             &proof[proof_idx], &x_ge, &r_ge);
         proof_idx += 65;
-        secp256k1_sha256_write(
-            transcript, &proof[proof_idx - 65], 65);
-        secp256k1_bppp_challenge_scalar(&gamma, transcript, 0);
+        if (challenge_callback != NULL) {
+            unsigned char challenge32[32] = {0};
+            const size_t round = proof_idx / 65u - 1u;
+            ok = challenge_callback(callback_data, &proof[proof_idx - 65],
+                                    round, challenge32);
+            if (!ok || !purify_parse_scalar(challenge32, &gamma, 1)) {
+                purify_bridge_secure_clear(challenge32,
+                                           sizeof(challenge32));
+                goto round_failure;
+            }
+            purify_bridge_secure_clear(challenge32, sizeof(challenge32));
+        } else {
+            secp256k1_sha256_write(
+                transcript, &proof[proof_idx - 65], 65);
+            secp256k1_bppp_challenge_scalar(&gamma, transcript, 0);
+        }
 
         if (g_len > 1) {
             for (i = 0; i < g_len; i += 2) {
@@ -2103,7 +2118,9 @@ static int purify_bppp_rangeproof_norm_product_prove_with_copied_inputs(
     const secp256k1_scalar* n_vec, size_t n_vec_len,
     const secp256k1_scalar* l_vec, size_t l_vec_len,
     const secp256k1_scalar* c_vec, size_t c_vec_len,
-    size_t secure_clear_checkpoint) {
+    size_t secure_clear_checkpoint,
+    purify_bppp_round_challenge_callback challenge_callback,
+    void* callback_data) {
     secp256k1_scalar *ns = NULL, *ls = NULL, *cs = NULL;
     secp256k1_ge *gs = NULL;
     size_t checkpoint = secp256k1_scratch_checkpoint(&ctx->error_callback, scratch);
@@ -2112,7 +2129,8 @@ static int purify_bppp_rangeproof_norm_product_prove_with_copied_inputs(
     if (purify_copy_vectors_into_scratch(ctx, scratch, &ns, &ls, &cs, &gs, n_vec, l_vec, c_vec, g_vec, n_vec_len, l_vec_len)) {
         result = purify_bppp_rangeproof_norm_product_prove_secret(
             ctx, proof, proof_len, transcript, rho, gs, g_vec_len,
-            ns, n_vec_len, ls, l_vec_len, cs, c_vec_len);
+            ns, n_vec_len, ls, l_vec_len, cs, c_vec_len,
+            challenge_callback, callback_data);
     }
     /* The imported prover rewinds its private scratch frames before returning.
      * Clear the entire tail so those secret intermediates do not survive along
@@ -2585,6 +2603,91 @@ int purify_point_add(purify_secp_context* context,
     return ok;
 }
 
+int purify_point_add_allow_infinity(
+    purify_secp_context* context, const unsigned char lhs33[33],
+    const unsigned char rhs33[33], unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_ge lhs_ge, rhs_ge, result_ge;
+    secp256k1_gej lhs_j, rhs_j, result_j;
+    static const unsigned char infinity33[33] = {0};
+    int lhs_infinity;
+    int rhs_infinity;
+    int ok = 0;
+
+    if (ctx == NULL || lhs33 == NULL || rhs33 == NULL || out33 == NULL) {
+        return 0;
+    }
+    purify_bridge_secure_clear(out33, 33);
+    lhs_infinity = purify_bridge_memeq_const(lhs33, infinity33, 33);
+    rhs_infinity = purify_bridge_memeq_const(rhs33, infinity33, 33);
+    if ((!lhs_infinity && !purify_parse_point_as_ge(lhs33, &lhs_ge)) ||
+        (!rhs_infinity && !purify_parse_point_as_ge(rhs33, &rhs_ge))) {
+        goto cleanup;
+    }
+    if (lhs_infinity) {
+        secp256k1_gej_set_infinity(&lhs_j);
+    } else {
+        secp256k1_gej_set_ge(&lhs_j, &lhs_ge);
+    }
+    if (rhs_infinity) {
+        secp256k1_gej_set_infinity(&rhs_j);
+    } else {
+        secp256k1_gej_set_ge(&rhs_j, &rhs_ge);
+    }
+    secp256k1_gej_add_var(&result_j, &lhs_j, &rhs_j, NULL);
+    if (secp256k1_gej_is_infinity(&result_j)) {
+        ok = 1;
+    } else {
+        secp256k1_ge_set_gej(&result_ge, &result_j);
+        ok = purify_serialize_point(out33, &result_ge);
+    }
+
+cleanup:
+    purify_bridge_secure_clear(&lhs_ge, sizeof(lhs_ge));
+    purify_bridge_secure_clear(&rhs_ge, sizeof(rhs_ge));
+    purify_bridge_secure_clear(&result_ge, sizeof(result_ge));
+    purify_bridge_secure_clear(&lhs_j, sizeof(lhs_j));
+    purify_bridge_secure_clear(&rhs_j, sizeof(rhs_j));
+    purify_bridge_secure_clear(&result_j, sizeof(result_j));
+    return ok;
+}
+
+int purify_point_subtract_allow_infinity(
+    purify_secp_context* context, const unsigned char lhs33[33],
+    const unsigned char rhs33[33], unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_ge lhs_ge, rhs_ge, result_ge;
+    secp256k1_gej lhs_j, result_j;
+    int ok = 0;
+
+    if (ctx == NULL || lhs33 == NULL || rhs33 == NULL || out33 == NULL) {
+        return 0;
+    }
+    purify_bridge_secure_clear(out33, 33);
+    if (!purify_parse_point_as_ge(lhs33, &lhs_ge) ||
+        !purify_parse_point_as_ge(rhs33, &rhs_ge)) {
+        goto cleanup;
+    }
+
+    secp256k1_ge_neg(&rhs_ge, &rhs_ge);
+    secp256k1_gej_set_ge(&lhs_j, &lhs_ge);
+    secp256k1_gej_add_ge_var(&result_j, &lhs_j, &rhs_ge, NULL);
+    if (secp256k1_gej_is_infinity(&result_j)) {
+        ok = 1;
+    } else {
+        secp256k1_ge_set_gej(&result_ge, &result_j);
+        ok = purify_serialize_point(out33, &result_ge);
+    }
+
+cleanup:
+    purify_bridge_secure_clear(&lhs_ge, sizeof(lhs_ge));
+    purify_bridge_secure_clear(&rhs_ge, sizeof(rhs_ge));
+    purify_bridge_secure_clear(&result_ge, sizeof(result_ge));
+    purify_bridge_secure_clear(&lhs_j, sizeof(lhs_j));
+    purify_bridge_secure_clear(&result_j, sizeof(result_j));
+    return ok;
+}
+
 static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
                                            purify_bppp_backend_resources* resources,
                                            const unsigned char rho32[32], const unsigned char* generators33,
@@ -2669,7 +2772,7 @@ static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
     ok = purify_bppp_rangeproof_norm_product_prove_with_copied_inputs(
         ctx, scratch, proof_out, proof_len, &transcript, &rho, gens->gens,
         gens->n, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len,
-        scratch_checkpoint);
+        scratch_checkpoint, NULL, NULL);
     scratch_tail_cleared = 1;
 
 cleanup:
@@ -2721,7 +2824,9 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
                                                          size_t n_vec_len, const unsigned char* l_vec32,
                                                          size_t l_vec_len, const unsigned char* c_vec32,
                                                          size_t c_vec_len, const unsigned char commitment33[33],
-                                                         unsigned char* proof_out, size_t* proof_len) {
+                                                         unsigned char* proof_out, size_t* proof_len,
+                                                         purify_bppp_round_challenge_callback challenge_callback,
+                                                         void* callback_data) {
     secp256k1_context* ctx = resources != NULL ? resources->ctx : purify_context_handle(context);
     secp256k1_scratch_space* scratch = resources != NULL ? resources->scratch : NULL;
     secp256k1_bppp_generators* gens = NULL;
@@ -2805,7 +2910,7 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
     ok = purify_bppp_rangeproof_norm_product_prove_with_copied_inputs(
         ctx, scratch, proof_out, proof_len, &transcript, &rho, gens->gens,
         gens->n, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len,
-        scratch_checkpoint);
+        scratch_checkpoint, challenge_callback, callback_data);
     scratch_tail_cleared = 1;
 
 cleanup:
@@ -2837,7 +2942,7 @@ int purify_bppp_prove_norm_arg_to_commitment(purify_secp_context* context,
                                              const unsigned char commitment33[33], unsigned char* proof_out, size_t* proof_len) {
     return purify_bppp_prove_norm_arg_to_commitment_impl(context, NULL, rho32, generators33, generators_count,
                                                          n_vec32, n_vec_len, l_vec32, l_vec_len, c_vec32, c_vec_len,
-                                                         commitment33, proof_out, proof_len);
+                                                         commitment33, proof_out, proof_len, NULL, NULL);
 }
 
 int purify_bppp_prove_norm_arg_to_commitment_with_resources(purify_bppp_backend_resources* resources,
@@ -2850,7 +2955,155 @@ int purify_bppp_prove_norm_arg_to_commitment_with_resources(purify_bppp_backend_
     return purify_bppp_prove_norm_arg_to_commitment_impl(NULL, resources, rho32, NULL,
                                                          resources != NULL ? resources->generators_count : 0,
                                                          n_vec32, n_vec_len, l_vec32, l_vec_len, c_vec32, c_vec_len,
-                                                         commitment33, proof_out, proof_len);
+                                                         commitment33, proof_out, proof_len, NULL, NULL);
+}
+
+int purify_bppp_prove_norm_arg_to_commitment_with_callback(
+    purify_secp_context* context,
+    const unsigned char rho32[32],
+    const unsigned char* generators33,
+    size_t generators_count,
+    const unsigned char* n_vec32,
+    size_t n_vec_len,
+    const unsigned char* l_vec32,
+    size_t l_vec_len,
+    const unsigned char* c_vec32,
+    size_t c_vec_len,
+    const unsigned char commitment33[33],
+    purify_bppp_round_challenge_callback challenge_callback,
+    void* callback_data,
+    unsigned char* proof_out,
+    size_t* proof_len) {
+    if (challenge_callback == NULL) {
+        return 0;
+    }
+    return purify_bppp_prove_norm_arg_to_commitment_impl(
+        context, NULL, rho32, generators33, generators_count,
+        n_vec32, n_vec_len, l_vec32, l_vec_len, c_vec32, c_vec_len,
+        commitment33, proof_out, proof_len, challenge_callback,
+        callback_data);
+}
+
+static int purify_bppp_rangeproof_norm_product_verify_challenges(
+    const secp256k1_context* ctx,
+    secp256k1_scratch_space* scratch,
+    const unsigned char* proof,
+    size_t proof_len,
+    const secp256k1_scalar* rho,
+    const secp256k1_bppp_generators* g_vec,
+    size_t g_len,
+    const secp256k1_scalar* c_vec,
+    size_t c_vec_len,
+    const secp256k1_ge* commit,
+    const secp256k1_scalar* gammas,
+    size_t gamma_count) {
+    secp256k1_scalar rho_f, mu_f, v, n, l, rho_inv, h_c;
+    secp256k1_scalar *s_g, *s_h, *rho_inv_pows;
+    secp256k1_gej res1, res2;
+    size_t i = 0, scratch_checkpoint;
+    int overflow;
+    size_t log_g_len, log_h_len, n_rounds;
+    size_t h_len = c_vec_len;
+    int ok = 0;
+
+    if (g_len == 0 || c_vec_len == 0) {
+        return 0;
+    }
+    log_g_len = secp256k1_bppp_log2(g_len);
+    log_h_len = secp256k1_bppp_log2(c_vec_len);
+    n_rounds = log_g_len > log_h_len ? log_g_len : log_h_len;
+    if (g_vec->n != h_len + g_len ||
+        proof_len != 65u * n_rounds + 64u ||
+        gamma_count != n_rounds ||
+        (gamma_count != 0 && gammas == NULL) ||
+        !secp256k1_is_power_of_two(g_len) ||
+        !secp256k1_is_power_of_two(h_len)) {
+        return 0;
+    }
+
+    secp256k1_scalar_set_b32(&n, &proof[n_rounds * 65u], &overflow);
+    if (overflow) {
+        return 0;
+    }
+    secp256k1_scalar_set_b32(&l, &proof[n_rounds * 65u + 32u], &overflow);
+    if (overflow || secp256k1_scalar_is_zero(rho)) {
+        return 0;
+    }
+
+    scratch_checkpoint =
+        secp256k1_scratch_checkpoint(&ctx->error_callback, scratch);
+    s_g = (secp256k1_scalar*)secp256k1_scratch_alloc(
+        &ctx->error_callback, scratch, g_len * sizeof(*s_g));
+    s_h = (secp256k1_scalar*)secp256k1_scratch_alloc(
+        &ctx->error_callback, scratch, h_len * sizeof(*s_h));
+    rho_inv_pows = (secp256k1_scalar*)secp256k1_scratch_alloc(
+        &ctx->error_callback, scratch,
+        log_g_len * sizeof(*rho_inv_pows));
+    if (s_g == NULL || s_h == NULL || rho_inv_pows == NULL) {
+        goto cleanup;
+    }
+
+    secp256k1_scalar_inverse_var(&rho_inv, rho);
+    secp256k1_bppp_powers_of_rho(rho_inv_pows, &rho_inv, log_g_len);
+    rho_f = *rho;
+    for (i = 0; i < log_g_len; ++i) {
+        secp256k1_scalar_sqr(&rho_f, &rho_f);
+    }
+
+    secp256k1_scalar_mul(&s_g[0], &n, &rho_f);
+    secp256k1_scalar_mul(&s_g[0], &s_g[0], &rho_inv);
+    for (i = 1; i < g_len; ++i) {
+        const size_t log_i = secp256k1_bppp_log2(i);
+        const size_t nearest_pow_of_two = (size_t)1 << log_i;
+        secp256k1_scalar_mul(&s_g[i],
+                            &s_g[i - nearest_pow_of_two],
+                            &gammas[log_i]);
+        secp256k1_scalar_mul(&s_g[i], &s_g[i], &rho_inv_pows[log_i]);
+    }
+    s_h[0] = l;
+    secp256k1_scalar_set_int(&h_c, 0);
+    for (i = 1; i < h_len; ++i) {
+        const size_t log_i = secp256k1_bppp_log2(i);
+        const size_t nearest_pow_of_two = (size_t)1 << log_i;
+        secp256k1_scalar_mul(&s_h[i],
+                            &s_h[i - nearest_pow_of_two],
+                            &gammas[log_i]);
+    }
+    secp256k1_scalar_inner_product(&h_c, c_vec, 0, s_h, 0, 1, h_len);
+    secp256k1_scalar_sqr(&mu_f, &rho_f);
+    secp256k1_scalar_mul(&v, &n, &n);
+    secp256k1_scalar_mul(&v, &v, &mu_f);
+    secp256k1_scalar_add(&v, &v, &h_c);
+
+    {
+        ec_mult_verify_cb_data1 data;
+        data.proof = proof;
+        data.commit = commit;
+        data.gammas = gammas;
+        if (!secp256k1_ecmult_multi_var(
+                &ctx->error_callback, scratch, &res1, NULL,
+                ec_mult_verify_cb1, &data, 2u * n_rounds + 1u)) {
+            goto cleanup;
+        }
+    }
+    {
+        ec_mult_verify_cb_data2 data;
+        data.g_vec = g_vec->gens;
+        data.g_vec_len = g_len;
+        data.s_g = s_g;
+        data.s_h = s_h;
+        if (!secp256k1_ecmult_multi_var(
+                &ctx->error_callback, scratch, &res2, &v,
+                ec_mult_verify_cb2, &data, g_len + h_len)) {
+            goto cleanup;
+        }
+    }
+    ok = secp256k1_gej_eq_var(&res1, &res2);
+
+cleanup:
+    secp256k1_scratch_apply_checkpoint(
+        &ctx->error_callback, scratch, scratch_checkpoint);
+    return ok;
 }
 
 static int purify_bppp_verify_norm_arg_impl(purify_secp_context* context,
@@ -2858,11 +3111,13 @@ static int purify_bppp_verify_norm_arg_impl(purify_secp_context* context,
                                             const unsigned char rho32[32], const unsigned char* generators33,
                                             size_t generators_count, const unsigned char* c_vec32, size_t c_vec_len,
                                             size_t n_vec_len, const unsigned char commitment33[33],
-                                            const unsigned char* proof, size_t proof_len) {
+                                            const unsigned char* proof, size_t proof_len,
+                                            const unsigned char* gammas32,
+                                            size_t gamma_count) {
     secp256k1_context* ctx = resources != NULL ? resources->ctx : purify_context_handle(context);
     secp256k1_scratch_space* scratch = resources != NULL ? resources->scratch : NULL;
     secp256k1_bppp_generators* gens = resources != NULL ? resources->gens : NULL;
-    secp256k1_scalar rho, *c_vec = NULL;
+    secp256k1_scalar rho, *c_vec = NULL, *gammas = NULL;
     secp256k1_ge commit;
     secp256k1_sha256 transcript;
     size_t expected_generators = 0;
@@ -2900,13 +3155,39 @@ static int purify_bppp_verify_norm_arg_impl(purify_secp_context* context,
     if (!purify_parse_scalar_array(c_vec32, c_vec_len, c_vec)) {
         goto cleanup;
     }
-    if (!purify_norm_arg_commit_initial_data(&transcript, &rho, gens, n_vec_len, c_vec, c_vec_len, &commit)) {
-        goto cleanup;
+    if (gammas32 != NULL) {
+        const size_t rounds = secp256k1_bppp_log2(n_vec_len);
+        if (gamma_count != rounds) {
+            goto cleanup;
+        }
+        gammas = (secp256k1_scalar*)purify_malloc_array(
+            gamma_count, sizeof(*gammas));
+        if ((gamma_count != 0 && gammas == NULL) ||
+            !purify_parse_scalar_array(gammas32, gamma_count, gammas)) {
+            goto cleanup;
+        }
+        for (size_t i = 0; i < gamma_count; ++i) {
+            if (secp256k1_scalar_is_zero(&gammas[i])) {
+                goto cleanup;
+            }
+        }
+        ok = purify_bppp_rangeproof_norm_product_verify_challenges(
+            ctx, scratch, proof, proof_len, &rho, gens, n_vec_len,
+            c_vec, c_vec_len, &commit, gammas, gamma_count);
+    } else {
+        if (gamma_count != 0 ||
+            !purify_norm_arg_commit_initial_data(
+                &transcript, &rho, gens, n_vec_len, c_vec, c_vec_len,
+                &commit)) {
+            goto cleanup;
+        }
+        ok = secp256k1_bppp_rangeproof_norm_product_verify(
+            ctx, scratch, proof, proof_len, &transcript, &rho,
+            gens, n_vec_len, c_vec, c_vec_len, &commit);
     }
-    ok = secp256k1_bppp_rangeproof_norm_product_verify(ctx, scratch, proof, proof_len, &transcript, &rho,
-                                                       gens, n_vec_len, c_vec, c_vec_len, &commit);
 
 cleanup:
+    free(gammas);
     if (c_vec != NULL) free(c_vec);
     if (resources == NULL) {
         if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
@@ -2920,7 +3201,8 @@ int purify_bppp_verify_norm_arg(purify_secp_context* context,
                                 const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
                                 const unsigned char commitment33[33], const unsigned char* proof, size_t proof_len) {
     return purify_bppp_verify_norm_arg_impl(context, NULL, rho32, generators33, generators_count,
-                                            c_vec32, c_vec_len, n_vec_len, commitment33, proof, proof_len);
+                                            c_vec32, c_vec_len, n_vec_len, commitment33, proof, proof_len,
+                                            NULL, 0);
 }
 
 int purify_bppp_verify_norm_arg_with_resources(purify_bppp_backend_resources* resources,
@@ -2930,18 +3212,49 @@ int purify_bppp_verify_norm_arg_with_resources(purify_bppp_backend_resources* re
                                                size_t proof_len) {
     return purify_bppp_verify_norm_arg_impl(NULL, resources, rho32, NULL,
                                             resources != NULL ? resources->generators_count : 0,
-                                            c_vec32, c_vec_len, n_vec_len, commitment33, proof, proof_len);
+                                            c_vec32, c_vec_len, n_vec_len, commitment33, proof, proof_len,
+                                            NULL, 0);
 }
 
-int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
-                                     const unsigned char rho32[32],
-                                     const unsigned char* generators33, size_t generators_count,
-                                     const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
-                                     const unsigned char commitment33[33],
-                                     const unsigned char* proof, size_t proof_len,
-                                     unsigned char terminal_n32[32], unsigned char terminal_l32[32],
-                                     unsigned char* gammas32, size_t gamma_count,
-                                     unsigned char residual33[33]) {
+int purify_bppp_verify_norm_arg_with_challenges(
+    purify_secp_context* context,
+    const unsigned char rho32[32],
+    const unsigned char* generators33,
+    size_t generators_count,
+    const unsigned char* c_vec32,
+    size_t c_vec_len,
+    size_t n_vec_len,
+    const unsigned char commitment33[33],
+    const unsigned char* proof,
+    size_t proof_len,
+    const unsigned char* gammas32,
+    size_t gamma_count) {
+    if (gammas32 == NULL) {
+        return 0;
+    }
+    return purify_bppp_verify_norm_arg_impl(
+        context, NULL, rho32, generators33, generators_count,
+        c_vec32, c_vec_len, n_vec_len, commitment33, proof, proof_len,
+        gammas32, gamma_count);
+}
+
+static int purify_bppp_prepare_norm_arg_claim_impl(
+    purify_secp_context* context,
+    const unsigned char rho32[32],
+    const unsigned char* generators33,
+    size_t generators_count,
+    const unsigned char* c_vec32,
+    size_t c_vec_len,
+    size_t n_vec_len,
+    const unsigned char commitment33[33],
+    const unsigned char* proof,
+    size_t proof_len,
+    const unsigned char* supplied_gammas32,
+    unsigned char* derived_gammas32,
+    size_t gamma_count,
+    unsigned char terminal_n32[32],
+    unsigned char terminal_l32[32],
+    unsigned char residual33[33]) {
     secp256k1_context* ctx = purify_context_handle(context);
     secp256k1_scratch_space* scratch = NULL;
     secp256k1_bppp_generators* gens = NULL;
@@ -2954,8 +3267,10 @@ int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
     int ok = 0;
 
     if (ctx == NULL || rho32 == NULL || generators33 == NULL || c_vec32 == NULL ||
-        commitment33 == NULL || proof == NULL || terminal_n32 == NULL || terminal_l32 == NULL ||
-        residual33 == NULL || (gamma_count != 0 && gammas32 == NULL)) {
+        commitment33 == NULL || proof == NULL || terminal_n32 == NULL ||
+        terminal_l32 == NULL || residual33 == NULL ||
+        (gamma_count != 0 && supplied_gammas32 == NULL &&
+         derived_gammas32 == NULL)) {
         return 0;
     }
     /* Preserve the standalone norm verifier's supported relation exactly. */
@@ -2980,17 +3295,33 @@ int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
     if (rounds != 0) {
         gammas = (secp256k1_scalar*)purify_malloc_array(rounds, sizeof(*gammas));
     }
-    if (scratch == NULL || gens == NULL || c_vec == NULL || (rounds != 0 && gammas == NULL) ||
-        !purify_parse_scalar_array(c_vec32, c_vec_len, c_vec) ||
-        !purify_norm_arg_commit_initial_data(&transcript, &rho, gens, n_vec_len,
-                                           c_vec, c_vec_len, &commit)) {
+    if (scratch == NULL || gens == NULL || c_vec == NULL ||
+        (rounds != 0 && gammas == NULL) ||
+        !purify_parse_scalar_array(c_vec32, c_vec_len, c_vec)) {
         goto cleanup;
     }
-    for (i = 0; i < rounds; ++i) {
-        secp256k1_sha256_write(&transcript, proof + 65u * i, 65u);
-        secp256k1_bppp_challenge_scalar(&gammas[i], &transcript, 0);
+    if (supplied_gammas32 != NULL) {
+        if (!purify_parse_scalar_array(
+                supplied_gammas32, rounds, gammas)) {
+            goto cleanup;
+        }
+        for (i = 0; i < rounds; ++i) {
+            if (secp256k1_scalar_is_zero(&gammas[i])) {
+                goto cleanup;
+            }
+        }
+    } else {
+        if (!purify_norm_arg_commit_initial_data(
+                &transcript, &rho, gens, n_vec_len, c_vec, c_vec_len,
+                &commit)) {
+            goto cleanup;
+        }
+        for (i = 0; i < rounds; ++i) {
+            secp256k1_sha256_write(&transcript, proof + 65u * i, 65u);
+            secp256k1_bppp_challenge_scalar(&gammas[i], &transcript, 0);
+        }
+        secp256k1_sha256_clear(&transcript);
     }
-    secp256k1_sha256_clear(&transcript);
 
     /* Remove only the weighted-norm base-generator contribution. This
      * computes the short side of the verification equation:
@@ -3016,8 +3347,9 @@ int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
     secp256k1_ge_serialize_ext(residual33, &residual);
     secp256k1_scalar_get_b32(terminal_n32, &n);
     secp256k1_scalar_get_b32(terminal_l32, &l);
-    for (i = 0; i < rounds; ++i) {
-        secp256k1_scalar_get_b32(gammas32 + 32u * i, &gammas[i]);
+    for (i = 0; derived_gammas32 != NULL && i < rounds; ++i) {
+        secp256k1_scalar_get_b32(
+            derived_gammas32 + 32u * i, &gammas[i]);
     }
     ok = 1;
 
@@ -3027,6 +3359,47 @@ cleanup:
     if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
     if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
     return ok;
+}
+
+int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
+                                     const unsigned char rho32[32],
+                                     const unsigned char* generators33, size_t generators_count,
+                                     const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
+                                     const unsigned char commitment33[33],
+                                     const unsigned char* proof, size_t proof_len,
+                                     unsigned char terminal_n32[32], unsigned char terminal_l32[32],
+                                     unsigned char* gammas32, size_t gamma_count,
+                                     unsigned char residual33[33]) {
+    return purify_bppp_prepare_norm_arg_claim_impl(
+        context, rho32, generators33, generators_count, c_vec32,
+        c_vec_len, n_vec_len, commitment33, proof, proof_len, NULL,
+        gammas32, gamma_count, terminal_n32, terminal_l32, residual33);
+}
+
+int purify_bppp_prepare_norm_arg_claim_with_challenges(
+    purify_secp_context* context,
+    const unsigned char rho32[32],
+    const unsigned char* generators33,
+    size_t generators_count,
+    const unsigned char* c_vec32,
+    size_t c_vec_len,
+    size_t n_vec_len,
+    const unsigned char commitment33[33],
+    const unsigned char* proof,
+    size_t proof_len,
+    const unsigned char* gammas32,
+    size_t gamma_count,
+    unsigned char terminal_n32[32],
+    unsigned char terminal_l32[32],
+    unsigned char residual33[33]) {
+    if (gammas32 == NULL) {
+        return 0;
+    }
+    return purify_bppp_prepare_norm_arg_claim_impl(
+        context, rho32, generators33, generators_count, c_vec32,
+        c_vec_len, n_vec_len, commitment33, proof, proof_len,
+        gammas32, NULL, gamma_count, terminal_n32, terminal_l32,
+        residual33);
 }
 
 int purify_bppp_generators_to_points(purify_secp_context* context,
@@ -3105,6 +3478,19 @@ int purify_bppp_public_msm(purify_secp_context* context,
         secp256k1_scratch_space_destroy(ctx, scratch);
     }
     return ok;
+}
+
+int purify_bppp_public_point_validate(
+    const unsigned char point33[33]) {
+    secp256k1_ge point;
+    unsigned char canonical[33];
+
+    if (point33 == NULL ||
+        !secp256k1_ge_parse_ext(&point, point33)) {
+        return 0;
+    }
+    secp256k1_ge_serialize_ext(canonical, &point);
+    return memcmp(point33, canonical, sizeof(canonical)) == 0;
 }
 
 int purify_bppp_public_hash_to_point(purify_secp_context* context,

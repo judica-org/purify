@@ -324,6 +324,9 @@ add_library(purify
     src/puresign/accountable_roster.cpp
     src/puresign/accountable_responses.cpp
     src/puresign/slash_adaptor.cpp
+    src/puresign/recovery_root.cpp
+    src/puresign/anchor_escrow.cpp
+    src/puresign/construction_receipt.cpp
     src/protocol/bppp.cpp
     src/protocol/accumulation.cpp
     src/protocol/sha256_transcript.cpp
@@ -419,6 +422,9 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/accountable_roster.cpp
         src/puresign/accountable_responses.cpp
         src/puresign/slash_adaptor.cpp
+        src/puresign/recovery_root.cpp
+        src/puresign/anchor_escrow.cpp
+        src/puresign/construction_receipt.cpp
         src/protocol/bppp.cpp
         src/protocol/accumulation.cpp
         src/protocol/sha256_transcript.cpp
@@ -541,11 +547,12 @@ if(PURIFY_BUILD_TESTS)
         tests/slash_adaptor_tests.cpp
         tests/canonical_recovery_root_tests.cpp
         tests/canonical_recovery_root_helpers.cpp
+        tests/anchor_escrow_tests.cpp
         tests/companion_scalar_escrow_tests.cpp
         tests/companion_scalar_escrow_helpers.cpp
         tests/construction_receipt_helpers.cpp
         tests/construction_receipt_tests.cpp
-        tests/receipt_sha256_tests.cpp
+        tests/construction_receipt_codec_tests.cpp
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
@@ -607,9 +614,10 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_response)
     purify_add_cpp_suite_test(slash_adaptor)
     purify_add_cpp_suite_test(canonical_recovery_root)
+    purify_add_cpp_suite_test(anchor_escrow)
     purify_add_cpp_suite_test(companion_scalar_escrow)
     purify_add_cpp_suite_test(construction_receipt)
-    purify_add_cpp_suite_test(receipt_sha256)
+    purify_add_cpp_suite_test(construction_receipt_codec)
     purify_add_cpp_suite_test(sha256_transcript)
     purify_add_cpp_suite_test(sha256_circuit_transcript)
 
@@ -617,7 +625,6 @@ if(PURIFY_BUILD_TESTS)
     # out of the property suites' bounded execution time.
     set_tests_properties(
         purify.tests.construction_receipt
-        purify.tests.receipt_sha256
         PROPERTIES RUN_SERIAL TRUE
     )
     purify_add_cpp_suite_test(aggregate_nonce)

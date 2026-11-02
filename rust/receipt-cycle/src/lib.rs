@@ -20,6 +20,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 mod ffi;
+// This is a candidate suite component, not an accepted receipt verifier.
+pub mod opening_base;
+// This is a tested migration primitive, not an accepted transcript suite yet.
+#[allow(dead_code)]
+pub mod parent_relation;
 #[allow(dead_code)]
 mod relation_builder;
 #[allow(dead_code)]

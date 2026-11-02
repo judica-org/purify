@@ -27,6 +27,9 @@ mod circuit_norm_leaf;
 mod construction_manifest;
 #[allow(dead_code)]
 mod construction_parent_input;
+// This is an internal candidate lowering, not a receipt acceptance API.
+#[allow(dead_code)]
+mod direct_nova;
 mod ffi;
 // This is an internal proof-codec foundation, not a receipt parser.
 #[allow(dead_code)]

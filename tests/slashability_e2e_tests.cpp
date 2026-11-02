@@ -4,6 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <system_error>
 
 #include "canonical_recovery_root_helpers.hpp"
 #include "companion_scalar_escrow_helpers.hpp"
@@ -18,6 +22,32 @@ using purify_test::expect_ok;
 using purify_test::slashability::make_all_evil_coalition;
 using purify_test::slashability::make_native_accumulation_reference;
 using purify_test::slashability::expose_conflicting_coalition_key;
+using purify_test::slashability::serialize_parent_prover_fixture;
+
+void write_parent_prover_fixture_if_requested(
+    TestContext& ctx, const purify::Bytes& fixture) {
+    const char* output_path =
+        std::getenv("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE_OUT");
+    if (output_path == nullptr) return;
+    if (output_path[0] == '\0') {
+        ctx.expect(false, "parent prover fixture output path is nonempty");
+        return;
+    }
+    std::error_code filesystem_error;
+    const bool exists =
+        std::filesystem::exists(output_path, filesystem_error);
+    if (filesystem_error || exists) {
+        ctx.expect(false, "parent prover fixture output path is new");
+        return;
+    }
+    std::ofstream output(
+        output_path, std::ios::binary | std::ios::out);
+    output.write(
+        reinterpret_cast<const char*>(fixture.data()),
+        static_cast<std::streamsize>(fixture.size()));
+    output.flush();
+    ctx.expect(output.good(), "parent prover fixture writes completely");
+}
 
 void test_hidden_second_generator_rejects(
     TestContext& ctx,
@@ -184,6 +214,21 @@ void run_slashability_e2e_tests(TestContext& ctx) {
                        anchor.parent_step_proof.size() == 1'056;
             }),
         "construction retains canonical recursive witness proofs");
+    auto prover_fixture = serialize_parent_prover_fixture(
+        *construction, secp.get());
+    expect_ok(ctx, prover_fixture,
+              "construction prover fixture serializes canonically");
+    if (!prover_fixture) return;
+    ctx.expect(
+        prover_fixture->size() == 8'314 &&
+            std::equal(prover_fixture->begin(),
+                       prover_fixture->begin() + 16,
+                       std::array<unsigned char, 16>{
+                           'P', 'u', 'r', 'i', 'f', 'y', '/', 'N',
+                           'o', 'v', 'a', '/', 'W', 'i', 't', '1'}
+                           .begin()),
+        "construction prover fixture has the exact v1 frame");
+    write_parent_prover_fixture_if_requested(ctx, *prover_fixture);
 
     auto exposed = expose_conflicting_coalition_key(
         *coalition, construction->statement, secp.get());

@@ -72,6 +72,18 @@ make_native_accumulation_reference(
     purify_secp_context* secp_context);
 
 /**
+ * Serializes the public witness needed to prove this exact construction.
+ *
+ * The fixed version selects the compiled parent suite. The bundle carries no
+ * coalition or anchor secret and cannot select another basis, relation, or
+ * verifier artifact.
+ */
+[[nodiscard]] purify::Result<purify::Bytes>
+serialize_parent_prover_fixture(
+    const NativeAccumulationReferenceFixture& fixture,
+    purify_secp_context* secp_context);
+
+/**
  * Sign one construction statement and one changed body with the same
  * proved nonces. The changed body has no parent-receipt fixture; this
  * demonstrates accountable response extraction, not two accepted

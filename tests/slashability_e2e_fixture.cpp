@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <utility>
@@ -23,6 +25,35 @@ using purify::accountable::PartialResponse;
 using purify::accountable::ScalarSignature;
 
 using Point = std::array<unsigned char, 33>;
+
+constexpr std::array<unsigned char, 16> kParentProverFixtureMagic{
+    'P', 'u', 'r', 'i', 'f', 'y', '/', 'N',
+    'o', 'v', 'a', '/', 'W', 'i', 't', '1'};
+constexpr std::size_t kParentDescriptorSize = 130;
+constexpr std::size_t kReductionProofSize = 1'022;
+constexpr std::size_t kParentStepProofSize = 1'056;
+constexpr std::size_t kParentProverAnchorSize =
+    kParentDescriptorSize + 33 +
+    purify::accountable::AnchorEscrowRecord::kSerializedSize +
+    kReductionProofSize + kParentStepProofSize;
+
+template <std::size_t N>
+void append(purify::Bytes& output,
+            const std::array<unsigned char, N>& bytes) {
+    output.insert(output.end(), bytes.begin(), bytes.end());
+}
+
+void append(purify::Bytes& output,
+            std::span<const unsigned char> bytes) {
+    output.insert(output.end(), bytes.begin(), bytes.end());
+}
+
+void append_u32_be(purify::Bytes& output, std::uint32_t value) {
+    output.push_back(static_cast<unsigned char>((value >> 24) & 0xffU));
+    output.push_back(static_cast<unsigned char>((value >> 16) & 0xffU));
+    output.push_back(static_cast<unsigned char>((value >> 8) & 0xffU));
+    output.push_back(static_cast<unsigned char>(value & 0xffU));
+}
 
 Result<Point> public_point(FieldElement scalar,
                            purify_secp_context* secp_context) {
@@ -381,6 +412,98 @@ make_native_accumulation_reference(
         std::move(accumulator), std::move(setup), std::move(payload),
         std::move(resolved_entries), std::move(anchors), statement,
         root_bytes};
+}
+
+Result<purify::Bytes> serialize_parent_prover_fixture(
+    const NativeAccumulationReferenceFixture& fixture,
+    purify_secp_context* secp_context) {
+    const auto anchor_count = fixture.anchors.size();
+    if (anchor_count == 0 ||
+        anchor_count >
+            static_cast<std::size_t>(
+                std::numeric_limits<std::uint32_t>::max())) {
+        return purify::unexpected_error(
+            purify::ErrorCode::RangeViolation,
+            "slashability_fixture:prover_anchor_count");
+    }
+    if (fixture.payload.entries().size() != anchor_count ||
+        fixture.resolved_entries.size() != anchor_count) {
+        return purify::unexpected_error(
+            purify::ErrorCode::SizeMismatch,
+            "slashability_fixture:prover_anchor_alignment");
+    }
+    constexpr std::size_t kHeaderSize =
+        kParentProverFixtureMagic.size() + 32 + 32 +
+        purify::accountable::ResolvedConstructionSetup::kSeedRootSize + 4;
+    constexpr std::size_t kFinalRootSize =
+        purify::accountable::ConstructionReceiptAccumulator::
+            kRootClaimSerializedSize;
+    if (anchor_count >
+        (std::numeric_limits<std::size_t>::max() - kHeaderSize -
+         kFinalRootSize) / kParentProverAnchorSize) {
+        return purify::unexpected_error(
+            purify::ErrorCode::Overflow,
+            "slashability_fixture:prover_fixture_size");
+    }
+
+    purify::Bytes encoded;
+    encoded.reserve(kHeaderSize + anchor_count * kParentProverAnchorSize +
+                    kFinalRootSize);
+    append(encoded, kParentProverFixtureMagic);
+    append(encoded, fixture.statement);
+    append(encoded, fixture.setup.resolved_digest().bytes());
+    append(encoded, fixture.setup.seed_root());
+    append_u32_be(encoded, static_cast<std::uint32_t>(anchor_count));
+
+    const auto& raw_generator_digest =
+        fixture.anchors.front().parent_constants.raw_generator_digest;
+    for (const auto& anchor : fixture.anchors) {
+        if (anchor.parent_constants.raw_generator_digest !=
+                raw_generator_digest ||
+            anchor.reduction_proof.size() != kReductionProofSize ||
+            anchor.parent_step_proof.size() != kParentStepProofSize ||
+            anchor.reduction_proof.front() != 2 ||
+            anchor.parent_step_proof.front() != 2) {
+            return purify::unexpected_error(
+                purify::ErrorCode::BindingMismatch,
+                "slashability_fixture:prover_witness_shape");
+        }
+        append(encoded,
+               anchor.parent_constants.circuit_binding_digest);
+        append(encoded, anchor.circuit_precommitment);
+        append(encoded,
+               anchor.parent_constants.coefficient_commitment);
+        append(encoded, anchor.parent_constants.anchored_offset);
+
+        Point punishment_point{};
+        punishment_point[0] = 0x02;
+        std::copy(anchor.punishment_key.public_key().xonly().begin(),
+                  anchor.punishment_key.public_key().xonly().end(),
+                  punishment_point.begin() + 1);
+        append(encoded, punishment_point);
+
+        PURIFY_ASSIGN_OR_RETURN(
+            auto record, anchor.record.serialize(secp_context),
+            "slashability_fixture:serialize_prover_record");
+        if (record.size() !=
+            purify::accountable::AnchorEscrowRecord::kSerializedSize) {
+            return purify::unexpected_error(
+                purify::ErrorCode::InternalMismatch,
+                "slashability_fixture:prover_record_size");
+        }
+        append(encoded, record);
+        append(encoded, anchor.reduction_proof);
+        append(encoded, anchor.parent_step_proof);
+    }
+    append(encoded, fixture.decided_reference_root);
+    if (encoded.size() !=
+        kHeaderSize + anchor_count * kParentProverAnchorSize +
+            kFinalRootSize) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InternalMismatch,
+            "slashability_fixture:prover_encoded_size");
+    }
+    return encoded;
 }
 
 Result<purify::accountable::ExposedCoalitionKey>

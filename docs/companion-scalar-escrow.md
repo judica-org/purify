@@ -32,7 +32,10 @@ record version 3 both encode V4 proofs. Their historical hidden-output sizes
 and timings below remain useful as an individual-proof baseline. The setup leaf
 is handled once at registry creation, and the record-version-3 public anchor
 leaf has been migrated into the homogeneous parent recurrence. That parent is
-not fully compressed or activated as a production receipt.
+qualified through a complete two-anchor compression lifecycle and a
+recursive-plus-native library acceptance path. It is not activated in
+consensus, and enrollment remains disabled for the separate security and
+custody reasons below.
 
 ## Groups, keys and canonical encodings
 
@@ -104,17 +107,14 @@ The affine x-denominators do not vanish. Extending the gadget directly to
 256 bits would not inherit that argument.
 
 Finite `Q` fixes `q` modulo `n`. The bound and sign then uniquely fix
-`a,s`, which fixes both recipient points and canonical components. The
-legacy V3 setup proof binds all of those outputs to the same witness.
-Verification is the only constructor for `RecoveryBoundSigningRoster`;
-anchor escrow creation does not accept an arbitrary recipient root.
-Consequently a roster cannot register a hidden second-generator
-component and later open a different recovery root while retaining the
-typed capability.
-
-The V4 candidate public setup leaf constrains the same circuit outputs
-and its public-point DLog equation. The current roster constructor still
-uses V3 verification until the fixed-record API is migrated.
+`a,s`, which fixes both recipient points and canonical components. The V4 setup
+proof binds all of those outputs to the same witness. Verification is the only
+constructor for `RecoveryBoundSigningRoster`; anchor escrow creation does not
+accept an arbitrary recipient root. Consequently a roster cannot register a
+hidden second-generator component and later open a different recovery root
+while retaining the typed capability. The all-evil slashability regression
+constructs exactly that rogue second component and requires setup verification
+to reject it.
 
 ## Encrypt the old root, not the new coalition
 
@@ -148,8 +148,10 @@ bound to canonical `02 || Kx` by V4 public-commitment mode and its 64-byte DLog
 argument. Encrypted plaintext relations remain native field/curve equations,
 not independently blinded Pedersen output values.
 
-The complete V4 transcript and pending norm obligation still require
-reduction, parent authentication, and the final accumulator decision.
+The complete V4 transcript and pending norm obligation require reduction,
+parent authentication, and the final accumulator decision. The selected Nova
+parent and public C++ acceptance path now perform those stages; the individual
+escrow record alone is still not receipt acceptance.
 
 `recover_escrowed_anchor` first verifies the bridge and checks that an exposed
 coalition scalar opens the recovery-bound roster's exact `Q` and registered
@@ -292,13 +294,22 @@ Recovery of a scalar is not by itself a proof of forced economic loss under
 Bitcoin's spend rules. Enrollment remains disabled while the distributed
 setup and prover are not implemented.
 
-The next [construction receipt experiment](construction-receipt.md)
+The selected [construction receipt](construction-receipt.md)
 treats the setup and encryption proofs as out-of-band inputs to a public
 assembler. V4 is the candidate child relation for that design. The
 intended on-chain receipt retains the ciphertexts and replaces the child
 proofs with one parent proof. The recurrence and selected profile are
-implemented; exact setup and one full-scale fold have qualified, and the proof
-shape and authenticated-root verifier are fixed. Full native-profile
-compression and the C ABI/native acceptance path remain incomplete; the
-historical V3 sizes above are not an estimate of the parent's size or prover
-cost.
+implemented. Exact setup, two ordered full-scale folds, Spartan IPA
+compression, canonical verification, and external verifier-artifact reload
+have qualified. A private C ABI returns only the authenticated pending root;
+the public C++ API completes native `decide()` before returning acceptance. A
+recursive-valid/nondeciding vector verifies under Nova but is rejected by that
+last decision. The historical V3 sizes above are not an estimate of parent
+prover cost.
+
+This completed validity path does not change the unresolved boundaries above:
+distributed setup, custody, and share-preserving child proving are absent, and
+the correlated-key confidentiality argument still requires review. Only two
+anchors have completed the full lifecycle; resource behavior at 100 to 1,000
+anchors is not qualified. The frozen external verifier is roughly 609 MiB, so
+convenient binary embedding remains separate size work.

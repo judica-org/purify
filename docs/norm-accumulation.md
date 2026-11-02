@@ -6,19 +6,22 @@ combines their pending generator equations through a one-vector inner-product
 opening, and produces one new pending equation. A final native MSM discharges
 that equation. The helper never receives the original norm witnesses.
 
-This is an accumulation component, not a compressed construction receipt.
-Native callers still replay the child partial verifiers and every accumulation
-transition. A future recursive proof must authenticate those computations
-before their transcripts can be discarded.
+This native helper is an accumulation component, not a compressed construction
+receipt. Native callers using it alone still replay the child partial verifiers
+and every accumulation transition. The selected construction-parent recurrence
+now authenticates those computations recursively so their transcripts can be
+discarded after receipt construction; its public C++ acceptance path still
+completes the final native decision.
 
 V4 is the candidate active circuit-leaf path. Its native producer,
 preparer, verifier, and constrained relation are implemented. The
 internal `prepare_v4_circuit_norm_for_algebraic_reduction` adapter
 converts an outer-authenticated V4 leaf into the same algebraic
-accumulation language. The result remains pending until coefficient
-reduction, every accumulation transition, and `decide` succeed. This
-implementation does not turn the native accumulation root into a
-recursive construction receipt.
+accumulation language. The result remains pending until coefficient reduction,
+every accumulation transition, and `decide` succeed. This native adapter alone
+does not turn an accumulation root into a recursive construction receipt; the
+selected Nova parent and C++ acceptance boundary perform that separate
+authentication.
 
 ## Exact grouping rule
 
@@ -346,9 +349,13 @@ must still call `decide` for the mandatory final basis MSM.
 These openings are additional public transition data. Native verification
 retains them alongside the original child proofs; a final 1,122-byte step
 does not replace that history. The selected recurrence implements recursive
-authentication so this history can become a parent witness, but its
-native-profile compression is not qualified and its acceptance path is not
-implemented.
+authentication so this history can become a parent witness. The qualified
+two-anchor Nova lifecycle compresses that witness history, and the public C++
+acceptance path completes the final native decision before returning a
+capability. A checked-in recursive-valid/nondeciding proof authenticates a
+nondeciding pending root and is rejected specifically by that decision,
+demonstrating why neither the native helper nor recursive verification alone
+establishes acceptance.
 
 ## Historical generic varying-coefficient measurements
 
@@ -455,11 +462,15 @@ the final step SHA256 is
 
 The selected parent now authenticates the purpose-owned semantic digest and
 frontend constants, constrains V4 preparation, reduction, and every ordered
-accumulation transition, and binds exact registry coverage. Remaining work is
-specific: independently review the V4 leaf and composition arguments, qualify
-full native-profile compression, ship the verifier artifact and C ABI, and
-enforce the final native accumulator decision. The native V4 adapter remains a
-component of that path, not receipt acceptance by itself.
+accumulation transition, and binds exact registry coverage. The complete
+two-anchor production lifecycle, frozen external verifier identity, private C
+ABI, and public C++ recursive-plus-native acceptance path are implemented.
+Remaining work is specific: independently review the V4 leaf and composition
+arguments; implement distributed custody and share-preserving child proving;
+resolve the correlated-key confidentiality argument; qualify operation at 100
+to 1,000 anchors; and reduce or operationalize the roughly 609 MiB verifier. The
+native V4 adapter remains a component of that path, not receipt acceptance by
+itself.
 
 The construction-specific V3 adapter previously demonstrated setup-proof
 preparation and safe zero-extension into the anchor basis. That

@@ -89,11 +89,22 @@ the preceding hidden-anchor recurrence is not compatible with record version
 3. The `69 + 224*N` payload boundary is unchanged, and no punishment key is
 added to the payload entry.
 
-This relation migration does not activate construction receipts. The selected
+This relation migration is now exercised by the library construction-receipt
+acceptance path, but it does not activate consensus or enrollment. The selected
 profile freezes public-parameter digest
 `b90f7e761288cc1fdb7abd16f4e0abbbe2c8d7c773f315a17f1d7c4f982f7900`
 and suite ID
 `116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa`;
-exact setup and one full-scale fold have qualified. Native-profile full
-compression, the shipped verifier artifact, and the complete C ABI and
-compressed-proof-to-native-decision acceptance path remain separate gates.
+exact setup, two ordered full-scale folds, Spartan IPA compression, canonical
+verification, and external verifier-artifact reload have qualified. The frozen
+external artifact identity is enforced by the loader behind a private C ABI,
+and the public C++ verifier completes native `decide()` before returning
+acceptance. A recursive-valid/nondeciding vector
+preserves the same public two-anchor inputs but authenticates a distinct root
+which fails that native decision.
+
+These validity results do not resolve this relation's explicit related-output
+security assumption, distributed setup and custody, share-preserving child
+proving, or correlated-key pre-conflict confidentiality. Qualification covers
+two anchors rather than operation at 100 to 1,000 anchors, and the roughly 609
+MiB external verifier remains impractical to embed without further size work.

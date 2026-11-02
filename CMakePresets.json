@@ -232,6 +232,9 @@
       "inherits": "test-base",
       "configurePreset": "sanitizers-int",
       "configuration": "Debug",
+      "execution": {
+        "jobs": 2
+      },
       "filter": {
         "include": {
           "name": "purify.tests|purify\\.property\\..*|purify.c_api"
@@ -254,6 +257,9 @@
       "inherits": "test-base",
       "configurePreset": "bitcoin-i686-debug",
       "configuration": "Debug",
+      "execution": {
+        "jobs": 2
+      },
       "filter": {
         "include": {
           "name": "purify.tests|purify\\.property\\..*|purify.c_api|purify.bench"

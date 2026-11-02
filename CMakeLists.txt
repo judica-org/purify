@@ -533,6 +533,7 @@ if(PURIFY_BUILD_TESTS)
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
+        tests/circuit_soundness_tests.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 
@@ -555,6 +556,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(expected)
     purify_add_cpp_suite_test(norm_protocol)
     purify_add_cpp_suite_test(norm_accumulation)
+    purify_add_cpp_suite_test(circuit_soundness)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
         add_test(NAME purify.tests.norm_accumulation_reference
@@ -631,6 +633,9 @@ if(PURIFY_BUILD_TESTS)
 
     if(PURIFY_BUILD_VALGRIND_TESTS)
         target_compile_definitions(purify PRIVATE PURIFY_VALGRIND_TESTING=1)
+        target_include_directories(purify PRIVATE
+            "${PURIFY_VALGRIND_INCLUDE_DIR}"
+        )
 
         add_executable(purify_valgrind_tests
             tests/purify_valgrind_tests.c
@@ -662,6 +667,7 @@ if(PURIFY_BUILD_TESTS)
         purify_add_valgrind_test(purify.valgrind.consttime_inverse purify_valgrind_tests inverse)
         purify_add_valgrind_test(purify.valgrind.consttime_packed_secret purify_valgrind_tests packed_secret)
         purify_add_valgrind_test(purify.valgrind.consttime_uint purify_valgrind_tests uint)
+        purify_add_valgrind_test(purify.valgrind.consttime_bppp purify_valgrind_tests bppp)
     endif()
 
     if(PURIFY_BUILD_BENCH)

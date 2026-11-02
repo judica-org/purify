@@ -21,6 +21,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(PURIFY_VALGRIND_TESTING)
+#include <valgrind/memcheck.h>
+/* Proof points and terminal scalars are public from these protocol lines on. */
+#define PURIFY_BRIDGE_DECLASSIFY(data, size) \
+    VALGRIND_MAKE_MEM_DEFINED((data), (size))
+#else
+#define PURIFY_BRIDGE_DECLASSIFY(data, size) ((void)(data), (void)(size))
+#endif
+
 #include "third_party/secp256k1-zkp/include/secp256k1_extrakeys.h"
 #include "third_party/secp256k1-zkp/include/secp256k1_schnorrsig.h"
 #include "third_party/secp256k1-zkp/src/secp256k1.c"
@@ -38,6 +47,9 @@ struct purify_secp_context {
 };
 
 static void purify_bridge_secure_clear(void* data, size_t size);
+static int purify_bridge_memeq_const(const unsigned char* lhs,
+                                     const unsigned char* rhs,
+                                     size_t size);
 
 static secp256k1_context* purify_context_handle(const purify_secp_context* context) {
     return context != NULL ? context->ctx : NULL;
@@ -79,6 +91,14 @@ void purify_secp_context_destroy(purify_secp_context* context) {
 static void purify_bridge_secure_clear(void* data, size_t size) {
     if (data != NULL && size != 0u) {
         secp256k1_memclear_explicit(data, size);
+    }
+}
+
+static void purify_bridge_secure_clear_scratch_tail(secp256k1_scratch_space* scratch,
+                                                    size_t checkpoint) {
+    if (scratch != NULL && scratch->data != NULL && checkpoint <= scratch->max_size) {
+        purify_bridge_secure_clear((unsigned char*)scratch->data + checkpoint,
+                                   scratch->max_size - checkpoint);
     }
 }
 
@@ -127,6 +147,15 @@ static int purify_bridge_checked_add_size(size_t lhs, size_t rhs, size_t* out) {
     }
     *out = lhs + rhs;
     return 1;
+}
+
+static void purify_bridge_secure_free_array(void* data, size_t count, size_t elem_size) {
+    size_t bytes = 0;
+
+    if (data != NULL && purify_bridge_checked_mul_size(count, elem_size, &bytes)) {
+        purify_bridge_secure_clear(data, bytes);
+    }
+    free(data);
 }
 
 /* Reserve this much work space for the batched multiscalar multiplication
@@ -234,6 +263,7 @@ static int purify_bulletproof_reserve_circuit_scratch(
     if (replacement == NULL) {
         return 0;
     }
+    purify_bridge_secure_clear_scratch_tail(resources->scratch, 0);
     secp256k1_scratch_space_destroy(resources->ctx, resources->scratch);
     resources->scratch = replacement;
     resources->scratch_capacity = required;
@@ -402,6 +432,7 @@ void purify_bulletproof_backend_resources_destroy(purify_bulletproof_backend_res
         secp256k1_bulletproof_generators_destroy(resources->ctx, resources->gens);
     }
     if (resources->scratch != NULL && resources->ctx != NULL) {
+        purify_bridge_secure_clear_scratch_tail(resources->scratch, 0);
         secp256k1_scratch_space_destroy(resources->ctx, resources->scratch);
     }
     free(resources);
@@ -500,6 +531,7 @@ void purify_bppp_backend_resources_destroy(purify_bppp_backend_resources* resour
         free(resources->gens_scratch.gens);
     }
     if (resources->scratch != NULL && resources->ctx != NULL) {
+        purify_bridge_secure_clear_scratch_tail(resources->scratch, 0);
         secp256k1_scratch_space_destroy(resources->ctx, resources->scratch);
     }
     free(resources);
@@ -640,17 +672,42 @@ void purify_hmac_sha256(unsigned char output32[32],
     secp256k1_hmac_sha256_clear(&hmac);
 }
 
+static int purify_bip340_canonicalize_scalar(
+    const secp256k1_context* ctx, unsigned char scalar32[32],
+    unsigned char xonly_pubkey32[32]) {
+    secp256k1_scalar scalar = {0};
+    secp256k1_ge point;
+    secp256k1_gej pointj;
+    int overflow = 0;
+    int ok = 0;
+
+    secp256k1_scalar_set_b32(&scalar, scalar32, &overflow);
+    if (overflow || secp256k1_scalar_is_zero(&scalar)) {
+        goto cleanup;
+    }
+    secp256k1_ecmult_gen(&ctx->ecmult_gen_ctx, &pointj, &scalar);
+    secp256k1_ge_set_gej(&point, &pointj);
+    secp256k1_fe_normalize(&point.x);
+    secp256k1_fe_normalize(&point.y);
+    secp256k1_scalar_cond_negate(
+        &scalar, secp256k1_fe_is_odd(&point.y));
+    secp256k1_scalar_get_b32(scalar32, &scalar);
+    secp256k1_fe_get_b32(xonly_pubkey32, &point.x);
+    ok = 1;
+
+cleanup:
+    secp256k1_scalar_clear(&scalar);
+    purify_bridge_secure_clear(&point, sizeof(point));
+    purify_bridge_secure_clear(&pointj, sizeof(pointj));
+    return ok;
+}
+
 int purify_bip340_key_from_seckey(purify_secp_context* context,
                                   unsigned char seckey32[32],
                                   unsigned char xonly_pubkey32[32]) {
     secp256k1_context* ctx = purify_context_handle(context);
-    secp256k1_keypair keypair;
-    secp256k1_xonly_pubkey xonly;
-    int parity = 0;
     int ok = 0;
 
-    memset(&keypair, 0, sizeof(keypair));
-    memset(&xonly, 0, sizeof(xonly));
     if (xonly_pubkey32 != NULL) {
         memset(xonly_pubkey32, 0, 32);
     }
@@ -659,23 +716,12 @@ int purify_bip340_key_from_seckey(purify_secp_context* context,
         return 0;
     }
 
-    ok = secp256k1_keypair_create(ctx, &keypair, seckey32);
-    if (ok) {
-        ok = secp256k1_keypair_xonly_pub(ctx, &xonly, &parity, &keypair);
-    }
-    if (ok) {
-        ok = secp256k1_xonly_pubkey_serialize(ctx, xonly_pubkey32, &xonly);
-    }
-    if (ok && parity != 0) {
-        ok = secp256k1_ec_seckey_negate(ctx, seckey32);
-    }
+    ok = purify_bip340_canonicalize_scalar(
+        ctx, seckey32, xonly_pubkey32);
     if (!ok) {
         purify_bridge_secure_clear(seckey32, 32);
         memset(xonly_pubkey32, 0, 32);
     }
-
-    purify_bridge_secure_clear(&keypair, sizeof(keypair));
-    purify_bridge_secure_clear(&xonly, sizeof(xonly));
     return ok;
 }
 
@@ -683,13 +729,8 @@ int purify_bip340_nonce_from_scalar(purify_secp_context* context,
                                     unsigned char scalar32[32],
                                     unsigned char xonly_nonce32[32]) {
     secp256k1_context* ctx = purify_context_handle(context);
-    secp256k1_pubkey pubkey;
-    secp256k1_xonly_pubkey xonly;
-    int parity = 0;
     int ok = 0;
 
-    memset(&pubkey, 0, sizeof(pubkey));
-    memset(&xonly, 0, sizeof(xonly));
     if (xonly_nonce32 != NULL) {
         memset(xonly_nonce32, 0, 32);
     }
@@ -698,23 +739,12 @@ int purify_bip340_nonce_from_scalar(purify_secp_context* context,
         return 0;
     }
 
-    ok = secp256k1_ec_pubkey_create(ctx, &pubkey, scalar32);
-    if (ok) {
-        ok = secp256k1_xonly_pubkey_from_pubkey(ctx, &xonly, &parity, &pubkey);
-    }
-    if (ok) {
-        ok = secp256k1_xonly_pubkey_serialize(ctx, xonly_nonce32, &xonly);
-    }
-    if (ok && parity != 0) {
-        ok = secp256k1_ec_seckey_negate(ctx, scalar32);
-    }
+    ok = purify_bip340_canonicalize_scalar(
+        ctx, scalar32, xonly_nonce32);
     if (!ok) {
         purify_bridge_secure_clear(scalar32, 32);
         memset(xonly_nonce32, 0, 32);
     }
-
-    purify_bridge_secure_clear(&pubkey, sizeof(pubkey));
-    purify_bridge_secure_clear(&xonly, sizeof(xonly));
     return ok;
 }
 
@@ -851,7 +881,8 @@ int purify_bip340_sign_with_fixed_nonce(purify_secp_context* context,
     memcpy(canonical_nonce32, nonce32, 32);
     ok = purify_bip340_nonce_from_scalar(context, canonical_nonce32, xonly_nonce32);
     if (ok) {
-        ok = secp256k1_memcmp_var(canonical_nonce32, nonce32, 32) == 0;
+        ok = purify_bridge_memeq_const(
+            canonical_nonce32, nonce32, sizeof(canonical_nonce32));
     }
     secp256k1_scalar_set_b32(&nonce_scalar, nonce32, &overflow);
     if (ok && !overflow && !secp256k1_scalar_is_zero(&nonce_scalar)) {
@@ -918,9 +949,24 @@ static int purify_parse_scalar_array(const unsigned char* input32, size_t count,
 }
 
 static int purify_serialize_point(unsigned char out33[33], secp256k1_ge* point) {
-    secp256k1_fe_normalize_var(&point->x);
-    secp256k1_fe_normalize_var(&point->y);
+    /* This helper also serializes prover commitments derived from secret
+     * witnesses. Keep normalization constant-time; serialization is the
+     * deliberate declassification boundary. */
+    secp256k1_fe_normalize(&point->x);
+    secp256k1_fe_normalize(&point->y);
     return secp256k1_bppp_serialize_pt(out33, point);
+}
+
+static int purify_bridge_memeq_const(const unsigned char* lhs,
+                                     const unsigned char* rhs,
+                                     size_t size) {
+    volatile unsigned char difference = 0;
+    size_t i;
+
+    for (i = 0; i < size; ++i) {
+        difference |= lhs[i] ^ rhs[i];
+    }
+    return difference == 0;
 }
 
 static int purify_parse_fast_scalar(const unsigned char input32[32], secp256k1_fast_scalar* scalar) {
@@ -986,10 +1032,10 @@ static void purify_free_bulletproof_assignment(secp256k1_bulletproof_circuit_ass
     if (assignment == NULL) {
         return;
     }
-    free(assignment->al);
-    free(assignment->ar);
-    free(assignment->ao);
-    free(assignment->v);
+    purify_bridge_secure_free_array(assignment->al, assignment->n_gates, sizeof(*assignment->al));
+    purify_bridge_secure_free_array(assignment->ar, assignment->n_gates, sizeof(*assignment->ar));
+    purify_bridge_secure_free_array(assignment->ao, assignment->n_gates, sizeof(*assignment->ao));
+    purify_bridge_secure_free_array(assignment->v, assignment->n_commits, sizeof(*assignment->v));
     memset(assignment, 0, sizeof(*assignment));
 }
 
@@ -1058,6 +1104,7 @@ static void purify_bulletproof_circuit_evaluate_sum_row(secp256k1_scalar* acc,
         secp256k1_scalar term;
         secp256k1_fast_scalar_mul(&term, &row->entry[j].scal, assn);
         secp256k1_scalar_add(&acc[row->entry[j].idx], &acc[row->entry[j].idx], &term);
+        secp256k1_scalar_clear(&term);
     }
 }
 
@@ -1081,8 +1128,11 @@ static int purify_bulletproof_circuit_evaluate(const secp256k1_bulletproof_circu
 
     for (i = 0; i < assignment->n_gates; ++i) {
         secp256k1_scalar product;
+        int matches;
         secp256k1_scalar_mul(&product, &assignment->al[i], &assignment->ar[i]);
-        if (!secp256k1_scalar_eq(&product, &assignment->ao[i])) {
+        matches = secp256k1_scalar_eq(&product, &assignment->ao[i]);
+        secp256k1_scalar_clear(&product);
+        if (!matches) {
             goto done;
         }
     }
@@ -1100,20 +1150,25 @@ static int purify_bulletproof_circuit_evaluate(const secp256k1_bulletproof_circu
         secp256k1_scalar negated_v;
         secp256k1_scalar_negate(&negated_v, &assignment->v[i]);
         purify_bulletproof_circuit_evaluate_sum_row(acc, &circuit->wv[i], &negated_v);
+        secp256k1_scalar_clear(&negated_v);
     }
     for (i = 0; i < circuit->n_constraints; ++i) {
         secp256k1_scalar constant_term;
         secp256k1_scalar one;
+        int matches;
         secp256k1_scalar_set_int(&one, 1);
         secp256k1_fast_scalar_mul(&constant_term, &circuit->c[i], &one);
-        if (!secp256k1_scalar_eq(&acc[i], &constant_term)) {
+        matches = secp256k1_scalar_eq(&acc[i], &constant_term);
+        secp256k1_scalar_clear(&constant_term);
+        secp256k1_scalar_clear(&one);
+        if (!matches) {
             goto done;
         }
     }
     ok = 1;
 
 done:
-    free(acc);
+    purify_bridge_secure_free_array(acc, circuit->n_constraints, sizeof(*acc));
     return ok;
 }
 
@@ -1249,9 +1304,11 @@ static int purify_bulletproof_prove_circuit_impl(const purify_bulletproof_circui
     size_t n_commits = 0;
     size_t required_generators = 0;
     size_t commitment_bytes = 0;
+    size_t scratch_checkpoint = 0;
     size_t i;
     int ok = 0;
     int owns_resources = 0;
+    int scratch_contains_secrets = 0;
 
     memset(&bp_circuit, 0, sizeof(bp_circuit));
     memset(&bp_assignment, 0, sizeof(bp_assignment));
@@ -1326,6 +1383,8 @@ static int purify_bulletproof_prove_circuit_impl(const purify_bulletproof_circui
         }
     }
 
+    scratch_checkpoint = secp256k1_scratch_checkpoint(&ctx->error_callback, scratch);
+    scratch_contains_secrets = 1;
     ok = secp256k1_bulletproof_relation66_prove_impl(
         &ctx->error_callback,
         scratch,
@@ -1344,6 +1403,9 @@ static int purify_bulletproof_prove_circuit_impl(const purify_bulletproof_circui
     );
 
 done:
+    if (scratch_contains_secrets) {
+        purify_bridge_secure_clear_scratch_tail(scratch, scratch_checkpoint);
+    }
     if (blinds != NULL) {
         for (i = 0; i < n_commits; ++i) secp256k1_scalar_clear(&blinds[i]);
     }
@@ -1650,22 +1712,413 @@ static int purify_copy_vectors_into_scratch(const secp256k1_context* ctx, secp25
     return 1;
 }
 
-static int purify_bppp_rangeproof_norm_product_prove_const(const secp256k1_context* ctx, secp256k1_scratch_space* scratch,
-                                                           unsigned char* proof, size_t* proof_len,
-                                                           secp256k1_sha256* transcript, const secp256k1_scalar* rho,
-                                                           const secp256k1_ge* g_vec, size_t g_vec_len,
-                                                           const secp256k1_scalar* n_vec, size_t n_vec_len,
-                                                           const secp256k1_scalar* l_vec, size_t l_vec_len,
-                                                           const secp256k1_scalar* c_vec, size_t c_vec_len) {
+/*
+ * Secret-scalar MSM for the circuit prover boundary.
+ *
+ * libsecp256k1's ecmult_multi_var is intentionally variable time and is only
+ * suitable when every scalar is public.  Circuit witnesses are still secret
+ * when their raw and norm commitments are formed, so use the constant-time
+ * single-point and base-point multipliers here.  The point list and its length
+ * are public.  A zero scalar produces infinity; replace that affine input with
+ * G, perform the unified addition, then constant-time select the unchanged
+ * accumulator.  This avoids branching on a witness scalar.
+ *
+ * The final point is intentionally declassified by serialization into the
+ * proof.  Public verifier and accumulation MSMs remain variable time.
+ */
+static void purify_ge_cmov(secp256k1_ge* r, const secp256k1_ge* a, int flag) {
+    secp256k1_fe_cmov(&r->x, &a->x, flag);
+    secp256k1_fe_cmov(&r->y, &a->y, flag);
+    r->infinity ^= (r->infinity ^ a->infinity) & flag;
+}
+
+static void purify_gej_add_secret_scalar_term(secp256k1_gej* accumulator,
+                                               const secp256k1_ge* point,
+                                               const secp256k1_scalar* scalar) {
+    secp256k1_gej termj, candidate;
+    secp256k1_ge term;
+    int term_is_infinity;
+
+    secp256k1_ecmult_const(&termj, point, scalar);
+    secp256k1_ge_set_gej(&term, &termj);
+    term_is_infinity = term.infinity;
+    purify_ge_cmov(&term, &secp256k1_ge_const_g, term_is_infinity);
+    candidate = *accumulator;
+    secp256k1_gej_add_ge(&candidate, &candidate, &term);
+    secp256k1_gej_cmov(accumulator, &candidate,
+                       term_is_infinity ^ 1);
+
+    purify_bridge_secure_clear(&termj, sizeof(termj));
+    purify_bridge_secure_clear(&candidate, sizeof(candidate));
+    purify_bridge_secure_clear(&term, sizeof(term));
+}
+
+static int purify_ecmult_multi_secret(const secp256k1_context* ctx,
+                                      secp256k1_gej* result,
+                                      const secp256k1_scalar* base_scalar,
+                                      secp256k1_ecmult_multi_callback callback,
+                                      void* callback_data,
+                                      size_t point_count) {
+    size_t i;
+
+    if (base_scalar != NULL) {
+        secp256k1_ecmult_gen(&ctx->ecmult_gen_ctx, result, base_scalar);
+    } else {
+        secp256k1_gej_set_infinity(result);
+    }
+    for (i = 0; i < point_count; ++i) {
+        secp256k1_scalar scalar = {0};
+        secp256k1_ge point = {0};
+        int callback_ok = callback(&scalar, &point, i, callback_data);
+        if (!callback_ok) {
+            secp256k1_scalar_clear(&scalar);
+            purify_bridge_secure_clear(&point, sizeof(point));
+            purify_bridge_secure_clear(result, sizeof(*result));
+            return 0;
+        }
+        purify_gej_add_secret_scalar_term(result, &point, &scalar);
+        secp256k1_scalar_clear(&scalar);
+        purify_bridge_secure_clear(&point, sizeof(point));
+    }
+    return 1;
+}
+
+static void purify_scalar_inner_product_secret(
+    secp256k1_scalar* result,
+    const secp256k1_scalar* lhs,
+    size_t lhs_offset,
+    const secp256k1_scalar* rhs,
+    size_t rhs_offset,
+    size_t step,
+    size_t length) {
+    size_t i;
+
+    secp256k1_scalar_set_int(result, 0);
+    for (i = 0; i < length; ++i) {
+        secp256k1_scalar term;
+        secp256k1_scalar_mul(
+            &term, &lhs[lhs_offset + step * i],
+            &rhs[rhs_offset + step * i]);
+        secp256k1_scalar_add(result, result, &term);
+        secp256k1_scalar_clear(&term);
+    }
+}
+
+static void purify_weighted_scalar_inner_product_secret(
+    secp256k1_scalar* result,
+    const secp256k1_scalar* lhs,
+    size_t lhs_offset,
+    const secp256k1_scalar* rhs,
+    size_t rhs_offset,
+    size_t step,
+    size_t length,
+    const secp256k1_scalar* weight) {
+    secp256k1_scalar weight_power = *weight;
+    size_t i;
+
+    secp256k1_scalar_set_int(result, 0);
+    for (i = 0; i < length; ++i) {
+        secp256k1_scalar term;
+        secp256k1_scalar_mul(
+            &term, &lhs[lhs_offset + step * i],
+            &rhs[rhs_offset + step * i]);
+        secp256k1_scalar_mul(&term, &term, &weight_power);
+        secp256k1_scalar_mul(&weight_power, &weight_power, weight);
+        secp256k1_scalar_add(result, result, &term);
+        secp256k1_scalar_clear(&term);
+    }
+    secp256k1_scalar_clear(&weight_power);
+}
+
+static int purify_bppp_commit_secret(const secp256k1_context* ctx,
+                                     secp256k1_ge* commit,
+                                     const secp256k1_bppp_generators* generators,
+                                     const secp256k1_scalar* n_vec,
+                                     size_t n_vec_len,
+                                     const secp256k1_scalar* l_vec,
+                                     size_t l_vec_len,
+                                     const secp256k1_scalar* c_vec,
+                                     size_t c_vec_len,
+                                     const secp256k1_scalar* mu) {
+    secp256k1_scalar v, l_c;
+    secp256k1_gej commitj;
+    ecmult_bp_commit_cb_data data;
+    int ok;
+
+    (void)c_vec_len;
+    VERIFY_CHECK(generators->n == n_vec_len + l_vec_len);
+    VERIFY_CHECK(l_vec_len == c_vec_len);
+    VERIFY_CHECK(secp256k1_is_power_of_two(n_vec_len));
+    VERIFY_CHECK(secp256k1_is_power_of_two(c_vec_len));
+
+    purify_weighted_scalar_inner_product_secret(
+        &v, n_vec, 0, n_vec, 0, 1, n_vec_len, mu);
+    purify_scalar_inner_product_secret(
+        &l_c, l_vec, 0, c_vec, 0, 1, l_vec_len);
+    secp256k1_scalar_add(&v, &v, &l_c);
+
+    data.g = generators->gens;
+    data.n = n_vec;
+    data.l = l_vec;
+    data.g_len = n_vec_len;
+    ok = purify_ecmult_multi_secret(
+        ctx, &commitj, &v, ecmult_bp_commit_cb, &data,
+        n_vec_len + l_vec_len);
+    if (ok) {
+        secp256k1_ge_set_gej(commit, &commitj);
+        PURIFY_BRIDGE_DECLASSIFY(commit, sizeof(*commit));
+    }
+
+    secp256k1_scalar_clear(&v);
+    secp256k1_scalar_clear(&l_c);
+    purify_bridge_secure_clear(&commitj, sizeof(commitj));
+    purify_bridge_secure_clear(&data, sizeof(data));
+    return ok;
+}
+
+/*
+ * Constant-time adaptation of the upstream BPPP norm prover.  The transcript,
+ * folding challenges, vector lengths, and generator folds are public, so their
+ * existing variable-time operations are retained.  The X and R commitments
+ * contain witness scalars and therefore use purify_ecmult_multi_secret.
+ */
+static int purify_bppp_rangeproof_norm_product_prove_secret(
+    const secp256k1_context* ctx,
+    unsigned char* proof,
+    size_t* proof_len,
+    secp256k1_sha256* transcript,
+    const secp256k1_scalar* rho,
+    secp256k1_ge* g_vec,
+    size_t g_vec_len,
+    secp256k1_scalar* n_vec,
+    size_t n_vec_len,
+    secp256k1_scalar* l_vec,
+    size_t l_vec_len,
+    secp256k1_scalar* c_vec,
+    size_t c_vec_len) {
+    secp256k1_scalar mu_f, rho_f = *rho;
+    size_t proof_idx = 0;
+    ecmult_x_cb_data x_cb_data;
+    ecmult_r_cb_data r_cb_data;
+    size_t g_len = n_vec_len, h_len = l_vec_len;
+    const size_t G_GENS_LEN = g_len;
+
+#ifdef VERIFY
+    {
+        size_t log_g_len_ver, log_h_len_ver, num_rounds_ver;
+        VERIFY_CHECK(g_len > 0 && h_len > 0);
+        log_g_len_ver = secp256k1_bppp_log2(g_len);
+        log_h_len_ver = secp256k1_bppp_log2(h_len);
+        num_rounds_ver = log_g_len_ver > log_h_len_ver
+            ? log_g_len_ver : log_h_len_ver;
+        VERIFY_CHECK(*proof_len >= 65 * num_rounds_ver + 64);
+        VERIFY_CHECK(g_vec_len == n_vec_len + l_vec_len);
+        VERIFY_CHECK(l_vec_len == c_vec_len);
+        VERIFY_CHECK(secp256k1_is_power_of_two(n_vec_len));
+        VERIFY_CHECK(secp256k1_is_power_of_two(c_vec_len));
+    }
+#else
+    (void)g_vec_len;
+    (void)c_vec_len;
+#endif
+
+    x_cb_data.n = n_vec;
+    x_cb_data.g = g_vec;
+    x_cb_data.l = l_vec;
+    x_cb_data.G_GENS_LEN = G_GENS_LEN;
+    r_cb_data.n1 = n_vec;
+    r_cb_data.g1 = g_vec;
+    r_cb_data.l1 = l_vec;
+    r_cb_data.G_GENS_LEN = G_GENS_LEN;
+    secp256k1_scalar_sqr(&mu_f, &rho_f);
+
+    while (g_len > 1 || h_len > 1) {
+        size_t i, num_points;
+        secp256k1_scalar mu_sq, rho_inv, c0_l1, c1_l0;
+        secp256k1_scalar x_v, c1_l1, r_v, gamma;
+        secp256k1_gej rj, xj;
+        secp256k1_ge r_ge, x_ge;
+        int ok;
+
+        /* rho_f is transcript-derived public data. */
+        secp256k1_scalar_inverse_var(&rho_inv, &rho_f);
+        secp256k1_scalar_sqr(&mu_sq, &mu_f);
+        purify_scalar_inner_product_secret(
+            &c0_l1, c_vec, 0, l_vec, 1, 2, h_len / 2);
+        purify_scalar_inner_product_secret(
+            &c1_l0, c_vec, 1, l_vec, 0, 2, h_len / 2);
+        purify_weighted_scalar_inner_product_secret(
+            &x_v, n_vec, 0, n_vec, 1, 2, g_len / 2, &mu_sq);
+        secp256k1_scalar_mul(&x_v, &x_v, &rho_inv);
+        secp256k1_scalar_add(&x_v, &x_v, &x_v);
+        secp256k1_scalar_add(&x_v, &x_v, &c0_l1);
+        secp256k1_scalar_add(&x_v, &x_v, &c1_l0);
+
+        x_cb_data.rho = &rho_f;
+        x_cb_data.rho_inv = &rho_inv;
+        x_cb_data.n_len = g_len >= 2 ? g_len : 0;
+        num_points = x_cb_data.n_len + (h_len >= 2 ? h_len : 0);
+        ok = purify_ecmult_multi_secret(
+            ctx, &xj, &x_v, ecmult_x_cb, &x_cb_data, num_points);
+        if (!ok) {
+            goto round_failure;
+        }
+
+        purify_weighted_scalar_inner_product_secret(
+            &r_v, n_vec, 1, n_vec, 1, 2, g_len / 2, &mu_sq);
+        purify_scalar_inner_product_secret(
+            &c1_l1, c_vec, 1, l_vec, 1, 2, h_len / 2);
+        secp256k1_scalar_add(&r_v, &r_v, &c1_l1);
+
+        r_cb_data.n_len = g_len / 2;
+        num_points = r_cb_data.n_len + h_len / 2;
+        ok = purify_ecmult_multi_secret(
+            ctx, &rj, &r_v, ecmult_r_cb, &r_cb_data, num_points);
+        if (!ok) {
+            goto round_failure;
+        }
+
+        /* These points become public proof bytes at this line. */
+        secp256k1_ge_set_gej(&x_ge, &xj);
+        secp256k1_ge_set_gej(&r_ge, &rj);
+        secp256k1_fe_normalize(&x_ge.x);
+        secp256k1_fe_normalize(&x_ge.y);
+        secp256k1_fe_normalize(&r_ge.x);
+        secp256k1_fe_normalize(&r_ge.y);
+        PURIFY_BRIDGE_DECLASSIFY(&x_ge, sizeof(x_ge));
+        PURIFY_BRIDGE_DECLASSIFY(&r_ge, sizeof(r_ge));
+        secp256k1_bppp_serialize_points(
+            &proof[proof_idx], &x_ge, &r_ge);
+        proof_idx += 65;
+        secp256k1_sha256_write(
+            transcript, &proof[proof_idx - 65], 65);
+        secp256k1_bppp_challenge_scalar(&gamma, transcript, 0);
+
+        if (g_len > 1) {
+            for (i = 0; i < g_len; i += 2) {
+                secp256k1_scalar nl, nr;
+                secp256k1_gej gl, gr;
+                secp256k1_scalar_mul(&nl, &n_vec[i], &rho_inv);
+                secp256k1_scalar_mul(&nr, &n_vec[i + 1], &gamma);
+                secp256k1_scalar_add(&n_vec[i / 2], &nl, &nr);
+
+                /* rho_f and gamma are public folding challenges. */
+                secp256k1_gej_set_ge(&gl, &g_vec[i]);
+                secp256k1_ecmult(&gl, &gl, &rho_f, NULL);
+                secp256k1_gej_set_ge(&gr, &g_vec[i + 1]);
+                secp256k1_ecmult(&gr, &gr, &gamma, NULL);
+                secp256k1_gej_add_var(&gl, &gl, &gr, NULL);
+                secp256k1_ge_set_gej_var(&g_vec[i / 2], &gl);
+
+                secp256k1_scalar_clear(&nl);
+                secp256k1_scalar_clear(&nr);
+                purify_bridge_secure_clear(&gl, sizeof(gl));
+                purify_bridge_secure_clear(&gr, sizeof(gr));
+            }
+        }
+        if (h_len > 1) {
+            for (i = 0; i < h_len; i += 2) {
+                secp256k1_scalar temporary;
+                secp256k1_gej folded_generator;
+                secp256k1_scalar_mul(
+                    &temporary, &c_vec[i + 1], &gamma);
+                secp256k1_scalar_add(
+                    &c_vec[i / 2], &c_vec[i], &temporary);
+                secp256k1_scalar_mul(
+                    &temporary, &l_vec[i + 1], &gamma);
+                secp256k1_scalar_add(
+                    &l_vec[i / 2], &l_vec[i], &temporary);
+
+                secp256k1_gej_set_ge(
+                    &folded_generator, &g_vec[G_GENS_LEN + i + 1]);
+                secp256k1_ecmult(
+                    &folded_generator, &folded_generator, &gamma, NULL);
+                secp256k1_gej_add_ge_var(
+                    &folded_generator, &folded_generator,
+                    &g_vec[G_GENS_LEN + i], NULL);
+                secp256k1_ge_set_gej_var(
+                    &g_vec[G_GENS_LEN + i / 2], &folded_generator);
+
+                secp256k1_scalar_clear(&temporary);
+                purify_bridge_secure_clear(
+                    &folded_generator, sizeof(folded_generator));
+            }
+        }
+        g_len /= 2;
+        h_len /= 2;
+        rho_f = mu_f;
+        mu_f = mu_sq;
+
+        secp256k1_scalar_clear(&mu_sq);
+        secp256k1_scalar_clear(&rho_inv);
+        secp256k1_scalar_clear(&c0_l1);
+        secp256k1_scalar_clear(&c1_l0);
+        secp256k1_scalar_clear(&x_v);
+        secp256k1_scalar_clear(&c1_l1);
+        secp256k1_scalar_clear(&r_v);
+        secp256k1_scalar_clear(&gamma);
+        purify_bridge_secure_clear(&rj, sizeof(rj));
+        purify_bridge_secure_clear(&xj, sizeof(xj));
+        purify_bridge_secure_clear(&r_ge, sizeof(r_ge));
+        purify_bridge_secure_clear(&x_ge, sizeof(x_ge));
+        continue;
+
+round_failure:
+        secp256k1_scalar_clear(&mu_sq);
+        secp256k1_scalar_clear(&rho_inv);
+        secp256k1_scalar_clear(&c0_l1);
+        secp256k1_scalar_clear(&c1_l0);
+        secp256k1_scalar_clear(&x_v);
+        secp256k1_scalar_clear(&c1_l1);
+        secp256k1_scalar_clear(&r_v);
+        secp256k1_scalar_clear(&gamma);
+        purify_bridge_secure_clear(&rj, sizeof(rj));
+        purify_bridge_secure_clear(&xj, sizeof(xj));
+        purify_bridge_secure_clear(&r_ge, sizeof(r_ge));
+        purify_bridge_secure_clear(&x_ge, sizeof(x_ge));
+        secp256k1_scalar_clear(&mu_f);
+        secp256k1_scalar_clear(&rho_f);
+        purify_bridge_secure_clear(&x_cb_data, sizeof(x_cb_data));
+        purify_bridge_secure_clear(&r_cb_data, sizeof(r_cb_data));
+        return 0;
+    }
+
+    secp256k1_scalar_get_b32(&proof[proof_idx], &n_vec[0]);
+    secp256k1_scalar_get_b32(&proof[proof_idx + 32], &l_vec[0]);
+    PURIFY_BRIDGE_DECLASSIFY(&proof[proof_idx], 64);
+    proof_idx += 64;
+    *proof_len = proof_idx;
+    secp256k1_scalar_clear(&mu_f);
+    secp256k1_scalar_clear(&rho_f);
+    purify_bridge_secure_clear(&x_cb_data, sizeof(x_cb_data));
+    purify_bridge_secure_clear(&r_cb_data, sizeof(r_cb_data));
+    return 1;
+}
+
+static int purify_bppp_rangeproof_norm_product_prove_with_copied_inputs(
+    const secp256k1_context* ctx, secp256k1_scratch_space* scratch,
+    unsigned char* proof, size_t* proof_len,
+    secp256k1_sha256* transcript, const secp256k1_scalar* rho,
+    const secp256k1_ge* g_vec, size_t g_vec_len,
+    const secp256k1_scalar* n_vec, size_t n_vec_len,
+    const secp256k1_scalar* l_vec, size_t l_vec_len,
+    const secp256k1_scalar* c_vec, size_t c_vec_len,
+    size_t secure_clear_checkpoint) {
     secp256k1_scalar *ns = NULL, *ls = NULL, *cs = NULL;
     secp256k1_ge *gs = NULL;
     size_t checkpoint = secp256k1_scratch_checkpoint(&ctx->error_callback, scratch);
     int result = 0;
 
     if (purify_copy_vectors_into_scratch(ctx, scratch, &ns, &ls, &cs, &gs, n_vec, l_vec, c_vec, g_vec, n_vec_len, l_vec_len)) {
-        result = secp256k1_bppp_rangeproof_norm_product_prove(ctx, scratch, proof, proof_len, transcript, rho,
-                                                              gs, g_vec_len, ns, n_vec_len, ls, l_vec_len, cs, c_vec_len);
+        result = purify_bppp_rangeproof_norm_product_prove_secret(
+            ctx, proof, proof_len, transcript, rho, gs, g_vec_len,
+            ns, n_vec_len, ls, l_vec_len, cs, c_vec_len);
     }
+    /* The imported prover rewinds its private scratch frames before returning.
+     * Clear the entire tail so those secret intermediates do not survive along
+     * with the bridge-owned witness copies in a reusable scratch allocation.
+     */
+    purify_bridge_secure_clear_scratch_tail(scratch, secure_clear_checkpoint);
     secp256k1_scratch_apply_checkpoint(&ctx->error_callback, scratch, checkpoint);
     return result;
 }
@@ -1736,35 +2189,104 @@ int purify_bppp_create_generators(purify_secp_context* context, size_t count, un
     return ok;
 }
 
+/* Scale a serialized BPPP generator without changing its wire encoding. */
+int purify_bppp_scale_generator(purify_secp_context* context,
+                                const unsigned char generator33[33],
+                                const unsigned char scalar32[32],
+                                unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_generator generator = {{0}}, result_generator = {{0}};
+    secp256k1_scalar scalar = {0};
+    secp256k1_ge generator_ge = {0}, result_ge = {0};
+    secp256k1_gej result_j = {0};
+    int ok = 0;
+
+    if (ctx == NULL || generator33 == NULL || scalar32 == NULL || out33 == NULL) {
+        goto cleanup;
+    }
+    if (!secp256k1_generator_parse(ctx, &generator, generator33) ||
+        !purify_parse_scalar(scalar32, &scalar, 0)) {
+        goto cleanup;
+    }
+    secp256k1_generator_load(&generator_ge, &generator);
+    secp256k1_ecmult_const(&result_j, &generator_ge, &scalar);
+    if (secp256k1_gej_is_infinity(&result_j)) {
+        goto cleanup;
+    }
+    secp256k1_ge_set_gej(&result_ge, &result_j);
+    secp256k1_generator_save(&result_generator, &result_ge);
+    ok = secp256k1_generator_serialize(ctx, out33, &result_generator);
+
+cleanup:
+    if (!ok && out33 != NULL) {
+        memset(out33, 0, 33);
+    }
+    secp256k1_scalar_clear(&scalar);
+    secp256k1_ge_clear(&generator_ge);
+    secp256k1_ge_clear(&result_ge);
+    secp256k1_gej_clear(&result_j);
+    secp256k1_memclear_explicit(&generator, sizeof(generator));
+    secp256k1_memclear_explicit(&result_generator,
+                                sizeof(result_generator));
+    return ok;
+}
+
+int purify_bppp_generator_to_point(purify_secp_context* context,
+                                   const unsigned char generator33[33],
+                                   unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_generator generator;
+    secp256k1_ge generator_ge;
+
+    if (ctx == NULL || generator33 == NULL || out33 == NULL) {
+        return 0;
+    }
+    if (!secp256k1_generator_parse(ctx, &generator, generator33)) {
+        return 0;
+    }
+    secp256k1_generator_load(&generator_ge, &generator);
+    return purify_serialize_point(out33, &generator_ge);
+}
+
 int purify_pedersen_commit_char(purify_secp_context* context,
                                 const unsigned char blind32[32], const unsigned char value32[32],
                                 const unsigned char value_gen33[33], const unsigned char blind_gen33[33],
                                 unsigned char commitment_out33[33]) {
     secp256k1_context* ctx = purify_context_handle(context);
-    secp256k1_scalar blind_scalar, value_scalar;
+    secp256k1_scalar blind_scalar = {0}, value_scalar = {0};
     secp256k1_generator value_generator, blind_generator;
     secp256k1_ge value_ge, blind_ge, commit_ge;
-    secp256k1_gej blind_part, value_part, total;
+    secp256k1_gej total;
     int ok = 0;
 
     if (ctx == NULL || blind32 == NULL || value32 == NULL || value_gen33 == NULL || blind_gen33 == NULL || commitment_out33 == NULL) {
         return 0;
     }
+    purify_bridge_secure_clear(commitment_out33, 33);
     if (!purify_parse_scalar(blind32, &blind_scalar, 0) || !purify_parse_scalar(value32, &value_scalar, 0)) {
-        return 0;
+        goto cleanup;
     }
     if (!secp256k1_generator_parse(ctx, &value_generator, value_gen33) || !secp256k1_generator_parse(ctx, &blind_generator, blind_gen33)) {
-        return 0;
+        goto cleanup;
     }
     secp256k1_generator_load(&value_ge, &value_generator);
     secp256k1_generator_load(&blind_ge, &blind_generator);
-    secp256k1_ecmult_const(&blind_part, &blind_ge, &blind_scalar);
-    secp256k1_ecmult_const(&value_part, &value_ge, &value_scalar);
-    secp256k1_gej_add_var(&total, &blind_part, &value_part, NULL);
-    if (!secp256k1_gej_is_infinity(&total)) {
-        secp256k1_ge_set_gej(&commit_ge, &total);
+    secp256k1_gej_set_infinity(&total);
+    purify_gej_add_secret_scalar_term(&total, &blind_ge, &blind_scalar);
+    purify_gej_add_secret_scalar_term(&total, &value_ge, &value_scalar);
+    secp256k1_ge_set_gej(&commit_ge, &total);
+    PURIFY_BRIDGE_DECLASSIFY(&commit_ge, sizeof(commit_ge));
+    if (!commit_ge.infinity) {
         ok = purify_serialize_point(commitment_out33, &commit_ge);
     }
+
+cleanup:
+    secp256k1_scalar_clear(&blind_scalar);
+    secp256k1_scalar_clear(&value_scalar);
+    purify_bridge_secure_clear(&value_ge, sizeof(value_ge));
+    purify_bridge_secure_clear(&blind_ge, sizeof(blind_ge));
+    purify_bridge_secure_clear(&commit_ge, sizeof(commit_ge));
+    purify_bridge_secure_clear(&total, sizeof(total));
     return ok;
 }
 
@@ -1778,12 +2300,14 @@ static int purify_bppp_commit_norm_arg_impl(purify_secp_context* context,
     secp256k1_context* ctx = resources != NULL ? resources->ctx : purify_context_handle(context);
     secp256k1_scratch_space* scratch = resources != NULL ? resources->scratch : NULL;
     secp256k1_bppp_generators* gens = resources != NULL ? resources->gens : NULL;
-    secp256k1_scalar rho, mu;
+    secp256k1_scalar rho = {0}, mu = {0};
     secp256k1_scalar *n_vec = NULL, *l_vec = NULL, *c_vec = NULL;
     secp256k1_ge commit;
     size_t expected_generators = 0;
     size_t serialized_generators_len = 0;
+    size_t scratch_checkpoint = 0;
     int ok = 0;
+    int scratch_contains_secrets = 0;
 
     if (ctx == NULL || rho32 == NULL || (resources == NULL && generators33 == NULL) || n_vec32 == NULL || l_vec32 == NULL || c_vec32 == NULL ||
         commitment_out33 == NULL) {
@@ -1802,7 +2326,7 @@ static int purify_bppp_commit_norm_arg_impl(purify_secp_context* context,
         return 0;
     }
     if (!purify_parse_scalar(rho32, &rho, 1)) {
-        return 0;
+        goto cleanup;
     }
     if (resources == NULL) {
         scratch = purify_bppp_create_scratch(ctx, generators_count);
@@ -1819,16 +2343,25 @@ static int purify_bppp_commit_norm_arg_impl(purify_secp_context* context,
         !purify_parse_scalar_array(c_vec32, c_vec_len, c_vec)) {
         goto cleanup;
     }
+    scratch_checkpoint = secp256k1_scratch_checkpoint(&ctx->error_callback, scratch);
+    scratch_contains_secrets = 1;
     secp256k1_scalar_sqr(&mu, &rho);
-    if (!secp256k1_bppp_commit(ctx, scratch, &commit, gens, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len, &mu)) {
+    if (!purify_bppp_commit_secret(ctx, &commit, gens, n_vec, n_vec_len,
+                                  l_vec, l_vec_len, c_vec, c_vec_len, &mu)) {
         goto cleanup;
     }
     ok = purify_serialize_point(commitment_out33, &commit);
 
 cleanup:
-    if (n_vec != NULL) free(n_vec);
-    if (l_vec != NULL) free(l_vec);
-    if (c_vec != NULL) free(c_vec);
+    purify_bridge_secure_free_array(n_vec, n_vec_len, sizeof(*n_vec));
+    purify_bridge_secure_free_array(l_vec, l_vec_len, sizeof(*l_vec));
+    purify_bridge_secure_free_array(c_vec, c_vec_len, sizeof(*c_vec));
+    if (scratch_contains_secrets) {
+        purify_bridge_secure_clear_scratch_tail(scratch, scratch_checkpoint);
+    }
+    secp256k1_scalar_clear(&rho);
+    secp256k1_scalar_clear(&mu);
+    purify_bridge_secure_clear(&commit, sizeof(commit));
     if (resources == NULL) {
         if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
         if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
@@ -1866,14 +2399,16 @@ static int purify_bppp_commit_witness_only_impl(purify_secp_context* context,
     secp256k1_context* ctx = resources != NULL ? resources->ctx : purify_context_handle(context);
     secp256k1_scratch_space* scratch = resources != NULL ? resources->scratch : NULL;
     secp256k1_bppp_generators* gens = resources != NULL ? resources->gens : NULL;
-    secp256k1_scalar zero;
+    secp256k1_scalar zero = {0};
     secp256k1_scalar *n_vec = NULL, *l_vec = NULL;
     secp256k1_ge commit;
     secp256k1_gej commitj;
     ecmult_bp_commit_cb_data data;
     size_t expected_generators = 0;
     size_t serialized_generators_len = 0;
+    size_t scratch_checkpoint = 0;
     int ok = 0;
+    int scratch_contains_secrets = 0;
 
     if (ctx == NULL || (resources == NULL && generators33 == NULL) || n_vec32 == NULL || l_vec32 == NULL || commitment_out33 == NULL) {
         return 0;
@@ -1902,24 +2437,37 @@ static int purify_bppp_commit_witness_only_impl(purify_secp_context* context,
         goto cleanup;
     }
 
+    scratch_checkpoint = secp256k1_scratch_checkpoint(&ctx->error_callback, scratch);
+    scratch_contains_secrets = 1;
     secp256k1_scalar_set_int(&zero, 0);
     data.g = gens->gens;
     data.n = n_vec;
     data.l = l_vec;
     data.g_len = n_vec_len;
-    if (!secp256k1_ecmult_multi_var(&ctx->error_callback, scratch, &commitj, &zero, ecmult_bp_commit_cb,
-                                    (void*)&data, expected_generators)) {
+    if (!purify_ecmult_multi_secret(ctx, &commitj, &zero,
+                                    ecmult_bp_commit_cb, &data,
+                                    expected_generators)) {
         goto cleanup;
     }
+    PURIFY_BRIDGE_DECLASSIFY(&commitj.infinity,
+                             sizeof(commitj.infinity));
     if (secp256k1_gej_is_infinity(&commitj)) {
         goto cleanup;
     }
-    secp256k1_ge_set_gej_var(&commit, &commitj);
+    secp256k1_ge_set_gej(&commit, &commitj);
+    PURIFY_BRIDGE_DECLASSIFY(&commit, sizeof(commit));
     ok = purify_serialize_point(commitment_out33, &commit);
 
 cleanup:
-    if (n_vec != NULL) free(n_vec);
-    if (l_vec != NULL) free(l_vec);
+    purify_bridge_secure_free_array(n_vec, n_vec_len, sizeof(*n_vec));
+    purify_bridge_secure_free_array(l_vec, l_vec_len, sizeof(*l_vec));
+    if (scratch_contains_secrets) {
+        purify_bridge_secure_clear_scratch_tail(scratch, scratch_checkpoint);
+    }
+    secp256k1_scalar_clear(&zero);
+    purify_bridge_secure_clear(&data, sizeof(data));
+    purify_bridge_secure_clear(&commit, sizeof(commit));
+    purify_bridge_secure_clear(&commitj, sizeof(commitj));
     if (resources == NULL) {
         if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
         if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
@@ -1948,26 +2496,34 @@ int purify_bppp_offset_commitment(purify_secp_context* context,
                                   const unsigned char commitment33[33], const unsigned char scalar32[32],
                                   unsigned char commitment_out33[33]) {
     secp256k1_context* ctx = purify_context_handle(context);
-    secp256k1_scalar scalar;
+    secp256k1_scalar scalar = {0};
     secp256k1_ge commitment_ge, result_ge;
-    secp256k1_gej commitment_j, offset_j, result_j;
+    secp256k1_gej result_j;
     int ok = 0;
 
     if (ctx == NULL || commitment33 == NULL || scalar32 == NULL || commitment_out33 == NULL) {
         return 0;
     }
+    purify_bridge_secure_clear(commitment_out33, 33);
     if (!purify_parse_point_as_ge(commitment33, &commitment_ge) ||
         !purify_parse_scalar(scalar32, &scalar, 0)) {
-        return 0;
+        goto cleanup;
     }
 
-    secp256k1_gej_set_ge(&commitment_j, &commitment_ge);
-    secp256k1_ecmult_const(&offset_j, &secp256k1_ge_const_g, &scalar);
-    secp256k1_gej_add_var(&result_j, &commitment_j, &offset_j, NULL);
-    if (!secp256k1_gej_is_infinity(&result_j)) {
-        secp256k1_ge_set_gej(&result_ge, &result_j);
+    secp256k1_gej_set_ge(&result_j, &commitment_ge);
+    purify_gej_add_secret_scalar_term(
+        &result_j, &secp256k1_ge_const_g, &scalar);
+    secp256k1_ge_set_gej(&result_ge, &result_j);
+    PURIFY_BRIDGE_DECLASSIFY(&result_ge, sizeof(result_ge));
+    if (!result_ge.infinity) {
         ok = purify_serialize_point(commitment_out33, &result_ge);
     }
+
+cleanup:
+    secp256k1_scalar_clear(&scalar);
+    purify_bridge_secure_clear(&commitment_ge, sizeof(commitment_ge));
+    purify_bridge_secure_clear(&result_ge, sizeof(result_ge));
+    purify_bridge_secure_clear(&result_j, sizeof(result_j));
     return ok;
 }
 
@@ -1975,7 +2531,7 @@ int purify_point_scale(purify_secp_context* context,
                        const unsigned char point33[33], const unsigned char scalar32[32],
                        unsigned char out33[33]) {
     secp256k1_context* ctx = purify_context_handle(context);
-    secp256k1_scalar scalar;
+    secp256k1_scalar scalar = {0};
     secp256k1_ge point_ge, result_ge;
     secp256k1_gej result_j;
     int ok = 0;
@@ -1983,16 +2539,24 @@ int purify_point_scale(purify_secp_context* context,
     if (ctx == NULL || point33 == NULL || scalar32 == NULL || out33 == NULL) {
         return 0;
     }
+    purify_bridge_secure_clear(out33, 33);
     if (!purify_parse_point_as_ge(point33, &point_ge) ||
         !purify_parse_scalar(scalar32, &scalar, 0)) {
-        return 0;
+        goto cleanup;
     }
 
     secp256k1_ecmult_const(&result_j, &point_ge, &scalar);
-    if (!secp256k1_gej_is_infinity(&result_j)) {
-        secp256k1_ge_set_gej(&result_ge, &result_j);
+    secp256k1_ge_set_gej(&result_ge, &result_j);
+    PURIFY_BRIDGE_DECLASSIFY(&result_ge, sizeof(result_ge));
+    if (!result_ge.infinity) {
         ok = purify_serialize_point(out33, &result_ge);
     }
+
+cleanup:
+    secp256k1_scalar_clear(&scalar);
+    purify_bridge_secure_clear(&point_ge, sizeof(point_ge));
+    purify_bridge_secure_clear(&result_ge, sizeof(result_ge));
+    purify_bridge_secure_clear(&result_j, sizeof(result_j));
     return ok;
 }
 
@@ -2032,14 +2596,17 @@ static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
     secp256k1_context* ctx = resources != NULL ? resources->ctx : purify_context_handle(context);
     secp256k1_scratch_space* scratch = resources != NULL ? resources->scratch : NULL;
     secp256k1_bppp_generators* gens = NULL;
-    secp256k1_scalar rho, mu;
+    secp256k1_scalar rho = {0}, mu = {0};
     secp256k1_scalar *n_vec = NULL, *l_vec = NULL, *c_vec = NULL;
     secp256k1_ge commit;
     secp256k1_sha256 transcript;
     size_t required = purify_bppp_required_proof_size(n_vec_len, c_vec_len);
     size_t expected_generators = 0;
     size_t serialized_generators_len = 0;
+    size_t scratch_checkpoint = 0;
     int ok = 0;
+    int scratch_contains_secrets = 0;
+    int scratch_tail_cleared = 0;
     purify_bppp_mutable_generators_guard gens_guard = {0};
 
     if (ctx == NULL || rho32 == NULL || (resources == NULL && generators33 == NULL) || n_vec32 == NULL || l_vec32 == NULL || c_vec32 == NULL ||
@@ -2064,12 +2631,12 @@ static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
         return 0;
     }
     if (!purify_parse_scalar(rho32, &rho, 1)) {
-        return 0;
+        goto cleanup;
     }
     if (resources != NULL) {
         gens = purify_bppp_backend_resources_acquire_scratch_gens(resources, &gens_guard);
         if (gens == NULL) {
-            return 0;
+            goto cleanup;
         }
     } else {
         scratch = purify_bppp_create_scratch(ctx, generators_count);
@@ -2086,8 +2653,11 @@ static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
         !purify_parse_scalar_array(c_vec32, c_vec_len, c_vec)) {
         goto cleanup;
     }
+    scratch_checkpoint = secp256k1_scratch_checkpoint(&ctx->error_callback, scratch);
+    scratch_contains_secrets = 1;
     secp256k1_scalar_sqr(&mu, &rho);
-    if (!secp256k1_bppp_commit(ctx, scratch, &commit, gens, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len, &mu)) {
+    if (!purify_bppp_commit_secret(ctx, &commit, gens, n_vec, n_vec_len,
+                                  l_vec, l_vec_len, c_vec, c_vec_len, &mu)) {
         goto cleanup;
     }
     if (!purify_serialize_point(commitment_out33, &commit)) {
@@ -2096,13 +2666,23 @@ static int purify_bppp_prove_norm_arg_impl(purify_secp_context* context,
     if (!purify_norm_arg_commit_initial_data(&transcript, &rho, gens, n_vec_len, c_vec, c_vec_len, &commit)) {
         goto cleanup;
     }
-    ok = purify_bppp_rangeproof_norm_product_prove_const(ctx, scratch, proof_out, proof_len, &transcript, &rho,
-                                                         gens->gens, gens->n, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len);
+    ok = purify_bppp_rangeproof_norm_product_prove_with_copied_inputs(
+        ctx, scratch, proof_out, proof_len, &transcript, &rho, gens->gens,
+        gens->n, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len,
+        scratch_checkpoint);
+    scratch_tail_cleared = 1;
 
 cleanup:
-    if (n_vec != NULL) free(n_vec);
-    if (l_vec != NULL) free(l_vec);
-    if (c_vec != NULL) free(c_vec);
+    purify_bridge_secure_free_array(n_vec, n_vec_len, sizeof(*n_vec));
+    purify_bridge_secure_free_array(l_vec, l_vec_len, sizeof(*l_vec));
+    purify_bridge_secure_free_array(c_vec, c_vec_len, sizeof(*c_vec));
+    if (scratch_contains_secrets && !scratch_tail_cleared) {
+        purify_bridge_secure_clear_scratch_tail(scratch, scratch_checkpoint);
+    }
+    secp256k1_scalar_clear(&rho);
+    secp256k1_scalar_clear(&mu);
+    purify_bridge_secure_clear(&commit, sizeof(commit));
+    purify_bridge_secure_clear(&transcript, sizeof(transcript));
     purify_bppp_backend_resources_release_scratch_gens(&gens_guard);
     if (resources == NULL) {
         if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
@@ -2145,7 +2725,7 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
     secp256k1_context* ctx = resources != NULL ? resources->ctx : purify_context_handle(context);
     secp256k1_scratch_space* scratch = resources != NULL ? resources->scratch : NULL;
     secp256k1_bppp_generators* gens = NULL;
-    secp256k1_scalar rho, mu;
+    secp256k1_scalar rho = {0}, mu = {0};
     secp256k1_scalar *n_vec = NULL, *l_vec = NULL, *c_vec = NULL;
     secp256k1_ge expected_commit, commitment_ge;
     secp256k1_sha256 transcript;
@@ -2153,7 +2733,10 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
     size_t required = purify_bppp_required_proof_size(n_vec_len, c_vec_len);
     size_t expected_generators = 0;
     size_t serialized_generators_len = 0;
+    size_t scratch_checkpoint = 0;
     int ok = 0;
+    int scratch_contains_secrets = 0;
+    int scratch_tail_cleared = 0;
     purify_bppp_mutable_generators_guard gens_guard = {0};
 
     memset(expected_commitment33, 0, sizeof(expected_commitment33));
@@ -2179,12 +2762,12 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
         return 0;
     }
     if (!purify_parse_scalar(rho32, &rho, 1) || !purify_parse_point_as_ge(commitment33, &commitment_ge)) {
-        return 0;
+        goto cleanup;
     }
     if (resources != NULL) {
         gens = purify_bppp_backend_resources_acquire_scratch_gens(resources, &gens_guard);
         if (gens == NULL) {
-            return 0;
+            goto cleanup;
         }
     } else {
         scratch = purify_bppp_create_scratch(ctx, generators_count);
@@ -2201,26 +2784,44 @@ static int purify_bppp_prove_norm_arg_to_commitment_impl(purify_secp_context* co
         !purify_parse_scalar_array(c_vec32, c_vec_len, c_vec)) {
         goto cleanup;
     }
+    scratch_checkpoint = secp256k1_scratch_checkpoint(&ctx->error_callback, scratch);
+    scratch_contains_secrets = 1;
     secp256k1_scalar_sqr(&mu, &rho);
-    if (!secp256k1_bppp_commit(ctx, scratch, &expected_commit, gens, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len, &mu)) {
+    if (!purify_bppp_commit_secret(ctx, &expected_commit, gens, n_vec,
+                                  n_vec_len, l_vec, l_vec_len, c_vec,
+                                  c_vec_len, &mu)) {
         goto cleanup;
     }
     if (!purify_serialize_point(expected_commitment33, &expected_commit)) {
         goto cleanup;
     }
-    if (secp256k1_memcmp_var(expected_commitment33, commitment33, sizeof(expected_commitment33)) != 0) {
+    if (!purify_bridge_memeq_const(expected_commitment33, commitment33,
+                                   sizeof(expected_commitment33))) {
         goto cleanup;
     }
     if (!purify_norm_arg_commit_initial_data(&transcript, &rho, gens, n_vec_len, c_vec, c_vec_len, &commitment_ge)) {
         goto cleanup;
     }
-    ok = purify_bppp_rangeproof_norm_product_prove_const(ctx, scratch, proof_out, proof_len, &transcript, &rho,
-                                                         gens->gens, gens->n, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len);
+    ok = purify_bppp_rangeproof_norm_product_prove_with_copied_inputs(
+        ctx, scratch, proof_out, proof_len, &transcript, &rho, gens->gens,
+        gens->n, n_vec, n_vec_len, l_vec, l_vec_len, c_vec, c_vec_len,
+        scratch_checkpoint);
+    scratch_tail_cleared = 1;
 
 cleanup:
-    if (n_vec != NULL) free(n_vec);
-    if (l_vec != NULL) free(l_vec);
-    if (c_vec != NULL) free(c_vec);
+    purify_bridge_secure_free_array(n_vec, n_vec_len, sizeof(*n_vec));
+    purify_bridge_secure_free_array(l_vec, l_vec_len, sizeof(*l_vec));
+    purify_bridge_secure_free_array(c_vec, c_vec_len, sizeof(*c_vec));
+    if (scratch_contains_secrets && !scratch_tail_cleared) {
+        purify_bridge_secure_clear_scratch_tail(scratch, scratch_checkpoint);
+    }
+    secp256k1_scalar_clear(&rho);
+    secp256k1_scalar_clear(&mu);
+    purify_bridge_secure_clear(&expected_commit, sizeof(expected_commit));
+    purify_bridge_secure_clear(&commitment_ge, sizeof(commitment_ge));
+    purify_bridge_secure_clear(expected_commitment33,
+                               sizeof(expected_commitment33));
+    purify_bridge_secure_clear(&transcript, sizeof(transcript));
     purify_bppp_backend_resources_release_scratch_gens(&gens_guard);
     if (resources == NULL) {
         if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);

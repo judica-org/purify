@@ -81,7 +81,9 @@ Result<Bytes> statement_bytes(const Statement& statement) {
 }
 
 std::size_t proof_bytes(const Proof& proof) {
-    return proof.a_commitment.size() + proof.s_commitment.size() + proof.t2.size() + proof.proof.size();
+    return proof.a_commitment.size() + proof.s_commitment.size() +
+        proof.t2.size() + proof.public_commitment_dlog_nonce.size() +
+        proof.public_commitment_dlog_response.size() + proof.proof.size();
 }
 
 } // namespace purify_test::construction_receipt

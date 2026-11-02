@@ -809,8 +809,9 @@ void test_experimental_circuit_norm_arg_one_gate(TestContext& ctx) {
     Bytes binding = purify::bytes_from_ascii("one-gate-norm-arg-binding");
 
     Result<purify::bppp::PointBytes> witness_commitment =
-        purify::bppp::commit_experimental_circuit_witness(circuit, assignment, context.get(), binding);
-    expect_ok(ctx, witness_commitment, "commit_experimental_circuit_witness commits the reduced one-gate witness");
+        purify::bppp::commit_experimental_circuit_witness(circuit, assignment,
+                                                          context.get());
+    expect_ok(ctx, witness_commitment, "commit_experimental_circuit_witness commits the raw one-gate witness");
     if (!witness_commitment.has_value()) {
         return;
     }
@@ -823,7 +824,7 @@ void test_experimental_circuit_norm_arg_one_gate(TestContext& ctx) {
         return;
     }
     ctx.expect(proof->witness_commitment == *witness_commitment,
-               "experimental circuit norm argument preserves the caller-supplied reduced witness commitment");
+               "experimental circuit norm argument preserves the caller-supplied raw witness commitment");
 
     Result<bool> verified = purify::bppp::verify_experimental_circuit_norm_arg(circuit, *proof, context.get(), binding);
     expect_ok(ctx, verified, "verify_experimental_circuit_norm_arg succeeds on the one-gate proof");

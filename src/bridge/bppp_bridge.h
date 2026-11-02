@@ -40,6 +40,15 @@ int purify_bppp_value_generator_h(purify_secp_context* context, unsigned char ou
  */
 int purify_bppp_create_generators(purify_secp_context* context, size_t count, unsigned char* out, size_t* out_len);
 
+int purify_bppp_scale_generator(purify_secp_context* context,
+                                const unsigned char generator33[33],
+                                const unsigned char scalar32[32],
+                                unsigned char out33[33]);
+
+int purify_bppp_generator_to_point(purify_secp_context* context,
+                                   const unsigned char generator33[33],
+                                   unsigned char out33[33]);
+
 purify_bppp_backend_resources* purify_bppp_backend_resources_create(purify_secp_context* context,
                                                                     const unsigned char* generators33,
                                                                     size_t generators_count);

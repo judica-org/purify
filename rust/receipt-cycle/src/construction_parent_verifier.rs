@@ -4,6 +4,8 @@
 //! root. It does not establish receipt acceptance: the native verifier must
 //! parse that root against the anchor basis and complete `decide()`.
 
+use std::io::{Read, Seek};
+
 use thiserror::Error;
 
 use crate::anchor_recurrence::ANCHOR_RECURRENCE_STATE_ARITY;
@@ -12,10 +14,49 @@ use crate::construction_manifest::{
 };
 use crate::construction_parent_input::ConstructionParentInputs;
 use crate::direct_nova::{nova_state_to_source, source_state_to_nova};
+use crate::nova_session::verifier_artifact::{
+    DirectNovaVerifierArtifactError, ExpectedDirectNovaVerifierArtifact,
+};
 use crate::nova_session::{
     DirectNovaSessionError, SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
 };
 use crate::{ReceiptCycleError, Scalar};
+
+/// Locally qualified identity of the production construction-parent verifier.
+///
+/// The digest is tagged SHA-256 over the complete artifact encoding. Neither
+/// value may be supplied by a receipt or derived from the artifact being
+/// opened.
+pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT:
+    ExpectedDirectNovaVerifierArtifact = ExpectedDirectNovaVerifierArtifact::new(
+    638_174_560,
+    [
+        0x7b, 0x2f, 0xca, 0xfb, 0x64, 0x75, 0xc8, 0x70, 0x92, 0x5c, 0x2c, 0x00, 0xb0, 0xab, 0x9e,
+        0xba, 0x53, 0x9b, 0xc5, 0x40, 0xe3, 0x4d, 0xb1, 0x46, 0x78, 0xcf, 0x00, 0x52, 0x13, 0xbd,
+        0xeb, 0xd5,
+    ],
+);
+
+/// Loads the sole production verifier from one seekable artifact snapshot.
+///
+/// Authentication of the complete encoding precedes all Serde work. A second
+/// digest over the bytes actually consumed prevents a changed snapshot from
+/// producing a verifier.
+pub(crate) fn load_qualified_construction_parent_verifier<R>(
+    artifact: &mut R,
+) -> Result<
+    SelectedDirectNovaVerifier<ANCHOR_RECURRENCE_STATE_ARITY>,
+    DirectNovaVerifierArtifactError,
+>
+where
+    R: Read + Seek,
+{
+    SelectedDirectNovaVerifier::from_artifact_reader(
+        artifact,
+        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+        &QUALIFIED_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
+    )
+}
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(crate) enum ConstructionParentVerifierError {

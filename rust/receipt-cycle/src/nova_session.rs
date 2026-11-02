@@ -467,11 +467,12 @@ const QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID: DirectNovaSuiteId = DirectNovaSuit
     0xff, 0xe7, 0xb7, 0x71, 0x9d, 0xf7, 0x94, 0xf6, 0xc7, 0xcf, 0xa2, 0x73, 0x14, 0xbd, 0xd5, 0xaa,
 ]);
 
-/// Native-profile construction-parent suite with qualified setup and fold.
+/// Native-profile construction-parent suite qualified through setup, folding,
+/// full Spartan compression, canonical verification, and verifier-artifact
+/// reload under the no-swap resource gate.
 ///
-/// Full Spartan compression remains pending under the no-swap resource gate.
-/// This selector does not activate a construction-receipt codec or consensus
-/// acceptance path.
+/// This selector does not itself expose a construction-receipt acceptance
+/// path.
 pub(crate) static QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE: ExpectedDirectNovaSuite =
     ExpectedDirectNovaSuite::new(
         QUALIFIED_CONSTRUCTION_VERSIONS,

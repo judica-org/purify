@@ -662,6 +662,7 @@ if(PURIFY_BUILD_TESTS)
         tests/accountable_signature_tests.cpp
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
+        tests/slashability_e2e_fixture.cpp
         tests/slash_adaptor_tests.cpp
         tests/canonical_recovery_root_tests.cpp
         tests/canonical_recovery_root_helpers.cpp

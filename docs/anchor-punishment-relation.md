@@ -84,27 +84,32 @@ The Rust production recurrence now selects the public V4 leaf and constrains
 the punishment-key DLog equation under the exact resolved statement. The
 construction statement digest and initial manifest bind that resolution. The
 complete recurrence is pinned by relation ID
-`ecfd8e56084083ba9a94431fad5a5b1e0991d7597746440e76ccf77924444a66`;
+`8494ab8ca7e6042e245e1ee1a55b915089b9f2e3fc161c4785235d1fac4651b2`;
 the preceding hidden-anchor recurrence is not compatible with record version
 3. The `69 + 224*N` payload boundary is unchanged, and no punishment key is
 added to the payload entry.
 
-This relation migration is now exercised by the library construction-receipt
-acceptance path, but it does not activate consensus or enrollment. The selected
-profile freezes public-parameter digest
-`b90f7e761288cc1fdb7abd16f4e0abbbe2c8d7c773f315a17f1d7c4f982f7900`
+This relation migration is exercised by the Rust construction-parent backend;
+it does not activate consensus, enrollment, or a public acceptance API. The
+selected profile freezes public-parameter digest
+`146a7b058e17885ffbdcbc883bcb1f3cbc26be9875223b059c0821c2cd588c03`
 and suite ID
-`116fbf3345173dbedfd53e3ebe0e2acbffe7b7719df794f6c7cfa27314bdd5aa`;
-exact setup, two ordered full-scale folds, Spartan IPA compression, canonical
-verification, and external verifier-artifact reload have qualified. The frozen
-external artifact identity is enforced by the loader behind a private C ABI,
-and the public C++ verifier completes native `decide()` before returning
-acceptance. A recursive-valid/nondeciding vector
-preserves the same public two-anchor inputs but authenticates a distinct root
-which fails that native decision.
+`44032777f0483b0f591f2490e54f6db293aa8ca8c10e1d6225cbed3040555d08`.
+One transparent setup, two ordered full-scale folds for each of the accepted
+and nondeciding fixtures, Spartan IPA compression, canonical verification, and
+authenticated artifact reload have qualified. Each proof is 15,076 bytes.
+
+The local verifier artifact is 720,295,190 encoded bytes and expands to a
+3,793,960,104-byte canonical payload. Its v2 tagged digest is
+`75b4cebc0d81ccc8c0427a0529f7eb4545ad827b24bf2de5ab3dcb7efface38d`.
+A setup-free regression loads that exact artifact and verifies both qualified
+outcomes. The purpose-specific C ABI and the mandatory native `decide()`
+acceptance boundary belong to the next stacked change; recursive validity alone
+does not accept a construction receipt.
 
 These validity results do not resolve this relation's explicit related-output
 security assumption, distributed setup and custody, share-preserving child
 proving, or correlated-key pre-conflict confidentiality. Qualification covers
-two anchors rather than operation at 100 to 1,000 anchors, and the roughly 609
-MiB external verifier remains impractical to embed without further size work.
+two anchors rather than operation at 100 to 1,000 anchors. The roughly 687 MiB
+compressed verifier, 3.53 GiB decoded state, and multi-minute cold load remain
+impractical for binary embedding without further size and startup work.

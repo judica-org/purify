@@ -9,9 +9,9 @@ that equation. The helper never receives the original norm witnesses.
 This native helper is an accumulation component, not a compressed construction
 receipt. Native callers using it alone still replay the child partial verifiers
 and every accumulation transition. The selected construction-parent recurrence
-now authenticates those computations recursively so their transcripts can be
-discarded after receipt construction; its public C++ acceptance path still
-completes the final native decision.
+authenticates those computations recursively so their transcripts can be
+discarded after receipt construction. A separate purpose-specific acceptance
+boundary must still complete the final native decision.
 
 V4 is the candidate active circuit-leaf path. Its native producer,
 preparer, verifier, and constrained relation are implemented. The
@@ -20,8 +20,8 @@ converts an outer-authenticated V4 leaf into the same algebraic
 accumulation language. The result remains pending until coefficient reduction,
 every accumulation transition, and `decide` succeed. This native adapter alone
 does not turn an accumulation root into a recursive construction receipt; the
-selected Nova parent and C++ acceptance boundary perform that separate
-authentication.
+selected Nova parent supplies recursive authentication, and the subsequent
+native decision supplies acceptance.
 
 ## Exact grouping rule
 
@@ -350,12 +350,11 @@ These openings are additional public transition data. Native verification
 retains them alongside the original child proofs; a final 1,122-byte step
 does not replace that history. The selected recurrence implements recursive
 authentication so this history can become a parent witness. The qualified
-two-anchor Nova lifecycle compresses that witness history, and the public C++
-acceptance path completes the final native decision before returning a
-capability. A checked-in recursive-valid/nondeciding proof authenticates a
-nondeciding pending root and is rejected specifically by that decision,
-demonstrating why neither the native helper nor recursive verification alone
-establishes acceptance.
+two-anchor Nova lifecycle compresses that witness history. The qualified
+nondeciding proof authenticates a different pending root and demonstrates why
+the next purpose-specific acceptance layer must complete the native decision.
+Neither the native helper nor recursive verification alone establishes
+acceptance.
 
 ## Historical generic varying-coefficient measurements
 
@@ -460,17 +459,18 @@ canonical reduction SHA256 is
 the final step SHA256 is
 `b3a14ad17548fed019e02a5d90063be232826750d1f5987a72b22013585f7b1b`.
 
-The selected parent now authenticates the purpose-owned semantic digest and
+The selected parent authenticates the purpose-owned semantic digest and
 frontend constants, constrains V4 preparation, reduction, and every ordered
-accumulation transition, and binds exact registry coverage. The complete
-two-anchor production lifecycle, frozen external verifier identity, private C
-ABI, and public C++ recursive-plus-native acceptance path are implemented.
+accumulation transition, and binds exact registry coverage. The two-anchor
+recursive lifecycle and frozen external verifier identity are qualified. The
+private C ABI and public C++ recursive-plus-native acceptance path are the next
+stacked change.
 Remaining work is specific: independently review the V4 leaf and composition
 arguments; implement distributed custody and share-preserving child proving;
 resolve the correlated-key confidentiality argument; qualify operation at 100
-to 1,000 anchors; and reduce or operationalize the roughly 609 MiB verifier. The
-native V4 adapter remains a component of that path, not receipt acceptance by
-itself.
+to 1,000 anchors; and reduce or operationalize the roughly 687 MiB compressed,
+3.53 GiB decoded verifier. The native V4 adapter remains a component of that
+path, not receipt acceptance by itself.
 
 The construction-specific V3 adapter previously demonstrated setup-proof
 preparation and safe zero-extension into the anchor basis. That

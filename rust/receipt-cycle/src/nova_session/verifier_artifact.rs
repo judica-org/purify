@@ -76,6 +76,19 @@ impl ExpectedDirectNovaVerifierArtifact {
     }
 }
 
+/// Authenticated local verifier artifact from the resource-gated SHA-256
+/// construction-parent qualification.
+pub(crate) const QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT:
+    ExpectedDirectNovaVerifierArtifact = ExpectedDirectNovaVerifierArtifact::new(
+    720_295_190,
+    3_793_960_104,
+    [
+        0x75, 0xb4, 0xce, 0xbc, 0x0d, 0x81, 0xcc, 0xc8, 0xc0, 0x42, 0x7a, 0x05, 0x29, 0xf7, 0xeb,
+        0x45, 0x45, 0xad, 0x82, 0x7b, 0x24, 0xbf, 0x2d, 0xe5, 0xab, 0x3d, 0xcb, 0x7e, 0xff, 0xac,
+        0xe3, 0x8d,
+    ],
+);
+
 #[derive(Debug, Error)]
 pub(crate) enum DirectNovaVerifierArtifactError {
     #[error("direct Nova verifier artifact destination is not empty")]

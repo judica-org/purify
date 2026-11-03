@@ -1065,6 +1065,7 @@ void test_circuit_template_partial_final_eval(TestContext& ctx) {
 
 void test_experimental_bulletproof_deserialize_rejects_huge_length(TestContext& ctx) {
     purify::ExperimentalBulletproofProof proof{};
+    proof.commitments.resize(1);
     proof.proof = Bytes{0x01, 0x02, 0x03};
 
     Result<Bytes> serialized = proof.serialize();

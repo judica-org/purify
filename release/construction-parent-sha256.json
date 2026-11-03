@@ -1,0 +1,45 @@
+{
+  "schema": "purify-construction-parent-release-v1",
+  "protocol": "purify-construction-parent-v1",
+  "transcript_hash": "sha256",
+  "artifact": {
+    "filename": "sha256-parent-verifier.nvk.zst",
+    "encoded_bytes": 720295190,
+    "decoded_bytes": 3793960104,
+    "sha256": "52075e34730e29ca0310effb428a69fc26f4f122a513027be926d76a3a07ff97",
+    "tagged_sha256": {
+      "tag": "Purify/Accountable/DirectNovaVerifierArtifact/v2",
+      "digest": "75b4cebc0d81ccc8c0427a0529f7eb4545ad827b24bf2de5ab3dcb7efface38d"
+    }
+  },
+  "suite": {
+    "relation_id": "8494ab8ca7e6042e245e1ee1a55b915089b9f2e3fc161c4785235d1fac4651b2",
+    "public_parameter_digest": "146a7b058e17885ffbdcbc883bcb1f3cbc26be9875223b059c0821c2cd588c03",
+    "suite_id": "44032777f0483b0f591f2490e54f6db293aa8ca8c10e1d6225cbed3040555d08",
+    "state_arity": 20,
+    "proof_bytes": 15076,
+    "proof_sequences": 152
+  },
+  "source": {
+    "purify_qualification_commit": "0af240ccd1e14f2d191903805cc7a610abf7ede1",
+    "purify_suite_commit": "9158265dc86e9f46129bfee0d78478b24956b3f3",
+    "purify_artifact_commit": "ebd7b4801da9b91360c3047dcfbc36e2ca7d8dd5",
+    "purify_acceptance_commit": "559d6c9c0d3619ab73961b62af986d0c6b8200ad",
+    "nova_repository": "https://github.com/JeremyRubin/Nova",
+    "nova_commit": "95674092501fe4a52dfc9e3c9f6667e3bd128c6c"
+  },
+  "qualification_vectors": {
+    "accepted": {
+      "path": "tests/vectors/construction_parent_sha256_accepted.proof",
+      "sha256": "ece707b5a39a1be21d0499d8c6de22cec103663ba01a926f5611130e083e2211",
+      "prover_fixture_bytes": 8314,
+      "prover_fixture_sha256": "7c819222679a52bfa216ed75262b5ca837d7f5032a15a67dea4eb18443032bb5"
+    },
+    "recursive_valid_native_rejected": {
+      "path": "tests/vectors/construction_parent_sha256_nondeciding.proof",
+      "sha256": "67b42e58ae787a493554dfb29aab9d40ba2c633fde292b670f28fc029b9a4688",
+      "prover_fixture_bytes": 8314,
+      "prover_fixture_sha256": "f2299a76e084e66e9185bf47445639f47367c1dc143061c31682dfad83de26ec"
+    }
+  }
+}

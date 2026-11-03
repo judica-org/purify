@@ -103,6 +103,9 @@ option(PURIFY_BUILD_RECEIPT_CYCLE
 set(PURIFY_RECEIPT_CYCLE_CARGO_TARGET "" CACHE STRING
     "Optional Rust target triple for the parent-receipt backend."
 )
+set(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT "" CACHE FILEPATH
+    "Qualified construction-parent verifier artifact for opt-in tests."
+)
 
 if(PURIFY_BUILD_CLI AND NOT PURIFY_HAVE_CLI_SOURCES)
     message(FATAL_ERROR "PURIFY_BUILD_CLI=ON requires cli/main.cpp")
@@ -146,6 +149,33 @@ endif()
 
 if(PURIFY_BUILD_VALGRIND_TESTS AND WIN32)
     message(FATAL_ERROR "PURIFY_BUILD_VALGRIND_TESTS is not supported on Windows")
+endif()
+
+if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+    if(NOT PURIFY_BUILD_TESTS)
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
+            "PURIFY_BUILD_TESTS=ON."
+        )
+    endif()
+    if(NOT PURIFY_BUILD_RECEIPT_CYCLE)
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
+            "PURIFY_BUILD_RECEIPT_CYCLE=ON."
+        )
+    endif()
+    get_filename_component(
+        PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT
+        "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+        ABSOLUTE BASE_DIR "${CMAKE_BINARY_DIR}"
+    )
+    if(NOT EXISTS "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+       OR IS_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}")
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT must name an "
+            "existing regular file."
+        )
+    endif()
 endif()
 
 if(NOT PURIFY_CXX_STANDARD MATCHES "^(20|23)$")
@@ -662,6 +692,8 @@ if(PURIFY_BUILD_TESTS)
         tests/accountable_signature_tests.cpp
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
+        tests/slashability_e2e_fixture.cpp
+        tests/slashability_e2e_tests.cpp
         tests/slash_adaptor_tests.cpp
         tests/canonical_recovery_root_tests.cpp
         tests/canonical_recovery_root_helpers.cpp
@@ -690,6 +722,15 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
 
     if(PURIFY_BUILD_RECEIPT_CYCLE)
+        target_compile_definitions(purify_tests PRIVATE
+            "PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_accepted.proof\""
+            "PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_nondeciding.proof\""
+        )
+        if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+            target_compile_definitions(purify_tests PRIVATE
+                PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT=1
+            )
+        endif()
         add_executable(purify_receipt_cycle_c_tests
             tests/receipt_cycle_c_tests.c
         )
@@ -776,6 +817,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_signature)
     purify_add_cpp_suite_test(accountable_roster)
     purify_add_cpp_suite_test(accountable_response)
+    purify_add_cpp_suite_test(slashability_e2e)
     purify_add_cpp_suite_test(slash_adaptor)
     purify_add_cpp_suite_test(canonical_recovery_root)
     purify_add_cpp_suite_test(anchor_escrow)
@@ -789,8 +831,16 @@ if(PURIFY_BUILD_TESTS)
     # out of the property suites' bounded execution time.
     set_tests_properties(
         purify.tests.construction_receipt
+        purify.tests.slashability_e2e
         PROPERTIES RUN_SERIAL TRUE
     )
+    if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+        set_tests_properties(purify.tests.slashability_e2e PROPERTIES
+            ENVIRONMENT
+                "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+            TIMEOUT 3600
+        )
+    endif()
     purify_add_cpp_suite_test(aggregate_nonce)
     purify_add_cpp_suite_test(aggregate_nonce_100)
     purify_add_cpp_suite_test(nonce_batch)

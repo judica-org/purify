@@ -55,6 +55,47 @@ Top-level builds also enable the regression test target by default.
 
 For multi-config generators such as Xcode, build benchmarks with `--config Release`.
 
+### Construction parent verifier
+
+The optional construction-parent verifier is a purpose-specific C++ API backed
+by the qualified transparent SHA-256 Nova profile. It is supported only in
+shared macOS and Linux builds. Rust 1.98.1 is pinned for the private backend:
+
+```sh
+cmake -S . -B build-parent \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=ON \
+  -DPURIFY_BUILD_RECEIPT_CYCLE=ON \
+  -DPURIFY_BUILD_TESTS=OFF
+cmake --build build-parent --parallel
+```
+
+The 720,295,190-byte verifier artifact remains an external deployment
+resource. `ConstructionParentVerifier::load()` accepts only its exact compiled
+length, suite, and tagged digest. The Rust archive, private C ABI, and generic
+R1CS transport are neither installed nor exported. Deploy the artifact through
+an immutable, read-only snapshot so concurrent writes cannot waste verifier
+resources before authentication rejects the changed file.
+
+Run the production acceptance gate with the authenticated artifact:
+
+```sh
+cmake -S . -B build-parent \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=ON \
+  -DPURIFY_BUILD_RECEIPT_CYCLE=ON \
+  -DPURIFY_BUILD_TESTS=ON \
+  -DPURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=/path/to/sha256-parent-verifier.nvk.zst
+cmake --build build-parent --parallel
+ctest --test-dir build-parent --output-on-failure \
+  -R '^(purify.tests.slashability_e2e|purify.tests.installed_package|purify.tests.private_receipt_symbols)$'
+```
+
+This verifies a construction proof and completes the native accumulation
+decision before returning a verified receipt. Library verification does not
+activate consensus, authorize enrollment, or resolve the documented child
+proof, custody, confidentiality, and scaling requirements.
+
 ### Using as a submodule
 
 Add the repository as a git submodule, then wire it into the parent `CMakeLists.txt`:

@@ -90,8 +90,10 @@ the preceding hidden-anchor recurrence is not compatible with record version
 added to the payload entry.
 
 This relation migration is exercised by the Rust construction-parent backend;
-it does not activate consensus, enrollment, or a public acceptance API. The
-selected profile freezes public-parameter digest
+it does not activate consensus or enrollment. The purpose-specific public C++
+API authenticates the recursive result and requires native accumulation
+decision before returning a verified receipt. The selected profile freezes
+public-parameter digest
 `146a7b058e17885ffbdcbc883bcb1f3cbc26be9875223b059c0821c2cd588c03`
 and suite ID
 `44032777f0483b0f591f2490e54f6db293aa8ca8c10e1d6225cbed3040555d08`.
@@ -103,9 +105,9 @@ The local verifier artifact is 720,295,190 encoded bytes and expands to a
 3,793,960,104-byte canonical payload. Its v2 tagged digest is
 `75b4cebc0d81ccc8c0427a0529f7eb4545ad827b24bf2de5ab3dcb7efface38d`.
 A setup-free regression loads that exact artifact and verifies both qualified
-outcomes. The purpose-specific C ABI and the mandatory native `decide()`
-acceptance boundary belong to the next stacked change; recursive validity alone
-does not accept a construction receipt.
+outcomes. The private purpose-specific C ABI backs a public C++ acceptance
+boundary that mandates native `decide()`; recursive validity alone does not
+accept a construction receipt.
 
 These validity results do not resolve this relation's explicit related-output
 security assumption, distributed setup and custody, share-preserving child

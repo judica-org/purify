@@ -214,6 +214,13 @@ std::ostream& operator<<(std::ostream& out, const Expr& expr);
  */
 class Transcript {
 public:
+    Transcript() = default;
+    Transcript(const Transcript&) = delete;
+    Transcript& operator=(const Transcript&) = delete;
+    Transcript(Transcript&&) noexcept = default;
+    Transcript& operator=(Transcript&&) = delete;
+    ~Transcript();
+
     /** @brief Allocates a new secret witness variable, optionally with a known concrete value. */
     Expr secret(const std::optional<FieldElement>& value);
 

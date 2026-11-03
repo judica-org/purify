@@ -18,6 +18,7 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 #[allow(dead_code)]
 mod anchor_recurrence;
@@ -117,6 +118,20 @@ pub(crate) struct Circuit {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Assignment {
     gates: Vec<(Scalar, Scalar)>,
+}
+
+impl Drop for Assignment {
+    fn drop(&mut self) {
+        for (left, right) in &mut self.gates {
+            // SAFETY: both pointers identify initialized scalars owned by this
+            // assignment. Volatile writes prevent dead-store elimination.
+            unsafe {
+                core::ptr::write_volatile(left, Scalar::ZERO);
+                core::ptr::write_volatile(right, Scalar::ZERO);
+            }
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -359,6 +374,7 @@ pub fn prove(
     statement: &[u8],
     prover_seed: [u8; 32],
 ) -> Result<Vec<u8>, ReceiptCycleError> {
+    let prover_seed = Zeroizing::new(prover_seed);
     let circuit = Circuit::parse(circuit_bytes)?;
     let assignment = Assignment::parse(assignment_bytes)?;
     if assignment.gates.len() != circuit.gate_count {
@@ -379,7 +395,7 @@ pub fn prove(
         });
     }
     install_constraints(&mut prover, &circuit, &gates);
-    let mut rng = ChaCha20Rng::from_seed(prover_seed);
+    let mut rng = ChaCha20Rng::from_seed(*prover_seed);
     Ok(prover.prove(&bp_gens, &mut rng)?.to_bytes())
 }
 

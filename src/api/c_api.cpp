@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 #include "purify/curve.hpp"
 #include "purify/error.hpp"
@@ -22,6 +23,25 @@
 #include "error_bridge.hpp"
 
 namespace purify::capi_detail {
+
+template <typename T>
+class WipeObjectOnDestruction {
+public:
+    explicit WipeObjectOnDestruction(T& value) noexcept : value_(&value) {
+        static_assert(std::is_trivially_destructible_v<T>);
+    }
+
+    WipeObjectOnDestruction(const WipeObjectOnDestruction&) = delete;
+    WipeObjectOnDestruction& operator=(
+        const WipeObjectOnDestruction&) = delete;
+
+    ~WipeObjectOnDestruction() {
+        detail::secure_clear_bytes(value_, sizeof(T));
+    }
+
+private:
+    T* value_;
+};
 
 bool ranges_overlap(const void* lhs, std::size_t lhs_size, const void* rhs, std::size_t rhs_size) noexcept {
     if (lhs_size == 0 || rhs_size == 0 || lhs == nullptr || rhs == nullptr) {
@@ -117,6 +137,7 @@ Result<UInt512> parse_secret_key(const unsigned char* secret_key) {
                                 "parse_secret_key:purify_validate_secret_key");
     }
     UInt512 packed = UInt512::from_bytes_be(secret_key, PURIFY_SECRET_KEY_BYTES);
+    WipeObjectOnDestruction packed_guard(packed);
     return packed;
 }
 
@@ -139,15 +160,23 @@ void write_uint512(const UInt512& value, unsigned char* out) {
 }
 
 void write_field_element(const FieldElement& value, unsigned char* out) {
-    const std::array<unsigned char, PURIFY_FIELD_ELEMENT_BYTES> bytes = value.to_bytes_be();
+    std::array<unsigned char, PURIFY_FIELD_ELEMENT_BYTES> bytes =
+        value.to_bytes_be();
+    WipeObjectOnDestruction bytes_guard(bytes);
     std::copy(bytes.begin(), bytes.end(), out);
 }
 
 Result<UInt512> derive_public_key_from_secret(const UInt512& secret) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& unpacked, unpack_secret(secret), "derive_public_key_from_secret:unpack_secret");
-    PURIFY_ASSIGN_OR_RETURN(const auto& p1, curve1().mul_secret_affine(generator1(), unpacked.first),
+    Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
+    if (!unpacked.has_value()) {
+        return unexpected_error(
+            unpacked.error(),
+            "derive_public_key_from_secret:unpack_secret");
+    }
+    WipeObjectOnDestruction unpacked_guard(*unpacked);
+    PURIFY_ASSIGN_OR_RETURN(const auto& p1, curve1().mul_secret_affine(generator1(), unpacked->first),
                             "derive_public_key_from_secret:mul_secret_affine_p1");
-    PURIFY_ASSIGN_OR_RETURN(const auto& p2, curve2().mul_secret_affine(generator2(), unpacked.second),
+    PURIFY_ASSIGN_OR_RETURN(const auto& p2, curve2().mul_secret_affine(generator2(), unpacked->second),
                             "derive_public_key_from_secret:mul_secret_affine_p2");
     return pack_public(p1.x.to_uint256(), p2.x.to_uint256());
 }
@@ -157,8 +186,6 @@ Result<UInt512> derive_public_key_from_secret(const UInt512& secret) {
 extern "C" {
 
 purify_error_code purify_generate_key(purify_generated_key* out) {
-    purify::Result<purify::UInt512> packed_secret;
-    purify::Result<purify::UInt512> public_key;
     purify_error_code status;
     if (out == nullptr) {
         return PURIFY_ERROR_MISSING_VALUE;
@@ -169,12 +196,16 @@ purify_error_code purify_generate_key(purify_generated_key* out) {
         purify::capi_detail::clear_generated_key(out);
         return status;
     }
-    packed_secret = purify::capi_detail::parse_secret_key(out->secret_key);
+    purify::Result<purify::UInt512> packed_secret =
+        purify::capi_detail::parse_secret_key(out->secret_key);
     if (!packed_secret.has_value()) {
         purify::capi_detail::clear_generated_key(out);
         return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
-    public_key = purify::capi_detail::derive_public_key_from_secret(*packed_secret);
+    purify::capi_detail::WipeObjectOnDestruction packed_secret_guard(
+        *packed_secret);
+    purify::Result<purify::UInt512> public_key =
+        purify::capi_detail::derive_public_key_from_secret(*packed_secret);
     if (!public_key.has_value()) {
         purify::capi_detail::clear_generated_key(out);
         return purify::core_api_detail::to_core_error_code(public_key.error().code);
@@ -186,8 +217,6 @@ purify_error_code purify_generate_key(purify_generated_key* out) {
 purify_error_code purify_generate_key_from_seed(purify_generated_key* out,
                                                 const unsigned char* seed,
                                                 size_t seed_len) {
-    purify::Result<purify::UInt512> packed_secret;
-    purify::Result<purify::UInt512> public_key;
     purify_error_code status;
     const unsigned char* seed_input = seed;
     purify::Bytes seed_copy;
@@ -204,12 +233,16 @@ purify_error_code purify_generate_key_from_seed(purify_generated_key* out,
         purify::capi_detail::clear_generated_key(out);
         return status;
     }
-    packed_secret = purify::capi_detail::parse_secret_key(out->secret_key);
+    purify::Result<purify::UInt512> packed_secret =
+        purify::capi_detail::parse_secret_key(out->secret_key);
     if (!packed_secret.has_value()) {
         purify::capi_detail::clear_generated_key(out);
         return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
-    public_key = purify::capi_detail::derive_public_key_from_secret(*packed_secret);
+    purify::capi_detail::WipeObjectOnDestruction packed_secret_guard(
+        *packed_secret);
+    purify::Result<purify::UInt512> public_key =
+        purify::capi_detail::derive_public_key_from_secret(*packed_secret);
     if (!public_key.has_value()) {
         purify::capi_detail::clear_generated_key(out);
         return purify::core_api_detail::to_core_error_code(public_key.error().code);
@@ -231,6 +264,8 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
     if (!packed_secret.has_value()) {
         return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
+    purify::capi_detail::WipeObjectOnDestruction packed_secret_guard(
+        *packed_secret);
 
     purify::Result<purify::UInt512> public_key = purify::capi_detail::derive_public_key_from_secret(*packed_secret);
     if (!public_key.has_value()) {
@@ -311,11 +346,14 @@ purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEME
     if (!packed_secret.has_value()) {
         return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
+    purify::capi_detail::WipeObjectOnDestruction packed_secret_guard(
+        *packed_secret);
 
     purify::Result<std::pair<purify::UInt256, purify::UInt256>> unpacked = purify::unpack_secret(*packed_secret);
     if (!unpacked.has_value()) {
         return purify::core_api_detail::to_core_error_code(unpacked.error().code);
     }
+    purify::capi_detail::WipeObjectOnDestruction unpacked_guard(*unpacked);
 
     purify::Result<purify::JacobianPoint> m1 =
         purify::hash_to_curve(purify::capi_detail::tagged_message("Eval/1/", message_bytes), purify::curve1());
@@ -333,13 +371,16 @@ purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEME
     if (!q1.has_value()) {
         return purify::core_api_detail::to_core_error_code(q1.error().code);
     }
+    purify::capi_detail::WipeObjectOnDestruction q1_guard(*q1);
     purify::Result<purify::AffinePoint> q2 =
         purify::curve2().mul_secret_affine(*m2, unpacked->second);
     if (!q2.has_value()) {
         return purify::core_api_detail::to_core_error_code(q2.error().code);
     }
+    purify::capi_detail::WipeObjectOnDestruction q2_guard(*q2);
 
-    const purify::FieldElement output = purify::combine(q1->x, q2->x);
+    purify::FieldElement output = purify::combine(q1->x, q2->x);
+    purify::capi_detail::WipeObjectOnDestruction output_guard(output);
     purify::capi_detail::write_field_element(output, out_field_element);
     return PURIFY_ERROR_OK;
 }

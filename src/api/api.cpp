@@ -36,11 +36,16 @@ void clear_core_bip340_key(purify_bip340_key& key) noexcept {
 }
 
 Result<GeneratedKey> generated_key_from_core(const purify_generated_key& generated) {
-    const UInt512 packed_secret = UInt512::from_bytes_be(generated.secret_key, sizeof(generated.secret_key));
-    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(packed_secret),
-                            "generated_key_from_core:from_packed");
+    UInt512 packed_secret = UInt512::from_bytes_be(
+        generated.secret_key, sizeof(generated.secret_key));
+    Result<SecretKey> owned_secret = SecretKey::from_packed(packed_secret);
+    detail::secure_clear_bytes(&packed_secret, sizeof(packed_secret));
+    if (!owned_secret.has_value()) {
+        return unexpected_error(
+            owned_secret.error(), "generated_key_from_core:from_packed");
+    }
     const UInt512 public_key = UInt512::from_bytes_be(generated.public_key, sizeof(generated.public_key));
-    return GeneratedKey{std::move(owned_secret), public_key};
+    return GeneratedKey{std::move(*owned_secret), public_key};
 }
 
 Bytes tagged_message(std::string_view prefix, const Bytes& message) {
@@ -181,10 +186,12 @@ Result<FieldElement> eval(const SecretKey& secret, const Bytes& message) {
         purify_eval(output_bytes.data(), secret_bytes.data(), message.data(), message.size());
     detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
     if (code != PURIFY_ERROR_OK) {
-        std::fill(output_bytes.begin(), output_bytes.end(), 0);
+        detail::secure_clear_bytes(output_bytes.data(), output_bytes.size());
         return unexpected_error(core_api_detail::from_core_error_code(code), "eval:purify_eval");
     }
-    return FieldElement::try_from_bytes32(output_bytes);
+    auto output = FieldElement::try_from_bytes32(output_bytes);
+    detail::secure_clear_bytes(output_bytes.data(), output_bytes.size());
+    return output;
 }
 
 Result<std::string> verifier(const Bytes& message, const UInt512& pubkey) {

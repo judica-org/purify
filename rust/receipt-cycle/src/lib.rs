@@ -30,6 +30,10 @@ mod construction_parent_input;
 #[cfg(test)]
 #[allow(dead_code)]
 mod construction_parent_prover_fixture;
+// This authenticates a pending construction root. Native decide remains
+// mandatory before receipt acceptance.
+#[allow(dead_code)]
+mod construction_parent_verifier;
 // This is an internal candidate lowering, not a receipt acceptance API.
 #[allow(dead_code)]
 mod direct_nova;

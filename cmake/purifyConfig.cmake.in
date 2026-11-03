@@ -1,3 +1,29 @@
 @PACKAGE_INIT@
 
+if(@PURIFY_CONFIG_WITH_RECEIPT_CYCLE@)
+    include(CMakeFindDependencyMacro)
+    if(UNIX AND NOT APPLE)
+        find_dependency(Threads)
+    endif()
+    if(NOT TARGET purify_receipt_cycle_backend)
+        add_library(purify_receipt_cycle_backend STATIC IMPORTED)
+        set_target_properties(purify_receipt_cycle_backend PROPERTIES
+            IMPORTED_LOCATION
+                "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/@PURIFY_CONFIG_RECEIPT_CYCLE_ARCHIVE_NAME@"
+        )
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(purify_receipt_cycle_backend INTERFACE
+                Threads::Threads
+                ${CMAKE_DL_LIBS}
+                m
+            )
+        endif()
+    endif()
+    if(NOT TARGET purify::receipt_cycle_backend)
+        add_library(purify::receipt_cycle_backend ALIAS
+            purify_receipt_cycle_backend
+        )
+    endif()
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/purifyTargets.cmake")

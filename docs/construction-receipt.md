@@ -308,12 +308,12 @@ public statement, including full roots, the coalition point, context and framing
 Its recipient and ciphertext portion is 448 bytes. No final proof is included
 in those statement measurements because the parent is not implemented.
 
-The SHA-256 fixture constrains symbolic input bits and bounded 32-bit additions,
-checks padding boundaries against the independent C hash, and produces an
-honest transcript for that locally checked relation. It does not establish a
-sound proof of a hash preimage through the current wrapper. A recursive verifier
-must also connect those input bits to the exact child transcript; the standalone
-hash relation is insufficient.
+The removed standalone SHA-256 fixture constrained symbolic input bits and
+bounded 32-bit additions, checked padding boundaries against the independent C
+hash, and produced an honest transcript for that locally checked relation. It
+did not establish a sound proof of a hash preimage through the old wrapper. A
+recursive verifier must connect those input bits to the exact child transcript;
+the standalone hash relation was insufficient.
 
 An AppleClang 16 / arm64 C++20 Release run measured the `abc` relation at 32,768
 padded gates and a 1,267-byte experimental transcript, with about 13.76 seconds
@@ -330,10 +330,9 @@ an overflow-checked dimension-dependent frame in addition to MSM work space,
 for both cached and uncached calls. It changes allocation capacity, not the
 proof relation or transcript.
 
-```
-python3 tests/reference_receipt_verifier_cost.py --self-test --roots 2
-python3 tests/reference_receipt_verifier_cost.py --roots 100
-ctest --test-dir build -R 'construction_receipt|receipt_sha256' --output-on-failure
+```sh
+ctest --test-dir build --output-on-failure \
+  -R '^purify\.tests\.construction_receipt(_codec)?$'
 ```
 
 The general composition approach is described in

@@ -23,7 +23,6 @@ void run_anchor_escrow_tests(TestContext& ctx);
 void run_companion_scalar_escrow_tests(TestContext& ctx);
 void run_construction_receipt_tests(TestContext& ctx);
 void run_construction_receipt_codec_tests(TestContext& ctx);
-void run_receipt_sha256_tests(TestContext& ctx);
 void run_aggregate_nonce_tests(TestContext& ctx);
 void run_aggregate_nonce_100_tests(TestContext& ctx);
 void run_nonce_batch_tests(TestContext& ctx);
@@ -56,7 +55,6 @@ constexpr SuiteSpec kSuites[]{
     {"companion_scalar_escrow", &run_companion_scalar_escrow_tests},
     {"construction_receipt", &run_construction_receipt_tests},
     {"construction_receipt_codec", &run_construction_receipt_codec_tests},
-    {"receipt_sha256", &run_receipt_sha256_tests},
     {"aggregate_nonce", &run_aggregate_nonce_tests},
     {"aggregate_nonce_100", &run_aggregate_nonce_100_tests},
     {"nonce_batch", &run_nonce_batch_tests},

@@ -43,6 +43,31 @@ Bytes copy_bytes(const unsigned char* data, std::size_t size) {
     return Bytes(data, data + size);
 }
 
+class SecretKeyInput {
+public:
+    explicit SecretKeyInput(const unsigned char* secret_key) noexcept
+        : present_(secret_key != nullptr) {
+        if (present_) {
+            std::copy_n(secret_key, value_.size(), value_.begin());
+        }
+    }
+
+    SecretKeyInput(const SecretKeyInput&) = delete;
+    SecretKeyInput& operator=(const SecretKeyInput&) = delete;
+
+    ~SecretKeyInput() {
+        detail::secure_clear_bytes(value_.data(), value_.size());
+    }
+
+    [[nodiscard]] const unsigned char* data() const noexcept {
+        return present_ ? value_.data() : nullptr;
+    }
+
+private:
+    std::array<unsigned char, PURIFY_SECRET_KEY_BYTES> value_{};
+    bool present_{false};
+};
+
 void clear_generated_key(purify_generated_key* out) noexcept {
     if (out == nullptr) {
         return;
@@ -198,8 +223,11 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
     if (out_public_key == nullptr) {
         return PURIFY_ERROR_MISSING_VALUE;
     }
+    const purify::capi_detail::SecretKeyInput secret_input(secret_key);
+    std::fill(out_public_key, out_public_key + PURIFY_PUBLIC_KEY_BYTES, 0);
 
-    purify::Result<purify::UInt512> packed_secret = purify::capi_detail::parse_secret_key(secret_key);
+    purify::Result<purify::UInt512> packed_secret =
+        purify::capi_detail::parse_secret_key(secret_input.data());
     if (!packed_secret.has_value()) {
         return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
@@ -209,7 +237,6 @@ purify_error_code purify_derive_public_key(unsigned char out_public_key[PURIFY_P
         return purify::core_api_detail::to_core_error_code(public_key.error().code);
     }
 
-    std::fill(out_public_key, out_public_key + PURIFY_PUBLIC_KEY_BYTES, 0);
     purify::capi_detail::write_uint512(*public_key, out_public_key);
     return PURIFY_ERROR_OK;
 }
@@ -220,13 +247,14 @@ purify_error_code purify_derive_bip340_key(purify_bip340_key* out,
     if (out == nullptr) {
         return PURIFY_ERROR_MISSING_VALUE;
     }
+    const purify::capi_detail::SecretKeyInput secret_input(secret_key);
+    purify::capi_detail::clear_bip340_key(out);
 
-    purify::Result<purify::UInt512> packed_secret = purify::capi_detail::parse_secret_key(secret_key);
+    purify::Result<purify::UInt512> packed_secret =
+        purify::capi_detail::parse_secret_key(secret_input.data());
     if (!packed_secret.has_value()) {
         return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
-
-    purify::capi_detail::clear_bip340_key(out);
 
     static const purify::TaggedHash kBip340KeyGenTag("Purify/BIP340/KeyGen");
     std::array<unsigned char, PURIFY_SECRET_KEY_BYTES> packed_secret_bytes = packed_secret->to_bytes_be();
@@ -268,10 +296,18 @@ purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEME
         return PURIFY_ERROR_MISSING_VALUE;
     }
     if (message_len != 0 && message == nullptr) {
+        std::fill(out_field_element,
+                  out_field_element + PURIFY_FIELD_ELEMENT_BYTES, 0);
         return PURIFY_ERROR_MISSING_VALUE;
     }
+    const purify::capi_detail::SecretKeyInput secret_input(secret_key);
+    const purify::Bytes message_bytes =
+        purify::capi_detail::copy_bytes(message, message_len);
+    std::fill(out_field_element,
+              out_field_element + PURIFY_FIELD_ELEMENT_BYTES, 0);
 
-    purify::Result<purify::UInt512> packed_secret = purify::capi_detail::parse_secret_key(secret_key);
+    purify::Result<purify::UInt512> packed_secret =
+        purify::capi_detail::parse_secret_key(secret_input.data());
     if (!packed_secret.has_value()) {
         return purify::core_api_detail::to_core_error_code(packed_secret.error().code);
     }
@@ -280,9 +316,6 @@ purify_error_code purify_eval(unsigned char out_field_element[PURIFY_FIELD_ELEME
     if (!unpacked.has_value()) {
         return purify::core_api_detail::to_core_error_code(unpacked.error().code);
     }
-
-    const purify::Bytes message_bytes = purify::capi_detail::copy_bytes(message, message_len);
-    std::fill(out_field_element, out_field_element + PURIFY_FIELD_ELEMENT_BYTES, 0);
 
     purify::Result<purify::JacobianPoint> m1 =
         purify::hash_to_curve(purify::capi_detail::tagged_message("Eval/1/", message_bytes), purify::curve1());

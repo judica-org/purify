@@ -90,6 +90,10 @@ struct purify_bulletproof_backend_resources {
     secp256k1_bulletproof_generators* gens;
 };
 
+size_t purify_bulletproof_backend_resources_scratch_capacity(const purify_bulletproof_backend_resources* resources) {
+    return resources != NULL && resources->scratch != NULL ? resources->scratch->max_size : 0;
+}
+
 struct purify_bppp_backend_resources {
     size_t generators_count;
     secp256k1_context* ctx;
@@ -2460,7 +2464,7 @@ int purify_bppp_public_msm(purify_secp_context* context,
                          const unsigned char* points33, const unsigned char* scalars32,
                          size_t count, unsigned char out33[33]) {
     secp256k1_context* ctx = purify_context_handle(context);
-    secp256k1_scratch_space* scratch;
+    secp256k1_scratch_space* scratch = NULL;
     secp256k1_gej result_j;
     secp256k1_ge result;
     purify_bppp_public_msm_data data;
@@ -2476,17 +2480,29 @@ int purify_bppp_public_msm(purify_secp_context* context,
         memset(out33, 0, 33);
         return 1;
     }
-    scratch = secp256k1_scratch_space_create(ctx, purify_bulletproof_msm_scratch_size);
-    if (scratch == NULL) return 0;
+    memset(out33, 0, 33);
     data.points33 = points33;
     data.scalars32 = scalars32;
-    ok = secp256k1_ecmult_multi_var(&ctx->error_callback, scratch, &result_j, NULL,
-                                  purify_bppp_public_msm_cb, &data, count);
+    if (count <= 8u) {
+        ok = secp256k1_ecmult_multi_var(&ctx->error_callback, NULL,
+                                       &result_j, NULL,
+                                       purify_bppp_public_msm_cb, &data,
+                                       count);
+    } else {
+        scratch = secp256k1_scratch_space_create(
+            ctx, purify_bulletproof_msm_scratch_size);
+        if (scratch == NULL) return 0;
+        ok = secp256k1_ecmult_multi_var(
+            &ctx->error_callback, scratch, &result_j, NULL,
+            purify_bppp_public_msm_cb, &data, count);
+    }
     if (ok) {
         secp256k1_ge_set_gej_var(&result, &result_j);
         secp256k1_ge_serialize_ext(out33, &result);
     }
-    secp256k1_scratch_space_destroy(ctx, scratch);
+    if (scratch != NULL) {
+        secp256k1_scratch_space_destroy(ctx, scratch);
+    }
     return ok;
 }
 

@@ -27,6 +27,8 @@ extern "C" {
     void purify_u##width##_from_bytes_be(uint64_t out[words], const unsigned char* data, size_t size); \
     int purify_u##width##_is_zero(const uint64_t value[words]); \
     int purify_u##width##_compare(const uint64_t lhs[words], const uint64_t rhs[words]); \
+    void purify_u##width##_conditional_assign(uint64_t value[words], \
+                                               const uint64_t other[words], int flag); \
     int purify_u##width##_try_add_small(uint64_t value[words], uint32_t addend); \
     int purify_u##width##_try_mul_small(uint64_t value[words], uint32_t factor); \
     int purify_u##width##_try_add(uint64_t value[words], const uint64_t addend[words]); \

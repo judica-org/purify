@@ -193,8 +193,19 @@ void check_norm_length_boundary(TestContext& ctx) {
     expect_error(ctx, purify::bppp::prove_norm_arg_to_commitment(inputs, *commitment, secp.get()),
                purify::ErrorCode::InvalidDimensions,
                "anchored prover rejects norm length below linear length");
-    purify::bppp::NormArgProof unsupported{
-        inputs.rho, *generators, inputs.c_vec, 2, *commitment, purify::Bytes(259, 0)};
+    // Start from an honest proof using the current public-data transcript.
+    // Change only its public shape, keeping its commitment and proof bytes.
+    // This checks rejection, not whether the dimension guard alone rejects it.
+    purify::bppp::NormArgInputs supported_inputs{inputs.rho, *generators,
+        std::vector(8, one), std::vector(2, one), std::vector(2, one)};
+    auto supported = purify::bppp::prove_norm_arg(supported_inputs, secp.get());
+    expect_ok(ctx, supported, "supported norm shape produces an honest proof");
+    if (!supported) return;
+    ctx.expect(purify::bppp::verify_norm_arg(*supported, secp.get()),
+               "honest norm proof verifies before its public shape changes");
+    auto unsupported = *supported;
+    unsupported.n_vec_len = 2;
+    unsupported.c_vec = inputs.c_vec;
     ctx.expect(!purify::bppp::verify_norm_arg(unsupported, secp.get()),
                "ordinary verifier rejects unsupported dimensions before proof parsing");
 
@@ -211,7 +222,7 @@ void check_norm_length_boundary(TestContext& ctx) {
     ctx.expect(resources != nullptr, "cached norm length resources create");
     if (!resources) return;
     ctx.expect(purify_bppp_verify_norm_arg_with_resources(
-        resources.get(), inputs.rho.data(), c_bytes.data(), 8, 2, commitment->data(),
+        resources.get(), inputs.rho.data(), c_bytes.data(), 8, 2, unsupported.commitment.data(),
         unsupported.proof.data(), unsupported.proof.size()) == 0,
         "cached verification applies the same norm length boundary");
 }
@@ -278,6 +289,16 @@ void check_pending_norm_equation(TestContext& ctx) {
     malformed[0] = 0;
     ctx.expect(purify_bppp_public_msm(secp.get(), malformed.data(), one.data(), 1,
         expected.data()) == 0, "public MSM rejects noncanonical infinity");
+    bool malformed_batch_rejected = true;
+    for (std::size_t i = 0; i < 256; ++i) {
+        expected.fill(0xa5);
+        malformed_batch_rejected &=
+            purify_bppp_public_msm(secp.get(), malformed.data(), one.data(),
+                                   1, expected.data()) == 0
+            && expected == infinity;
+    }
+    ctx.expect(malformed_batch_rejected,
+               "small malformed MSMs reject without retaining output state");
 }
 
 } // namespace

@@ -295,6 +295,12 @@ void test_legacy_scratch_tracks_constraint_count(TestContext& ctx) {
     auto cloned = prover_cache.clone_for_thread(circuit.n_gates);
     expect_ok(ctx, cloned, "grown prover resources clone successfully");
     if (!cloned.has_value()) return;
+    const auto* original_resources = prover_cache.get_or_create(circuit.n_gates, context.get());
+    const auto* cloned_resources = cloned->get_or_create(circuit.n_gates, context.get());
+    const std::size_t original_capacity = purify_bulletproof_backend_resources_scratch_capacity(original_resources);
+    const std::size_t cloned_capacity = purify_bulletproof_backend_resources_scratch_capacity(cloned_resources);
+    ctx.expect(original_capacity > (std::size_t{1} << 24), "prover scratch grew beyond the initial allocation");
+    ctx.expect(cloned_capacity == original_capacity, "clone preserves grown scratch capacity");
     auto cloned_verified = purify::verify_experimental_circuit(
         circuit, *proof, generator, context.get(), binding, &*cloned);
     expect_ok(ctx, cloned_verified, "cloned resources verify the same circuit");

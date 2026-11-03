@@ -325,6 +325,7 @@ add_library(purify
     src/puresign/accountable_responses.cpp
     src/protocol/bppp.cpp
     src/protocol/accumulation.cpp
+    src/protocol/sha256_transcript.cpp
     src/bridge/bppp_bridge.c
 )
 
@@ -417,6 +418,7 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/accountable_responses.cpp
         src/protocol/bppp.cpp
         src/protocol/accumulation.cpp
+        src/protocol/sha256_transcript.cpp
         src/bridge/bppp_bridge.c
     )
 
@@ -531,6 +533,7 @@ if(PURIFY_BUILD_TESTS)
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
         tests/circuit_soundness_tests.cpp
+        tests/sha256_transcript_tests.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 
@@ -560,6 +563,11 @@ if(PURIFY_BUILD_TESTS)
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_norm_accumulation.py")
         set_tests_properties(purify.tests.norm_accumulation_reference PROPERTIES TIMEOUT 30)
+        add_test(NAME purify.tests.sha256_transcript_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_sha256_transcript.py")
+        set_tests_properties(purify.tests.sha256_transcript_reference
+            PROPERTIES TIMEOUT 30)
     endif()
     purify_add_cpp_suite_test(accountable_signature)
     purify_add_cpp_suite_test(accountable_roster)
@@ -568,6 +576,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(companion_scalar_escrow)
     purify_add_cpp_suite_test(construction_receipt)
     purify_add_cpp_suite_test(receipt_sha256)
+    purify_add_cpp_suite_test(sha256_transcript)
 
     # These proof experiments saturate sanitizer runners. Keep their work
     # out of the property suites' bounded execution time.

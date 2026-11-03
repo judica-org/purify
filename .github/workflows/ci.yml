@@ -57,6 +57,63 @@ jobs:
           ctest --test-dir build-tagged --output-on-failure
           -R 'purify\.tests\..*|purify\.c_api'
 
+  receipt-cycle:
+    runs-on: ubuntu-latest
+    name: ubuntu-latest / transparent SHA receipt cycle
+    env:
+      CARGO_BUILD_JOBS: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: >
+          rustup toolchain install 1.98.1
+          --profile minimal
+          --component clippy
+          --component rustfmt
+
+      - name: Check Rust formatting
+        working-directory: rust/receipt-cycle
+        run: cargo +1.98.1 fmt --all -- --check
+
+      - name: Test Rust backend
+        working-directory: rust/receipt-cycle
+        run: >
+          cargo +1.98.1 test --locked --release
+          -- --test-threads=1
+
+      - name: Lint Rust backend
+        working-directory: rust/receipt-cycle
+        run: >
+          cargo +1.98.1 clippy --locked --release --all-targets
+          -- -D warnings
+
+      - name: Initialize required submodule
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp
+
+      - name: Configure receipt package tests
+        run: >
+          cmake -S . -B build-receipt-cycle
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_SHARED_LIBS=ON
+          -DPURIFY_BUILD_TESTS=ON
+          -DPURIFY_BUILD_RECEIPT_CYCLE=ON
+          -DPURIFY_BUILD_CLI=OFF
+          -DPURIFY_BUILD_BENCH=OFF
+          -DPURIFY_BUILD_DOCS=OFF
+          -DPURIFY_BUILD_FUZZ=OFF
+
+      - name: Build receipt package tests
+        run: >
+          cmake --build build-receipt-cycle --parallel 1
+          --target purify purify_receipt_cycle_c_tests
+
+      - name: Test C and installed package boundaries
+        run: >
+          ctest --test-dir build-receipt-cycle --output-on-failure
+          -R '^purify\.tests\.(receipt_cycle_c|installed_package)$'
+
   build-and-test:
     strategy:
       fail-fast: false

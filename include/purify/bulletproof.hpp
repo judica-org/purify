@@ -367,6 +367,27 @@ public:
     Result<NativeBulletproofCircuit::PackedWithSlack> instantiate_packed(const UInt512& pubkey) const;
     Result<NativeBulletproofCircuit> instantiate(const UInt512& pubkey) const;
 
+    /**
+     * @brief Builds one circuit binding the sum of distinct hosts' outputs to one commitment.
+     *
+     * Hosts retain their supplied order. Every host uses this template's evaluation input;
+     * individual output commitments are replaced by one commitment to their field sum.
+     * Empty rosters, duplicate hosts, invalid dimensions, and overflow are rejected.
+     * This composes a circuit relation; it does not implement distributed proving.
+     */
+    Result<NativeBulletproofCircuit> instantiate_sum(std::span<const UInt512> public_keys) const;
+
+    /**
+     * @brief Validates and concatenates local assignments for `instantiate_sum`.
+     *
+     * Each assignment must satisfy this template and its corresponding host. Gate columns
+     * are padded with zeros, and the sole output commitment is the sum of member outputs.
+     * The caller receives every witness centrally; this is not a private MPC operation.
+     */
+    Result<BulletproofAssignmentData> sum_assignments(
+        std::span<const UInt512> public_keys,
+        std::span<const BulletproofAssignmentData> assignments) const;
+
 private:
     NativeBulletproofCircuit::PackedWithSlack base_packed_;
     Expr p1x_;

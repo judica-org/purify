@@ -1,8 +1,12 @@
 # Public construction receipts for coalition escrow
 
-This is the next experiment after [companion scalar escrow](companion-scalar-escrow.md).
-It fixes the intended statement and public-data flow. It does not implement a
-compressed receipt, enable enrollment, or establish the proof systems' security.
+This began as the design experiment after
+[companion scalar escrow](companion-scalar-escrow.md). The implementation now
+has a transparent SHA-256 Nova parent backend and a qualified 15,076-byte proof
+profile. The purpose-specific C ABI and recursive-plus-native acceptance path
+are a subsequent stacked change. Neither backend qualification nor that local
+acceptance path enables enrollment or establishes the child proof system's
+security.
 
 Transparent setup is a hard requirement for the completed library: public
 parameters must not depend on a trusted ceremony or retained trapdoor. This
@@ -118,12 +122,12 @@ are additional. The reference statement includes full public roots instead of
 assuming an unimplemented on-chain index; its serialized size is therefore
 larger than this incremental formula.
 
-The final proof has not been implemented or measured. A 1-2 KB proof is a target,
-not a result. Repairing or replacing the child argument can change its proof
-sizes, verifier workload and transcript dependencies. Direct proofs of combined
-native relations and public proofs of already completed proofs also have
-different prover costs. Combining all native witnesses centrally would not
-satisfy the required public assembler interface.
+The qualified parent proof is 15,076 bytes, not the original 1-2 KB target.
+Its 720,295,190-byte local verifier artifact expands to 3,793,960,104 bytes.
+These measurements qualify the selected recursive backend; they do not resolve
+the child argument's security review, distributed proving, or the public
+assembler boundary. Combining all native witnesses centrally would not satisfy
+the required public assembler interface.
 
 ## Public prehashing measured in the current wrapper
 
@@ -231,11 +235,11 @@ argument for that relation. The native
 [norm accumulator](norm-accumulation.md) now implements partial norm
 verification, public coefficient openings for varying `c`, accumulation
 transitions and a mandatory final decision. Its API requires all child
-statements and transition transcripts. It does not implement their recursive
-authentication or repair the outer-circuit wrapper, and the concrete protocol
-still requires cryptographic review. The workload profiler does not model
-those recursive transitions. Neither native accumulation nor batch verification
-alone is a compressed construction receipt.
+statements and transition transcripts. The selected SHA-256 Nova recurrence
+now authenticates those transitions, but it does not repair an unsound child
+argument, and the concrete protocol still requires cryptographic review.
+Neither native accumulation nor batch verification alone is a compressed
+construction receipt.
 
 Before selecting a replacement backend on cost grounds, evaluate this route
 alongside direct recursive verification. Account separately for the recursive
@@ -286,9 +290,9 @@ public recovery, custody and privacy guarantees before replacing it.
    accepted certificate recovery with the registry and punishment path before
    enabling enrollment.
 
-The first two milestones are preparation for the third. No receipt should be
-accepted merely because its public inputs passed the reference assembler.
-Daybreak work remains deferred.
+No receipt should be accepted merely because its public inputs passed the
+reference assembler. Backend qualification does not replace the remaining
+composition and protocol review.
 
 ## Running the experiments
 
@@ -300,13 +304,13 @@ witness assignment or callback to a participant. The tested mutations reject
 incomplete coverage, duplicate roots, crossed child proofs, and changed
 recipients, coalitions, contexts or ciphertexts.
 After preparation, recovery uses only the statement and extracted toy scalar;
-it does not retain the child proofs. This models a future accepted receipt,
-not a substitute for its missing verifier.
+it does not retain the child proofs. This historical fixture models the public
+data flow; it is not the qualified recursive verifier or receipt acceptance.
 
 The two-root fixture has 3,281 bytes of out-of-band child proofs and a 662-byte
 public statement, including full roots, the coalition point, context and framing.
-Its recipient and ciphertext portion is 448 bytes. No final proof is included
-in those statement measurements because the parent is not implemented.
+Its recipient and ciphertext portion is 448 bytes. Those historical statement
+measurements exclude the separately qualified 15,076-byte parent proof.
 
 The SHA-256 fixture constrains symbolic input bits and bounded 32-bit additions,
 checks padding boundaries against the independent C hash, and produces an

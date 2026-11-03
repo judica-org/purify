@@ -31,11 +31,11 @@ accumulation adapter are implemented. The fixed-size setup record and anchor
 record version 3 both encode V4 proofs. Their historical hidden-output sizes
 and timings below remain useful as an individual-proof baseline. The setup leaf
 is handled once at registry creation, and the record-version-3 public anchor
-leaf has been migrated into the homogeneous parent recurrence. That parent is
-qualified through a complete two-anchor compression lifecycle and a
-recursive-plus-native library acceptance path. It is not activated in
-consensus, and enrollment remains disabled for the separate security and
-custody reasons below.
+leaf has been migrated into the homogeneous parent recurrence. The SHA-256
+parent backend is qualified through a complete two-anchor compression and
+artifact-reload lifecycle. Its purpose-specific recursive-plus-native
+acceptance path is a separate stacked change. Neither path activates consensus,
+and enrollment remains disabled for the security and custody reasons below.
 
 ## Groups, keys and canonical encodings
 
@@ -150,8 +150,9 @@ not independently blinded Pedersen output values.
 
 The complete V4 transcript and pending norm obligation require reduction,
 parent authentication, and the final accumulator decision. The selected Nova
-parent and public C++ acceptance path now perform those stages; the individual
-escrow record alone is still not receipt acceptance.
+parent authenticates the recursive stages. A purpose-specific caller must still
+perform the final native decision; the individual escrow record and recursive
+proof alone are not receipt acceptance.
 
 `recover_escrowed_anchor` first verifies the bridge and checks that an exposed
 coalition scalar opens the recovery-bound roster's exact `Q` and registered
@@ -301,15 +302,15 @@ intended on-chain receipt retains the ciphertexts and replaces the child
 proofs with one parent proof. The recurrence and selected profile are
 implemented. Exact setup, two ordered full-scale folds, Spartan IPA
 compression, canonical verification, and external verifier-artifact reload
-have qualified. A private C ABI returns only the authenticated pending root;
-the public C++ API completes native `decide()` before returning acceptance. A
-recursive-valid/nondeciding vector verifies under Nova but is rejected by that
-last decision. The historical V3 sizes above are not an estimate of parent
-prover cost.
+have qualified. The purpose-specific C ABI and public C++ API which complete
+native `decide()` are the next stacked change. The qualified nondeciding vector
+is intentionally valid under Nova and demonstrates why that final decision is
+mandatory. The historical V3 sizes above are not an estimate of parent prover
+cost.
 
 This completed validity path does not change the unresolved boundaries above:
 distributed setup, custody, and share-preserving child proving are absent, and
 the correlated-key confidentiality argument still requires review. Only two
 anchors have completed the full lifecycle; resource behavior at 100 to 1,000
-anchors is not qualified. The frozen external verifier is roughly 609 MiB, so
-convenient binary embedding remains separate size work.
+anchors is not qualified. The frozen artifact is about 687 MiB compressed and
+3.53 GiB decoded, so binary embedding and startup remain separate size work.

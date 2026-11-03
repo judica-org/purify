@@ -440,6 +440,52 @@ impl ExpectedDirectNovaSuite {
     }
 }
 
+const QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION: ConstructionPayloadVersion =
+    ConstructionPayloadVersion::new(2);
+const QUALIFIED_CONSTRUCTION_STATEMENT_VERSION: ConstructionStatementVersion =
+    ConstructionStatementVersion::new(3);
+const QUALIFIED_CONSTRUCTION_MANIFEST_VERSION: ConstructionManifestVersion =
+    ConstructionManifestVersion::new(2);
+
+/// Candidate-decision v1 binds `CandidateAccumStep/v1` and the native linear
+/// decision over `point:33 || scale:32 || factors:15*32`, the current 545-byte
+/// construction-root semantics.
+const QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION: ConstructionNativeDecisionVersion =
+    ConstructionNativeDecisionVersion::new(1);
+const QUALIFIED_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
+    DirectNovaConstructionVersions::new(
+        QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION,
+        QUALIFIED_CONSTRUCTION_STATEMENT_VERSION,
+        QUALIFIED_CONSTRUCTION_MANIFEST_VERSION,
+        QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION,
+    );
+const QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID: [u8; 32] = [
+    0x84, 0x94, 0xab, 0x8c, 0xa7, 0xe6, 0x04, 0x2e, 0x24, 0x5e, 0x1e, 0xe1, 0xa5, 0x5b, 0x91, 0x50,
+    0x89, 0xb9, 0xf2, 0xe3, 0xfc, 0x16, 0x1c, 0x47, 0x85, 0x23, 0x5d, 0x1f, 0xac, 0x46, 0x51, 0xb2,
+];
+const QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST: [u8; 32] = [
+    0x14, 0x6a, 0x7b, 0x05, 0x8e, 0x17, 0x88, 0x5f, 0xfb, 0xdc, 0xbc, 0x88, 0x3b, 0xcb, 0x1f, 0x3c,
+    0xbc, 0x26, 0xbe, 0x98, 0x75, 0x22, 0x3b, 0x05, 0x9c, 0x08, 0x21, 0xc2, 0xcd, 0x58, 0x8c, 0x03,
+];
+const QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID: DirectNovaSuiteId = DirectNovaSuiteId::new([
+    0x44, 0x03, 0x27, 0x77, 0xf0, 0x48, 0x3b, 0x0f, 0x59, 0x1f, 0x24, 0x90, 0xe5, 0x4f, 0x6d, 0xb2,
+    0x93, 0xaa, 0x8c, 0xa8, 0xc1, 0x0e, 0x1d, 0x62, 0x25, 0xcb, 0xed, 0x30, 0x40, 0x55, 0x5d, 0x08,
+]);
+pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH: usize = 15_076;
+
+/// Resource-gated production qualification of the SHA-256 construction
+/// parent. This static selector does not activate receipt acceptance.
+pub(crate) static QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE: ExpectedDirectNovaSuite =
+    ExpectedDirectNovaSuite::new(
+        QUALIFIED_CONSTRUCTION_VERSIONS,
+        QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
+        QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
+        FrozenNovaDimensions::new(12_392_865, 12_192_189),
+        FrozenNovaDimensions::new(728_974, 728_211),
+        FrozenNovaProofMetrics::new(QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH as u64, 152),
+        QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID,
+    );
+
 /// A generic suite promoted through one exact local selection profile.
 pub(crate) struct SelectedDirectNovaSuite<const ARITY: usize> {
     expected: &'static ExpectedDirectNovaSuite,
@@ -460,48 +506,6 @@ impl<const ARITY: usize> DirectNovaSuite<ARITY> {
         trusted_step: DirectNovaStep<ARITY>,
     ) -> Result<Self, DirectNovaSessionError> {
         Self::setup_prepared(trusted_step)
-    }
-
-    /// Promotes setup output only inside the offline qualification test.
-    ///
-    /// Production callers cannot compile this path and must use one frozen
-    /// [`ExpectedDirectNovaSuite`] through [`Self::setup_exact`].
-    #[cfg(test)]
-    pub(crate) fn select_observed_construction_parent_for_qualification(
-        self,
-    ) -> Result<SelectedDirectNovaSuite<ARITY>, DirectNovaSessionError> {
-        let construction_versions = DirectNovaConstructionVersions::new(
-            ConstructionPayloadVersion::new(2),
-            ConstructionStatementVersion::new(3),
-            ConstructionManifestVersion::new(2),
-            ConstructionNativeDecisionVersion::new(1),
-        );
-        let metadata = self.verifier.metadata;
-        let proof_shape = self.verifier.proof_shape.clone();
-        let suite_id = metadata.suite_id::<ARITY>(&proof_shape, construction_versions)?;
-        let expected = Box::leak(Box::new(ExpectedDirectNovaSuite::new(
-            construction_versions,
-            *metadata.relation_id.bytes(),
-            metadata.public_parameter_digest,
-            FrozenNovaDimensions::new(
-                suite_u64(metadata.primary_constraints, "primary constraints")?,
-                suite_u64(metadata.primary_variables, "primary variables")?,
-            ),
-            FrozenNovaDimensions::new(
-                suite_u64(metadata.secondary_constraints, "secondary constraints")?,
-                suite_u64(metadata.secondary_variables, "secondary variables")?,
-            ),
-            FrozenNovaProofMetrics::new(
-                suite_u64(metadata.proof_length, "proof length")?,
-                suite_u32(metadata.codec_sequence_count, "codec sequence count")?,
-            ),
-            suite_id,
-        )));
-        expected.validate::<ARITY>(&metadata, &proof_shape)?;
-        Ok(SelectedDirectNovaSuite {
-            expected,
-            inner: self,
-        })
     }
 
     /// Builds a suite only after its relation and complete resulting metadata
@@ -1150,6 +1154,41 @@ mod tests {
                 "proof codec metadata"
             ))
         ));
+    }
+
+    #[test]
+    fn qualified_sha_construction_parent_suite_is_frozen() {
+        let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
+            NovaR1csDimensions::new(12_392_865, 12_192_189),
+            NovaR1csDimensions::new(728_974, 728_211),
+            TEST_ARITY,
+        )
+        .expect("qualified SHA-256 production proof shape");
+        assert_eq!(
+            proof_shape.encoded_len(),
+            QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
+        );
+        assert_eq!(proof_shape.sequence_count(), 152);
+
+        let metadata = DirectNovaSuiteMetadata {
+            relation_id: DirectRelationId::from_frozen_bytes(
+                QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
+            ),
+            public_parameter_digest: QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
+            primary_constraints: 12_392_865,
+            primary_variables: 12_192_189,
+            secondary_constraints: 728_974,
+            secondary_variables: 728_211,
+            proof_length: proof_shape.encoded_len(),
+            codec_sequence_count: proof_shape.sequence_count(),
+        };
+        let suite_id = metadata
+            .suite_id::<TEST_ARITY>(&proof_shape, QUALIFIED_CONSTRUCTION_VERSIONS)
+            .expect("qualified SHA-256 production suite ID");
+        assert_eq!(suite_id, QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID);
+        QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE
+            .validate::<TEST_ARITY>(&metadata, &proof_shape)
+            .expect("qualified SHA-256 production suite profile");
     }
 
     const TEST_EXPECTED_SUITE: ExpectedDirectNovaSuite = ExpectedDirectNovaSuite::new(

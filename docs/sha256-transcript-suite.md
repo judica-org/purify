@@ -100,3 +100,7 @@ opening full digests together with their scalar images. The seed-255 vector
 deliberately records an `effe...` digest and its distinct `6ffe...` scalar.
 Native C++ tests and `tests/reference_sha256_transcript.py` consume the same
 records.
+
+Complete V4 transcript fixtures live in `sha256_circuit_v4.json` and
+`sha256_circuit_v4_hidden.json`. Their stdlib-only Python reference reconstructs
+the typed messages, every challenge transition, and the final proof fields.

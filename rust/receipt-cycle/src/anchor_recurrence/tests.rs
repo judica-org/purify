@@ -1015,7 +1015,7 @@ fn exported_sha_parent_fixtures_reconstruct_one_shape() {
 }
 
 #[test]
-#[ignore = "run explicitly under the native no-swap resource gate"]
+#[ignore = "run explicitly under the native resource gate"]
 fn native_profile_sha_parent_qualification_is_exact() {
     let total_started = std::time::Instant::now();
     let accepted_proof_path = qualification_output_path("PURIFY_CONSTRUCTION_PARENT_PROOF_OUT");
@@ -1047,11 +1047,11 @@ fn native_profile_sha_parent_qualification_is_exact() {
 
     let setup_started = std::time::Instant::now();
     eprintln!("sha_parent_qualification: constructing transparent parameters");
-    let suite = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup(trusted_step)
-        .expect("unselected production qualification suite");
-    let selected = suite
-        .select_observed_construction_parent_for_qualification()
-        .expect("select observed production qualification suite");
+    let selected = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup_exact(
+        trusted_step,
+        &crate::nova_session::QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+    )
+    .expect("exact production qualification suite");
     let metadata = selected.metadata();
     eprintln!(
         "sha_parent_qualification: setup_seconds={:.3}\n\

@@ -627,6 +627,9 @@ if(PURIFY_BUILD_TESTS)
 
     if(PURIFY_BUILD_VALGRIND_TESTS)
         target_compile_definitions(purify PRIVATE PURIFY_VALGRIND_TESTING=1)
+        target_include_directories(purify PRIVATE
+            "${PURIFY_VALGRIND_INCLUDE_DIR}"
+        )
 
         add_executable(purify_valgrind_tests
             tests/purify_valgrind_tests.c
@@ -658,6 +661,7 @@ if(PURIFY_BUILD_TESTS)
         purify_add_valgrind_test(purify.valgrind.consttime_inverse purify_valgrind_tests inverse)
         purify_add_valgrind_test(purify.valgrind.consttime_packed_secret purify_valgrind_tests packed_secret)
         purify_add_valgrind_test(purify.valgrind.consttime_uint purify_valgrind_tests uint)
+        purify_add_valgrind_test(purify.valgrind.consttime_bppp purify_valgrind_tests bppp)
     endif()
 
     if(PURIFY_BUILD_BENCH)

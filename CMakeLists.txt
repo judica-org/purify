@@ -530,6 +530,7 @@ if(PURIFY_BUILD_TESTS)
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
+        tests/circuit_soundness_tests.cpp
         ${PURIFY_HEADER_HYGIENE_SOURCES}
     )
 
@@ -552,6 +553,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(expected)
     purify_add_cpp_suite_test(norm_protocol)
     purify_add_cpp_suite_test(norm_accumulation)
+    purify_add_cpp_suite_test(circuit_soundness)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
         add_test(NAME purify.tests.norm_accumulation_reference

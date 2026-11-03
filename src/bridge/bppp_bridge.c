@@ -2189,6 +2189,65 @@ int purify_bppp_create_generators(purify_secp_context* context, size_t count, un
     return ok;
 }
 
+/* Scale a serialized BPPP generator without changing its wire encoding. */
+int purify_bppp_scale_generator(purify_secp_context* context,
+                                const unsigned char generator33[33],
+                                const unsigned char scalar32[32],
+                                unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_generator generator = {{0}}, result_generator = {{0}};
+    secp256k1_scalar scalar = {0};
+    secp256k1_ge generator_ge = {0}, result_ge = {0};
+    secp256k1_gej result_j = {0};
+    int ok = 0;
+
+    if (ctx == NULL || generator33 == NULL || scalar32 == NULL || out33 == NULL) {
+        goto cleanup;
+    }
+    if (!secp256k1_generator_parse(ctx, &generator, generator33) ||
+        !purify_parse_scalar(scalar32, &scalar, 0)) {
+        goto cleanup;
+    }
+    secp256k1_generator_load(&generator_ge, &generator);
+    secp256k1_ecmult_const(&result_j, &generator_ge, &scalar);
+    if (secp256k1_gej_is_infinity(&result_j)) {
+        goto cleanup;
+    }
+    secp256k1_ge_set_gej(&result_ge, &result_j);
+    secp256k1_generator_save(&result_generator, &result_ge);
+    ok = secp256k1_generator_serialize(ctx, out33, &result_generator);
+
+cleanup:
+    if (!ok && out33 != NULL) {
+        memset(out33, 0, 33);
+    }
+    secp256k1_scalar_clear(&scalar);
+    secp256k1_ge_clear(&generator_ge);
+    secp256k1_ge_clear(&result_ge);
+    secp256k1_gej_clear(&result_j);
+    secp256k1_memclear_explicit(&generator, sizeof(generator));
+    secp256k1_memclear_explicit(&result_generator,
+                                sizeof(result_generator));
+    return ok;
+}
+
+int purify_bppp_generator_to_point(purify_secp_context* context,
+                                   const unsigned char generator33[33],
+                                   unsigned char out33[33]) {
+    secp256k1_context* ctx = purify_context_handle(context);
+    secp256k1_generator generator;
+    secp256k1_ge generator_ge;
+
+    if (ctx == NULL || generator33 == NULL || out33 == NULL) {
+        return 0;
+    }
+    if (!secp256k1_generator_parse(ctx, &generator, generator33)) {
+        return 0;
+    }
+    secp256k1_generator_load(&generator_ge, &generator);
+    return purify_serialize_point(out33, &generator_ge);
+}
+
 int purify_pedersen_commit_char(purify_secp_context* context,
                                 const unsigned char blind32[32], const unsigned char value32[32],
                                 const unsigned char value_gen33[33], const unsigned char blind_gen33[33],

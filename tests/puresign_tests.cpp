@@ -645,11 +645,26 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
     ctx.expect(direct->bytes == proven->signature.bytes,
                "PureSign++ proof signing preserves the deterministic BIP340 signature bytes");
 
+    auto dlog_tampered_proof = proven->nonce_proof;
+    dlog_tampered_proof.proof.public_commitment_dlog_response.back() ^= 1;
+    Result<bool> dlog_tampered_ok = public_key.verify_message_nonce_proof(
+        message, dlog_tampered_proof, context.get());
+    expect_ok(ctx, dlog_tampered_ok,
+              "PureSign++ verifies a tampered DLog response without parser ambiguity");
+    if (dlog_tampered_ok.has_value()) {
+        ctx.expect(!*dlog_tampered_ok,
+                   "PureSign++ rejects a tampered public-commitment DLog response");
+    }
+
     Result<Bytes> nonce_proof_bytes = proven->nonce_proof.serialize(context.get());
     expect_ok(ctx, nonce_proof_bytes, "PureSign++ NonceProof serializes");
     if (nonce_proof_bytes.has_value()) {
-        ctx.expect((*nonce_proof_bytes)[0] == 2,
-                   "PureSign++ NonceProof identifies the factored norm transcript");
+        ctx.expect((*nonce_proof_bytes)[0] == 3,
+                   "PureSign++ NonceProof identifies the raw-precommit transcript");
+        ctx.expect(nonce_proof_bytes->size() == 1072 &&
+                       nonce_proof_bytes->size() ==
+                           purify::puresign_plusplus::NonceProof::kSerializedSize,
+                   "PureSign++ V3 nonce proof stays within its measured wire budget");
         auto old_transcript_frame = *nonce_proof_bytes;
         old_transcript_frame[0] = 1;
         expect_error(ctx, purify::puresign_plusplus::NonceProof::deserialize(old_transcript_frame, context.get()),
@@ -659,17 +674,74 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
             purify::puresign_plusplus::NonceProof::deserialize(*nonce_proof_bytes, context.get());
         expect_ok(ctx, parsed_nonce_proof, "PureSign++ NonceProof round-trips");
 
-        Bytes length_tampered_nonce_proof = *nonce_proof_bytes;
-        overwrite_u32_le(length_tampered_nonce_proof, 1, 0xffffffffU);
+        Bytes truncated_nonce_proof = *nonce_proof_bytes;
+        truncated_nonce_proof.pop_back();
         expect_error(ctx,
-                     purify::puresign_plusplus::NonceProof::deserialize(length_tampered_nonce_proof, context.get()),
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         truncated_nonce_proof, context.get()),
                      ErrorCode::InvalidFixedSize,
-                     "PureSign++ NonceProof rejects a huge declared proof length");
+                     "PureSign++ NonceProof rejects a truncated inner proof");
+
+        Bytes oversized_nonce_proof = *nonce_proof_bytes;
+        oversized_nonce_proof.push_back(0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         oversized_nonce_proof, context.get()),
+                     ErrorCode::InvalidFixedSize,
+                     "PureSign++ NonceProof rejects an oversized inner proof");
+
+        Bytes invalid_a = *nonce_proof_bytes;
+        std::fill_n(invalid_a.begin() + 66, 33, 0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         invalid_a, context.get()),
+                     ErrorCode::BackendRejectedInput,
+                     "PureSign++ NonceProof rejects an invalid A commitment");
+
+        Bytes invalid_s = *nonce_proof_bytes;
+        std::fill_n(invalid_s.begin() + 99, 33, 0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         invalid_s, context.get()),
+                     ErrorCode::BackendRejectedInput,
+                     "PureSign++ NonceProof rejects an invalid S commitment");
+
+        Bytes noncanonical_t2 = *nonce_proof_bytes;
+        std::fill_n(noncanonical_t2.begin() + 132, 32, 0xff);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         noncanonical_t2, context.get()),
+                     ErrorCode::RangeViolation,
+                     "PureSign++ NonceProof rejects a non-canonical t2 scalar");
+
+        Bytes zero_dlog_response = *nonce_proof_bytes;
+        std::fill_n(zero_dlog_response.begin() + 196, 32, 0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         zero_dlog_response, context.get()),
+                     ErrorCode::BackendRejectedInput,
+                     "PureSign++ NonceProof rejects a zero DLog response");
+
+        Bytes noncanonical_dlog_response = *nonce_proof_bytes;
+        std::fill_n(noncanonical_dlog_response.begin() + 196, 32, 0xff);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         noncanonical_dlog_response, context.get()),
+                     ErrorCode::RangeViolation,
+                     "PureSign++ NonceProof rejects a non-canonical DLog response");
+
     }
 
     Result<Bytes> proven_bytes = proven->serialize(context.get());
     expect_ok(ctx, proven_bytes, "PureSign++ ProvenSignature serializes");
     if (proven_bytes.has_value()) {
+        ctx.expect((*proven_bytes)[0] == 2,
+                   "PureSign++ ProvenSignature identifies its fixed framing");
+        ctx.expect(
+            proven_bytes->size() == 1137 &&
+                proven_bytes->size() ==
+                    purify::puresign_plusplus::ProvenSignature::kSerializedSize,
+                   "PureSign++ V3 proven signature stays within its measured wire budget");
         Result<purify::puresign_plusplus::ProvenSignature> parsed_proven =
             purify::puresign_plusplus::ProvenSignature::deserialize(*proven_bytes, context.get());
         expect_ok(ctx, parsed_proven, "PureSign++ ProvenSignature round-trips");
@@ -682,12 +754,28 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
             }
         }
 
-        Bytes length_tampered_proven = *proven_bytes;
-        overwrite_u32_le(length_tampered_proven, 1, 0xffffffffU);
+        Bytes old_framing_proven = *proven_bytes;
+        old_framing_proven[0] = 1;
         expect_error(ctx,
-                     purify::puresign_plusplus::ProvenSignature::deserialize(length_tampered_proven, context.get()),
+                     purify::puresign_plusplus::ProvenSignature::deserialize(
+                         old_framing_proven, context.get()),
+                     ErrorCode::BackendRejectedInput,
+                     "PureSign++ ProvenSignature rejects the length-framed version");
+
+        Bytes truncated_proven = *proven_bytes;
+        truncated_proven.pop_back();
+        expect_error(ctx,
+                     purify::puresign_plusplus::ProvenSignature::deserialize(
+                         truncated_proven, context.get()),
                      ErrorCode::InvalidFixedSize,
-                     "PureSign++ ProvenSignature rejects a huge declared nonce-proof length");
+                     "PureSign++ ProvenSignature rejects truncation");
+        Bytes oversized_proven = *proven_bytes;
+        oversized_proven.push_back(0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::ProvenSignature::deserialize(
+                         oversized_proven, context.get()),
+                     ErrorCode::InvalidFixedSize,
+                     "PureSign++ ProvenSignature rejects extension");
     }
 }
 
@@ -866,11 +954,7 @@ void test_puresign_plusplus_topic_proof_cache_clone_for_thread(TestContext& ctx)
         return;
     }
 
-    std::size_t l_vec_len = 1;
-    while (l_vec_len < circuit->n_gates + 1) {
-        l_vec_len <<= 1;
-    }
-    const std::size_t generator_count = 4 * circuit->n_gates + l_vec_len;
+    const std::size_t generator_count = 4 * circuit->n_gates;
     Result<std::vector<purify::bppp::PointBytes>> generators =
         purify::bppp::create_generators(generator_count, context.get());
     expect_ok(ctx, generators, "PureSign++ reconstructs the cached generator line for cloning");

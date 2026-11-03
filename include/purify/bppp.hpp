@@ -76,7 +76,10 @@ Result<PointBytes> pedersen_commit_char(const ScalarBytes& blind,
  * @return Big-endian scalar bytes.
  */
 inline ScalarBytes scalar_bytes(const FieldElement& value) {
-    return value.to_bytes_be();
+    ScalarBytes out{};
+    purify_scalar_get_b32(
+        out.data(), &::purify::detail::FieldElementAccess::raw(value));
+    return out;
 }
 
 /**
@@ -86,10 +89,11 @@ inline ScalarBytes scalar_bytes(const FieldElement& value) {
  */
 inline std::vector<ScalarBytes> scalar_bytes(
     std::span<const FieldElement> values) {
-    std::vector<ScalarBytes> out;
-    out.reserve(values.size());
-    for (const FieldElement& value : values) {
-        out.push_back(scalar_bytes(value));
+    std::vector<ScalarBytes> out(values.size());
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        purify_scalar_get_b32(
+            out[i].data(),
+            &::purify::detail::FieldElementAccess::raw(values[i]));
     }
     return out;
 }
@@ -260,27 +264,29 @@ struct ExperimentalCircuitNormArgProof {
     Bytes proof;
 };
 
-/** @brief Experimental masked circuit proof that hides the reduced witness before the final BPPP argument. */
+/** @brief Masked circuit proof with a pre-challenge raw-coordinate commitment. */
 struct ExperimentalCircuitZkNormArgProof {
-    /** @brief Witness-only outer A commitment; verifiers re-anchor it to the public statement. */
+    /** @brief Raw-coordinate commitment made before reduction challenges. */
     PointBytes a_commitment{};
     PointBytes s_commitment{};
     ScalarBytes t2{};
+    /** @brief Even-Y Schnorr nonce x-coordinate for the batched public-commitment DLog proof. */
+    std::array<unsigned char, 32> public_commitment_dlog_nonce{};
+    /** @brief Schnorr response for the batched public-commitment DLog proof. */
+    ScalarBytes public_commitment_dlog_response{};
     Bytes proof;
 };
 
 /**
- * @brief Commits to the reduced witness coordinates used by the experimental circuit-to-BPPP reduction.
- * @param circuit Native circuit to reduce.
+ * @brief Commits to raw circuit coordinates before reduction challenges exist.
+ * @param circuit Native circuit whose coordinate shape determines the fixed bases.
  * @param assignment Witness assignment to commit.
- * @param statement_binding Optional statement bytes folded into the public reduction challenges.
- * @return Commitment to the reduced hidden witness coordinates.
+ * @return Commitment to the raw hidden witness coordinates.
  */
 Result<PointBytes> commit_experimental_circuit_witness(
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
     purify_secp_context* secp_context,
-    std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitBackend* cache = nullptr);
 
 /**
@@ -288,7 +294,7 @@ Result<PointBytes> commit_experimental_circuit_witness(
  * @param circuit Native circuit to reduce.
  * @param assignment Witness assignment to prove.
  * @param statement_binding Optional statement bytes folded into the public reduction challenges.
- * @return Proof carrying the reduced witness commitment and BPPP proof bytes.
+ * @return Proof carrying the raw-coordinate commitment and BPPP proof bytes.
  */
 Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
     const NativeBulletproofCircuit& circuit,
@@ -298,12 +304,12 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
     ExperimentalCircuitBackend* cache = nullptr);
 
 /**
- * @brief Produces an anchored transparent circuit proof against a caller-supplied reduced witness commitment.
+ * @brief Produces an anchored transparent circuit proof against a caller-supplied raw-coordinate commitment.
  * @param circuit Native circuit to reduce.
  * @param assignment Witness assignment to prove.
- * @param witness_commitment Public reduced witness commitment expected by the verifier.
+ * @param witness_commitment Raw-coordinate commitment made before reduction challenges.
  * @param statement_binding Optional statement bytes folded into the public reduction challenges.
- * @return Proof carrying the supplied reduced witness commitment and BPPP proof bytes.
+ * @return Proof carrying the supplied raw-coordinate commitment and BPPP proof bytes.
  */
 Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg_to_commitment(
     const NativeBulletproofCircuit& circuit,
@@ -316,7 +322,7 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg_to_c
 /**
  * @brief Verifies an experimental transparent circuit proof produced by `prove_experimental_circuit_norm_arg`.
  * @param circuit Native circuit to reduce.
- * @param proof Reduced witness commitment plus proof bytes.
+ * @param proof Raw-coordinate commitment plus proof bytes.
  * @param statement_binding Optional statement bytes folded into the public reduction challenges.
  * @return True when the proof verifies against the public circuit statement.
  */
@@ -330,21 +336,29 @@ Result<bool> verify_experimental_circuit_norm_arg(
 /**
  * @brief Produces an experimental masked circuit proof over the reduced BPPP relation.
  *
- * This wrapper is intended to mimic the outer masking strategy of Bulletproof-style protocols:
- * it commits to the reduced witness, commits to a random mask, derives a challenge, and only
- * proves the challenge-combined witness with the inner BPPP norm argument. The inner BPPP
- * implementation remains variable-time and should still be treated as experimental for secret data.
+ * The prover first commits to fixed raw circuit coordinates, then derives structured random
+ * reduction coefficients and reciprocal-scales the norm bases so the reduced opening maps back
+ * to that commitment. It commits to a random mask and proves only the challenge-combined witness
+ * with the inner BPPP norm argument. Secret witness commitments and the inner
+ * proof's witness-dependent X/R commitments use constant-time secp256k1
+ * multiplication and addition. Variable-time group operations are confined to
+ * transcript-derived public folds, public verification, accumulation, and
+ * points already declassified as proof output. This is a reviewed code
+ * boundary, not a formal side-channel proof; the API remains experimental.
  *
  * @param circuit Native circuit to reduce.
  * @param assignment Witness assignment to prove.
- * @param nonce Deterministic prover randomness used to derive the outer masking vectors.
+ * @param secret_prover_seed A secret, uniformly unpredictable 32-byte seed. Reuse is permitted
+ * only for the identical assignment and statement. Supply a fresh independent seed whenever the
+ * assignment may differ, even under the same public statement; disclosure compromises the proof's
+ * witness-hiding randomness.
  * @param statement_binding Optional statement bytes folded into the public reduction challenges.
  * @return Masked proof bundle, or a reduction/backend error.
  */
 Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
-    const ScalarBytes& nonce,
+    const ScalarBytes& secret_prover_seed,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
     ExperimentalCircuitBackend* cache = nullptr);
@@ -366,14 +380,20 @@ Result<bool> verify_experimental_circuit_zk_norm_arg(
 /**
  * @brief Produces an experimental masked circuit proof bound to explicit public commitment points.
  *
- * This variant removes the circuit commitment scalars from the hidden reduced witness and instead
- * binds them through caller-supplied compressed secp256k1 points. Each point must equal the exact
- * public commitment `assignment.commitments[i] * G` for the matching circuit commitment wire.
+ * This variant removes circuit commitment scalars from the hidden witness and binds them through
+ * caller-supplied compressed secp256k1 points. Each point must equal the exact public commitment
+ * `assignment.commitments[i] * G`. One 64-byte Schnorr proof checks a
+ * transcript-derived random linear combination of all points.
+ * @param secret_prover_seed A secret, uniformly unpredictable 32-byte seed. Reuse is permitted
+ * only for the identical assignment and statement. Supply a fresh independent seed whenever the
+ * assignment may differ, even under the same public statement. The batched Schnorr nonce is also
+ * hedged with the canonical batched opening, but seed disclosure still compromises the surrounding
+ * proof's witness-hiding randomness.
  */
 Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg_with_public_commitments(
     const NativeBulletproofCircuit& circuit,
     const BulletproofAssignmentData& assignment,
-    const ScalarBytes& nonce,
+    const ScalarBytes& secret_prover_seed,
     std::span<const PointBytes> public_commitments,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
@@ -382,8 +402,9 @@ Result<ExperimentalCircuitZkNormArgProof> prove_experimental_circuit_zk_norm_arg
 /**
  * @brief Verifies an experimental masked circuit proof against explicit public commitment points.
  *
- * The verifier reconstructs the anchored outer commitment from `proof.a_commitment`, the folded
- * circuit target, and the supplied public commitment points before checking the inner BPPP proof.
+ * The verifier checks the transcript-derived random-linear-combination DLog proof, derives
+ * structured reduction coefficients from `proof.a_commitment`, reconstructs the anchored outer
+ * commitment, and checks the inner BPPP proof.
  */
 Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
     const NativeBulletproofCircuit& circuit,

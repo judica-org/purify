@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "purify/recursive/receipt_cycle.h"
+#include "../src/bridge/receipt_cycle_bridge.h"
 #include "../src/bridge/construction_parent_bridge.h"
 
 static int expect(int condition, const char* message) {

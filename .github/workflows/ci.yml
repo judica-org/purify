@@ -109,7 +109,7 @@ jobs:
       - name: Test C and installed package boundaries
         run: >
           ctest --test-dir build-receipt-cycle --output-on-failure
-          -R '^purify\.tests\.(receipt_cycle_c|installed_package)$'
+          -R '^purify\.tests\.(receipt_cycle_c|installed_package|private_receipt_symbols)$'
 
   build-and-test:
     strategy:

@@ -44,7 +44,10 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build --preset tagged --parallel --target purify_tests purify_c_tests
+        run: >
+          cmake --build --preset tagged --parallel
+          --target purify_tests purify_c_tests
+          purify_opening_base_vector_tests
 
       - name: Show sccache stats
         run: sccache --show-stats

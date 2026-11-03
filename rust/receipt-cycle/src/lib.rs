@@ -30,6 +30,10 @@ mod construction_parent_input;
 #[cfg(test)]
 #[allow(dead_code)]
 mod construction_parent_prover_fixture;
+// This private ABI returns only a proof-authenticated pending root. The C++
+// acceptance boundary must parse and decide that root before exposing success.
+#[allow(dead_code)]
+mod construction_parent_ffi;
 // This authenticates a pending construction root. Native decide remains
 // mandatory before receipt acceptance.
 #[allow(dead_code)]

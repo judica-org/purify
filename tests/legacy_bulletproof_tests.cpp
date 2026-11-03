@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../src/bridge/bppp_bridge.h"
+#include "../src/protocol/bulletproof_internal.hpp"
 #include "purify.hpp"
 #include "purify/bppp.hpp"
 #include "test_harness.hpp"
@@ -245,6 +246,21 @@ void test_experimental_bulletproof_output_transcript_boundary(TestContext& ctx) 
     }
 }
 
+void test_circuit_shape_rejects_invalid_constraint_indices(TestContext& ctx) {
+    NativeBulletproofCircuit circuit(1, 0, 0);
+    circuit.add_left_term(0, 0, FieldElement::one());
+
+    ctx.expect(!circuit.has_valid_shape(),
+               "circuit shape rejects a sparse term without a constraint");
+    auto packed = circuit.pack_with_slack();
+    ctx.expect(!packed.has_value(),
+               "packing rejects an out-of-range sparse constraint index");
+    auto binding = purify::experimental_circuit_binding_digest(
+        circuit, purify::bytes_from_ascii("invalid-constraint-index"));
+    ctx.expect(!binding.has_value(),
+               "circuit hashing rejects an out-of-range sparse constraint index");
+}
+
 void test_legacy_scratch_tracks_constraint_count(TestContext& ctx) {
     auto context = make_test_secp_context(ctx);
     if (context == nullptr) return;
@@ -459,6 +475,7 @@ void run_legacy_bulletproof_tests(TestContext& ctx) {
     test_experimental_bulletproof_roundtrip(ctx);
     test_experimental_bulletproof_multiple_outputs(ctx);
     test_experimental_bulletproof_output_transcript_boundary(ctx);
+    test_circuit_shape_rejects_invalid_constraint_indices(ctx);
     test_legacy_scratch_tracks_constraint_count(ctx);
     test_experimental_bulletproof_rejects_malformed_inner_product_point(ctx);
     test_legacy_bridge_zero_constraint_roundtrip(ctx);

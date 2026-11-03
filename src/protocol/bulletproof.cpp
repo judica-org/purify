@@ -330,6 +330,10 @@ Status append_row_family_digest_generic(Bytes& out, std::size_t row_count, const
 Result<Bytes> circuit_binding_digest(const purify::NativeBulletproofCircuit& circuit,
                                      std::span<const unsigned char> statement_binding) {
     static const purify::TaggedHash kCircuitBindingTag("Purify/ExperimentalBulletproof/CircuitV1");
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions,
+                                "circuit_binding_digest:native_shape");
+    }
     std::size_t reserve_size = 0;
     if (!checked_mul_size(circuit.c.size(), 32, reserve_size)
         || !checked_add_size(64, reserve_size, reserve_size)) {
@@ -388,6 +392,10 @@ Result<Bytes> circuit_binding_digest(const purify::NativeBulletproofCircuit& cir
 
 Result<Bytes> circuit_binding_digest(const PackedCircuit& circuit, std::span<const unsigned char> statement_binding) {
     static const purify::TaggedHash kCircuitBindingTag("Purify/ExperimentalBulletproof/CircuitV1");
+    if (!circuit.has_valid_shape()) {
+        return unexpected_error(ErrorCode::InvalidDimensions,
+                                "circuit_binding_digest:packed_shape");
+    }
     std::size_t reserve_size = 0;
     if (!checked_mul_size(circuit.constraint_count(), 32, reserve_size)
         || !checked_add_size(64, reserve_size, reserve_size)) {
@@ -927,10 +935,26 @@ void NativeBulletproofCircuit::resize(std::size_t gates, std::size_t commitments
 }
 
 bool NativeBulletproofCircuit::has_valid_shape() const {
-    return wl.size() == n_gates
-        && wr.size() == n_gates
-        && wo.size() == n_gates
-        && wv.size() == n_commitments;
+    if (wl.size() != n_gates
+        || wr.size() != n_gates
+        || wo.size() != n_gates
+        || wv.size() != n_commitments) {
+        return false;
+    }
+    const auto rows_are_valid = [&](const std::vector<NativeBulletproofCircuitRow>& rows) {
+        for (const NativeBulletproofCircuitRow& row : rows) {
+            for (const NativeBulletproofCircuitTerm& entry : row.entries) {
+                if (entry.idx >= c.size()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    return rows_are_valid(wl)
+        && rows_are_valid(wr)
+        && rows_are_valid(wo)
+        && rows_are_valid(wv);
 }
 
 std::size_t NativeBulletproofCircuit::add_constraint(const FieldElement& constant) {
@@ -1167,6 +1191,12 @@ bool NativeBulletproofCircuit::PackedWithSlack::has_valid_shape() const noexcept
         }
         if (term_cursor > term_capacity_ || header.capacity > term_capacity_ - term_cursor) {
             return false;
+        }
+        const NativeBulletproofCircuitTerm* terms = term_data();
+        for (std::size_t j = 0; j < header.size; ++j) {
+            if (terms[header.offset + j].idx >= constraint_size_) {
+                return false;
+            }
         }
         term_cursor += header.capacity;
     }
@@ -2424,8 +2454,16 @@ Expr circuit_ec_add_x(Transcript& transcript, const ExprPoint& p1, const ExprPoi
         .build();
 }
 
-Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
-                           const JacobianPoint& point, const std::vector<Expr>& bits) {
+namespace {
+
+enum class CircuitEcMultiplyOutput {
+    XOnly,
+    FullPoint,
+};
+
+ExprPoint circuit_ec_multiply_impl(const EllipticCurve& curve, Transcript& transcript,
+                                   const JacobianPoint& point, const std::vector<Expr>& bits,
+                                   CircuitEcMultiplyOutput output) {
     std::vector<JacobianPoint> powers;
     powers.reserve(bits.size());
     powers.push_back(point);
@@ -2472,7 +2510,28 @@ Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
     for (std::size_t i = 1; i + 1 < lookups.size(); ++i) {
         out = circuit_ec_add(transcript, out, lookups[i]);
     }
-    return circuit_ec_add_x(transcript, out, lookups.back());
+    if (output == CircuitEcMultiplyOutput::FullPoint) {
+        return circuit_ec_add(transcript, out, lookups.back());
+    }
+    // Keep the historical x-only circuit byte-for-byte stable. Computing an
+    // unused final y-coordinate would append one multiplication gate and
+    // change every existing circuit transcript and proof vector.
+    return {circuit_ec_add_x(transcript, out, lookups.back()), Expr(0)};
+}
+
+}  // namespace
+
+ExprPoint circuit_ec_multiply_point(const EllipticCurve& curve, Transcript& transcript,
+                                    const JacobianPoint& point, const std::vector<Expr>& bits) {
+    return circuit_ec_multiply_impl(curve, transcript, point, bits,
+                                    CircuitEcMultiplyOutput::FullPoint);
+}
+
+Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,
+                           const JacobianPoint& point, const std::vector<Expr>& bits) {
+    return circuit_ec_multiply_impl(curve, transcript, point, bits,
+                                    CircuitEcMultiplyOutput::XOnly)
+        .first;
 }
 
 Expr circuit_combine(Transcript& transcript, const Expr& x1, const Expr& x2) {

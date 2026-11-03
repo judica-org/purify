@@ -260,7 +260,7 @@ struct NativeBulletproofCircuit {
     /** @brief Reinitializes the circuit shape and clears all accumulated constraints. */
     void resize(std::size_t gates, std::size_t commitments, std::size_t bits = 0);
 
-    /** @brief Returns true when the sparse matrix vectors match the declared circuit dimensions. */
+    /** @brief Checks declared dimensions and every sparse constraint index. */
     bool has_valid_shape() const;
 
     /** @brief Appends a new linear constraint constant term and returns its index. */
@@ -534,6 +534,10 @@ ExprPoint circuit_ec_add(Transcript& transcript, const ExprPoint& p1, const Expr
 
 /** @brief Symbolically adds two affine points and returns only the resulting x-coordinate. */
 Expr circuit_ec_add_x(Transcript& transcript, const ExprPoint& p1, const ExprPoint& p2);
+
+/** @brief Builds the symbolic affine-point multiplication gadget for one curve point. */
+ExprPoint circuit_ec_multiply_point(const EllipticCurve& curve, Transcript& transcript,
+                                    const JacobianPoint& point, const std::vector<Expr>& bits);
 
 /** @brief Builds the symbolic x-coordinate multiplication gadget for one curve point. */
 Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,

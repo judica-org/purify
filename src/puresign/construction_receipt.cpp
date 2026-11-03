@@ -4,6 +4,7 @@
 
 #include "purify/puresign/construction_receipt.hpp"
 #include "purify/puresign/construction_receipt_accumulation.hpp"
+#include "purify/puresign/construction_receipt_envelope.hpp"
 
 #include <algorithm>
 #include <array>
@@ -534,6 +535,62 @@ ConstructionReceiptAccumulator::promote_setup_claim(
     }
     return bppp::accumulation::PendingClaim(
         target.digest(), setup_claim.point(), polynomial);
+}
+
+Result<ConstructionReceiptEnvelope> ConstructionReceiptEnvelope::create(
+    ConstructionReceiptPayload payload,
+    Bytes parent_proof) {
+    if (parent_proof.size() != kParentProofSize) {
+        return unexpected_error(ErrorCode::InvalidFixedSize,
+                                "construction_envelope:parent_proof");
+    }
+    return ConstructionReceiptEnvelope(std::move(payload),
+                                       std::move(parent_proof));
+}
+
+Result<ConstructionReceiptEnvelope>
+ConstructionReceiptEnvelope::deserialize(
+    std::span<const unsigned char> encoded) {
+    constexpr std::size_t count_offset = 65;
+    constexpr std::size_t count_size = 4;
+    if (encoded.size() < ConstructionReceiptPayload::kFixedHeaderSize) {
+        return unexpected_error(ErrorCode::InvalidFixedSize,
+                                "construction_envelope:header");
+    }
+    const std::span<const unsigned char, count_size> encoded_count(
+        encoded.data() + count_offset, count_size);
+    const std::size_t entry_count = read_u32_be(encoded_count);
+    PURIFY_ASSIGN_OR_RETURN(
+        const std::size_t payload_size,
+        encoded_size_for_count(entry_count),
+        "construction_envelope:payload_size");
+    std::size_t encoded_size = 0;
+    if (!checked_add_size(payload_size, kParentProofSize,
+                          encoded_size) ||
+        encoded.size() != encoded_size) {
+        return unexpected_error(ErrorCode::InvalidFixedSize,
+                                "construction_envelope:encoded_size");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto payload,
+        ConstructionReceiptPayload::deserialize(
+            encoded.first(payload_size)),
+        "construction_envelope:payload");
+    Bytes parent_proof(encoded.begin() + payload_size, encoded.end());
+    return create(std::move(payload), std::move(parent_proof));
+}
+
+Bytes ConstructionReceiptEnvelope::serialize() const {
+    Bytes encoded = payload_.serialize();
+    encoded.reserve(serialized_size());
+    encoded.insert(encoded.end(), parent_proof_.begin(),
+                   parent_proof_.end());
+    assert(encoded.size() == serialized_size());
+    return encoded;
+}
+
+std::size_t ConstructionReceiptEnvelope::serialized_size() const noexcept {
+    return payload_.serialized_size() + parent_proof_.size();
 }
 
 }  // namespace purify::accountable

@@ -19,7 +19,11 @@ use crate::direct_nova::{
     DirectNovaScalar, DirectNovaSecondaryEngine, DirectNovaStep, DirectNovaTemplate,
 };
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
-use crate::nova_session::{DirectNovaSuite, SelectedDirectNovaSuite, SelectedDirectNovaVerifier};
+use crate::nova_session::verifier_artifact::QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT;
+use crate::nova_session::{
+    DirectNovaSuite, SelectedDirectNovaSuite, SelectedDirectNovaVerifier,
+    QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
+};
 use crate::parent_relation::{
     add_point_values, derive_candidate_folded_generator, CandidatePendingClaimWitness,
     CandidatePolynomialTermWitness, ConstrainedPendingClaim, EncodedSecpPoint, PointValue,
@@ -1015,6 +1019,72 @@ fn exported_sha_parent_fixtures_reconstruct_one_shape() {
 }
 
 #[test]
+#[ignore = "requires qualified artifacts and builds production recurrences"]
+fn qualified_sha_parent_artifact_verifies_both_outputs() {
+    let accepted = read_qualification_fixture(
+        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
+        QUALIFIED_PROVER_FIXTURE_SHA256,
+    );
+    let nondeciding = read_qualification_fixture(
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
+        NONDECIDING_PROVER_FIXTURE_SHA256,
+    );
+    let (trusted_step, accepted_bound, nondeciding_bound) =
+        bind_both_qualification_fixtures(&accepted, &nondeciding);
+    drop(trusted_step);
+    drop(accepted);
+    drop(nondeciding);
+
+    let z0 = source_state_to_nova(accepted_bound.initial_state).expect("qualified Nova z0");
+    let accepted_final =
+        source_state_to_nova(accepted_bound.final_state).expect("qualified accepted final state");
+    let nondeciding_final = source_state_to_nova(nondeciding_bound.final_state)
+        .expect("qualified nondeciding final state");
+    let step_count = accepted_bound.steps.len();
+    assert_eq!(nondeciding_bound.steps.len(), step_count);
+    drop(accepted_bound.steps);
+    drop(nondeciding_bound.steps);
+
+    let accepted_proof = std::fs::read(
+        std::env::var_os("PURIFY_CONSTRUCTION_PARENT_PROOF")
+            .expect("qualified accepted proof path"),
+    )
+    .expect("read qualified accepted proof");
+    let nondeciding_proof = std::fs::read(
+        std::env::var_os("PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROOF")
+            .expect("qualified nondeciding proof path"),
+    )
+    .expect("read qualified nondeciding proof");
+    assert_eq!(
+        accepted_proof.len(),
+        QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
+    );
+    assert_eq!(
+        nondeciding_proof.len(),
+        QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
+    );
+
+    let mut artifact = std::fs::File::open(
+        std::env::var_os("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT")
+            .expect("qualified verifier artifact path"),
+    )
+    .expect("open qualified verifier artifact");
+    let verifier =
+        SelectedDirectNovaVerifier::<ANCHOR_RECURRENCE_STATE_ARITY>::from_artifact_reader(
+            &mut artifact,
+            &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+            &QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
+        )
+        .expect("load qualified verifier artifact");
+    verifier
+        .verify_exact(&z0, step_count, &accepted_final, &accepted_proof)
+        .expect("qualified verifier accepts accepted proof");
+    verifier
+        .verify_exact(&z0, step_count, &nondeciding_final, &nondeciding_proof)
+        .expect("qualified verifier accepts nondeciding proof");
+}
+
+#[test]
 #[ignore = "run explicitly under the native resource gate"]
 fn native_profile_sha_parent_qualification_is_exact() {
     let total_started = std::time::Instant::now();
@@ -1049,7 +1119,7 @@ fn native_profile_sha_parent_qualification_is_exact() {
     eprintln!("sha_parent_qualification: constructing transparent parameters");
     let selected = DirectNovaSuite::<ANCHOR_RECURRENCE_STATE_ARITY>::setup_exact(
         trusted_step,
-        &crate::nova_session::QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
     )
     .expect("exact production qualification suite");
     let metadata = selected.metadata();
@@ -1099,8 +1169,8 @@ fn native_profile_sha_parent_qualification_is_exact() {
         .write_artifact(&mut artifact)
         .expect("write qualification verifier artifact");
     assert_eq!(
-        descriptor.decoded_payload_length(),
-        SHA_VERIFIER_PAYLOAD_LENGTH
+        descriptor,
+        QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT
     );
     artifact
         .sync_all()
@@ -1121,7 +1191,7 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let loaded = SelectedDirectNovaVerifier::<ANCHOR_RECURRENCE_STATE_ARITY>::from_artifact_reader(
         &mut artifact,
         expected_suite,
-        &descriptor,
+        &QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
     )
     .expect("reload qualification verifier artifact");
     loaded

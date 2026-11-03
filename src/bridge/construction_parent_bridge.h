@@ -23,6 +23,7 @@ extern "C" {
 enum {
     PURIFY_CONSTRUCTION_PARENT_ROOT_SIZE = 545,
     PURIFY_CONSTRUCTION_PARENT_DESCRIPTOR_SIZE = 130,
+    PURIFY_CONSTRUCTION_PARENT_PROOF_SIZE = 15076,
 };
 
 typedef enum purify_construction_parent_status {

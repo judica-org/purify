@@ -23,3 +23,4 @@
 #include "purify/puresign/construction_receipt.hpp"
 #include "purify/puresign/construction_receipt_accumulation.hpp"
 #include "purify/puresign/construction_receipt_envelope.hpp"
+#include "purify/puresign/construction_parent_verifier.hpp"

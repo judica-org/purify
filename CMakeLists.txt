@@ -96,6 +96,13 @@ set(PURIFY_SANITIZER_LIST "address,undefined" CACHE STRING
 option(PURIFY_BUILD_CBMC "Enable optional CBMC proof harnesses for the pure C wide-integer core." OFF)
 option(PURIFY_BUILD_CBMC_EXTENDED "Enable heavier experimental CBMC proofs that are not part of the default CI suite." OFF)
 option(PURIFY_BUILD_VALGRIND_TESTS "Enable optional Valgrind-backed memcheck and constant-time tests." OFF)
+option(PURIFY_BUILD_RECEIPT_CYCLE
+    "Build the transparent Secq256k1 parent-receipt backend."
+    OFF
+)
+set(PURIFY_RECEIPT_CYCLE_CARGO_TARGET "" CACHE STRING
+    "Optional Rust target triple for the parent-receipt backend."
+)
 
 if(PURIFY_BUILD_CLI AND NOT PURIFY_HAVE_CLI_SOURCES)
     message(FATAL_ERROR "PURIFY_BUILD_CLI=ON requires cli/main.cpp")
@@ -338,6 +345,101 @@ add_library(purify::purify ALIAS purify)
 add_library(purify_bppp_support ALIAS purify)
 
 purify_configure_library_target(purify)
+
+set(PURIFY_CONFIG_WITH_RECEIPT_CYCLE OFF)
+set(PURIFY_CONFIG_RECEIPT_CYCLE_ARCHIVE_NAME "")
+if(PURIFY_BUILD_RECEIPT_CYCLE)
+    find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
+    set(PURIFY_RECEIPT_CYCLE_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/rust/receipt-cycle"
+    )
+    set(PURIFY_RECEIPT_CYCLE_TARGET_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/receipt-cycle-target"
+    )
+    file(GLOB_RECURSE PURIFY_RECEIPT_CYCLE_SOURCES
+        CONFIGURE_DEPENDS
+        "${PURIFY_RECEIPT_CYCLE_DIR}/src/*.rs"
+    )
+    set(PURIFY_RECEIPT_CYCLE_CARGO_ARGS build --locked --release)
+    set(PURIFY_RECEIPT_CYCLE_ARCHIVE_DIR
+        "${PURIFY_RECEIPT_CYCLE_TARGET_DIR}/release"
+    )
+    if(PURIFY_RECEIPT_CYCLE_CARGO_TARGET)
+        list(APPEND PURIFY_RECEIPT_CYCLE_CARGO_ARGS
+            --target "${PURIFY_RECEIPT_CYCLE_CARGO_TARGET}"
+        )
+        set(PURIFY_RECEIPT_CYCLE_ARCHIVE_DIR
+            "${PURIFY_RECEIPT_CYCLE_TARGET_DIR}/${PURIFY_RECEIPT_CYCLE_CARGO_TARGET}/release"
+        )
+    elseif(CMAKE_CROSSCOMPILING)
+        message(FATAL_ERROR
+            "Cross-compiling the receipt backend requires "
+            "PURIFY_RECEIPT_CYCLE_CARGO_TARGET."
+        )
+    endif()
+    set(PURIFY_RECEIPT_CYCLE_ARCHIVE
+        "${PURIFY_RECEIPT_CYCLE_ARCHIVE_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}purify_receipt_cycle${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    )
+    add_custom_command(
+        OUTPUT "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
+        COMMAND "${CMAKE_COMMAND}" -E env
+            --unset=MAKEFLAGS
+            --unset=MFLAGS
+            --unset=CARGO_MAKEFLAGS
+            "CARGO_INCREMENTAL=0"
+            "CARGO_TARGET_DIR=${PURIFY_RECEIPT_CYCLE_TARGET_DIR}"
+            "${PURIFY_CARGO_EXECUTABLE}" ${PURIFY_RECEIPT_CYCLE_CARGO_ARGS}
+        DEPENDS
+            "${PURIFY_RECEIPT_CYCLE_DIR}/Cargo.lock"
+            "${PURIFY_RECEIPT_CYCLE_DIR}/Cargo.toml"
+            "${PURIFY_RECEIPT_CYCLE_DIR}/rust-toolchain.toml"
+            ${PURIFY_RECEIPT_CYCLE_SOURCES}
+        WORKING_DIRECTORY "${PURIFY_RECEIPT_CYCLE_DIR}"
+        COMMENT "Building transparent Secq256k1 receipt backend"
+        VERBATIM
+    )
+    add_custom_target(purify_receipt_cycle_build ALL
+        DEPENDS "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
+    )
+    add_library(purify_receipt_cycle_backend STATIC IMPORTED GLOBAL)
+    add_library(purify::receipt_cycle_backend ALIAS
+        purify_receipt_cycle_backend
+    )
+    set_target_properties(purify_receipt_cycle_backend PROPERTIES
+        IMPORTED_LOCATION "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
+    )
+    add_dependencies(purify_receipt_cycle_backend
+        purify_receipt_cycle_build
+    )
+    if(UNIX AND NOT APPLE)
+        find_package(Threads REQUIRED)
+        target_link_libraries(purify_receipt_cycle_backend INTERFACE
+            Threads::Threads
+            ${CMAKE_DL_LIBS}
+            m
+        )
+    endif()
+
+    target_link_libraries(purify PUBLIC
+        $<BUILD_INTERFACE:purify_receipt_cycle_backend>
+        $<INSTALL_INTERFACE:purify::receipt_cycle_backend>
+    )
+    target_compile_definitions(purify PUBLIC
+        PURIFY_HAS_RECEIPT_CYCLE=1
+    )
+    install(FILES "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+
+    set(PURIFY_CONFIG_WITH_RECEIPT_CYCLE ON)
+    get_filename_component(PURIFY_CONFIG_RECEIPT_CYCLE_ARCHIVE_NAME
+        "${PURIFY_RECEIPT_CYCLE_ARCHIVE}" NAME
+    )
+else()
+    target_compile_definitions(purify PUBLIC
+        PURIFY_HAS_RECEIPT_CYCLE=0
+    )
+endif()
 
 if(WIN32)
     target_link_libraries(purify PUBLIC bcrypt)

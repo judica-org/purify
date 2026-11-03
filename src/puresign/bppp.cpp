@@ -22,9 +22,9 @@ namespace purify::puresign_plusplus {
 namespace api_impl {
 
 Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
-                                             PreparedNonce&& prepared, purify_secp_context* secp_context);
+                                             PreparedNonce prepared, purify_secp_context* secp_context);
 Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
-                                           PreparedNonce&& prepared, purify_secp_context* secp_context);
+                                           PreparedNonce prepared, purify_secp_context* secp_context);
 
 }  // namespace api_impl
 
@@ -38,6 +38,21 @@ constexpr std::string_view kMessageProofTag = "PureSign/BPPP/Proof/Message/V1";
 constexpr std::string_view kTopicProofTag = "PureSign/BPPP/Proof/Topic/V1";
 
 using Scope = PreparedNonce::Scope;
+
+class BurnScalarOnDestruction {
+public:
+    explicit BurnScalarOnDestruction(Scalar32& scalar) noexcept
+        : scalar_(&scalar) {}
+    BurnScalarOnDestruction(const BurnScalarOnDestruction&) = delete;
+    BurnScalarOnDestruction& operator=(
+        const BurnScalarOnDestruction&) = delete;
+    ~BurnScalarOnDestruction() {
+        detail::secure_clear_bytes(scalar_->data(), scalar_->size());
+    }
+
+private:
+    Scalar32* scalar_;
+};
 
 const TaggedHash& binding_tagged_hash(Scope scope) {
     static const TaggedHash kMessageBindingTaggedHash(kMessageBindingTag);
@@ -301,7 +316,9 @@ Result<TopicProofCache> TopicProofCache::build(std::span<const unsigned char> to
 
 PreparedNonce::PreparedNonce(Scope scope, const Scalar32& scalar, const Nonce& nonce,
                              const XOnly32& signer_pubkey, const XOnly32& binding_digest)
-    : scope_(scope), scalar_(scalar), nonce_(nonce), signer_pubkey_(signer_pubkey), binding_digest_(binding_digest) {}
+    : scope_(scope), scalar_(scalar), nonce_(nonce),
+      signer_pubkey_(signer_pubkey), binding_digest_(binding_digest),
+      available_(true) {}
 
 PreparedNonce PreparedNonce::from_parts(Scope scope, const Scalar32& scalar, const Nonce& nonce,
                                         const XOnly32& signer_pubkey, const XOnly32& binding_digest) {
@@ -310,7 +327,8 @@ PreparedNonce PreparedNonce::from_parts(Scope scope, const Scalar32& scalar, con
 
 PreparedNonce::PreparedNonce(PreparedNonce&& other) noexcept
     : scope_(other.scope_), scalar_(other.scalar_), nonce_(other.nonce_),
-      signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_) {
+      signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_),
+      available_(other.available_) {
     other.clear();
 }
 
@@ -322,6 +340,7 @@ PreparedNonce& PreparedNonce::operator=(PreparedNonce&& other) noexcept {
         nonce_ = other.nonce_;
         signer_pubkey_ = other.signer_pubkey_;
         binding_digest_ = other.binding_digest_;
+        available_ = other.available_;
         other.clear();
     }
     return *this;
@@ -332,12 +351,19 @@ PreparedNonce::~PreparedNonce() {
 }
 
 void PreparedNonce::clear() noexcept {
-    std::fill(scalar_.begin(), scalar_.end(), static_cast<unsigned char>(0));
+    detail::secure_clear_bytes(scalar_.data(), scalar_.size());
+    available_ = false;
 }
 
 Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
                                               std::span<const unsigned char> message,
                                               purify_secp_context* secp_context) && {
+    if (!available_) {
+        return unexpected_error(ErrorCode::UninitializedState,
+                                "PreparedNonce::sign_message:consumed");
+    }
+    available_ = false;
+    BurnScalarOnDestruction burn(scalar_);
     if (scope_ != Scope::Message) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_message:scope");
     }
@@ -368,6 +394,12 @@ Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
 Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
                                                     std::span<const unsigned char> message,
                                                     purify_secp_context* secp_context) && {
+    if (!available_) {
+        return unexpected_error(ErrorCode::UninitializedState,
+                                "PreparedNonce::sign_topic_message:consumed");
+    }
+    available_ = false;
+    BurnScalarOnDestruction burn(scalar_);
     if (scope_ != Scope::Topic) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_topic_message:scope");
     }
@@ -532,7 +564,7 @@ Result<Signature> sign_message(const SecretKey& secret, std::span<const unsigned
 }
 
 Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
-                                             PreparedNonce&& prepared, purify_secp_context* secp_context) {
+                                             PreparedNonce prepared, purify_secp_context* secp_context) {
     PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret, secp_context), "sign_message_with_prepared:derive_bip340_key");
     return std::move(prepared).sign_message(signer, message, secp_context);
 }
@@ -552,7 +584,7 @@ Result<Signature> sign_with_topic(const SecretKey& secret, std::span<const unsig
 }
 
 Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
-                                           PreparedNonce&& prepared, purify_secp_context* secp_context) {
+                                           PreparedNonce prepared, purify_secp_context* secp_context) {
     PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret, secp_context), "sign_with_prepared_topic:derive_bip340_key");
     return std::move(prepared).sign_topic_message(signer, message, secp_context);
 }
@@ -852,8 +884,8 @@ Result<Signature> KeyPair::sign_message(std::span<const unsigned char> message,
 Result<Signature> KeyPair::sign_message_with_prepared(std::span<const unsigned char> message,
                                                       PreparedNonce&& prepared,
                                                       purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret_, secp_context), "KeyPair::sign_message_with_prepared:derive_bip340_key");
-    return std::move(prepared).sign_message(signer, message, secp_context);
+    return api_impl::sign_message_with_prepared(
+        secret_, message, std::move(prepared), secp_context);
 }
 
 Result<ProvenSignature> KeyPair::sign_message_with_prepared_proof(std::span<const unsigned char> message,
@@ -872,8 +904,8 @@ Result<Signature> KeyPair::sign_with_topic(std::span<const unsigned char> messag
 Result<Signature> KeyPair::sign_with_prepared_topic(std::span<const unsigned char> message,
                                                     PreparedNonce&& prepared,
                                                     purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret_, secp_context), "KeyPair::sign_with_prepared_topic:derive_bip340_key");
-    return std::move(prepared).sign_topic_message(signer, message, secp_context);
+    return api_impl::sign_with_prepared_topic(
+        secret_, message, std::move(prepared), secp_context);
 }
 
 Result<ProvenSignature> KeyPair::sign_with_prepared_topic_proof(std::span<const unsigned char> message,

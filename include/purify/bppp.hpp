@@ -84,7 +84,8 @@ inline ScalarBytes scalar_bytes(const FieldElement& value) {
  * @param values Field elements to serialize.
  * @return Serialized scalar vector.
  */
-inline std::vector<ScalarBytes> scalar_bytes(const std::vector<FieldElement>& values) {
+inline std::vector<ScalarBytes> scalar_bytes(
+    std::span<const FieldElement> values) {
     std::vector<ScalarBytes> out;
     out.reserve(values.size());
     for (const FieldElement& value : values) {

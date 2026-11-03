@@ -147,10 +147,10 @@ std::uint32_t narrow_symbol_index(std::size_t index) {
 
 struct ResolvedValues {
     WitnessAssignments witness;
-    std::vector<std::optional<FieldElement>> left;
-    std::vector<std::optional<FieldElement>> right;
-    std::vector<std::optional<FieldElement>> output;
-    std::vector<std::optional<FieldElement>> commitment;
+    WitnessAssignments left;
+    WitnessAssignments right;
+    WitnessAssignments output;
+    WitnessAssignments commitment;
 
     ResolvedValues(std::size_t witness_count, std::size_t gate_count, std::size_t commitment_count)
         : witness(witness_count), left(gate_count), right(gate_count), output(gate_count), commitment(commitment_count) {}
@@ -298,7 +298,7 @@ std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes, s
     return value;
 }
 
-Bytes flatten_scalars32(const std::vector<FieldElement>& values) {
+Bytes flatten_scalars32(std::span<const FieldElement> values) {
     Bytes out;
     best_effort_reserve_mul(out, values.size(), 32);
     for (const FieldElement& value : values) {
@@ -887,7 +887,7 @@ Result<Bytes> BulletproofAssignmentData::serialize() const {
             out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
         }
     };
-    auto write_column = [&](const std::vector<FieldElement>& column) {
+    auto write_column = [&](std::span<const FieldElement> column) {
         for (const FieldElement& value : column) {
             out.push_back(static_cast<unsigned char>(0x20));
             std::array<unsigned char, 32> bytes = value.to_bytes_le();
@@ -973,7 +973,7 @@ bool NativeBulletproofCircuit::evaluate(const BulletproofAssignmentData& assignm
 
     std::vector<FieldElement> acc(c.size(), FieldElement::zero());
     auto accumulate = [&](const std::vector<NativeBulletproofCircuitRow>& rows,
-                          const std::vector<FieldElement>& values,
+                          std::span<const FieldElement> values,
                           bool negate_values = false) {
         if (rows.size() != values.size()) {
             return false;
@@ -1379,7 +1379,8 @@ bool NativeBulletproofCircuit::PackedWithSlack::evaluate(const BulletproofAssign
 
     std::vector<FieldElement> acc(constraint_size_, FieldElement::zero());
     const NativeBulletproofCircuitTerm* all_terms = term_data();
-    auto accumulate = [&](RowFamily family, std::size_t row_count, const std::vector<FieldElement>& values,
+    auto accumulate = [&](RowFamily family, std::size_t row_count,
+                          std::span<const FieldElement> values,
                           bool negate_values = false) {
         if (values.size() != row_count) {
             return false;
@@ -2272,8 +2273,8 @@ Result<BulletproofAssignmentData> BulletproofTranscript::assignment_data_impl(co
     assignment.right.reserve(n_muls_);
     assignment.output.reserve(n_muls_);
     assignment.commitments.reserve(n_commitments_);
-    auto read_column = [&](const std::vector<std::optional<FieldElement>>& source,
-                           std::vector<FieldElement>& column) -> Status {
+    auto read_column = [&](const WitnessAssignments& source,
+                           BulletproofWitnessColumn& column) -> Status {
         for (const auto& value : source) {
             if (!value.has_value()) {
                 return unexpected_error(ErrorCode::MissingValue, "BulletproofTranscript::assignment_data:column_value");

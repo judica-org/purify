@@ -304,13 +304,23 @@ public:
         return nonce_;
     }
 
+    /** @brief Returns whether the secret nonce remains available to consume. */
+    [[nodiscard]] bool available() const noexcept {
+        return available_;
+    }
+
     /**
      * @brief Explicitly exports the secret nonce scalar.
      *
      * This is intentionally a copy-returning accessor so callers have to opt in to handling the
      * secret value.
+     * @return A scalar copy, or UninitializedState after the nonce is consumed.
      */
-    [[nodiscard]] Scalar32 scalar() const {
+    [[nodiscard]] Result<Scalar32> scalar() const {
+        if (!available_) {
+            return unexpected_error(ErrorCode::UninitializedState,
+                                    "PreparedNonce::scalar:consumed");
+        }
         return scalar_;
     }
 
@@ -357,6 +367,7 @@ private:
     Nonce nonce_{};
     XOnly32 signer_pubkey_{};
     XOnly32 binding_digest_{};
+    bool available_{false};
 };
 
 class PreparedNonceWithProof {
@@ -376,6 +387,11 @@ public:
         return prepared_.public_nonce();
     }
 
+    /** @brief Returns whether the wrapped secret nonce remains available. */
+    [[nodiscard]] bool available() const noexcept {
+        return prepared_.available();
+    }
+
     /**
      * @brief Returns the public nonce proof carried by this bundle.
      * @return The BPPP-backed nonce proof paired with the prepared nonce.
@@ -386,9 +402,9 @@ public:
 
     /**
      * @brief Explicitly exports the secret nonce scalar from the wrapped prepared nonce.
-     * @return A copy of the secret nonce scalar.
+     * @return A scalar copy, or UninitializedState after the nonce is consumed.
      */
-    [[nodiscard]] Scalar32 scalar() const {
+    [[nodiscard]] Result<Scalar32> scalar() const {
         return prepared_.scalar();
     }
 

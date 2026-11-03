@@ -6,14 +6,19 @@ combines their pending generator equations through a one-vector inner-product
 opening, and produces one new pending equation. A final native MSM discharges
 that equation. The helper never receives the original norm witnesses.
 
-This is an accumulation component, not a compressed construction receipt.
-Native callers still replay the child partial verifiers and every accumulation
-transition. A future recursive proof must authenticate those computations
-before their transcripts can be discarded. The existing experimental
-arithmetic-circuit wrapper's soundness defects remain a separate prerequisite;
-this implementation does not use that wrapper to prove accumulation.
-It operates on already-public proof data and does not turn the standalone
-norm argument into a zero-knowledge leaf.
+This native helper is an accumulation component, not a compressed construction
+receipt. Native callers using it alone still replay the child partial verifiers
+and every accumulation transition. A constrained construction parent must
+authenticate those computations before their transcripts can be discarded;
+its acceptance path must still complete the final native decision.
+
+V4 is the selected circuit-leaf path. Its native producer, preparer, verifier,
+and `prepare_v4_circuit_norm_for_algebraic_reduction` adapter are implemented.
+The adapter converts an outer-authenticated V4 leaf into the same algebraic
+accumulation language. The result remains pending until coefficient reduction,
+every accumulation transition, and `decide` succeed. This native adapter alone
+does not turn an accumulation root into a recursive construction receipt; a
+future constrained parent must provide that separate authentication.
 
 ## Exact grouping rule
 
@@ -23,6 +28,56 @@ deterministic generator stream. Both lengths are nonzero powers of two and
 commitments and witnesses may share this basis. Different dimensions or
 semantic domains may not. This does not combine different proof types by
 silently interpreting their statements as equivalent.
+
+The V4 adapter consumes only an opaque value returned by V4 preparation.
+Preparation authenticates the outer transcript and, in public mode, the
+batched DLog equation. It does not accept the inner norm argument. The
+adapter then exact-matches the raw generator points and their digest
+against the selected basis, replays the explicit-gamma residual,
+recomputes `Cc` from the canonical coefficient vector, and emits the
+exact two compact polynomial terms used by the constrained leaf.
+
+The caller owns the basis semantic digest. V4 authenticates the raw
+points and their digest, not arbitrary purpose text. The same
+authenticated prepared obligation may be promoted under another semantic
+digest when the raw points match. A coefficient-reduction proof for one
+digest cannot replay under the other. Safety does not depend on
+linearity or single-use ownership of the prepared value. The generic
+`prepare_norm` API still requires its proof generators to equal the
+basis directly and cannot bypass these checks.
+
+### Historical V3 circuit adapter
+
+The construction-specific V3 adapter accepts only the circuit API with
+explicit public commitment points. It verifies the mandatory batched
+DLog proof before producing a prepared norm, validates that the
+circuit's raw generator-stream digest equals the selected basis, and
+replays the complete outer transcript. The inner norm equation remains
+pending until the normal coefficient opening and final decision run.
+
+For norm index `i`, V3 uses the fixed even `s` with `s^2=-1` and the
+public scales:
+
+```
+T_(2k)   = lambda z^k
+T_(2k+1) = s lambda z^k
+G'_i     = rho^(i+1) T_i^-1 G_i
+```
+
+If `a` is the terminal norm scalar and `gamma_j` are the inner folding
+challenges, the adapter represents the same obligation on raw `G_i` with:
+
+```
+f_G(X) = a rho^g lambda^-1
+         (1 + gamma_0 s^-1 X)
+         product_(j>=1)(1 + gamma_j z^(-2^(j-1)) X^(2^j))
+```
+
+The `H` polynomial is unchanged. This historical compact mapping permits
+independently published V3 proofs with different `rho,lambda,z` values
+to enter one raw-basis accumulation bucket without accepting
+caller-supplied generator scales. It is retained as a measured
+predecessor, not the candidate receipt leaf.
 
 Each child has a public coefficient-opening argument. Native preparation
 reconstructs its coefficient commitment from the child's exact canonical `c`;
@@ -116,9 +171,10 @@ composition still requires the stated random-oracle assumptions and review.
 
 Coefficient preparation costs a native linear-size MSM per child. The public
 opening prover also does linear generator work. The opening's short equation
-uses logarithmically many proof points. A future recursive parent must
-authenticate the derivation of `c` and `Cc`, including any dependence on child
-messages. This native API has not compressed or eliminated that requirement.
+uses logarithmically many proof points. A construction-parent recurrence must
+authenticate the derivation of `c` and `Cc`, including their dependence on
+child messages. This native API alone has not compressed or eliminated that
+requirement.
 
 The raw-basis digest uses `Purify/BPPP/NormAccumBasisV2`, binding the framed
 semantic domain, `g,h` and all `2g` canonical points. The prepared statement
@@ -126,6 +182,16 @@ uses `Purify/BPPP/NormReduction/StatementV1` over that digest, `rho`, the initia
 commitment, all `h` canonical coefficients, computed `Cc`, and the length-framed
 original proof. Sizes are unsigned 64-bit little-endian; scalars are 32-byte
 big-endian. Basis-authenticated dimensions fix the coefficient array's length.
+Legacy typed V3 preparation instead uses
+`Purify/BPPP/CircuitNormReduction/StatementV3` and additionally binds the raw
+generator digest, V3 challenge digest, `rho,lambda,z`, statement binding,
+ordered public commitments, every outer proof field, reconstructed inner
+commitment, coefficient vector and inner proof.
+Candidate V4 preparation and its algebraic reduction use the typed
+transcripts specified in
+[algebraic accumulation V2](algebraic-accumulation-v2.md). Those
+transcripts bind the V4 prepared result, purpose-selected basis digest,
+and explicit-gamma reduction rather than reusing the V3 statement tag.
 The coefficient opening and fusion have separate `OpeningBaseV1`, `OpeningV1`
 and `FusionV1` tags under `Purify/BPPP/NormReduction/`. Fusion includes the
 complete opening bytes and both complete pending equations before sampling
@@ -198,11 +264,15 @@ authenticate omitted ancestors or application metadata.
 
 ```
 authenticate exact child statements and intended coverage
-prepare_norm for each completed child
+prepare each V4 leaf and run its exact algebraic adapter
 verify_norm_reduction for each public coefficient-opening proof
 verify every public accumulation transition
 decide the final pending claim
 ```
+
+The standalone generic path may use `prepare_norm`. The
+construction-specific V3 adapter is a historical integration path, not
+the candidate receipt flow.
 
 Inputs may be combined in one wide step or a tree. A 100-leaf binary tree has
 99 combination steps and seven levels when odd final nodes are carried up.
@@ -254,12 +324,33 @@ transcript domains prevent interpreting an accumulation step as a coefficient
 opening. Both parsers validate syntax only. An application must still use
 the appropriate verifier and finish with the accumulator decision.
 
+A final one-term claim returned by `verify_step` has a separate unframed
+encoding. The selected basis and receipt version supply its dimensions:
+
+```
+point33 || scale32 || factors32[log2(D)]
+```
+
+The polynomial offset is implicitly zero. Its exact length is
+`65+32*log2(D)` bytes. The current anchor basis has `D=32768`, so its root
+claim is 545 bytes. The encoding intentionally omits a basis digest; the
+parent statement and receipt version must bind the exact basis supplied to
+the parser.
+
+Parsing a root claim establishes only canonical point and scalar encodings
+and the required one-term shape. It does not authenticate child proofs or
+accumulation transitions, and it is never acceptance. A compressed parent
+must bind the exact parsed claim and its ancestry, after which the verifier
+must still call `decide` for the mandatory final basis MSM.
+
 These openings are additional public transition data. Native verification
 retains them alongside the original child proofs; a final 1,122-byte step
-does not replace that history. Recursive authentication is the remaining
-mechanism needed to discard it in an on-chain construction receipt.
+does not replace that history. A recursive parent may authenticate the history
+as a witness, but its public acceptance path must still complete the final
+native decision. Neither this helper nor recursive verification alone
+establishes acceptance.
 
-## Measured varying-coefficient accumulation
+## Historical generic varying-coefficient measurements
 
 Single local runs at commit `691b219` on macOS arm64, AppleClang
 16.0.0.16000026, C++20 Release `-O3`, used `g=32768,h=16384,D=65536`.
@@ -287,6 +378,10 @@ proofs. The full leaf records, including coefficients, rho and commitments,
 occupied 52,539,200 bytes. Basis points are shared; coefficient commitments
 are derived during preparation. These are retained public-data sizes, not
 peak memory or a proposed on-chain encoding.
+
+These runs use synthetic standalone Version 1 norm preparation. They
+measure the public accumulation machinery, not V4 leaf preparation or a
+complete construction receipt.
 
 Coefficient authentication and opening generation still scale with the
 number of children and their linear dimension. Native verification must
@@ -358,12 +453,23 @@ canonical reduction SHA256 is
 the final step SHA256 is
 `b3a14ad17548fed019e02a5d90063be232826750d1f5987a72b22013585f7b1b`.
 
-Remaining work for construction receipts is specific: repair/select a sound
-leaf circuit argument; authenticate the frontend's coefficient derivation; constrain
-partial verification and accumulation transitions in a recursive proof; bind
-exact registry coverage; and enforce final accumulator decision. Encryption
-privacy and signing security remain their own protocol obligations. Daybreak
-work remains deferred.
+The native V4 adapter, coefficient reduction, and accumulation transitions are
+implemented and independently exercised. A construction parent must still
+constrain those exact operations, bind the purpose-owned semantic digest and
+registry coverage, and expose a verifier that always performs the final native
+decision. Until then, this machinery is a component of receipt construction,
+not receipt acceptance.
+
+Further work includes independent review of the V4 leaf and composition
+arguments, distributed custody and share-preserving child proving, the
+correlated-key confidentiality argument, and qualification at 100 to 1,000
+anchors.
+
+The construction-specific V3 adapter previously demonstrated setup-proof
+preparation and safe zero-extension into the anchor basis. That
+historical result does not authenticate a V4 promotion or complete the
+recursive parent. Encryption privacy, distributed proving, and signing
+security remain their own protocol obligations.
 
 Publishing a coefficient seed and binding it to the child transcript remains
 a possible byte/preprocessing tradeoff. It requires a sound outer transcript

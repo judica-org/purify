@@ -127,6 +127,10 @@ statement and semantic coverage, verify reduction and every transition, and
 reach the mandatory final decision. It cannot repair an unsound leaf relation.
 No compressed accountable-signature certificate implements that parent yet.
 
+The algebraic accumulation adapter is also implemented. Its output remains a
+pending obligation until reduction, every transition, and the native final
+decision succeed.
+
 ### Historical V3 public codec
 
 The current public `NonceProof` codec and `verify_coalition_nonce_set`

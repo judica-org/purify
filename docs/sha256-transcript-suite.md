@@ -104,3 +104,5 @@ records.
 Complete V4 transcript fixtures live in `sha256_circuit_v4.json` and
 `sha256_circuit_v4_hidden.json`. Their stdlib-only Python reference reconstructs
 the typed messages, every challenge transition, and the final proof fields.
+The accumulation fixture `sha256_accumulation_v2.json` independently pins the
+opening-base forks, coefficient reduction, and accumulation transcript.

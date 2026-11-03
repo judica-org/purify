@@ -8,9 +8,6 @@
 #include "bppp_bridge.h"
 #include "bppp_internal.hpp"
 #include "sha256_transcript.hpp"
-#if defined(PURIFY_INTERNAL_TEST_SUPPORT)
-#include "accumulation_test_support.hpp"
-#endif
 
 namespace purify::bppp::accumulation {
 
@@ -2077,41 +2074,6 @@ Result<PendingClaim> verify_algebraic_step(
         basis.digest(), proof.folded_generator,
         {std::move(folded)});
 }
-
-#if defined(PURIFY_INTERNAL_TEST_SUPPORT)
-namespace test_support {
-
-Result<PointBytes> algebraic_step_equation_residual(
-    const Basis& basis, std::span<const PendingClaim> claims,
-    const AlgebraicStepProof& proof,
-    purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:test_basis");
-    const auto rounds = log2_dimension(basis.dimension());
-    if (proof.left.size() != rounds ||
-        proof.right.size() != rounds) {
-        return unexpected_error(
-            ErrorCode::SizeMismatch,
-            "accumulation:test_step_rounds");
-    }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto state,
-        make_algebraic_step_context(basis, claims, context),
-        "accumulation:test_step_context");
-    const auto weights =
-        geometric_tensor(state.x, basis.dimension());
-    PURIFY_ASSIGN_OR_RETURN(
-        auto evaluated,
-        evaluate_algebraic_ipa(
-            basis.dimension(), proof, weights,
-            state.commitment, state.y, state.opening_base,
-            state.transcript, 2, context),
-        "accumulation:test_step_evaluate");
-    return evaluated.residual;
-}
-
-} // namespace test_support
-#endif
 
 Status decide(const Basis& basis, const PendingClaim& claim, purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),

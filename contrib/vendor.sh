@@ -231,6 +231,7 @@ append_file "COPYING"
 append_file "README.md"
 append_superproject_dir "cmake"
 append_superproject_dir "include"
+append_superproject_dir "release"
 append_superproject_dir "src"
 append_superproject_dir "rust/receipt-cycle"
 

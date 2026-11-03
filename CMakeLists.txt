@@ -692,6 +692,26 @@ if(PURIFY_BUILD_TESTS)
         add_test(NAME purify.tests.receipt_cycle_c
             COMMAND purify_receipt_cycle_c_tests
         )
+
+        if(NOT CMAKE_CROSSCOMPILING)
+            add_test(NAME purify.tests.installed_package
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_CMAKE_COMMAND=${CMAKE_COMMAND}"
+                    "-DTEST_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+                    "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+                    "-DTEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+                    "-DTEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+                    "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                    "-DTEST_CONFIG=$<CONFIG>"
+                    "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installed_package/run.cmake"
+            )
+            set_tests_properties(purify.tests.installed_package
+                PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
+            )
+        endif()
     endif()
 
     function(purify_add_cpp_suite_test suite_name)

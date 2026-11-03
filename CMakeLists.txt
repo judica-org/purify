@@ -424,8 +424,12 @@ if(PURIFY_BUILD_RECEIPT_CYCLE)
         $<BUILD_INTERFACE:purify_receipt_cycle_backend>
         $<INSTALL_INTERFACE:purify::receipt_cycle_backend>
     )
+    target_sources(purify PRIVATE
+        src/puresign/construction_parent_verifier.cpp
+    )
     target_compile_definitions(purify PUBLIC
         PURIFY_HAS_RECEIPT_CYCLE=1
+        PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
     )
     install(FILES "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}

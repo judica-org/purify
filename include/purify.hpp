@@ -17,3 +17,5 @@
 #include "purify/puresign/accountable_responses.hpp"
 #include "purify/puresign/recovery_root.hpp"
 #include "purify/puresign/recovery_root_accumulation.hpp"
+#include "purify/puresign/anchor_escrow.hpp"
+#include "purify/puresign/anchor_escrow_accumulation.hpp"

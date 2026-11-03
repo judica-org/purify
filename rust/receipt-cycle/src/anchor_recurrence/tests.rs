@@ -39,7 +39,6 @@ const SECP_ORDER: [u8; 32] = [
 ];
 
 const SHA_VERIFIER_PAYLOAD_LENGTH: u64 = 3_793_960_104;
-const SHA_VERIFIER_ARTIFACT_LENGTH: u64 = SHA_VERIFIER_PAYLOAD_LENGTH + 64;
 
 // The pinned Nova revision encodes each sparse term as a 32-byte scalar and
 // an eight-byte index. This setup-free estimate must match the produced file.
@@ -1099,14 +1098,19 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let descriptor = verifier
         .write_artifact(&mut artifact)
         .expect("write qualification verifier artifact");
-    assert_eq!(descriptor.encoded_length(), SHA_VERIFIER_ARTIFACT_LENGTH);
+    assert_eq!(
+        descriptor.decoded_payload_length(),
+        SHA_VERIFIER_PAYLOAD_LENGTH
+    );
     artifact
         .sync_all()
         .expect("sync qualification verifier artifact");
     eprintln!(
-        "verifier_artifact={}\nartifact_bytes={}\nartifact_tagged_digest={}",
+        "verifier_artifact={}\nartifact_bytes={}\nartifact_decoded_bytes={}\n\
+         artifact_tagged_digest={}",
         artifact_path.display(),
         descriptor.encoded_length(),
+        descriptor.decoded_payload_length(),
         hex(&descriptor.digest()),
     );
     drop(artifact);

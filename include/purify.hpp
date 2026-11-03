@@ -19,3 +19,4 @@
 #include "purify/puresign/recovery_root_accumulation.hpp"
 #include "purify/puresign/anchor_escrow.hpp"
 #include "purify/puresign/anchor_escrow_accumulation.hpp"
+#include "purify/puresign/construction_receipt.hpp"

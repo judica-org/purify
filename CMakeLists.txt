@@ -325,6 +325,7 @@ add_library(purify
     src/puresign/accountable_responses.cpp
     src/puresign/recovery_root.cpp
     src/puresign/anchor_escrow.cpp
+    src/puresign/construction_receipt.cpp
     src/protocol/bppp.cpp
     src/protocol/accumulation.cpp
     src/protocol/sha256_transcript.cpp
@@ -421,6 +422,7 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/accountable_responses.cpp
         src/puresign/recovery_root.cpp
         src/puresign/anchor_escrow.cpp
+        src/puresign/construction_receipt.cpp
         src/protocol/bppp.cpp
         src/protocol/accumulation.cpp
         src/protocol/sha256_transcript.cpp
@@ -547,6 +549,7 @@ if(PURIFY_BUILD_TESTS)
         tests/companion_scalar_escrow_helpers.cpp
         tests/construction_receipt_helpers.cpp
         tests/construction_receipt_tests.cpp
+        tests/construction_receipt_codec_tests.cpp
         tests/receipt_sha256_tests.cpp
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
@@ -611,6 +614,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(anchor_escrow)
     purify_add_cpp_suite_test(companion_scalar_escrow)
     purify_add_cpp_suite_test(construction_receipt)
+    purify_add_cpp_suite_test(construction_receipt_codec)
     purify_add_cpp_suite_test(receipt_sha256)
     purify_add_cpp_suite_test(sha256_transcript)
     purify_add_cpp_suite_test(sha256_circuit_transcript)

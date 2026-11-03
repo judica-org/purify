@@ -1021,6 +1021,7 @@ fn exported_sha_parent_fixtures_reconstruct_one_shape() {
 #[test]
 #[ignore = "requires qualified artifacts and builds production recurrences"]
 fn qualified_sha_parent_artifact_verifies_both_outputs() {
+    let total_started = std::time::Instant::now();
     let accepted = read_qualification_fixture(
         "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
         QUALIFIED_PROVER_FIXTURE_SHA256,
@@ -1029,8 +1030,13 @@ fn qualified_sha_parent_artifact_verifies_both_outputs() {
         "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
         NONDECIDING_PROVER_FIXTURE_SHA256,
     );
+    let relation_started = std::time::Instant::now();
     let (trusted_step, accepted_bound, nondeciding_bound) =
         bind_both_qualification_fixtures(&accepted, &nondeciding);
+    eprintln!(
+        "sha_parent_artifact_check: relation_seconds={:.3}",
+        relation_started.elapsed().as_secs_f64()
+    );
     drop(trusted_step);
     drop(accepted);
     drop(nondeciding);
@@ -1069,6 +1075,7 @@ fn qualified_sha_parent_artifact_verifies_both_outputs() {
             .expect("qualified verifier artifact path"),
     )
     .expect("open qualified verifier artifact");
+    let load_started = std::time::Instant::now();
     let verifier =
         SelectedDirectNovaVerifier::<ANCHOR_RECURRENCE_STATE_ARITY>::from_artifact_reader(
             &mut artifact,
@@ -1076,12 +1083,28 @@ fn qualified_sha_parent_artifact_verifies_both_outputs() {
             &QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
         )
         .expect("load qualified verifier artifact");
+    eprintln!(
+        "sha_parent_artifact_check: load_seconds={:.3}",
+        load_started.elapsed().as_secs_f64()
+    );
+    let accepted_started = std::time::Instant::now();
     verifier
         .verify_exact(&z0, step_count, &accepted_final, &accepted_proof)
         .expect("qualified verifier accepts accepted proof");
+    eprintln!(
+        "sha_parent_artifact_check: accepted_verify_seconds={:.3}",
+        accepted_started.elapsed().as_secs_f64()
+    );
+    let nondeciding_started = std::time::Instant::now();
     verifier
         .verify_exact(&z0, step_count, &nondeciding_final, &nondeciding_proof)
         .expect("qualified verifier accepts nondeciding proof");
+    eprintln!(
+        "sha_parent_artifact_check: nondeciding_verify_seconds={:.3}\n\
+         total_seconds={:.3}",
+        nondeciding_started.elapsed().as_secs_f64(),
+        total_started.elapsed().as_secs_f64()
+    );
 }
 
 #[test]

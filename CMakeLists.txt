@@ -346,9 +346,19 @@ add_library(purify_bppp_support ALIAS purify)
 
 purify_configure_library_target(purify)
 
-set(PURIFY_CONFIG_WITH_RECEIPT_CYCLE OFF)
-set(PURIFY_CONFIG_RECEIPT_CYCLE_ARCHIVE_NAME "")
 if(PURIFY_BUILD_RECEIPT_CYCLE)
+    if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR
+            "The receipt backend is qualified only on macOS and Linux."
+        )
+    endif()
+    get_target_property(PURIFY_RECEIPT_LIBRARY_TYPE purify TYPE)
+    if(NOT PURIFY_RECEIPT_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
+        message(FATAL_ERROR
+            "PURIFY_BUILD_RECEIPT_CYCLE requires a shared Purify library."
+        )
+    endif()
+    unset(PURIFY_RECEIPT_LIBRARY_TYPE)
     find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
     set(PURIFY_RECEIPT_CYCLE_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/rust/receipt-cycle"
@@ -401,48 +411,50 @@ if(PURIFY_BUILD_RECEIPT_CYCLE)
     add_custom_target(purify_receipt_cycle_build ALL
         DEPENDS "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
     )
-    add_library(purify_receipt_cycle_backend STATIC IMPORTED GLOBAL)
-    add_library(purify::receipt_cycle_backend ALIAS
-        purify_receipt_cycle_backend
-    )
-    set_target_properties(purify_receipt_cycle_backend PROPERTIES
+    add_library(purify::receipt_cycle_backend STATIC IMPORTED GLOBAL)
+    set_target_properties(purify::receipt_cycle_backend PROPERTIES
         IMPORTED_LOCATION "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
     )
-    add_dependencies(purify_receipt_cycle_backend
+    add_dependencies(purify::receipt_cycle_backend
         purify_receipt_cycle_build
     )
     if(UNIX AND NOT APPLE)
         find_package(Threads REQUIRED)
-        target_link_libraries(purify_receipt_cycle_backend INTERFACE
+        target_link_libraries(purify::receipt_cycle_backend INTERFACE
             Threads::Threads
             ${CMAKE_DL_LIBS}
             m
         )
     endif()
 
-    target_link_libraries(purify PUBLIC
-        $<BUILD_INTERFACE:purify_receipt_cycle_backend>
-        $<INSTALL_INTERFACE:purify::receipt_cycle_backend>
-    )
+    if(APPLE)
+        target_link_directories(purify PRIVATE
+            "${PURIFY_RECEIPT_CYCLE_ARCHIVE_DIR}"
+        )
+        target_link_libraries(purify PRIVATE
+            "-Wl,-hidden-lpurify_receipt_cycle"
+        )
+        add_dependencies(purify purify_receipt_cycle_build)
+    else()
+        target_link_libraries(purify PRIVATE
+            purify::receipt_cycle_backend
+        )
+    endif()
     target_sources(purify PRIVATE
         src/puresign/construction_parent_verifier.cpp
     )
     target_compile_definitions(purify PUBLIC
-        PURIFY_HAS_RECEIPT_CYCLE=1
         PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
     )
-    install(FILES "${PURIFY_RECEIPT_CYCLE_ARCHIVE}"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    )
-
-    set(PURIFY_CONFIG_WITH_RECEIPT_CYCLE ON)
-    get_filename_component(PURIFY_CONFIG_RECEIPT_CYCLE_ARCHIVE_NAME
-        "${PURIFY_RECEIPT_CYCLE_ARCHIVE}" NAME
-    )
-else()
-    target_compile_definitions(purify PUBLIC
-        PURIFY_HAS_RECEIPT_CYCLE=0
-    )
+    if(UNIX AND NOT APPLE)
+        get_filename_component(PURIFY_RECEIPT_CYCLE_ARCHIVE_NAME
+            "${PURIFY_RECEIPT_CYCLE_ARCHIVE}" NAME
+        )
+        target_link_options(purify PRIVATE
+            "LINKER:--exclude-libs,${PURIFY_RECEIPT_CYCLE_ARCHIVE_NAME}"
+        )
+        unset(PURIFY_RECEIPT_CYCLE_ARCHIVE_NAME)
+    endif()
 endif()
 
 if(WIN32)
@@ -682,10 +694,7 @@ if(PURIFY_BUILD_TESTS)
             tests/receipt_cycle_c_tests.c
         )
         target_link_libraries(purify_receipt_cycle_c_tests
-            PRIVATE purify_receipt_cycle_backend
-        )
-        target_include_directories(purify_receipt_cycle_c_tests
-            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            PRIVATE purify::receipt_cycle_backend
         )
         purify_enable_warnings(purify_receipt_cycle_c_tests)
         purify_enable_sanitizers(purify_receipt_cycle_c_tests)
@@ -712,6 +721,18 @@ if(PURIFY_BUILD_TESTS)
                 PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
             )
         endif()
+
+        get_target_property(PURIFY_TEST_LIBRARY_TYPE purify TYPE)
+        if(UNIX AND CMAKE_NM AND
+           PURIFY_TEST_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
+            add_test(NAME purify.tests.private_receipt_symbols
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_NM=${CMAKE_NM}"
+                    "-DTEST_LIBRARY=$<TARGET_FILE:purify>"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/shared_symbol_visibility.cmake"
+            )
+        endif()
+        unset(PURIFY_TEST_LIBRARY_TYPE)
     endif()
 
     function(purify_add_cpp_suite_test suite_name)

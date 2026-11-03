@@ -28,6 +28,17 @@ if(NOT install_result EQUAL 0)
     message(FATAL_ERROR "Purify package installation failed")
 endif()
 
+file(GLOB_RECURSE leaked_receipt_backend
+    "${prefix}/*purify_receipt_cycle*"
+    "${prefix}/*receipt_cycle.h"
+)
+if(leaked_receipt_backend)
+    message(FATAL_ERROR
+        "installed package exposed the private receipt backend: "
+        "${leaked_receipt_backend}"
+    )
+endif()
+
 set(configure_command
     "${TEST_CMAKE_COMMAND}"
     -S "${TEST_SOURCE_DIR}/tests/installed_package"

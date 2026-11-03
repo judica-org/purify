@@ -463,8 +463,8 @@ The selected parent authenticates the purpose-owned semantic digest and
 frontend constants, constrains V4 preparation, reduction, and every ordered
 accumulation transition, and binds exact registry coverage. The two-anchor
 recursive lifecycle and frozen external verifier identity are qualified. The
-private C ABI and public C++ recursive-plus-native acceptance path are the next
-stacked change.
+backend ABI remains private, and the public C++ recursive-plus-native
+acceptance path is qualified by accepted and nondeciding proof vectors.
 Remaining work is specific: independently review the V4 leaf and composition
 arguments; implement distributed custody and share-preserving child proving;
 resolve the correlated-key confidentiality argument; qualify operation at 100

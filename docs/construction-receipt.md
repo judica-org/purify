@@ -3,8 +3,9 @@
 This began as the design experiment after
 [companion scalar escrow](companion-scalar-escrow.md). The implementation now
 has a transparent SHA-256 Nova parent backend and a qualified 15,076-byte proof
-profile. The purpose-specific C ABI and recursive-plus-native acceptance path
-are a subsequent stacked change. Neither backend qualification nor that local
+profile. A private purpose-specific C ABI backs the public C++ verifier, which
+requires both recursive verification and native accumulation decision before
+returning a verified receipt. Neither backend qualification nor that local
 acceptance path enables enrollment or establishes the child proof system's
 security.
 

@@ -33,9 +33,9 @@ and timings below remain useful as an individual-proof baseline. The setup leaf
 is handled once at registry creation, and the record-version-3 public anchor
 leaf has been migrated into the homogeneous parent recurrence. The SHA-256
 parent backend is qualified through a complete two-anchor compression and
-artifact-reload lifecycle. Its purpose-specific recursive-plus-native
-acceptance path is a separate stacked change. Neither path activates consensus,
-and enrollment remains disabled for the security and custody reasons below.
+artifact-reload lifecycle. Its purpose-specific public C++ verifier completes
+recursive-plus-native acceptance. Neither path activates consensus, and
+enrollment remains disabled for the security and custody reasons below.
 
 ## Groups, keys and canonical encodings
 
@@ -302,11 +302,10 @@ intended on-chain receipt retains the ciphertexts and replaces the child
 proofs with one parent proof. The recurrence and selected profile are
 implemented. Exact setup, two ordered full-scale folds, Spartan IPA
 compression, canonical verification, and external verifier-artifact reload
-have qualified. The purpose-specific C ABI and public C++ API which complete
-native `decide()` are the next stacked change. The qualified nondeciding vector
-is intentionally valid under Nova and demonstrates why that final decision is
-mandatory. The historical V3 sizes above are not an estimate of parent prover
-cost.
+have qualified. A private purpose-specific C ABI backs the public C++ API, which
+completes native `decide()`. The qualified nondeciding vector is intentionally
+valid under Nova and demonstrates why that final decision is mandatory. The
+historical V3 sizes above are not an estimate of parent prover cost.
 
 This completed validity path does not change the unresolved boundaries above:
 distributed setup, custody, and share-preserving child proving are absent, and

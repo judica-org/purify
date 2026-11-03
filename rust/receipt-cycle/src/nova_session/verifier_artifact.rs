@@ -29,7 +29,7 @@ const ARITY_OFFSET: usize = 52;
 const COMPRESSED_LENGTH_OFFSET: usize = 56;
 const DECODED_LENGTH_OFFSET: usize = 64;
 
-/// The one artifact identity compiled into a future production deployment.
+/// The one artifact identity compiled into the selected library deployment.
 ///
 /// It is deliberately separate from the semantic suite ID. Receipts never
 /// supply this value, and a serialization-only change must replace it without

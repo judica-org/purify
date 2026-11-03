@@ -24,6 +24,8 @@ void run_construction_receipt_tests(TestContext& ctx);
 void run_receipt_sha256_tests(TestContext& ctx);
 void run_aggregate_nonce_tests(TestContext& ctx);
 void run_aggregate_nonce_100_tests(TestContext& ctx);
+void run_nonce_batch_tests(TestContext& ctx);
+void run_nonce_certificate_tests(TestContext& ctx);
 
 namespace {
 
@@ -50,6 +52,8 @@ constexpr SuiteSpec kSuites[]{
     {"receipt_sha256", &run_receipt_sha256_tests},
     {"aggregate_nonce", &run_aggregate_nonce_tests},
     {"aggregate_nonce_100", &run_aggregate_nonce_100_tests},
+    {"nonce_batch", &run_nonce_batch_tests},
+    {"nonce_certificate", &run_nonce_certificate_tests},
 };
 
 const SuiteSpec* find_suite(std::string_view name) {

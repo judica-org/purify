@@ -4,6 +4,7 @@ use core::ptr;
 use std::slice;
 
 use bulletproofs_cycle::R1CSError;
+use zeroize::Zeroizing;
 
 use crate::{proof_wire_len, prove, verify, ReceiptCycleError};
 
@@ -96,22 +97,22 @@ pub unsafe extern "C" fn purify_receipt_cycle_prove(
         Ok(value) => value,
         Err(error) => return error,
     };
-    let assignment = match unsafe { copy_input(assignment, assignment_len) } {
+    let assignment = Zeroizing::new(match unsafe { copy_input(assignment, assignment_len) } {
         Ok(value) => value,
         Err(error) => return error,
-    };
+    });
     let statement = match unsafe { copy_input(statement, statement_len) } {
         Ok(value) => value,
         Err(error) => return error,
     };
-    let seed = match unsafe { copy_input(prover_seed32, 32) } {
+    let seed_bytes = Zeroizing::new(match unsafe { copy_input(prover_seed32, 32) } {
         Ok(value) => value,
         Err(error) => return error,
-    };
-    let seed: [u8; 32] = match seed.try_into() {
+    });
+    let seed = Zeroizing::new(match seed_bytes.as_slice().try_into() {
         Ok(value) => value,
         Err(_) => return PurifyReceiptCycleStatus::InternalError,
-    };
+    });
 
     let required = match proof_wire_len(&circuit) {
         Ok(value) => value,
@@ -127,7 +128,7 @@ pub unsafe extern "C" fn purify_receipt_cycle_prove(
         return PurifyReceiptCycleStatus::Malformed;
     }
 
-    let proof = match prove(&circuit, &assignment, &statement, seed) {
+    let proof = match prove(&circuit, &assignment, &statement, *seed) {
         Ok(value) => value,
         Err(error) => return status(error),
     };

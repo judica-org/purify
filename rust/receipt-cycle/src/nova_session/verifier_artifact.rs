@@ -493,7 +493,49 @@ fn tagged_artifact_digest_reader<R: Read>(
 
 #[cfg(test)]
 mod tests {
+    use serde::{Deserialize, Serialize};
+
     use super::*;
+
+    #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+    struct TestPayload {
+        values: Vec<u64>,
+    }
+
+    fn test_payload_bytes(value: &TestPayload) -> Vec<u8> {
+        bincode::serde::encode_to_vec(
+            value,
+            bincode::config::legacy()
+                .with_little_endian()
+                .with_fixed_int_encoding(),
+        )
+        .expect("encode test payload")
+    }
+
+    fn test_zstd_frame(decoded: &[u8]) -> Vec<u8> {
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), ZSTD_COMPRESSION_LEVEL)
+            .expect("test zstd encoder");
+        encoder
+            .include_checksum(true)
+            .expect("enable test frame checksum");
+        encoder
+            .window_log(ZSTD_WINDOW_LOG)
+            .expect("set test frame window");
+        encoder.write_all(decoded).expect("encode test frame");
+        encoder.finish().expect("finish test frame")
+    }
+
+    fn decode_test_payload(
+        compressed: &[u8],
+        decoded_length: usize,
+    ) -> Result<TestPayload, DirectNovaVerifierArtifactError> {
+        let compressed_length =
+            u64::try_from(compressed.len()).expect("compressed test payload length fits u64");
+        decode_exact_zstd_payload(
+            io::Cursor::new(compressed).take(compressed_length),
+            u64::try_from(decoded_length).expect("decoded test payload length fits u64"),
+        )
+    }
 
     #[test]
     fn artifact_header_is_exact_and_big_endian() {
@@ -537,5 +579,49 @@ mod tests {
             assert_eq!(writer.written(), 4);
         }
         assert_eq!(encoded, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn exact_zstd_payload_rejects_extra_frames_and_decoded_bytes() {
+        let expected = TestPayload {
+            values: vec![3, 5, 8, 13],
+        };
+        let decoded = test_payload_bytes(&expected);
+        let compressed = test_zstd_frame(&decoded);
+        assert_eq!(
+            decode_test_payload(&compressed, decoded.len()).expect("decode exact frame"),
+            expected
+        );
+
+        let mut truncated = compressed.clone();
+        truncated.pop();
+        assert!(matches!(
+            decode_test_payload(&truncated, decoded.len()),
+            Err(DirectNovaVerifierArtifactError::Io(_))
+                | Err(DirectNovaVerifierArtifactError::Decode(_))
+        ));
+
+        let mut bad_checksum = compressed.clone();
+        *bad_checksum.last_mut().expect("zstd frame checksum") ^= 1;
+        assert!(matches!(
+            decode_test_payload(&bad_checksum, decoded.len()),
+            Err(DirectNovaVerifierArtifactError::Io(_))
+                | Err(DirectNovaVerifierArtifactError::Decode(_))
+        ));
+
+        let mut concatenated = compressed.clone();
+        concatenated.extend_from_slice(&test_zstd_frame(b"second frame"));
+        assert!(matches!(
+            decode_test_payload(&concatenated, decoded.len()),
+            Err(DirectNovaVerifierArtifactError::Length)
+        ));
+
+        let mut excess_decoded = decoded;
+        excess_decoded.push(0);
+        let excess_frame = test_zstd_frame(&excess_decoded);
+        assert!(matches!(
+            decode_test_payload(&excess_frame, excess_decoded.len()),
+            Err(DirectNovaVerifierArtifactError::Length)
+        ));
     }
 }

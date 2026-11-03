@@ -673,6 +673,23 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_sanitizers(purify_tests)
     purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
 
+    if(PURIFY_BUILD_RECEIPT_CYCLE)
+        add_executable(purify_receipt_cycle_c_tests
+            tests/receipt_cycle_c_tests.c
+        )
+        target_link_libraries(purify_receipt_cycle_c_tests
+            PRIVATE purify_receipt_cycle_backend
+        )
+        target_include_directories(purify_receipt_cycle_c_tests
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        )
+        purify_enable_warnings(purify_receipt_cycle_c_tests)
+        purify_enable_sanitizers(purify_receipt_cycle_c_tests)
+        add_test(NAME purify.tests.receipt_cycle_c
+            COMMAND purify_receipt_cycle_c_tests
+        )
+    endif()
+
     function(purify_add_cpp_suite_test suite_name)
         add_test(NAME "purify.tests.${suite_name}" COMMAND purify_tests --suite "${suite_name}")
     endfunction()

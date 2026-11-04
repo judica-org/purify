@@ -1,5 +1,11 @@
 # SHA-256 circuit transcript V4
 
+Status: candidate native proof generation, preparation, and verification are
+implemented. The recursive parent must supply the matching constrained leaf
+described below. This suite does not accept a construction receipt by itself.
+The constrained leaf's reduced norm equation remains a pending fixed-basis
+obligation until the accumulator's final decision.
+
 V4 derives every proof-dependent challenge with the chained typed SHA-256
 transcript. It does not change secret padding, mask, or nonce PRFs because a
 verifier never replays those operations.

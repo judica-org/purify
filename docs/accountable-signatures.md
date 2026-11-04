@@ -112,6 +112,40 @@ exact full point and proof transcript. Omitting `R` from the 32-byte scalar
 response therefore does not let a caller substitute a fresh nonce in the
 typed acceptance path.
 
+### Candidate V4 receipt leaf
+
+The V4 nonce proof's Fiat-Shamir transcript binds `R`, its circuit/relation,
+generators, host/context inputs, and all commitments needed by the
+construction. V4 is the candidate active leaf for a receipt. Its typed
+transcript authenticates the exact statement, mode, shape, ordered public
+points, raw commitment, generator digest, and proof fields. Public mode
+retains a mandatory batched DLog equation for the advertised points.
+
+Native V4 proof generation, preparation, and verification are implemented.
+Preparation is not acceptance. A later parent must authenticate the same
+statement and semantic coverage, verify reduction and every transition, and
+reach the mandatory final decision. It cannot repair an unsound leaf relation.
+No compressed accountable-signature certificate implements that parent yet.
+
+### Historical V3 public codec
+
+The current public `NonceProof` codec and `verify_coalition_nonce_set`
+integration still carry V3 proofs while that migration remains pending.
+V3 commits raw circuit coordinates before deriving fold weights. It
+binds each advertised public point through a transcript-derived batched
+DLog check. In the random-oracle and algebraic-group model, the latter
+adds approximately `(m-1)/q` soundness loss for `m` batched openings.
+This analysis is retained as the historical baseline for the legacy
+codec; it is not a security proof for the V4 transcript.
+
+The earlier generic arithmetic wrapper permitted output blinding and therefore
+did not establish this exact-point property merely because its honest prover
+used a zero blind. The legacy V3 public-point proof and typed nonce-set
+verifier close that leaf-level gap for the current integration. The V4
+migration must preserve the same exact external-point check. Neither
+path by itself authenticates coalition registration or proves that two
+bodies are economically slashable.
+
 ## Conflict extraction and low-level helpers
 
 Given two accepted conflicting responses with the same `Q`, `U`, `D`, `T`,

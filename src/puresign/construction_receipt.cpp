@@ -3,6 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include "purify/puresign/construction_receipt.hpp"
+#include "purify/puresign/construction_receipt_accumulation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -313,6 +314,149 @@ construction_receipt_statement_digest(
         append_array(statement, resolved.context_digest);
     }
     return kConstructionReceiptStatementHash.digest(statement);
+}
+
+}  // namespace purify::accountable
+
+namespace purify::accountable {
+
+Result<ConstructionReceiptAccumulator>
+ConstructionReceiptAccumulator::create(
+    purify_secp_context* secp_context) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto setup, RecoveryRootSetupAccumulator::create(secp_context),
+        "construction_accumulation:setup_basis");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto anchors, AnchorEscrowAccumulator::create(secp_context),
+        "construction_accumulation:anchor_basis");
+    return ConstructionReceiptAccumulator(std::move(setup),
+                                          std::move(anchors));
+}
+
+ResolvedConstructionSetup::ResolvedConstructionSetup(
+    RecoveryBoundSigningRoster roster,
+    ResolvedConstructionSetupDigest resolved_digest,
+    std::array<unsigned char, kSeedRootSize> seed_root)
+    : roster_(std::move(roster)),
+      resolved_digest_(std::move(resolved_digest)),
+      seed_root_(std::move(seed_root)) {}
+
+Result<ResolvedConstructionSetup>
+ConstructionReceiptAccumulator::resolve_setup_record(
+    NonceHostBoundSigningRoster roster,
+    const UInt512& recovery_root,
+    const RecoveryRootSetupProof& setup_proof,
+    ResolvedConstructionSetupDigest resolved_digest,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) const {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto verified_roster,
+        verify_recovery_root_setup(
+            std::move(roster), recovery_root, setup_proof,
+            secp_context),
+        "construction_accumulation:verify_setup_record");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto prepared,
+        setup_.prepare(verified_roster, recovery_root, setup_proof,
+                       secp_context, cache),
+        "construction_accumulation:prepare_setup");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto reduction,
+        bppp::accumulation::prove_algebraic_norm_reduction(
+            setup_.basis(), prepared, secp_context),
+        "construction_accumulation:prove_setup_reduction");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto setup_claim,
+        bppp::accumulation::verify_algebraic_norm_reduction(
+            setup_.basis(), prepared, reduction, secp_context),
+        "construction_accumulation:verify_setup_reduction");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto promoted, promote_setup_claim(setup_claim),
+        "construction_accumulation:promote_setup");
+    const std::span<const bppp::accumulation::PendingClaim>
+        promoted_claims(&promoted, 1);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto seed_proof,
+        bppp::accumulation::prove_algebraic_step(
+            anchors_.basis(), promoted_claims, secp_context),
+        "construction_accumulation:prove_setup_seed");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto seed_claim,
+        bppp::accumulation::verify_algebraic_step(
+            anchors_.basis(), promoted_claims, seed_proof,
+            secp_context),
+        "construction_accumulation:verify_setup_seed");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto seed_root,
+        bppp::accumulation::serialize_root_claim(
+            anchors_.basis(), seed_claim, secp_context),
+        "construction_accumulation:serialize_setup_seed");
+    if (seed_root.size() !=
+        ResolvedConstructionSetup::kSeedRootSize) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "construction_accumulation:setup_seed_size");
+    }
+    std::array<unsigned char,
+               ResolvedConstructionSetup::kSeedRootSize>
+        canonical_seed_root{};
+    std::copy(seed_root.begin(), seed_root.end(),
+              canonical_seed_root.begin());
+    PURIFY_RETURN_IF_ERROR(
+        bppp::accumulation::decide(
+            anchors_.basis(), seed_claim, secp_context),
+        "construction_accumulation:decide_setup_seed");
+    const auto& polynomial = seed_claim.polynomial();
+    (void)polynomial;
+    assert(polynomial.size() == 1);
+    assert(polynomial[0].offset == 0);
+    assert(polynomial[0].factors.size() == kRootClaimRounds);
+    return ResolvedConstructionSetup(
+        std::move(verified_roster), std::move(resolved_digest),
+        std::move(canonical_seed_root));
+}
+
+Result<bppp::accumulation::PendingClaim>
+ConstructionReceiptAccumulator::promote_setup_claim(
+    const bppp::accumulation::PendingClaim& setup_claim) const {
+    const auto& source = setup_.basis();
+    const auto& target = anchors_.basis();
+    if (setup_claim.basis_digest() != source.digest()) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "construction_accumulation:setup_claim_basis");
+    }
+    if (source.dimension() >= target.dimension() ||
+        !std::equal(source.points().begin(), source.points().end(),
+                    target.points().begin())) {
+        return unexpected_error(
+            ErrorCode::InternalMismatch,
+            "construction_accumulation:basis_prefix");
+    }
+    const auto& polynomial = setup_claim.polynomial();
+    if (polynomial.empty() || polynomial.size() > 3) {
+        return unexpected_error(
+            ErrorCode::InvalidDimensions,
+            "construction_accumulation:setup_claim_shape");
+    }
+    for (const auto& term : polynomial) {
+        if (term.factors.size() >=
+            std::numeric_limits<std::size_t>::digits) {
+            return unexpected_error(
+                ErrorCode::Overflow,
+                "construction_accumulation:setup_claim_degree");
+        }
+        const std::size_t width =
+            std::size_t{1} << term.factors.size();
+        if (width > source.dimension() ||
+            term.offset > source.dimension() - width) {
+            return unexpected_error(
+                ErrorCode::InvalidDimensions,
+                "construction_accumulation:setup_claim_degree");
+        }
+    }
+    return bppp::accumulation::PendingClaim(
+        target.digest(), setup_claim.point(), polynomial);
 }
 
 }  // namespace purify::accountable

@@ -139,7 +139,7 @@ void test_setup_and_recovery(TestContext& ctx) {
     ctx.expect(!public_setup_circuit(purify::packed_public_key_space_size()), "noncanonical root rejects");
 
     const auto slot = purify::bytes_from_ascii("canonical-root/domain=1/epoch=2/slot=3");
-    purify::accountable::ConflictContext conflict{{}, {}, slot};
+    purify::accountable::ConflictContext conflict{{}, {}, {}, slot};
     std::copy(key->begin() + 1, key->end(), conflict.signing_key.begin());
     const auto first_body = purify::bytes_from_ascii("toy decision A");
     const auto second_body = purify::bytes_from_ascii("toy decision B");

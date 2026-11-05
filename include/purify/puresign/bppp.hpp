@@ -414,6 +414,16 @@ public:
     }
 
     /**
+     * @brief Explicitly exports the scalar for the proof's full raw point.
+     *
+     * `scalar()` follows BIP340's even-point normalization. This accessor
+     * reverses that normalization when the proof binds an odd compressed
+     * point, so the returned scalar always satisfies
+     * `raw_scalar * G == proof().commitment_point`.
+     */
+    [[nodiscard]] Result<Scalar32> raw_scalar() const;
+
+    /**
      * @brief Bundles a prepared nonce with its matching BPPP-backed public nonce proof.
      * @param prepared The prepared nonce carrying the secret scalar.
      * @param proof The public nonce proof matching `prepared`.

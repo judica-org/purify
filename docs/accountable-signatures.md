@@ -1,185 +1,172 @@
 # Scalar-only accountable signature transcript
 
-This experimental contract implements the public transcript, response codec,
-and algebraic key recovery for
-[Purify issue #20](https://github.com/judica-org/purify/issues/20). It does not
-implement a production signer, a nonce-proof verifier, MuSig2 signing, or a
-security proof. In particular,
-`accountable::reconstruct_nonce` returns an algebraic point, never a successful
-signature-verification result. Live use awaits the reviewed leaf relation,
-signature/proof composition, private multiparty protocol, and durable signing
-rules.
+This contract defines the public transcript, 32-byte response codec, and key
+recovery equation for
+[Purify issue #20](https://github.com/judica-org/purify/issues/20). The typed
+response API composes it with the ordered coalition roster and exact
+PureSign++ nonce proofs. It does not implement the secret multiparty signer,
+transport, durable release state, semantic conflict policy, or a final
+recursive certificate.
+
+`accountable::reconstruct_nonce` remains a low-level algebra primitive: it
+returns a point, not an accepted signature. The proof-attested path uses
+`VerifiedCoalitionNonceSet` and `VerifiedScalarResponse`, whose constructors
+are private and whose verifiers check the exact external nonce points.
 
 The [ordered roster](accountable-rosters.md) and
-[partial-response helpers](accountable-responses.md) implement public key
-aggregation and response equations for this transcript. Those algebraic checks
-do not discharge the nonce-proof or signature-composition requirements below.
+[verified response helpers](accountable-responses.md) implement public-key
+aggregation, nonce-proof acceptance, response equations, and typed conflict
+extraction for this transcript.
 
 ## Public context and exact encoding
 
-Let `n` be the secp256k1 group order and `G` its standard generator. The registered
-signing key is `Q = qG`, represented as exactly 32 big-endian x-coordinate bytes
-with an even-Y lift. The private signing scalar must correspond to that same
-lift. Non-lifting or out-of-range coordinates reject. No caller-selected key
-tweak is supported by this candidate transcript.
+Let `n` be the secp256k1 group order and `G` its standard generator. The
+registered signing key is `Q = qG`, represented as exactly 32 big-endian
+x-coordinate bytes with an even-Y lift. The private signing scalar must
+correspond to that same lift. Non-lifting or out-of-range coordinates reject.
+No caller-selected key tweak is supported by this transcript.
 
-`U` is exactly 32 bytes committing to the registered, ordered Purify hosts and
-roster. It contains no secret material. The application must authenticate `Q`
-and `U` against its fixed registry/snapshot and verify the roster's canonical
-encoding, member consent, key aggregation rules, and key/host associations.
-Hashing an arbitrary `U` does not establish any of those facts. This first
-implementation treats it as an opaque commitment; registration and rogue-key
-defenses remain separate requirements.
+`U` is exactly 32 bytes committing to the registered, ordered PureSign++ hosts
+and roster. `D` is exactly 32 bytes committing to the immutable coalition core
+and pre-proof setup context. Neither contains secret material. The application
+must authenticate `Q`, `U`, and `D` against its fixed registry or snapshot and
+verify member consent and registration authorization. Hashing arbitrary values
+does not establish those facts.
 
-`T` is a nonempty canonical application conflict-slot encoding. It must bind the
-application suite/version, domain, applicable electorate, epoch/slot and handoff
-context required by the accountability contract. Competing decision bodies for
-one slashable slot use exactly the same `T`. A message-dependent candidate hash,
-local attempt ID, proof randomizer, tree identifier, or certificate batch must
-not provide a fresh slot. An epoch change alone cannot override the handoff
-contract for an unresolved slot.
+`T` is a nonempty canonical application conflict-slot encoding. It must bind
+the application suite and version, domain, applicable electorate, epoch or
+slot, and handoff context required by the accountability contract. Competing
+decision bodies for one slashable slot use exactly the same `T`. A
+message-dependent candidate hash, local attempt ID, proof randomizer, tree
+identifier, or certificate batch must not create a fresh slot.
 
-`m` is the canonical semantic decision body, supplied as an arbitrary byte span.
-This layer permits an empty body; the application decides which bodies and
-conflicts are admissible. Both byte spans must remain alive during API calls.
+`m` is the canonical semantic decision body, supplied as an arbitrary byte
+span. This layer permits an empty body; the application decides which bodies
+and conflicts are admissible. Both byte spans must remain alive during API
+calls.
 
-Define `len64(x)` as the length of `x` encoded in eight unsigned big-endian bytes.
-Lengths above `2^64-1` reject. Define:
+Define `len64(x)` as the length of `x` encoded in eight unsigned big-endian
+bytes. Lengths above `2^64-1` reject. Define:
 
-```
-C = Q_x[32] || U[32] || len64(T) || T
+```text
+C = Q_x[32] || U[32] || D[32] || len64(T) || T
 S = C || len64(m) || m
 tagged(tag, x) = SHA256(SHA256(tag) || SHA256(tag) || x)
 
-nonce_input = tagged("Purify/Accountable/Nonce/v1", C)
-e = int_be(tagged("Purify/Accountable/Challenge/v1", S)) mod n
+nonce_input = tagged("Purify/Accountable/Nonce/v2", C)
+e = int_be(tagged("Purify/Accountable/Challenge/v2", S)) mod n
 ```
 
 The literal tags are ASCII without a terminator. There are no omitted framing
 bytes or native-endian integers. The tags separate nonce evaluation from the
-signature challenge and identify this candidate version. The application suite
-is additionally bound through `T`; these bytes are not yet a frozen consensus
-format. An honest signer and verifier reject the negligible `e = 0` case rather
-than changing `T` or adding an attempt counter to retry the same decision.
+signature challenge. An honest signer and verifier reject the negligible
+`e = 0` case rather than changing `T` or adding an attempt counter.
 
-`nonce_evaluation_input` supplies the 32 bytes to the reviewed Purify relation.
-The body and proof representation never enter this input. A coalition's
-independent hosts evaluate the same input, and the intended relation fixes the
-sum of their raw outputs modulo `n`. Host enrollment and the relationship
-between this sum and accepted proof outputs remain proof obligations.
+`nonce_evaluation_input` supplies `nonce_input` to every registered
+PureSign++ host. The body and proof encoding never enter this input.
+`verify_coalition_nonce_set` requires exactly one proof per ordered host,
+verifies each proof for this input, retains its exact full compressed point,
+and sums those points without x-only normalization.
 
 ## Scalar trace and reconstructed nonce
 
 For a raw deterministic nonce `r_T`:
 
-```
+```text
 sigma = r_T + e*q mod n
 R = sigma*G - e*Q
 ```
 
 `ScalarSignature` parses exactly 32 unsigned big-endian bytes in `[0,n)`. It
-rejects overflow, short encodings and trailing data. Zero is a valid response
-encoding; validity still requires the nonce proof. Its entire serialization is
-those 32 bytes, with no prefix, nonce point, proof, or hidden alias field.
+rejects overflow, short encodings, and trailing data. Zero is a valid response
+encoding; validity still requires the nonce proof. Its complete serialization
+is those 32 bytes, with no prefix, nonce point, proof, or alias field.
 
-`reconstruct_nonce` computes `e` from the full context and body, lifts `Q` to its
-even-Y point, and returns the exact 33-byte compressed SEC1 representation of
-`R`. It rejects infinity. Both even and odd `R` are meaningful outputs; the raw
-nonce is not negated or normalized. The later verifier must not accept either
-sign interchangeably. Since nonzero `e` and a valid `Q` make `-eQ` nonidentity,
-`sigma = 0` is handled normally as `R = -eQ`.
+`reconstruct_nonce` computes `e` from the full context and body, lifts `Q` to
+its even-Y point, and returns the exact 33-byte compressed representation of
+`R`. It rejects infinity. Both even and odd `R` are meaningful; the raw nonce
+is not negated or normalized. The typed verifier does not accept either sign
+interchangeably.
 
-The new trace codec does not alter the existing BIP340 PureSign formats or
-claim that those signature proofs satisfy this construction. It is a separate
-experimental protocol with its own tags and no backward-compatibility codec.
+This transcript does not alter the existing BIP340 PureSign formats or claim
+that those signatures satisfy this construction. It uses separate v2 tags and
+has no backward-compatibility codec.
 
-## Required nonce-proof interface
+## Proof-attested response interface
 
-The later verifier must receive the authenticated host roster, the exact
-`nonce_input`, the full reconstructed point `R`, the selected proof suite and
-completed proof bytes. The proof must establish the required relation against
-that external point. A prover-supplied replacement point or unchecked point
-stored inside a wrapper cannot satisfy this interface. Final proof framing must
-omit a duplicate `R` before claiming the full 32-byte-per-response saving.
+The accepted-response path begins with a `NonceHostBoundSigningRoster`, the
+exact `nonce_input`, and one `NonceProof` for every ordered host.
+`verify_coalition_nonce_set` verifies those proofs and returns a
+`VerifiedCoalitionNonceSet` bound to `Q`, `U`, `D`, `T`, and every full nonce
+point. Missing, reordered, substituted, opposite-sign, or wrong-topic points
+reject.
 
-Only the signature challenge excludes `R`. The nonce proof's Fiat-Shamir
-transcript must still bind `R`, its circuit/relation, generators, host/context
-inputs, and all commitments needed by the selected construction. A later
-recursive parent proves acceptance of that same reviewed statement and its
-semantic coverage; it cannot repair an unsound leaf relation.
+`verify_partial_response` checks one member's scalar against its verified
+nonce and roster coefficient. `aggregate_responses` checks one partial per
+member and returns a `VerifiedScalarResponse` only if the reconstructed
+aggregate point equals the proof-attested sum. `verify_scalar_response`
+provides the same final check for an already aggregated scalar.
 
-An acceptable composition needs either exact-output nonce-proof uniqueness or
-a reviewed combined signature/proof argument sufficient for extraction. The
-generic arithmetic Pedersen-output backend permits output blinding; using a
-zero blind in an honest prover does not alone establish that every accepted
-point is the intended raw nonce. This implementation neither demonstrates a
-break nor resolves that obligation. See
-[leaf soundness](https://github.com/judica-org/purify/issues/21).
+Only the signature challenge excludes `R`. Each nonce proof still binds its
+exact full point and proof transcript. Omitting `R` from the 32-byte scalar
+response therefore does not let a caller substitute a fresh nonce in the
+typed acceptance path.
 
-## Conditional extraction and signing obligations
+## Conflict extraction and low-level helpers
 
-Given two fully accepted conflicting endorsements with the same `Q`, `U`, `T`
-and a proven common raw nonce, and distinct challenges:
+Given two accepted conflicting responses with the same `Q`, `U`, `D`, `T`,
+and raw nonce, and distinct challenges:
 
-```
+```text
 q = (sigma - sigma') * inverse(e - e') mod n
 ```
 
-`recover_same_slot_key` implements the algebraic part of this operation under
-one supplied `Q/U/T` context. It rejects equal challenges before inversion and
-compares the full recovered public point against the even-Y lift of `Q`. It
-never normalizes a recovered `-q` into an accepted result. Exact `qG = Q` implies
-that the two reconstructed nonce points are equal; checking
-`sigma - e*q != 0` then excludes a common nonce at infinity without repeating
-the point reconstructions. A zero response remains permitted when that common
-nonce is finite. The returned 32 bytes are derived entirely from public inputs.
+`recover_verified_same_slot_key` accepts only two
+`VerifiedScalarResponse` values. It requires identical registry bindings,
+slot, and exact full aggregate nonce, rejects equal bodies or challenges, and
+checks the recovered full point against the even-Y `Q`. Success returns an
+`ExposedCoalitionKey`; it does not decide whether the bodies are semantically
+conflicting or whether a penalty is authorized.
 
-Recovery success establishes the exposed scalar, not certificate acceptance,
-semantic conflict, or liability. Before using it for a penalty, the caller must
-authenticate both endorsements' contexts, verify their nonce proofs, and apply
-the conflict and liability rules. Arbitrary future slots do not generally share
-`r_T`; a matching signing key alone is insufficient. Interpreting both responses
-under the caller's context does not authenticate that context for either one.
+`recover_same_slot_key` implements the same algebra under one caller-supplied
+context. It checks the recovered point and common nonce, but accepts no proof
+capability. Together with `reconstruct_nonce`, it remains available for
+vectors and low-level analysis and must not be used as a certificate-acceptance
+shortcut.
 
-The helper propagates context/challenge errors. Equal challenges return
-`BindingMismatch`; a zero or wrong recovered key returns `EquationMismatch`;
-a common nonce at infinity returns `RangeViolation`. It does not accept proof
-bytes or claim to enforce the unresolved nonce relation.
+Registration authorization, semantic conflict, and liability remain
+application rules. A matching signing key alone is insufficient across slots,
+because arbitrary future slots do not generally share `r_T`.
 
-No-framing for one honest member, malicious enrollment, concurrent sessions,
-abort, and adaptive proof/transcript choices remains to be established for the
-complete protocol. Signing shares, Purify host secrets, punishment scalars and
-transport keys must retain their distinct roles, even for a singleton. The
-future signer needs owned secret types and a reviewed aggregation protocol;
-the public `FieldElement` arithmetic used by the reference tests is not that
-secret-key interface.
+## Signing obligations
 
-`e` can be reserved before the aggregate nonce is known. This does not authorize
-early partial release. Each participant still needs durable authorization for
-the exact body/challenge and the reviewed nonce/proof protocol readiness
-boundary before exposing a partial. Storage, reservation, abort and release
-semantics belong to the later signer integration.
+The library does not yet provide the secret multiparty signing protocol. Each
+participant must durably authorize the exact body and challenge and validate
+proof readiness before releasing a partial response. Session reservation,
+abort handling, transport, and release policy belong to that signer.
+
+A complete protocol argument must also cover malicious enrollment, concurrent
+sessions, aborts, and adaptive transcript choices. Signing shares, PureSign++
+host secrets, punishment scalars, and transport keys remain distinct roles,
+including for a singleton coalition.
 
 ## Independent vectors and validation
 
-`python3 tests/reference_accountable_vectors.py` uses Python integers,
-`hashlib`, and independent affine secp256k1 arithmetic to regenerate the public
-vectors embedded in `accountable_signature_tests.cpp`. It uses the public toy
-key `q = 3` and raw nonce `r = 6`; the nonce has odd Y. It checks both reconstruction
-equations, and the C++ tests compare exact transcript hashes, scalar bytes and
-full nonce points before checking exact key recovery in both response orders.
+`python3 tests/reference_accountable_vectors.py` independently regenerates the
+public transcript vectors embedded in `accountable_signature_tests.cpp`. The
+fixtures use toy public scalars and compare exact v2 transcript hashes, scalar
+bytes, full nonce points, and low-level key recovery in both response orders.
 
-These are algebraic and encoding fixtures, not accepted cryptographic
-certificates or evidence of proof soundness. They require no private deployment
-keys, signer service, or proof backend. Additional tests cover field boundaries,
-length framing, invalid context, zero responses, infinity rejection, and changed
-statement reconstruction. The zero-challenge branch is specified but has no
-engineered hash preimage or test-only injection hook.
+The accountable-response suite separately exercises proof-attested singleton
+and multi-member acceptance, exact nonce parity, fresh-nonce rejection, typed
+responses, and typed extraction. These tests do not establish registration,
+semantic conflict, or a complete multiparty security proof.
 
-Run the focused C++ suite with:
+Run the focused suites with:
 
-```
+```text
 cmake --build build --parallel 4
-ctest --test-dir build -R '^purify.tests.accountable_signature$' \
+ctest --test-dir build \
+    -R '^purify.tests.(accountable_signature|accountable_response)$' \
     --output-on-failure
 ```

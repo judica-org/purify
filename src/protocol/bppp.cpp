@@ -27,6 +27,7 @@
 #include "bppp_internal.hpp"
 #include "bulletproof_internal.hpp"
 #include "purify/secp_bridge.h"
+#include "secure_cleanup.hpp"
 
 namespace purify::bppp {
 
@@ -303,39 +304,7 @@ struct SecretScalarBytes {
   }
 };
 
-template <typename T> class WipeObjectOnDestruction {
-public:
-  explicit WipeObjectOnDestruction(T &value) noexcept : value_(&value) {
-    static_assert(std::is_trivially_destructible_v<T>);
-  }
-  WipeObjectOnDestruction(const WipeObjectOnDestruction &) = delete;
-  WipeObjectOnDestruction &
-  operator=(const WipeObjectOnDestruction &) = delete;
-  ~WipeObjectOnDestruction() {
-    ::purify::detail::secure_clear_bytes(value_, sizeof(T));
-  }
-
-private:
-  T *value_;
-};
-
-template <typename T> class WipeVectorOnDestruction {
-public:
-  explicit WipeVectorOnDestruction(std::vector<T> &value) noexcept
-      : value_(&value) {
-    static_assert(std::is_trivially_destructible_v<T>);
-  }
-  WipeVectorOnDestruction(const WipeVectorOnDestruction &) = delete;
-  WipeVectorOnDestruction &
-  operator=(const WipeVectorOnDestruction &) = delete;
-  ~WipeVectorOnDestruction() {
-    ::purify::detail::secure_clear_bytes(value_->data(),
-                                         value_->size() * sizeof(T));
-  }
-
-private:
-  std::vector<T> *value_;
-};
+using ::purify::detail::WipeOnDestruction;
 
 void secure_clear_field_element(FieldElement &value) noexcept {
   static_assert(std::is_trivially_destructible_v<FieldElement>);
@@ -715,8 +684,8 @@ Result<NormArgInputs> build_raw_circuit_norm_arg_inputs(
                                   FieldElement::zero());
   std::vector<FieldElement> raw_l(dimensions.l_vec_len,
                                   FieldElement::zero());
-  WipeVectorOnDestruction raw_n_wiper(raw_n);
-  WipeVectorOnDestruction raw_l_wiper(raw_l);
+  WipeOnDestruction raw_n_wiper(raw_n);
+  WipeOnDestruction raw_l_wiper(raw_l);
   for (std::size_t i = 0; i < circuit.n_gates; ++i) {
     raw_n[2 * i] = assignment.left[i] + assignment.right[i];
     raw_n[2 * i + 1] = assignment.left[i] - assignment.right[i];
@@ -1010,14 +979,14 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
   for (std::size_t i = 0; i < circuit.n_gates; ++i) {
     FieldElement plus_value = assignment.left[i] + assignment.right[i] +
                               out.public_data->plus_shift[i];
-    WipeObjectOnDestruction plus_value_wiper(plus_value);
+    WipeOnDestruction plus_value_wiper(plus_value);
     out.n_vec[2 * i] =
         out.public_data->plus_terms[i] * plus_value * rho_weight_inv;
     rho_weight_inv = rho_weight_inv * rho_inv;
 
     FieldElement minus_value = assignment.left[i] - assignment.right[i] +
                                out.public_data->minus_shift[i];
-    WipeObjectOnDestruction minus_value_wiper(minus_value);
+    WipeOnDestruction minus_value_wiper(minus_value);
     out.n_vec[2 * i + 1] =
         out.public_data->minus_terms[i] * minus_value * rho_weight_inv;
     rho_weight_inv = rho_weight_inv * rho_inv;
@@ -1293,12 +1262,12 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog(
                             "prove_public_commitment_dlog:values");
   }
   FieldElement value = FieldElement::zero();
-  WipeObjectOnDestruction value_wiper(value);
+  WipeOnDestruction value_wiper(value);
   for (std::size_t i = 0; i < commitment_values.size(); ++i) {
     FieldElement term = batched.weights[i] * commitment_values[i];
-    WipeObjectOnDestruction term_wiper(term);
+    WipeOnDestruction term_wiper(term);
     FieldElement next = value + term;
-    WipeObjectOnDestruction next_wiper(next);
+    WipeOnDestruction next_wiper(next);
     value = next;
   }
 
@@ -1316,7 +1285,7 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog(
   nonce_seed.value.insert(nonce_seed.value.end(), challenge_digest.begin(),
                           challenge_digest.end());
   FieldElement nonce = FieldElement::zero();
-  WipeObjectOnDestruction nonce_wiper(nonce);
+  WipeOnDestruction nonce_wiper(nonce);
   PURIFY_RETURN_IF_ERROR(
       derive_secret_nonzero_scalar(nonce, nonce_seed.value,
                                    kCircuitDlogNonceTaggedHash, 0),
@@ -1334,14 +1303,14 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog(
                             "prove_public_commitment_dlog:nonce_xonly");
   }
   FieldElement negated_nonce = nonce.negate();
-  WipeObjectOnDestruction negated_nonce_wiper(negated_nonce);
+  WipeOnDestruction negated_nonce_wiper(negated_nonce);
   nonce.conditional_assign(negated_nonce, parity != 0);
   PURIFY_ASSIGN_OR_RETURN(
       const auto &challenge,
       dlog_challenge(challenge_digest, batched.point, out.nonce_xonly),
       "prove_public_commitment_dlog:challenge");
   FieldElement challenge_value = challenge * value;
-  WipeObjectOnDestruction challenge_value_wiper(challenge_value);
+  WipeOnDestruction challenge_value_wiper(challenge_value);
   const FieldElement response = nonce + challenge_value;
   if (response.is_zero()) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
@@ -1364,12 +1333,12 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog_v4(
                             "prove_public_commitment_dlog_v4:values");
   }
   FieldElement value = FieldElement::zero();
-  WipeObjectOnDestruction value_wiper(value);
+  WipeOnDestruction value_wiper(value);
   for (std::size_t i = 0; i < commitment_values.size(); ++i) {
     FieldElement term = batched.weights[i] * commitment_values[i];
-    WipeObjectOnDestruction term_wiper(term);
+    WipeOnDestruction term_wiper(term);
     FieldElement next = value + term;
-    WipeObjectOnDestruction next_wiper(next);
+    WipeOnDestruction next_wiper(next);
     value = next;
   }
 
@@ -1387,7 +1356,7 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog_v4(
   nonce_seed.value.insert(nonce_seed.value.end(), nonce_binding.begin(),
                           nonce_binding.end());
   FieldElement nonce = FieldElement::zero();
-  WipeObjectOnDestruction nonce_wiper(nonce);
+  WipeOnDestruction nonce_wiper(nonce);
   PURIFY_RETURN_IF_ERROR(
       derive_secret_nonzero_scalar(nonce, nonce_seed.value,
                                    kCircuitDlogNonceV4TaggedHash, 0),
@@ -1405,13 +1374,13 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog_v4(
                             "prove_public_commitment_dlog_v4:nonce_xonly");
   }
   FieldElement negated_nonce = nonce.negate();
-  WipeObjectOnDestruction negated_nonce_wiper(negated_nonce);
+  WipeOnDestruction negated_nonce_wiper(negated_nonce);
   nonce.conditional_assign(negated_nonce, parity != 0);
   PURIFY_ASSIGN_OR_RETURN(
       const auto &challenge, challenge_callback(out.nonce_xonly),
       "prove_public_commitment_dlog_v4:challenge");
   FieldElement challenge_value = challenge * value;
-  WipeObjectOnDestruction challenge_value_wiper(challenge_value);
+  WipeOnDestruction challenge_value_wiper(challenge_value);
   const FieldElement response = nonce + challenge_value;
   if (response.is_zero()) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
@@ -2141,8 +2110,8 @@ Result<PointBytes> commit_experimental_circuit_witness(
       build_raw_circuit_norm_arg_inputs(circuit, assignment, {}, false,
                                         secp_context),
       "commit_experimental_circuit_witness:raw_inputs");
-  WipeVectorOnDestruction raw_n_wiper(raw_inputs.n_vec);
-  WipeVectorOnDestruction raw_l_wiper(raw_inputs.l_vec);
+  WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
+  WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
   return commit_norm_arg_witness_only(raw_inputs, secp_context, cache);
 }
 
@@ -2183,8 +2152,8 @@ prove_experimental_circuit_norm_arg_to_commitment(
       build_raw_circuit_norm_arg_inputs(circuit, assignment, {}, false,
                                         secp_context),
       "prove_experimental_circuit_norm_arg_to_commitment:raw_inputs");
-  WipeVectorOnDestruction raw_n_wiper(raw_inputs.n_vec);
-  WipeVectorOnDestruction raw_l_wiper(raw_inputs.l_vec);
+  WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
+  WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
   PURIFY_ASSIGN_OR_RETURN(
       const auto &computed_witness_commitment,
       commit_norm_arg_witness_only(raw_inputs, secp_context, cache),
@@ -2201,12 +2170,12 @@ prove_experimental_circuit_norm_arg_to_commitment(
           circuit, assignment, witness_commitment, secp_context,
           statement_binding, false, cache),
       "prove_experimental_circuit_norm_arg_to_commitment:reduce");
-  WipeVectorOnDestruction reduction_n_wiper(reduction.n_vec);
-  WipeVectorOnDestruction reduction_l_wiper(reduction.l_vec);
+  WipeOnDestruction reduction_n_wiper(reduction.n_vec);
+  WipeOnDestruction reduction_l_wiper(reduction.l_vec);
 
   NormArgInputs inputs = build_norm_arg_inputs(reduction);
-  WipeVectorOnDestruction input_n_wiper(inputs.n_vec);
-  WipeVectorOnDestruction input_l_wiper(inputs.l_vec);
+  WipeOnDestruction input_n_wiper(inputs.n_vec);
+  WipeOnDestruction input_l_wiper(inputs.l_vec);
 
   PURIFY_ASSIGN_OR_RETURN(
       const auto &anchored_commitment,
@@ -2361,7 +2330,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
   for (std::uint64_t attempt = 0; attempt < 32; ++attempt) {
     std::vector<FieldElement> padding(
         dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
-    WipeVectorOnDestruction padding_wiper(padding);
+    WipeOnDestruction padding_wiper(padding);
     for (std::size_t i = 0; i < padding.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(
           derive_scalar(padding[i], seed.value, kCircuitZkBlindTaggedHash, i,
@@ -2375,8 +2344,8 @@ prove_experimental_circuit_zk_norm_arg_impl(
                                           externalize_commitments,
                                           secp_context),
         "prove_experimental_circuit_zk_norm_arg_impl:raw_inputs");
-    WipeVectorOnDestruction raw_n_wiper(raw_inputs.n_vec);
-    WipeVectorOnDestruction raw_l_wiper(raw_inputs.l_vec);
+    WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
+    WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
     Result<PointBytes> raw_commitment =
         commit_norm_arg_witness_only(raw_inputs, secp_context, cache);
     if (!raw_commitment.has_value()) {
@@ -2396,8 +2365,8 @@ prove_experimental_circuit_zk_norm_arg_impl(
             circuit, assignment, *raw_commitment, secp_context,
             bound_statement_binding, externalize_commitments, cache),
         "prove_experimental_circuit_zk_norm_arg_impl:reduce");
-    WipeVectorOnDestruction hidden_n_wiper(hidden.n_vec);
-    WipeVectorOnDestruction hidden_l_wiper(hidden.l_vec);
+    WipeOnDestruction hidden_n_wiper(hidden.n_vec);
+    WipeOnDestruction hidden_l_wiper(hidden.l_vec);
     std::copy(padding.begin(), padding.end(),
               hidden.l_vec.begin() + dimensions.used_l);
 
@@ -2435,7 +2404,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
     }
 
     std::vector<FieldElement> mask_n(hidden.n_vec.size(), FieldElement::zero());
-    WipeVectorOnDestruction mask_n_wiper(mask_n);
+    WipeOnDestruction mask_n_wiper(mask_n);
     for (std::size_t i = 0; i < mask_n.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(
           derive_scalar(mask_n[i], seed.value, kCircuitZkMaskNTaggedHash, i,
@@ -2444,7 +2413,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
     }
 
     std::vector<FieldElement> mask_l(hidden.l_vec.size(), FieldElement::zero());
-    WipeVectorOnDestruction mask_l_wiper(mask_l);
+    WipeOnDestruction mask_l_wiper(mask_l);
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(
           derive_scalar(mask_l[i], seed.value, kCircuitZkMaskLTaggedHash, i,
@@ -2454,14 +2423,14 @@ prove_experimental_circuit_zk_norm_arg_impl(
 
     FieldElement t2 =
         weighted_bppp_inner_product(mask_n, mask_n, hidden.public_data->rho);
-    WipeObjectOnDestruction t2_wiper(t2);
+    WipeOnDestruction t2_wiper(t2);
     if (t2.is_zero()) {
       continue;
     }
     FieldElement t1 = FieldElement::from_int(2) *
                       weighted_bppp_inner_product(hidden.n_vec, mask_n,
                                                   hidden.public_data->rho);
-    WipeObjectOnDestruction t1_wiper(t1);
+    WipeOnDestruction t1_wiper(t1);
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
       t1 = t1 + (mask_l[i] * hidden.public_data->c_vec[i]);
     }
@@ -2472,8 +2441,8 @@ prove_experimental_circuit_zk_norm_arg_impl(
     mask_inputs.n_vec = scalar_bytes(mask_n);
     mask_inputs.l_vec = scalar_bytes(mask_l);
     mask_inputs.c_vec = hidden.public_data->c_vec_bytes;
-    WipeVectorOnDestruction mask_input_n_wiper(mask_inputs.n_vec);
-    WipeVectorOnDestruction mask_input_l_wiper(mask_inputs.l_vec);
+    WipeOnDestruction mask_input_n_wiper(mask_inputs.n_vec);
+    WipeOnDestruction mask_input_l_wiper(mask_inputs.l_vec);
 
     Result<PointBytes> a_commitment = anchor_zk_a_commitment(
         *raw_commitment, *hidden.public_data, public_commitments, secp_context);
@@ -2506,8 +2475,8 @@ prove_experimental_circuit_zk_norm_arg_impl(
         "prove_experimental_circuit_zk_norm_arg_impl:challenge");
 
     CircuitNormArgReduction masked = hidden;
-    WipeVectorOnDestruction masked_n_wiper(masked.n_vec);
-    WipeVectorOnDestruction masked_l_wiper(masked.l_vec);
+    WipeOnDestruction masked_n_wiper(masked.n_vec);
+    WipeOnDestruction masked_l_wiper(masked.l_vec);
     for (std::size_t i = 0; i < masked.n_vec.size(); ++i) {
       masked.n_vec[i] = masked.n_vec[i] + (challenge * mask_n[i]);
     }
@@ -2515,8 +2484,8 @@ prove_experimental_circuit_zk_norm_arg_impl(
       masked.l_vec[i] = masked.l_vec[i] + (challenge * mask_l[i]);
     }
     NormArgInputs masked_inputs = build_norm_arg_inputs(masked);
-    WipeVectorOnDestruction masked_input_n_wiper(masked_inputs.n_vec);
-    WipeVectorOnDestruction masked_input_l_wiper(masked_inputs.l_vec);
+    WipeOnDestruction masked_input_n_wiper(masked_inputs.n_vec);
+    WipeOnDestruction masked_input_l_wiper(masked_inputs.l_vec);
 
     Result<PointBytes> combined_commitment =
         combine_zk_commitments(*a_commitment, *s_commitment, challenge, t2, secp_context);
@@ -3091,7 +3060,7 @@ prove_circuit_zk_norm_arg_v4_impl(
   for (std::uint64_t attempt = 0; attempt < 32; ++attempt) {
     std::vector<FieldElement> padding(
         dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
-    WipeVectorOnDestruction padding_wiper(padding);
+    WipeOnDestruction padding_wiper(padding);
     for (std::size_t i = 0; i < padding.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(
           derive_scalar(padding[i], seed.value, kCircuitZkBlindV4TaggedHash,
@@ -3105,8 +3074,8 @@ prove_circuit_zk_norm_arg_v4_impl(
                                           externalize_commitments,
                                           secp_context),
         "prove_circuit_zk_norm_arg_v4:raw_inputs");
-    WipeVectorOnDestruction raw_n_wiper(raw_inputs.n_vec);
-    WipeVectorOnDestruction raw_l_wiper(raw_inputs.l_vec);
+    WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
+    WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
     auto raw_commitment =
         commit_norm_arg_witness_only(raw_inputs, secp_context, cache);
     if (!raw_commitment.has_value()) {
@@ -3141,8 +3110,8 @@ prove_circuit_zk_norm_arg_v4_impl(
       return unexpected_error(ErrorCode::InternalMismatch,
                               "prove_circuit_zk_norm_arg_v4:raw_basis");
     }
-    WipeVectorOnDestruction hidden_n_wiper(hidden.n_vec);
-    WipeVectorOnDestruction hidden_l_wiper(hidden.l_vec);
+    WipeOnDestruction hidden_n_wiper(hidden.n_vec);
+    WipeOnDestruction hidden_l_wiper(hidden.l_vec);
     std::copy(padding.begin(), padding.end(),
               hidden.l_vec.begin() + dimensions.used_l);
 
@@ -3226,7 +3195,7 @@ prove_circuit_zk_norm_arg_v4_impl(
     assert(mask_seed.value.size() == mask_seed_size);
     std::vector<FieldElement> mask_n(hidden.n_vec.size(),
                                      FieldElement::zero());
-    WipeVectorOnDestruction mask_n_wiper(mask_n);
+    WipeOnDestruction mask_n_wiper(mask_n);
     for (std::size_t i = 0; i < mask_n.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(
           derive_scalar(mask_n[i], mask_seed.value,
@@ -3235,7 +3204,7 @@ prove_circuit_zk_norm_arg_v4_impl(
     }
     std::vector<FieldElement> mask_l(hidden.l_vec.size(),
                                      FieldElement::zero());
-    WipeVectorOnDestruction mask_l_wiper(mask_l);
+    WipeOnDestruction mask_l_wiper(mask_l);
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(
           derive_scalar(mask_l[i], mask_seed.value,
@@ -3245,13 +3214,13 @@ prove_circuit_zk_norm_arg_v4_impl(
 
     FieldElement t2 = weighted_bppp_inner_product(
         mask_n, mask_n, hidden.public_data->rho);
-    WipeObjectOnDestruction t2_wiper(t2);
+    WipeOnDestruction t2_wiper(t2);
     if (t2.is_zero()) continue;
     FieldElement t1 =
         FieldElement::from_int(2) *
         weighted_bppp_inner_product(hidden.n_vec, mask_n,
                                     hidden.public_data->rho);
-    WipeObjectOnDestruction t1_wiper(t1);
+    WipeOnDestruction t1_wiper(t1);
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
       t1 = t1 + mask_l[i] * hidden.public_data->c_vec[i];
     }
@@ -3262,8 +3231,8 @@ prove_circuit_zk_norm_arg_v4_impl(
     mask_inputs.n_vec = scalar_bytes(mask_n);
     mask_inputs.l_vec = scalar_bytes(mask_l);
     mask_inputs.c_vec = hidden.public_data->c_vec_bytes;
-    WipeVectorOnDestruction mask_input_n_wiper(mask_inputs.n_vec);
-    WipeVectorOnDestruction mask_input_l_wiper(mask_inputs.l_vec);
+    WipeOnDestruction mask_input_n_wiper(mask_inputs.n_vec);
+    WipeOnDestruction mask_input_l_wiper(mask_inputs.l_vec);
     auto mask_commitment =
         commit_explicit_norm_arg(mask_inputs, t1, secp_context, nullptr);
     if (!mask_commitment.has_value()) {
@@ -3278,8 +3247,8 @@ prove_circuit_zk_norm_arg_v4_impl(
         "prove_circuit_zk_norm_arg_v4:alpha");
 
     CircuitNormArgReduction masked = hidden;
-    WipeVectorOnDestruction masked_n_wiper(masked.n_vec);
-    WipeVectorOnDestruction masked_l_wiper(masked.l_vec);
+    WipeOnDestruction masked_n_wiper(masked.n_vec);
+    WipeOnDestruction masked_l_wiper(masked.l_vec);
     for (std::size_t i = 0; i < masked.n_vec.size(); ++i) {
       masked.n_vec[i] = masked.n_vec[i] + alpha.scalar * mask_n[i];
     }
@@ -3287,8 +3256,8 @@ prove_circuit_zk_norm_arg_v4_impl(
       masked.l_vec[i] = masked.l_vec[i] + alpha.scalar * mask_l[i];
     }
     NormArgInputs masked_inputs = build_norm_arg_inputs(masked);
-    WipeVectorOnDestruction masked_input_n_wiper(masked_inputs.n_vec);
-    WipeVectorOnDestruction masked_input_l_wiper(masked_inputs.l_vec);
+    WipeOnDestruction masked_input_n_wiper(masked_inputs.n_vec);
+    WipeOnDestruction masked_input_l_wiper(masked_inputs.l_vec);
     auto combined_commitment = combine_zk_commitments(
         anchored_commitment, *mask_commitment, alpha.scalar, t2,
         secp_context);

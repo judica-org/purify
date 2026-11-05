@@ -712,6 +712,7 @@ if(PURIFY_BUILD_TESTS)
         tests/puresign_tests.cpp
         tests/legacy_bulletproof_tests.cpp
         tests/expected_tests.cpp
+        tests/secure_cleanup_tests.cpp
         tests/norm_protocol_tests.cpp
         tests/norm_accumulation_tests.cpp
         tests/accountable_signature_tests.cpp
@@ -739,6 +740,10 @@ if(PURIFY_BUILD_TESTS)
     target_link_libraries(purify_tests
         PRIVATE
             purify::purify
+    )
+
+    target_include_directories(purify_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/support"
     )
 
     purify_enable_warnings(purify_tests)
@@ -793,6 +798,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(puresign)
     purify_add_cpp_suite_test(legacy_bulletproof)
     purify_add_cpp_suite_test(expected)
+    purify_add_cpp_suite_test(secure_cleanup)
     purify_add_cpp_suite_test(norm_protocol)
     purify_add_cpp_suite_test(norm_accumulation)
     purify_add_cpp_suite_test(circuit_soundness)

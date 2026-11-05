@@ -13,6 +13,7 @@ void run_purify_tests(TestContext& ctx);
 void run_puresign_tests(TestContext& ctx);
 void run_legacy_bulletproof_tests(TestContext& ctx);
 void run_expected_tests(TestContext& ctx);
+void run_secure_cleanup_tests(TestContext& ctx);
 void run_norm_protocol_tests(TestContext& ctx);
 void run_norm_accumulation_tests(TestContext& ctx);
 void run_accountable_signature_tests(TestContext& ctx);
@@ -49,6 +50,7 @@ constexpr SuiteSpec kSuites[]{
     {"puresign", &run_puresign_tests},
     {"legacy_bulletproof", &run_legacy_bulletproof_tests},
     {"expected", &run_expected_tests},
+    {"secure_cleanup", &run_secure_cleanup_tests},
     {"norm_protocol", &run_norm_protocol_tests},
     {"norm_accumulation", &run_norm_accumulation_tests},
     {"accountable_signature", &run_accountable_signature_tests},

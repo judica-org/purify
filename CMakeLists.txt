@@ -323,6 +323,7 @@ add_library(purify
     src/puresign/accountable.cpp
     src/puresign/accountable_roster.cpp
     src/puresign/accountable_responses.cpp
+    src/puresign/recovery_root.cpp
     src/protocol/bppp.cpp
     src/protocol/accumulation.cpp
     src/protocol/sha256_transcript.cpp
@@ -417,6 +418,7 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/accountable.cpp
         src/puresign/accountable_roster.cpp
         src/puresign/accountable_responses.cpp
+        src/puresign/recovery_root.cpp
         src/protocol/bppp.cpp
         src/protocol/accumulation.cpp
         src/protocol/sha256_transcript.cpp

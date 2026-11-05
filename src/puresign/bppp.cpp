@@ -86,27 +86,9 @@ Bytes proof_statement_binding(Scope scope) {
     return bytes_from_ascii(proof_tag_for_scope(scope));
 }
 
-struct SecretProofSeed {
-    Scalar32 value{};
-
-    SecretProofSeed() = default;
-    SecretProofSeed(const SecretProofSeed&) = delete;
-    SecretProofSeed& operator=(const SecretProofSeed&) = delete;
-    ~SecretProofSeed() {
-        detail::secure_clear_bytes(value.data(), value.size());
-    }
-};
-
-struct SecretPackedKeyBytes {
-    std::array<unsigned char, 64> value{};
-
-    SecretPackedKeyBytes() = default;
-    SecretPackedKeyBytes(const SecretPackedKeyBytes&) = delete;
-    SecretPackedKeyBytes& operator=(const SecretPackedKeyBytes&) = delete;
-    ~SecretPackedKeyBytes() {
-        detail::secure_clear_bytes(value.data(), value.size());
-    }
-};
+using SecretProofSeed = ::purify::detail::Secret<Scalar32>;
+using SecretPackedKeyBytes =
+    ::purify::detail::Secret<std::array<unsigned char, 64>>;
 
 void derive_secret_prover_seed(const SecretKey& secret, Scope scope,
                                std::span<const unsigned char> eval_input,

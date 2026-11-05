@@ -293,16 +293,7 @@ struct SecretBytes {
   }
 };
 
-struct SecretScalarBytes {
-  ScalarBytes value{};
-
-  SecretScalarBytes() = default;
-  SecretScalarBytes(const SecretScalarBytes &) = delete;
-  SecretScalarBytes &operator=(const SecretScalarBytes &) = delete;
-  ~SecretScalarBytes() {
-    ::purify::detail::secure_clear_bytes(value.data(), value.size());
-  }
-};
+using SecretScalarBytes = ::purify::detail::Secret<ScalarBytes>;
 
 using ::purify::detail::WipeOnDestruction;
 

@@ -26,16 +26,7 @@ using PointBytes = bppp::PointBytes;
 using PointPair = std::pair<JacobianPoint, JacobianPoint>;
 using ::purify::detail::WipeOnDestruction;
 
-struct SecretScalarBytes {
-    bppp::ScalarBytes value{};
-
-    SecretScalarBytes() = default;
-    SecretScalarBytes(const SecretScalarBytes&) = delete;
-    SecretScalarBytes& operator=(const SecretScalarBytes&) = delete;
-    ~SecretScalarBytes() {
-        detail::secure_clear_bytes(value.data(), value.size());
-    }
-};
+using SecretScalarBytes = ::purify::detail::Secret<bppp::ScalarBytes>;
 
 UInt256 half_secp_order() {
     return prime_p().shifted_right(1);

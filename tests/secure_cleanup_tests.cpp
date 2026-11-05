@@ -25,6 +25,12 @@ static_assert(!std::is_move_constructible_v<ObjectGuard>);
 static_assert(
     !purify::detail::SecureErasable<const std::array<unsigned char, 32>>);
 static_assert(!purify::detail::SecureErasable<std::vector<bool>>);
+static_assert(!purify::detail::SecretValue<std::vector<unsigned char>>);
+
+using OwnedSecret =
+    purify::detail::Secret<std::array<unsigned char, 32>>;
+static_assert(!std::is_copy_constructible_v<OwnedSecret>);
+static_assert(!std::is_move_constructible_v<OwnedSecret>);
 
 void test_object_guard(purify_test::TestContext& ctx) {
     SecretObject value{0x1122334455667788ULL, 0x8877665544332211ULL};

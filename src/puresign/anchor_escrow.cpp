@@ -63,16 +63,7 @@ Bytes evaluation_curve_input(std::string_view prefix) {
 
 using ::purify::detail::WipeOnDestruction;
 
-struct SecretBytes32 {
-    bppp::ScalarBytes value{};
-
-    SecretBytes32() = default;
-    SecretBytes32(const SecretBytes32&) = delete;
-    SecretBytes32& operator=(const SecretBytes32&) = delete;
-    ~SecretBytes32() {
-        detail::secure_clear_bytes(value.data(), value.size());
-    }
-};
+using SecretBytes32 = ::purify::detail::Secret<bppp::ScalarBytes>;
 
 struct EscrowOpening {
     const SecretKey& payload;

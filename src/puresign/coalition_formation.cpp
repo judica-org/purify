@@ -22,18 +22,37 @@ std::array<unsigned char, 4> encode_u32_le(std::uint32_t value) {
     };
 }
 
+template <std::size_t Size>
+bool is_zero(const std::array<unsigned char, Size>& value) {
+    return std::all_of(value.begin(), value.end(),
+                       [](unsigned char byte) { return byte == 0; });
+}
+
 bool is_null_outpoint(const BitcoinOutpoint& outpoint) {
     return outpoint.output_index ==
                std::numeric_limits<std::uint32_t>::max() &&
-           std::all_of(outpoint.transaction_id.begin(),
-                       outpoint.transaction_id.end(),
-                       [](unsigned char byte) { return byte == 0; });
+           is_zero(outpoint.transaction_id);
 }
 
 } // namespace
 
 Result<CoalitionFormation> CoalitionFormation::create(
     CoalitionFormationInput input) {
+    if (is_zero(input.genesis_hash)) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "coalition_formation:zero_genesis_hash");
+    }
+    if (is_zero(input.deployment_id)) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "coalition_formation:zero_deployment_id");
+    }
+    if (is_zero(input.manifest_digest)) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "coalition_formation:zero_manifest_digest");
+    }
     if (is_null_outpoint(input.permit)) {
         return unexpected_error(
             ErrorCode::RangeViolation,

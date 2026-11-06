@@ -31,7 +31,8 @@ Every field has fixed width. `bitcoin_genesis_hash32` and `permit_txid32` are
 the raw `uint256` bytes emitted by Bitcoin consensus serialization. They are
 not RPC display-order hex. The explicit genesis hash prevents cross-network
 replay. `deployment_id32` separates Char deployments sharing one Bitcoin
-network.
+network. Purify rejects all-zero genesis, deployment, and manifest values so
+an omitted domain input cannot silently become a valid formation.
 
 The permit is the exact pre-existing output consumed by the transaction that
 finalizes formation. It is not an output of that transaction. Hashing the

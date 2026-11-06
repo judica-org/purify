@@ -48,7 +48,7 @@ struct BitcoinOutpoint {
                            const BitcoinOutpoint&) = default;
 };
 
-/** Named public inputs to one formation derivation. */
+/** Named, nonzero domain inputs to one formation derivation. */
 struct CoalitionFormationInput {
     BitcoinGenesisHash genesis_hash{};
     CoalitionDeploymentId deployment_id{};
@@ -59,9 +59,10 @@ struct CoalitionFormationInput {
 /**
  * A coalition manifest bound to a one-shot Bitcoin formation permit.
  *
- * Creation rejects Bitcoin's null outpoint. It does not establish that the
- * outpoint exists or is spent: the surrounding protocol must accept a
- * formation only from a transaction that consumes this exact predecessor.
+ * Creation rejects zero domain identifiers, a zero manifest digest, and
+ * Bitcoin's null outpoint. It does not establish that the outpoint exists or
+ * is spent: the surrounding protocol must accept a formation only from a
+ * transaction that consumes this exact predecessor.
  */
 class CoalitionFormation {
 public:

@@ -140,6 +140,33 @@ void run_coalition_formation_tests(TestContext& ctx) {
     expect_error(
         ctx,
         CoalitionFormation::create({
+            .deployment_id = deployment,
+            .permit = permit,
+            .manifest_digest = manifest,
+        }),
+        purify::ErrorCode::RangeViolation,
+        "zero genesis hash cannot define a formation domain");
+    expect_error(
+        ctx,
+        CoalitionFormation::create({
+            .genesis_hash = genesis,
+            .permit = permit,
+            .manifest_digest = manifest,
+        }),
+        purify::ErrorCode::RangeViolation,
+        "zero deployment ID cannot define a formation domain");
+    expect_error(
+        ctx,
+        CoalitionFormation::create({
+            .genesis_hash = genesis,
+            .deployment_id = deployment,
+            .permit = permit,
+        }),
+        purify::ErrorCode::RangeViolation,
+        "zero manifest digest cannot define a formation");
+    expect_error(
+        ctx,
+        CoalitionFormation::create({
             .genesis_hash = genesis,
             .deployment_id = deployment,
             .permit = {

@@ -22,6 +22,9 @@ mod construction_recurrence;
 // This is an internal proof-codec foundation, not a receipt parser.
 mod fixed_serde;
 mod nova_types;
+// Production candidate accumulation constraints for qualification.
+#[cfg(test)]
+mod nova_candidate;
 // Transcript-derived opening-base constraints for qualification.
 #[cfg(test)]
 mod nova_opening_base;

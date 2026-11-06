@@ -1,8 +1,13 @@
 # Public construction receipts for coalition escrow
 
-This is the next experiment after [companion scalar escrow](companion-scalar-escrow.md).
-It fixes the intended statement and public-data flow. It does not implement a
-compressed receipt, enable enrollment, or establish the proof systems' security.
+This began as the design experiment after
+[companion scalar escrow](companion-scalar-escrow.md). The implementation now
+has a transparent SHA-256 Nova parent backend and a qualified 15,076-byte proof
+profile. A private purpose-specific C ABI backs the public C++ verifier, which
+requires both recursive verification and native accumulation decision before
+returning a verified receipt. Neither backend qualification nor that local
+acceptance path enables enrollment or establishes the child proof system's
+security.
 
 Transparent setup is a hard requirement for the completed library: public
 parameters must not depend on a trusted ceremony or retained trapdoor. This
@@ -118,12 +123,13 @@ are additional. The reference statement includes full public roots instead of
 assuming an unimplemented on-chain index; its serialized size is therefore
 larger than this incremental formula.
 
-The final proof has not been implemented or measured. A 1-2 KB proof is a target,
-not a result. Repairing or replacing the child argument can change its proof
-sizes, verifier workload and transcript dependencies. Direct proofs of combined
-native relations and public proofs of already completed proofs also have
-different prover costs. Combining all native witnesses centrally would not
-satisfy the required public assembler interface.
+The qualified parent proof is 15,076 bytes, not the original 1-2 KB target.
+Its 693,735,316-byte local verifier artifact expands to 3,206,748,264 bytes.
+These measurements qualify the selected recursive backend; they do not resolve
+the child argument's security review, distributed proving, or a production
+assembler-prover API. Public witness reconstruction currently exists only in
+test helpers. Combining all native witnesses centrally would not satisfy the
+required public assembler interface.
 
 ## Public prehashing measured in the current wrapper
 
@@ -185,27 +191,27 @@ The previous layout placed the variable commitment before the public arrays,
 so those arrays could not be prehashed as an independent SHA-256 prefix. The
 profiler retains that historical layout only for comparison, not compatibility.
 
+### Historical backend-selection assessment
+
 Purify's key/nonce relation avoids hashing secret material by combining public
 hash-to-curve preprocessing with constrained secret scalar multiplication. It
 does not remove the proof system's Fiat-Shamir hash. An off-chain child proof
 becomes a witness to its parent, so the child's proof-dependent challenges
-still require constrained derivation. The SHA-256 experiment measures that
-part of the existing verifier; it does not select SHA-256 for the final parent.
-A reviewed circuit-friendly transcript hash could remove the SHA-256-specific
-gadget, but requires an explicit suite, parameters and security argument.
-Purify's PRF security alone does not justify substituting Purify for this
-random-oracle role.
+still require constrained derivation. The original SHA-256 experiment measured
+that workload but did not by itself select a final backend.
 
-The verifier also performs secp256k1 group operations. Its coordinate field is
-different from the scalar field used by the existing Purify arithmetic circuit.
-The companion-curve gadgets cannot be substituted for secp256k1 point arithmetic.
-Canonical non-native arithmetic and complete handling of group edge cases are
-additional work; SHA-256 alone is not a recursive verifier.
+The qualified profile now explicitly selects the chained SHA-256 transcript.
+Its native Nova `StepCircuit` relation implements canonical non-native
+secp256k1 arithmetic and complete group-edge handling, and the production
+archive verifies the resulting frozen Nova profile. This establishes the
+implemented validity path; it does not supply the missing independent child and
+composition security review. Purify's PRF security would not justify replacing
+the selected random oracle without a new suite and security argument.
 
-The current inner checks still have 12,288 setup and 49,152 encryption
-fixed-generator terms before any separately reviewed batch optimization. A
-replacement parent backend must satisfy the transparent-setup requirement; its
-feasibility does not follow from the small experimental child transcripts.
+The historical inner checks had 12,288 setup and 49,152 encryption
+fixed-generator terms before separately reviewed batch optimization. Those
+measurements motivated the accumulation design but do not estimate the
+qualified parent prover from the small experimental child transcripts.
 
 ### Full verifier circuits and accumulation are different designs
 
@@ -231,64 +237,58 @@ argument for that relation. The native
 [norm accumulator](norm-accumulation.md) now implements partial norm
 verification, public coefficient openings for varying `c`, accumulation
 transitions and a mandatory final decision. Its API requires all child
-statements and transition transcripts. It does not implement their recursive
-authentication or repair the outer-circuit wrapper, and the concrete protocol
-still requires cryptographic review. The workload profiler does not model
-those recursive transitions. Neither native accumulation nor batch verification
-alone is a compressed construction receipt.
+statements and transition transcripts. The selected SHA-256 Nova recurrence
+now authenticates those transitions, but it does not repair an unsound child
+argument, and the concrete protocol still requires cryptographic review.
+Neither native accumulation nor batch verification alone is a compressed
+construction receipt.
 
-Before selecting a replacement backend on cost grounds, evaluate this route
-alongside direct recursive verification. Account separately for the recursive
-circuit, final verifier, public accumulator bytes and authenticated manifest.
-Curve cycles and a suitable transcript can reduce recursive arithmetic costs;
-the existing scalar-field circuit and SHA-256 choices do not define the only
-possible transparent implementation. An accumulator still needs sound child
-proofs and cannot repair the current outer-circuit wrapper.
+The selected backend takes this accumulation route. Its cost accounting keeps
+the recursive circuit, final verifier, public accumulator bytes, and
+authenticated manifest separate. Other curve cycles or transcript suites may
+reduce recursive arithmetic costs, but would define new protocol profiles. The
+selected accumulator still needs sound child proofs and cannot repair the
+current outer-circuit wrapper.
 
-Anchor punishment-key derivation is also a design variable in this pre-release
-protocol. Public descriptors and hash-to-curve bases may be derived outside the
-circuit when the verifier can reconstruct them exactly. A hash of an unknown
-secret cannot be lifted on that basis. Any replacement leaf relation must still
-let the owner derive its key and the recovered root derive the exact same
-punishment scalar, while retaining the intended custody and exposure rules.
+Anchor punishment-key derivation was also a design variable. The selected leaf
+now derives `k = Purify(d, punishment_domain)` under one fixed domain and
+constrains the exact public `kG`; public hash-to-curve bases are reconstructed
+outside the circuit. See
+[the anchor punishment-key relation](anchor-punishment-relation.md). This avoids
+hashing an unknown secret in-circuit but introduces the documented related-output
+security assumption.
 
-For independent owner-held roots, a candidate leaf is
-`k = Purify(d, public_anchor_descriptor)`, with registered root `D`. Both the
-owner and anyone recovering `d` can evaluate `k`. Its public hash-to-curve bases
-come from an acyclic descriptor containing the suite, network, root and relevant
-owner/refund identities plus a uniqueness salt, not the final anchor ID that
-already contains the derived key. This could replace the fresh 64-byte public
-ephemeral pair in the earlier leaf experiment; descriptor/reference costs and
-the exact `kG` binding proof remain. It is a candidate, not an implemented leaf
-or deployed anchor format. An owner who does not know a shared root would need
-distributed evaluation, so this substitution cannot silently change shared-root
-custody into individual custody. Anchor-key topics must be domain-separated
-from signing-nonce topics, and root reuse retains every historical escrow
-authority's exposure. The current canonical aggregate `q`-to-recipient
-construction requires distributed proving to avoid reconstructing `q` at a
-coordinator, and its correlated-key privacy argument remains unresolved. This
-is a requirement of that construction, not a claim that every possible
-recipient setup must use MPC. An alternative relation must establish its own
-public recovery, custody and privacy guarantees before replacing it.
+An owner who does not know a shared root still needs distributed evaluation, so
+this choice cannot silently change shared-root custody into individual custody.
+Anchor-key topics remain domain-separated from signing-nonce topics, and root
+reuse retains every historical escrow authority's exposure. The aggregate
+`q`-to-recipient construction requires distributed proving to avoid
+reconstructing `q` at a coordinator, and its correlated-key privacy argument
+remains unresolved.
 
-## Implementation milestones
+## Implementation status
 
-1. Share the existing reference setup and encryption verifiers without changing
-   their relations, then exercise assembly using only public child packets.
-2. Measure the actual verifier workload and implement a constrained SHA-256
-   experiment with independently checked outputs and an honest transcript.
-3. Repair or replace the child argument with a sound transparent construction,
-   then choose an affordable, reviewed parent relation/backend. Implement
-   canonical child parsing, transcript replay and constrained secp verification;
-   benchmark one setup plus two encryption children before scaling to 100.
-4. Establish composition security and the remaining privacy/output-binding
-   guarantees, implement the selected setup and signing protocols, and integrate
-   accepted certificate recovery with the registry and punishment path before
-   enabling enrollment.
+Completed validity work includes public child-packet assembly, independently
+checked SHA-256 transcripts, canonical child parsing, constrained secp256k1
+verification, the authenticated manifest recurrence, transparent Nova
+qualification, fixed accepted and nondeciding proof vectors, and the public C++
+recursive-plus-native acceptance boundary.
 
-The first two milestones are preparation for the third. No receipt should be
-accepted merely because its public inputs passed the reference assembler.
-Daybreak work remains deferred.
+Remaining production work is narrower but security-critical:
+
+1. Repair or independently justify the child argument and review the V4 leaf,
+   accumulation, composition, and related-output assumptions.
+2. Implement distributed setup, custody, and share-preserving proving without
+   reconstructing coalition secrets at a coordinator.
+3. Publish the authenticated verifier artifact through an immutable release
+   channel and qualify resource behavior at 100 to 1,000 anchors, including
+   distribution and startup.
+4. Integrate accepted certificate recovery with registry, consensus, redemption,
+   and punishment rules before enabling enrollment.
+
+No receipt should be accepted merely because its public inputs passed the
+reference assembler. Backend qualification does not replace the remaining
+composition and protocol review.
 
 ## Running the experiments
 
@@ -300,20 +300,21 @@ witness assignment or callback to a participant. The tested mutations reject
 incomplete coverage, duplicate roots, crossed child proofs, and changed
 recipients, coalitions, contexts or ciphertexts.
 After preparation, recovery uses only the statement and extracted toy scalar;
-it does not retain the child proofs. This models a future accepted receipt,
-not a substitute for its missing verifier.
+it does not retain the child proofs. This historical fixture models the public
+data flow; it is not the qualified recursive verifier or receipt acceptance.
 
 The two-root fixture has 3,281 bytes of out-of-band child proofs and a 662-byte
 public statement, including full roots, the coalition point, context and framing.
-Its recipient and ciphertext portion is 448 bytes. No final proof is included
-in those statement measurements because the parent is not implemented.
+Its recipient and ciphertext portion is 448 bytes. Those historical statement
+measurements exclude the separately qualified 15,076-byte parent proof.
 
 The removed standalone SHA-256 fixture constrained symbolic input bits and
 bounded 32-bit additions, checked padding boundaries against the independent C
 hash, and produced an honest transcript for that locally checked relation. It
-did not establish a sound proof of a hash preimage through the old wrapper. A
-recursive verifier must connect those input bits to the exact child transcript;
-the standalone hash relation was insufficient.
+did not establish a sound proof of a hash preimage through the current wrapper.
+That standalone hash relation was insufficient; the qualified recurrence
+separately connects the exact chained transcript to its constrained child
+relation.
 
 An AppleClang 16 / arm64 C++20 Release run measured the `abc` relation at 32,768
 padded gates and a 1,267-byte experimental transcript, with about 13.76 seconds

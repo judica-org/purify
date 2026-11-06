@@ -30,6 +30,7 @@ FILE_PATTERNS          = *.h \
                          *.c \
                          *.cpp \
                          *.md
+PREDEFINED             = PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
 RECURSIVE              = YES
 EXCLUDE_PATTERNS       = */third_party/* \
                          */reference/* \

@@ -55,6 +55,67 @@ Top-level builds also enable the regression test target by default.
 
 For multi-config generators such as Xcode, build benchmarks with `--config Release`.
 
+### Construction parent verifier
+
+The optional construction-parent verifier is a purpose-specific C++ API backed
+by the qualified transparent SHA-256 Nova profile. It is supported only in
+shared 64-bit macOS and Linux builds. Rust 1.98.1 is pinned for the private
+backend:
+
+```sh
+cmake -S . -B build-parent \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=ON \
+  -DPURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=ON \
+  -DPURIFY_BUILD_TESTS=OFF \
+  -DPURIFY_BUILD_CLI=OFF \
+  -DPURIFY_BUILD_BENCH=OFF \
+  -DPURIFY_BUILD_DOCS=OFF \
+  -DPURIFY_BUILD_FUZZ=OFF
+CARGO_BUILD_JOBS=1 cmake --build build-parent --parallel
+```
+
+On macOS, also pass an explicit minimum deployment target, such as
+`-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0`. This keeps the C++ library and Cargo's C
+dependencies on the same platform boundary.
+
+The 693,735,316-byte verifier artifact remains an external deployment
+resource. `ConstructionParentVerifier::load()` accepts only its exact compiled
+length, suite, and tagged digest. The linked Rust archive contains only the
+verifier; setup, proving, and artifact writing compile only into its
+qualification tests. The archive and private C ABI are neither installed nor
+exported. Deploy the artifact through an immutable, read-only snapshot so
+concurrent writes cannot waste verifier resources before authentication rejects
+the changed file.
+
+The ordinary CI job builds and tests the Rust, package, codec, and private
+symbol boundaries without downloading this artifact. It does not claim
+recursive proof acceptance. Artifact-backed acceptance is the explicit release
+gate below.
+
+Run that release gate with the authenticated artifact:
+
+```sh
+cmake -S . -B build-parent \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=ON \
+  -DPURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=ON \
+  -DPURIFY_BUILD_TESTS=ON \
+  -DPURIFY_BUILD_CLI=OFF \
+  -DPURIFY_BUILD_BENCH=OFF \
+  -DPURIFY_BUILD_DOCS=OFF \
+  -DPURIFY_BUILD_FUZZ=OFF \
+  -DPURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=/path/to/sha256-parent-verifier.nvk.zst
+CARGO_BUILD_JOBS=1 cmake --build build-parent --parallel
+ctest --test-dir build-parent --output-on-failure \
+  -R '^(purify.tests.slashability_e2e|purify.tests.installed_package|purify.tests.private_construction_parent_symbols)$'
+```
+
+This verifies a construction proof and completes the native accumulation
+decision before returning a verified receipt. Library verification does not
+activate consensus, authorize enrollment, or resolve the documented child
+proof, custody, confidentiality, and scaling requirements.
+
 ### Using as a submodule
 
 Add the repository as a git submodule, then wire it into the parent `CMakeLists.txt`:
@@ -68,7 +129,7 @@ Downstream code should include the library headers from the stable public includ
 
 ```cpp
 #include <purify.hpp>
-#include <purify_bppp.hpp>
+#include <purify/bppp.hpp>
 ```
 
 If you want the bundled CLI, benchmark, or docs targets while consuming the project as a subdirectory, enable them explicitly before `add_subdirectory(...)`:

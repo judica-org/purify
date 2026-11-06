@@ -18,6 +18,10 @@ void run_norm_accumulation_tests(TestContext& ctx);
 void run_accountable_signature_tests(TestContext& ctx);
 void run_accountable_roster_tests(TestContext& ctx);
 void run_accountable_response_tests(TestContext& ctx);
+void run_slashability_native_tests(TestContext& ctx);
+#if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
+void run_slashability_e2e_tests(TestContext& ctx);
+#endif
 void run_canonical_recovery_root_tests(TestContext& ctx);
 void run_anchor_escrow_tests(TestContext& ctx);
 void run_companion_scalar_escrow_tests(TestContext& ctx);
@@ -50,6 +54,10 @@ constexpr SuiteSpec kSuites[]{
     {"accountable_signature", &run_accountable_signature_tests},
     {"accountable_roster", &run_accountable_roster_tests},
     {"accountable_response", &run_accountable_response_tests},
+    {"slashability_native", &run_slashability_native_tests},
+#if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
+    {"slashability_e2e", &run_slashability_e2e_tests},
+#endif
     {"canonical_recovery_root", &run_canonical_recovery_root_tests},
     {"anchor_escrow", &run_anchor_escrow_tests},
     {"companion_scalar_escrow", &run_companion_scalar_escrow_tests},

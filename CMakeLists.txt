@@ -96,6 +96,16 @@ set(PURIFY_SANITIZER_LIST "address,undefined" CACHE STRING
 option(PURIFY_BUILD_CBMC "Enable optional CBMC proof harnesses for the pure C wide-integer core." OFF)
 option(PURIFY_BUILD_CBMC_EXTENDED "Enable heavier experimental CBMC proofs that are not part of the default CI suite." OFF)
 option(PURIFY_BUILD_VALGRIND_TESTS "Enable optional Valgrind-backed memcheck and constant-time tests." OFF)
+option(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER
+    "Build the transparent construction-parent verifier backend."
+    OFF
+)
+set(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET "" CACHE STRING
+    "Optional Rust target triple for the construction-parent backend."
+)
+set(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT "" CACHE FILEPATH
+    "Qualified construction-parent verifier artifact for opt-in tests."
+)
 
 if(PURIFY_BUILD_CLI AND NOT PURIFY_HAVE_CLI_SOURCES)
     message(FATAL_ERROR "PURIFY_BUILD_CLI=ON requires cli/main.cpp")
@@ -139,6 +149,41 @@ endif()
 
 if(PURIFY_BUILD_VALGRIND_TESTS AND WIN32)
     message(FATAL_ERROR "PURIFY_BUILD_VALGRIND_TESTS is not supported on Windows")
+endif()
+
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER AND
+   PURIFY_USE_LEGACY_FIELD_HASHES)
+    message(FATAL_ERROR
+        "PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER requires the modern "
+        "tagged field-hash suite."
+    )
+endif()
+
+if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+    if(NOT PURIFY_BUILD_TESTS)
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
+            "PURIFY_BUILD_TESTS=ON."
+        )
+    endif()
+    if(NOT PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
+            "PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=ON."
+        )
+    endif()
+    get_filename_component(
+        PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT
+        "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+        ABSOLUTE BASE_DIR "${CMAKE_BINARY_DIR}"
+    )
+    if(NOT EXISTS "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+       OR IS_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}")
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT must name an "
+            "existing regular file."
+        )
+    endif()
 endif()
 
 if(NOT PURIFY_CXX_STANDARD MATCHES "^(20|23)$")
@@ -334,9 +379,139 @@ add_library(purify
 )
 
 add_library(purify::purify ALIAS purify)
-add_library(purify_bppp_support ALIAS purify)
 
 purify_configure_library_target(purify)
+
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
+    if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR
+            "The construction-parent backend is supported only on 64-bit "
+            "macOS and Linux."
+        )
+    endif()
+    if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+        message(FATAL_ERROR
+            "The construction-parent backend requires a 64-bit target."
+        )
+    endif()
+    if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        message(FATAL_ERROR
+            "The construction-parent backend requires an explicit "
+            "CMAKE_OSX_DEPLOYMENT_TARGET so CMake and Cargo use the same "
+            "minimum macOS version."
+        )
+    endif()
+    get_target_property(PURIFY_CONSTRUCTION_PARENT_LIBRARY_TYPE purify TYPE)
+    if(NOT PURIFY_CONSTRUCTION_PARENT_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
+        message(FATAL_ERROR
+            "PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER requires a shared "
+            "Purify library."
+        )
+    endif()
+    unset(PURIFY_CONSTRUCTION_PARENT_LIBRARY_TYPE)
+    find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
+    set(PURIFY_CONSTRUCTION_PARENT_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/rust/construction-parent"
+    )
+    set(PURIFY_CONSTRUCTION_PARENT_TARGET_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/construction-parent-target"
+    )
+    file(GLOB_RECURSE PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES
+        CONFIGURE_DEPENDS
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/src/*.rs"
+    )
+    set(PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS build --locked --release)
+    set(PURIFY_CONSTRUCTION_PARENT_ARCHIVE_DIR
+        "${PURIFY_CONSTRUCTION_PARENT_TARGET_DIR}/release"
+    )
+    if(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
+        list(APPEND PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS
+            --target "${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}"
+        )
+        set(PURIFY_CONSTRUCTION_PARENT_ARCHIVE_DIR
+            "${PURIFY_CONSTRUCTION_PARENT_TARGET_DIR}/${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}/release"
+        )
+    elseif(CMAKE_CROSSCOMPILING)
+        message(FATAL_ERROR
+            "Cross-compiling the construction-parent backend requires "
+            "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
+        )
+    endif()
+    set(PURIFY_CONSTRUCTION_PARENT_ARCHIVE
+        "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}purify_construction_parent${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    )
+    set(PURIFY_CONSTRUCTION_PARENT_CARGO_ENV
+        --unset=MAKEFLAGS
+        --unset=MFLAGS
+        --unset=CARGO_MAKEFLAGS
+        "CARGO_INCREMENTAL=0"
+        "CARGO_TARGET_DIR=${PURIFY_CONSTRUCTION_PARENT_TARGET_DIR}"
+    )
+    if(APPLE)
+        list(APPEND PURIFY_CONSTRUCTION_PARENT_CARGO_ENV
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        )
+    endif()
+    add_custom_command(
+        OUTPUT "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE}"
+        COMMAND "${CMAKE_COMMAND}" -E env
+            ${PURIFY_CONSTRUCTION_PARENT_CARGO_ENV}
+            "${PURIFY_CARGO_EXECUTABLE}" ${PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS}
+        DEPENDS
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.lock"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.toml"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/rust-toolchain.toml"
+            ${PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES}
+        WORKING_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_DIR}"
+        COMMENT "Building transparent construction-parent verifier backend"
+        VERBATIM
+    )
+    unset(PURIFY_CONSTRUCTION_PARENT_CARGO_ENV)
+    add_custom_target(purify_construction_parent_backend_build
+        DEPENDS "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE}"
+    )
+    if(APPLE)
+        target_link_directories(purify PRIVATE
+            "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE_DIR}"
+        )
+        target_link_libraries(purify PRIVATE
+            "-Wl,-hidden-lpurify_construction_parent"
+        )
+        add_dependencies(purify purify_construction_parent_backend_build)
+    else()
+        add_library(purify_construction_parent_backend STATIC IMPORTED)
+        set_target_properties(purify_construction_parent_backend PROPERTIES
+            IMPORTED_LOCATION "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE}"
+        )
+        add_dependencies(purify_construction_parent_backend
+            purify_construction_parent_backend_build
+        )
+        find_package(Threads REQUIRED)
+        target_link_libraries(purify_construction_parent_backend INTERFACE
+            Threads::Threads
+            ${CMAKE_DL_LIBS}
+            m
+        )
+        target_link_libraries(purify PRIVATE
+            purify_construction_parent_backend
+        )
+    endif()
+    target_sources(purify PRIVATE
+        src/puresign/construction_parent_verifier.cpp
+    )
+    target_compile_definitions(purify PUBLIC
+        PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
+    )
+    if(UNIX AND NOT APPLE)
+        get_filename_component(PURIFY_CONSTRUCTION_PARENT_ARCHIVE_NAME
+            "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE}" NAME
+        )
+        target_link_options(purify PRIVATE
+            "LINKER:--exclude-libs,${PURIFY_CONSTRUCTION_PARENT_ARCHIVE_NAME}"
+        )
+        unset(PURIFY_CONSTRUCTION_PARENT_ARCHIVE_NAME)
+    endif()
+endif()
 
 if(WIN32)
     target_link_libraries(purify PUBLIC bcrypt)
@@ -542,6 +717,8 @@ if(PURIFY_BUILD_TESTS)
         tests/accountable_signature_tests.cpp
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
+        tests/slashability_e2e_fixture.cpp
+        tests/slashability_e2e_tests.cpp
         tests/canonical_recovery_root_tests.cpp
         tests/canonical_recovery_root_helpers.cpp
         tests/anchor_escrow_tests.cpp
@@ -567,6 +744,46 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_warnings(purify_tests)
     purify_enable_sanitizers(purify_tests)
     purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
+
+    if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
+        target_compile_definitions(purify_tests PRIVATE
+            "PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_accepted.proof\""
+            "PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_nondeciding.proof\""
+        )
+        if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+            target_compile_definitions(purify_tests PRIVATE
+                PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT=1
+            )
+        endif()
+        if(NOT CMAKE_CROSSCOMPILING)
+            add_test(NAME purify.tests.installed_package
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+                    "-DTEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+                    "-DTEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+                    "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                    "-DTEST_CONFIG=$<CONFIG>"
+                    "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installed_package/run.cmake"
+            )
+            set_tests_properties(purify.tests.installed_package
+                PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
+            )
+        endif()
+
+        get_target_property(PURIFY_TEST_LIBRARY_TYPE purify TYPE)
+        if(UNIX AND CMAKE_NM AND
+           PURIFY_TEST_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
+            add_test(NAME purify.tests.private_construction_parent_symbols
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_NM=${CMAKE_NM}"
+                    "-DTEST_LIBRARY=$<TARGET_FILE:purify>"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/shared_symbol_visibility.cmake"
+            )
+        endif()
+        unset(PURIFY_TEST_LIBRARY_TYPE)
+    endif()
 
     function(purify_add_cpp_suite_test suite_name)
         add_test(NAME "purify.tests.${suite_name}" COMMAND purify_tests --suite "${suite_name}")
@@ -609,6 +826,7 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_signature)
     purify_add_cpp_suite_test(accountable_roster)
     purify_add_cpp_suite_test(accountable_response)
+    purify_add_cpp_suite_test(slashability_native)
     purify_add_cpp_suite_test(canonical_recovery_root)
     purify_add_cpp_suite_test(anchor_escrow)
     purify_add_cpp_suite_test(companion_scalar_escrow)
@@ -617,12 +835,23 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(sha256_transcript)
     purify_add_cpp_suite_test(sha256_circuit_transcript)
 
-    # These proof experiments saturate sanitizer runners. Keep their work
+    # These proof suites saturate sanitizer runners. Keep their work
     # out of the property suites' bounded execution time.
     set_tests_properties(
         purify.tests.construction_receipt
+        purify.tests.slashability_native
         PROPERTIES RUN_SERIAL TRUE
     )
+    if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER AND
+       PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
+        purify_add_cpp_suite_test(slashability_e2e)
+        set_tests_properties(purify.tests.slashability_e2e PROPERTIES
+            ENVIRONMENT
+                "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+            RUN_SERIAL TRUE
+            TIMEOUT 3600
+        )
+    endif()
     purify_add_cpp_suite_test(aggregate_nonce)
     purify_add_cpp_suite_test(aggregate_nonce_100)
     purify_add_cpp_suite_test(nonce_batch)

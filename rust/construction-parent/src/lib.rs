@@ -21,6 +21,22 @@ mod construction_profile;
 mod construction_recurrence;
 // This is an internal proof-codec foundation, not a receipt parser.
 mod fixed_serde;
+mod nova_types;
+// Transcript-derived opening-base constraints for qualification.
+#[cfg(test)]
+mod nova_opening_base;
+// Shared typed transcript framing for direct Nova relations.
+#[cfg(test)]
+mod nova_protocol_transcript;
+// Canonical secp256k1 scalar arithmetic for the direct Nova relation.
+#[cfg(test)]
+mod nova_secp_scalar;
+// SHA-256 transcript constraints for the production relation.
+#[cfg(test)]
+mod nova_sha256_transcript;
+// Canonical secp256k1 wrappers for the production relation.
+#[cfg(test)]
+mod nova_secp;
 #[cfg(test)]
 mod opening_generators;
 mod secp_constants;

@@ -11,16 +11,20 @@ coalition with a fresh permit and fresh consent.
 
 ## Formation identity
 
-`accountable::CoalitionFormation` derives the coalition core as:
+`accountable::CoalitionFormation` first derives a manifest-independent permit
+identifier, then the coalition core:
 
 ```text
+permit_id = TaggedSHA256(
+              "Purify/Accountable/CoalitionPermit/v1",
+              bitcoin_genesis_hash32 ||
+              deployment_id32 ||
+              permit_txid32 ||
+              permit_vout_u32le)
+
 D = TaggedSHA256(
       "Purify/Accountable/CoalitionFormation/v1",
-      bitcoin_genesis_hash32 ||
-      deployment_id32 ||
-      permit_txid32 ||
-      permit_vout_u32le ||
-      manifest_digest32)
+      permit_id || manifest_digest32)
 ```
 
 Every field has fixed width. `bitcoin_genesis_hash32` and `permit_txid32` are
@@ -62,15 +66,15 @@ formation only when all of these conditions hold:
 1. The canonical record and all member authorizations validate.
 2. The record's `D` recomputes from the manifest and the declared permit.
 3. The transaction completing the record consumes that exact permit.
-4. That transaction contains exactly one formation claim for the permit.
-5. No other complete record was accepted for the same permit in that
-   canonical history.
-6. Confirmation and epoch-delay rules make the record active only at their
+4. That transaction contains exactly one formation claim for `permit_id` in
+   this deployment.
+5. Confirmation and epoch-delay rules make the record active only at their
    specified boundary.
 
-The fourth rule covers two different records placed in the same transaction.
+The fourth rule covers two different manifests placed in the same transaction.
 Bitcoin's double-spend rule covers claims placed in conflicting transactions;
-only the transaction in the canonical chain can complete formation.
+only the transaction in the canonical chain can complete formation. No second
+historical uniqueness index is needed beyond ordinary canonical-chain state.
 
 If a large record is assembled from earlier chunks, those chunks have no
 registry effect. The final transaction must spend the permit and commit the
@@ -89,6 +93,13 @@ eligibility after the protocol delay. It does not erase old escrow,
 certificates, signing reservations, or liability. A replacement is a new
 formation with a fresh permit, a new `D`, and fresh member authorization.
 
+A destroy is valid only after its formation has completed earlier in Bitcoin
+transaction order. A destroy in the formation transaction or before formation
+is invalid, including in an earlier transaction of the same block. Multiple
+valid destroys are idempotent and cannot move the first effective destruction
+boundary. Within a block, Char applies transactions in Bitcoin block order and
+records within one transaction in their canonical carrier order.
+
 ## Replay and chain behavior
 
 - Copying an old record into a later transaction fails because the later
@@ -97,8 +108,10 @@ formation with a fresh permit, a new `D`, and fresh member authorization.
   escrow, nonce, response, and member-authorization contexts.
 - Reposting the original transaction cannot create a second transition in one
   valid Bitcoin history because its input is already spent.
-- Fee replacement may preserve `D` when it preserves the permit and manifest.
-  The canonical confirmed transaction supplies the inclusion position.
+- Fee replacement may preserve `D` when it preserves the permit, manifest,
+  and authenticated record-body commitment. Fee and change edits outside that
+  committed body require no fresh member authorization. The canonical
+  confirmed transaction supplies the inclusion position.
 - A disconnect rolls formation and destruction state back with the Bitcoin
   block. Re-inclusion on the replacement branch is ordinary canonical-chain
   processing, not resurrection in one history.
@@ -119,11 +132,20 @@ among that transaction's inputs. It does not prove that a referenced state
 coin remains unspent, nor search for a global first-registration winner.
 
 This assumes the client follows a Bitcoin chain whose transactions satisfy
-Bitcoin consensus. A txid Merkle proof alone does not authenticate SegWit
-witness bytes. If formation data is carried in witness, the publication format
-must also verify the block witness commitment or place a commitment to the
-complete record in txid-committed output data. Purify deliberately does not
-select that carrier.
+Bitcoin consensus. A full validator proves that the permit was a live UTXO. An
+SPV client instead assumes the most-work header chain contains only valid
+transactions; finding the prevout in `vin` is not an independent UTXO proof.
+
+A txid Merkle proof alone does not authenticate SegWit witness bytes. A block
+witness commitment is not by itself a convenient per-transaction witness
+proof. The simplest light-client format places the complete-record commitment
+in txid-committed output data. A witness carrier requires full witness data or
+an equally explicit authenticated proof. Purify deliberately does not select
+that carrier.
+
+A confirmed formation permit is the operational default. An unconfirmed
+permit is cryptographically valid but parent replacement or malleation can
+invalidate expensive proofs prepared against its transaction ID.
 
 The derivation adds no proof or receipt bytes. The genesis and deployment are
 protocol constants, and the permit is available from the enclosing Bitcoin

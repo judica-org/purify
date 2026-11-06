@@ -12,28 +12,14 @@
 #include <algorithm>
 
 #include "purify/secret.hpp"
+#include "secure_cleanup.hpp"
 #include "curve.h"
 
 namespace purify {
 
 namespace {
 
-template <typename T>
-class WipeObjectOnDestruction {
-public:
-    explicit WipeObjectOnDestruction(T& value) noexcept : value_(&value) {
-        static_assert(std::is_trivially_destructible_v<T>);
-    }
-    WipeObjectOnDestruction(const WipeObjectOnDestruction&) = delete;
-    WipeObjectOnDestruction& operator=(
-        const WipeObjectOnDestruction&) = delete;
-    ~WipeObjectOnDestruction() {
-        detail::secure_clear_bytes(value_, sizeof(T));
-    }
-
-private:
-    T* value_;
-};
+using ::purify::detail::WipeOnDestruction;
 
 purify_fe to_core(const FieldElement& value) {
     return purify_fe{detail::FieldElementAccess::raw(value)};
@@ -171,7 +157,7 @@ Result<AffinePoint> EllipticCurve::mul_secret_affine(const JacobianPoint& point,
     purify_curve curve = make_core_curve(a_, b_, n_);
     purify_jacobian_point point_core = to_core(point);
     purify_affine_point out{};
-    WipeObjectOnDestruction out_guard(out);
+    WipeOnDestruction out_guard(out);
     if (purify_curve_mul_secret_affine(&out, &curve, &point_core, scalar.limbs.data()) == 0) {
         return unexpected_error(ErrorCode::InternalMismatch,
                                 "EllipticCurve::mul_secret_affine:purify_curve_mul_secret_affine");
@@ -339,14 +325,14 @@ Status validate_public_key(const UInt512& packed) {
 
 Result<std::pair<UInt256, UInt256>> unpack_secret(const UInt512& z) {
     UInt256 first;
-    WipeObjectOnDestruction first_guard(first);
+    WipeOnDestruction first_guard(first);
     UInt256 second;
-    WipeObjectOnDestruction second_guard(second);
+    WipeOnDestruction second_guard(second);
     if (purify_curve_unpack_secret(first.limbs.data(), second.limbs.data(), z.limbs.data()) == 0) {
         return unexpected_error(ErrorCode::RangeViolation, "unpack_secret:validate_secret_key");
     }
     std::pair<UInt256, UInt256> unpacked{first, second};
-    WipeObjectOnDestruction unpacked_guard(unpacked);
+    WipeOnDestruction unpacked_guard(unpacked);
     return unpacked;
 }
 

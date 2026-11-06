@@ -12,13 +12,13 @@
 #include <cassert>
 #include <optional>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "purify/puresign/recovery_root.hpp"
 #include "purify/secp_bridge.h"
 #include "anchor_escrow_internal.hpp"
+#include "secure_cleanup.hpp"
 
 namespace purify::accountable {
 namespace {
@@ -61,75 +61,9 @@ Bytes evaluation_curve_input(std::string_view prefix) {
     return input;
 }
 
-template <typename T>
-class WipeObjectOnDestruction {
-public:
-    explicit WipeObjectOnDestruction(T& value) noexcept : value_(&value) {
-        static_assert(std::is_trivially_destructible_v<T>);
-    }
-    WipeObjectOnDestruction(const WipeObjectOnDestruction&) = delete;
-    WipeObjectOnDestruction& operator=(const WipeObjectOnDestruction&) =
-        delete;
-    ~WipeObjectOnDestruction() {
-        detail::secure_clear_bytes(value_, sizeof(T));
-    }
+using ::purify::detail::WipeOnDestruction;
 
-private:
-    T* value_;
-};
-
-template <typename T>
-class WipeVectorOnDestruction {
-public:
-    explicit WipeVectorOnDestruction(std::vector<T>& value) noexcept
-        : value_(&value) {
-        static_assert(std::is_trivially_destructible_v<T>);
-    }
-    WipeVectorOnDestruction(const WipeVectorOnDestruction&) = delete;
-    WipeVectorOnDestruction& operator=(const WipeVectorOnDestruction&) =
-        delete;
-    ~WipeVectorOnDestruction() {
-        detail::secure_clear_bytes(value_->data(),
-                                   value_->size() * sizeof(T));
-    }
-
-private:
-    std::vector<T>* value_;
-};
-
-struct SecretBytes32 {
-    bppp::ScalarBytes value{};
-
-    SecretBytes32() = default;
-    SecretBytes32(const SecretBytes32&) = delete;
-    SecretBytes32& operator=(const SecretBytes32&) = delete;
-    ~SecretBytes32() {
-        detail::secure_clear_bytes(value.data(), value.size());
-    }
-};
-
-class WipeAssignmentOnDestruction {
-public:
-    explicit WipeAssignmentOnDestruction(BulletproofAssignmentData& value)
-        : value_(&value) {}
-    WipeAssignmentOnDestruction(const WipeAssignmentOnDestruction&) = delete;
-    WipeAssignmentOnDestruction& operator=(
-        const WipeAssignmentOnDestruction&) = delete;
-    ~WipeAssignmentOnDestruction() {
-        wipe(value_->left);
-        wipe(value_->right);
-        wipe(value_->output);
-        wipe(value_->commitments);
-    }
-
-private:
-    static void wipe(BulletproofWitnessColumn& values) {
-        detail::secure_clear_bytes(values.data(),
-                                   values.size() * sizeof(FieldElement));
-    }
-
-    BulletproofAssignmentData* value_;
-};
+using SecretBytes32 = ::purify::detail::Secret<bppp::ScalarBytes>;
 
 struct EscrowOpening {
     const SecretKey& payload;
@@ -208,9 +142,9 @@ Result<PunishmentEvaluation> evaluate_punishment_key(
         return unexpected_error(raw_scalar.error(),
                                 "anchor_escrow:punishment_evaluation");
     }
-    WipeObjectOnDestruction raw_scalar_guard(*raw_scalar);
+    WipeOnDestruction raw_scalar_guard(*raw_scalar);
     auto raw_bytes = raw_scalar->to_bytes_be();
-    WipeObjectOnDestruction raw_bytes_guard(raw_bytes);
+    WipeOnDestruction raw_bytes_guard(raw_bytes);
     Bip340Key key;
     key.seckey = raw_bytes;
     if (purify_bip340_key_from_seckey(
@@ -224,14 +158,14 @@ Result<PunishmentEvaluation> evaluate_punishment_key(
     }
     bool negated = difference != 0;
     detail::secure_clear_bytes(&difference, sizeof(difference));
-    WipeObjectOnDestruction negated_guard(negated);
+    WipeOnDestruction negated_guard(negated);
     auto normalized = FieldElement::try_from_bytes32(key.seckey);
     if (!normalized) {
         return unexpected_error(
             normalized.error(),
             "anchor_escrow:normalized_punishment_scalar");
     }
-    WipeObjectOnDestruction normalized_guard(*normalized);
+    WipeOnDestruction normalized_guard(*normalized);
     return PunishmentEvaluation(*normalized, negated,
                                 std::move(key));
 }
@@ -264,8 +198,8 @@ Result<PointPair> decode_root(const UInt512& encoded,
 }
 
 Result<GeneratedKey> key_from_scalars(UInt256 first, UInt256 second) {
-    WipeObjectOnDestruction first_guard(first);
-    WipeObjectOnDestruction second_guard(second);
+    WipeOnDestruction first_guard(first);
+    WipeOnDestruction second_guard(second);
     if (first.is_zero() || second.is_zero() || half_n1() < first ||
         half_n2() < second) {
         return unexpected_error(ErrorCode::RangeViolation,
@@ -274,7 +208,7 @@ Result<GeneratedKey> key_from_scalars(UInt256 first, UInt256 second) {
     first.sub_assign(UInt256::one());
     second.sub_assign(UInt256::one());
     auto packed = multiply(half_n1(), second);
-    WipeObjectOnDestruction packed_guard(packed);
+    WipeOnDestruction packed_guard(packed);
     packed.add_assign(widen<8>(first));
     PURIFY_ASSIGN_OR_RETURN(auto secret, SecretKey::from_packed(packed),
                             "anchor_escrow:plaintext_secret");
@@ -285,7 +219,7 @@ Result<FieldElement> shared_pad(const SecretKey& secret,
                                 const UInt512& peer) {
     PURIFY_ASSIGN_OR_RETURN(auto scalars, unpack_secret(secret.packed()),
                             "anchor_escrow:shared_secret");
-    WipeObjectOnDestruction scalars_guard(scalars);
+    WipeOnDestruction scalars_guard(scalars);
     PURIFY_ASSIGN_OR_RETURN(const auto& points,
                             decode_root(peer, "anchor_escrow:shared_peer"),
                             "anchor_escrow:shared_peer");
@@ -293,12 +227,12 @@ Result<FieldElement> shared_pad(const SecretKey& secret,
         auto first,
         curve1().mul_secret_affine(points.first, scalars.first),
         "anchor_escrow:shared_first");
-    WipeObjectOnDestruction first_guard(first);
+    WipeOnDestruction first_guard(first);
     PURIFY_ASSIGN_OR_RETURN(
         auto second,
         curve2().mul_secret_affine(points.second, scalars.second),
         "anchor_escrow:shared_second");
-    WipeObjectOnDestruction second_guard(second);
+    WipeOnDestruction second_guard(second);
     return combine(first.x, second.x);
 }
 
@@ -312,18 +246,18 @@ Result<AnchorEscrowCiphertext> encrypt_anchor(
     PURIFY_ASSIGN_OR_RETURN(auto payload,
                             unpack_secret(opening.payload.packed()),
                             "anchor_escrow:payload");
-    WipeObjectOnDestruction payload_guard(payload);
+    WipeOnDestruction payload_guard(payload);
     AnchorEscrowCiphertext out;
     for (std::size_t i = 0; i < out.ephemeral_keys.size(); ++i) {
         PURIFY_ASSIGN_OR_RETURN(
             auto pad,
             shared_pad(opening.ephemeral[i]->secret, recipient),
             "anchor_escrow:encrypt_pad");
-        WipeObjectOnDestruction pad_guard(pad);
+        WipeOnDestruction pad_guard(pad);
         out.ephemeral_keys[i] = opening.ephemeral[i]->public_key;
         const auto& value = i == 0 ? payload.first : payload.second;
         FieldElement plaintext = FieldElement::from_uint256(value);
-        WipeObjectOnDestruction plaintext_guard(plaintext);
+        WipeOnDestruction plaintext_guard(plaintext);
         out.masked_scalars[i] = plaintext + pad;
     }
     return out;
@@ -355,7 +289,7 @@ std::vector<Expr> ordinary_bits(Transcript& transcript,
                        ? std::optional<FieldElement>(
                              FieldElement::from_u64(value->bit(i)))
                        : std::nullopt;
-        WipeObjectOnDestruction bit_guard(bit);
+        WipeOnDestruction bit_guard(bit);
         bits.push_back(transcript.boolean(transcript.secret(bit)));
     }
     return bits;
@@ -409,12 +343,12 @@ Result<CircuitMainResult> escrow_relation(
     }
 
     std::array<std::optional<UInt256>, 2> payload_values;
-    WipeObjectOnDestruction payload_values_guard(payload_values);
+    WipeOnDestruction payload_values_guard(payload_values);
     if (opening != nullptr) {
         PURIFY_ASSIGN_OR_RETURN(auto pair,
                                 unpack_secret(opening->payload.packed()),
                                 "anchor_escrow:payload_witness");
-        WipeObjectOnDestruction pair_guard(pair);
+        WipeOnDestruction pair_guard(pair);
         payload_values = {pair.first, pair.second};
         for (auto& value : payload_values) {
             value->sub_assign(UInt256::one());
@@ -428,14 +362,14 @@ Result<CircuitMainResult> escrow_relation(
     for (std::size_t i = 0; i < ephemeral_bits.size(); ++i) {
         std::array<std::vector<int>, 2> values{
             std::vector<int>(255, -1), std::vector<int>(255, -1)};
-        WipeVectorOnDestruction first_values_guard(values[0]);
-        WipeVectorOnDestruction second_values_guard(values[1]);
+        WipeOnDestruction first_values_guard(values[0]);
+        WipeOnDestruction second_values_guard(values[1]);
         if (opening != nullptr) {
             PURIFY_ASSIGN_OR_RETURN(
                 auto pair,
                 unpack_secret(opening->ephemeral[i]->secret.packed()),
                 "anchor_escrow:ephemeral_secret");
-            WipeObjectOnDestruction pair_guard(pair);
+            WipeOnDestruction pair_guard(pair);
             PURIFY_ASSIGN_OR_RETURN(
                 values[0], key_to_bits(pair.first, half_n1()),
                 "anchor_escrow:ephemeral_first_bits");
@@ -452,7 +386,7 @@ Result<CircuitMainResult> escrow_relation(
                         ? std::optional<FieldElement>{}
                         : std::optional<FieldElement>(
                               FieldElement::from_int(bit));
-                WipeObjectOnDestruction bit_value_guard(bit_value);
+                WipeOnDestruction bit_value_guard(bit_value);
                 bits.push_back(transcript.boolean(
                     transcript.secret(bit_value)));
             }
@@ -479,7 +413,7 @@ Result<CircuitMainResult> escrow_relation(
             ? std::optional<FieldElement>{}
             : std::optional<FieldElement>(FieldElement::from_u64(
                   opening->negate_punishment_scalar ? 1 : 0));
-    WipeObjectOnDestruction negate_value_guard(negate_value);
+    WipeOnDestruction negate_value_guard(negate_value);
     const Expr negate = transcript.boolean(transcript.secret(negate_value));
     const Expr punishment =
         raw_punishment - 2 * transcript.mul(negate, raw_punishment);
@@ -623,13 +557,13 @@ Result<GeneratedKey> decrypt_anchor(
     const GeneratedKey& recipient, const UInt512& advertised_anchor_root,
     const AnchorEscrowCiphertext& ciphertext) {
     std::array<UInt256, 2> plaintext;
-    WipeObjectOnDestruction plaintext_guard(plaintext);
+    WipeOnDestruction plaintext_guard(plaintext);
     for (std::size_t i = 0; i < plaintext.size(); ++i) {
         PURIFY_ASSIGN_OR_RETURN(
             auto pad, shared_pad(recipient.secret,
                                  ciphertext.ephemeral_keys[i]),
             "anchor_escrow:decrypt_pad");
-        WipeObjectOnDestruction pad_guard(pad);
+        WipeOnDestruction pad_guard(pad);
         plaintext[i] =
             (ciphertext.masked_scalars[i] - pad).to_uint256();
     }
@@ -852,24 +786,24 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
                                     context_digest),
         "anchor_escrow:randomness_statement");
     auto packed_anchor = anchor_recovery_key.secret.packed().to_bytes_be();
-    WipeObjectOnDestruction packed_anchor_guard(packed_anchor);
+    WipeOnDestruction packed_anchor_guard(packed_anchor);
     SecretBytes32 randomness_master;
     {
         auto digest = kRandomnessMasterHash.digest_many<3>({
             auxiliary_randomness, packed_anchor, randomness_statement});
-        WipeObjectOnDestruction digest_guard(digest);
+        WipeOnDestruction digest_guard(digest);
         randomness_master.value = digest;
     }
     SecretBytes32 first_seed;
     {
         auto digest = kFirstEphemeralHash.digest(randomness_master.value);
-        WipeObjectOnDestruction digest_guard(digest);
+        WipeOnDestruction digest_guard(digest);
         first_seed.value = digest;
     }
     SecretBytes32 second_seed;
     {
         auto digest = kSecondEphemeralHash.digest(randomness_master.value);
-        WipeObjectOnDestruction digest_guard(digest);
+        WipeOnDestruction digest_guard(digest);
         second_seed.value = digest;
     }
     PURIFY_ASSIGN_OR_RETURN(auto first_ephemeral,
@@ -888,7 +822,7 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
         punishment_evaluation.normalized_scalar,
         punishment_evaluation.negated,
     };
-    WipeObjectOnDestruction opening_sign_guard(
+    WipeOnDestruction opening_sign_guard(
         opening.negate_punishment_scalar);
     PURIFY_ASSIGN_OR_RETURN(
         const auto& ciphertext,
@@ -905,7 +839,6 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
                           anchor_recovery_key.public_key, ciphertext,
                           opening),
         "anchor_escrow:assignment");
-    WipeAssignmentOnDestruction assignment_guard(assignment);
     PURIFY_ASSIGN_OR_RETURN(
         const auto& binding,
         escrow_binding(roster, anchor_recovery_key.public_key,
@@ -915,7 +848,7 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
     {
         auto digest = kProofSeedHash.digest_many<2>({
             randomness_master.value, binding});
-        WipeObjectOnDestruction digest_guard(digest);
+        WipeOnDestruction digest_guard(digest);
         prover_seed.value = digest;
     }
     const std::array<PointBytes, 1> outputs{

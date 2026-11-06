@@ -12,69 +12,21 @@
 #include <cassert>
 #include <cstdint>
 #include <optional>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "purify/puresign/accountable.hpp"
 #include "purify/secp_bridge.h"
+#include "secure_cleanup.hpp"
 
 namespace purify::accountable {
 namespace {
 
 using PointBytes = bppp::PointBytes;
 using PointPair = std::pair<JacobianPoint, JacobianPoint>;
+using ::purify::detail::WipeOnDestruction;
 
-template <typename T>
-class WipeObjectOnDestruction {
-public:
-    explicit WipeObjectOnDestruction(T& value) noexcept : value_(&value) {
-        static_assert(std::is_trivially_destructible_v<T>);
-    }
-    WipeObjectOnDestruction(const WipeObjectOnDestruction&) = delete;
-    WipeObjectOnDestruction& operator=(
-        const WipeObjectOnDestruction&) = delete;
-    ~WipeObjectOnDestruction() {
-        detail::secure_clear_bytes(value_, sizeof(T));
-    }
-
-private:
-    T* value_;
-};
-
-class WipeAssignmentOnDestruction {
-public:
-    explicit WipeAssignmentOnDestruction(BulletproofAssignmentData& value)
-        : value_(&value) {}
-    WipeAssignmentOnDestruction(const WipeAssignmentOnDestruction&) = delete;
-    WipeAssignmentOnDestruction& operator=(
-        const WipeAssignmentOnDestruction&) = delete;
-    ~WipeAssignmentOnDestruction() {
-        wipe(value_->left);
-        wipe(value_->right);
-        wipe(value_->output);
-        wipe(value_->commitments);
-    }
-
-private:
-    static void wipe(BulletproofWitnessColumn& values) {
-        detail::secure_clear_bytes(values.data(),
-                                   values.size() * sizeof(FieldElement));
-    }
-
-    BulletproofAssignmentData* value_;
-};
-
-struct SecretScalarBytes {
-    bppp::ScalarBytes value{};
-
-    SecretScalarBytes() = default;
-    SecretScalarBytes(const SecretScalarBytes&) = delete;
-    SecretScalarBytes& operator=(const SecretScalarBytes&) = delete;
-    ~SecretScalarBytes() {
-        detail::secure_clear_bytes(value.data(), value.size());
-    }
-};
+using SecretScalarBytes = ::purify::detail::Secret<bppp::ScalarBytes>;
 
 UInt256 half_secp_order() {
     return prime_p().shifted_right(1);
@@ -88,9 +40,9 @@ struct CanonicalScalar {
 CanonicalScalar canonical_scalar(const FieldElement& scalar) {
     CanonicalScalar out{scalar.to_uint256(), false};
     FieldElement negative_scalar = scalar.negate();
-    WipeObjectOnDestruction negative_scalar_guard(negative_scalar);
+    WipeOnDestruction negative_scalar_guard(negative_scalar);
     UInt256 negative = negative_scalar.to_uint256();
-    WipeObjectOnDestruction negative_guard(negative);
+    WipeOnDestruction negative_guard(negative);
     out.negated = half_secp_order() < out.magnitude;
     out.magnitude.conditional_assign(negative, out.negated);
     return out;
@@ -98,7 +50,7 @@ CanonicalScalar canonical_scalar(const FieldElement& scalar) {
 
 UInt256 magnitude(const FieldElement& scalar) {
     auto canonical = canonical_scalar(scalar);
-    WipeObjectOnDestruction canonical_guard(canonical);
+    WipeOnDestruction canonical_guard(canonical);
     return canonical.magnitude;
 }
 
@@ -161,7 +113,7 @@ std::vector<Expr> ordinary_bits(Transcript& transcript,
                        ? std::optional<FieldElement>(
                              FieldElement::from_u64(value->bit(i)))
                        : std::nullopt;
-        WipeObjectOnDestruction bit_guard(bit);
+        WipeOnDestruction bit_guard(bit);
         bits.push_back(transcript.boolean(transcript.secret(bit)));
     }
     return bits;
@@ -207,11 +159,11 @@ Result<CircuitMainResult> setup_relation(
     }
     std::optional<UInt256> value;
     std::optional<FieldElement> sign_value;
-    WipeObjectOnDestruction value_guard(value);
-    WipeObjectOnDestruction sign_value_guard(sign_value);
+    WipeOnDestruction value_guard(value);
+    WipeOnDestruction sign_value_guard(sign_value);
     if (scalar) {
         auto canonical = canonical_scalar(*scalar);
-        WipeObjectOnDestruction canonical_guard(canonical);
+        WipeOnDestruction canonical_guard(canonical);
         value = canonical.magnitude;
         value->sub_assign(UInt256::one());
         sign_value = FieldElement::from_u64(canonical.negated);
@@ -364,17 +316,17 @@ Result<GeneratedKey> derive_recovery_root(
                                 "recovery_root:zero_scalar");
     }
     auto first = magnitude(signing_scalar);
-    WipeObjectOnDestruction first_guard(first);
+    WipeOnDestruction first_guard(first);
     auto second = first;
-    WipeObjectOnDestruction second_guard(second);
+    WipeOnDestruction second_guard(second);
     auto reduced_second = order_n2();
-    WipeObjectOnDestruction reduced_second_guard(reduced_second);
+    WipeOnDestruction reduced_second_guard(reduced_second);
     reduced_second.sub_assign(first);
     second.conditional_assign(reduced_second, half_n2() < second);
     first.sub_assign(UInt256::one());
     second.sub_assign(UInt256::one());
     auto packed = multiply(half_n1(), second);
-    WipeObjectOnDestruction packed_guard(packed);
+    WipeOnDestruction packed_guard(packed);
     packed.add_assign(widen<8>(first));
     PURIFY_ASSIGN_OR_RETURN(auto secret, SecretKey::from_packed(packed),
                             "recovery_root:secret");
@@ -413,7 +365,6 @@ Result<RecoveryRootSetupProof> prove_recovery_root_setup(
     PURIFY_ASSIGN_OR_RETURN(auto assignment,
                             setup_assignment(recovery_root, signing_scalar),
                             "recovery_root:assignment");
-    WipeAssignmentOnDestruction assignment_guard(assignment);
     PURIFY_ASSIGN_OR_RETURN(const auto& binding,
                             setup_binding(roster, recovery_root),
                             "recovery_root:binding");
@@ -426,7 +377,7 @@ Result<RecoveryRootSetupProof> prove_recovery_root_setup(
         "Purify/Accountable/RecoveryRootProverSeed/v2");
     auto prover_seed = prover_seed_hash.digest_many<2>(
         {encoded_scalar.value, binding});
-    WipeObjectOnDestruction prover_seed_guard(prover_seed);
+    WipeOnDestruction prover_seed_guard(prover_seed);
     secret_prover_seed.value = prover_seed;
     const std::array<PointBytes, 1> outputs{roster_point(roster)};
     PURIFY_ASSIGN_OR_RETURN(

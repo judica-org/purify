@@ -10,6 +10,7 @@
 #include "purify/expr.hpp"
 
 #include "purify/secret.hpp"
+#include "secure_cleanup.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,22 +23,7 @@
 
 namespace {
 
-template <typename T>
-class WipeObjectOnDestruction {
-public:
-    explicit WipeObjectOnDestruction(T& value) noexcept : value_(&value) {
-        static_assert(std::is_trivially_destructible_v<T>);
-    }
-    WipeObjectOnDestruction(const WipeObjectOnDestruction&) = delete;
-    WipeObjectOnDestruction& operator=(
-        const WipeObjectOnDestruction&) = delete;
-    ~WipeObjectOnDestruction() {
-        purify::detail::secure_clear_bytes(value_, sizeof(T));
-    }
-
-private:
-    T* value_;
-};
+using ::purify::detail::WipeOnDestruction;
 
 int compare_field_elements(const purify::FieldElement& lhs, const purify::FieldElement& rhs) {
     return lhs.to_uint256().compare(rhs.to_uint256());
@@ -421,11 +407,11 @@ Expr Transcript::mul(const Expr& lhs, const Expr& rhs) {
         return it->second;
     }
     std::optional<FieldElement> lhs_val = lhs.evaluate(varmap_);
-    WipeObjectOnDestruction lhs_guard(lhs_val);
+    WipeOnDestruction lhs_guard(lhs_val);
     std::optional<FieldElement> rhs_val = rhs.evaluate(varmap_);
-    WipeObjectOnDestruction rhs_guard(rhs_val);
+    WipeOnDestruction rhs_guard(rhs_val);
     std::optional<FieldElement> value;
-    WipeObjectOnDestruction value_guard(value);
+    WipeOnDestruction value_guard(value);
     if (lhs_val.has_value() && rhs_val.has_value()) {
         value = *lhs_val * *rhs_val;
     }
@@ -442,15 +428,15 @@ Expr Transcript::div(const Expr& lhs, const Expr& rhs) {
         return it->second;
     }
     std::optional<FieldElement> lhs_val = lhs.evaluate(varmap_);
-    WipeObjectOnDestruction lhs_guard(lhs_val);
+    WipeOnDestruction lhs_guard(lhs_val);
     std::optional<FieldElement> rhs_val = rhs.evaluate(varmap_);
-    WipeObjectOnDestruction rhs_guard(rhs_val);
+    WipeOnDestruction rhs_guard(rhs_val);
     assert((!rhs_val.has_value() || !rhs_val->is_zero()) && "Transcript::div() requires a non-zero known divisor");
     std::optional<FieldElement> value;
-    WipeObjectOnDestruction value_guard(value);
+    WipeOnDestruction value_guard(value);
     if (lhs_val.has_value() && rhs_val.has_value()) {
         FieldElement inverse = rhs_val->inverse_consttime();
-        WipeObjectOnDestruction inverse_guard(inverse);
+        WipeOnDestruction inverse_guard(inverse);
         value = *lhs_val * inverse;
     }
     Expr out = secret(value);
@@ -465,11 +451,11 @@ Expr Transcript::boolean(const Expr& expr) {
     }
 #ifndef NDEBUG
     std::optional<FieldElement> value = expr.evaluate(varmap_);
-    WipeObjectOnDestruction value_guard(value);
+    WipeOnDestruction value_guard(value);
     bool valid = true;
     if (value.has_value()) {
         FieldElement check = *value * (*value - FieldElement::one());
-        WipeObjectOnDestruction check_guard(check);
+        WipeOnDestruction check_guard(check);
         valid = check.is_zero();
     }
     assert(valid
@@ -484,7 +470,7 @@ void Transcript::equal(const Expr& lhs, const Expr& rhs) {
     Expr diff = lhs - rhs;
 #ifndef NDEBUG
     std::optional<FieldElement> value = diff.evaluate(varmap_);
-    WipeObjectOnDestruction value_guard(value);
+    WipeOnDestruction value_guard(value);
     assert((!value.has_value() || value->is_zero()) && "Transcript::equal() requires known values to match");
 #endif
     eqs_.push_back(diff);

@@ -18,6 +18,7 @@
 
 #include "detail/common.hpp"
 #include "purify/secp_bridge.h"
+#include "secure_cleanup.hpp"
 
 namespace purify::puresign_plusplus {
 
@@ -40,21 +41,7 @@ constexpr std::string_view kMessageProofTag = "PureSign/BPPP/Proof/Message/V1";
 constexpr std::string_view kTopicProofTag = "PureSign/BPPP/Proof/Topic/V1";
 
 using Scope = PreparedNonce::Scope;
-
-class BurnScalarOnDestruction {
-public:
-    explicit BurnScalarOnDestruction(Scalar32& scalar) noexcept
-        : scalar_(&scalar) {}
-    BurnScalarOnDestruction(const BurnScalarOnDestruction&) = delete;
-    BurnScalarOnDestruction& operator=(
-        const BurnScalarOnDestruction&) = delete;
-    ~BurnScalarOnDestruction() {
-        detail::secure_clear_bytes(scalar_->data(), scalar_->size());
-    }
-
-private:
-    Scalar32* scalar_;
-};
+using ::purify::detail::WipeOnDestruction;
 
 const TaggedHash& binding_tagged_hash(Scope scope) {
     static const TaggedHash kMessageBindingTaggedHash(kMessageBindingTag);
@@ -99,27 +86,9 @@ Bytes proof_statement_binding(Scope scope) {
     return bytes_from_ascii(proof_tag_for_scope(scope));
 }
 
-struct SecretProofSeed {
-    Scalar32 value{};
-
-    SecretProofSeed() = default;
-    SecretProofSeed(const SecretProofSeed&) = delete;
-    SecretProofSeed& operator=(const SecretProofSeed&) = delete;
-    ~SecretProofSeed() {
-        detail::secure_clear_bytes(value.data(), value.size());
-    }
-};
-
-struct SecretPackedKeyBytes {
-    std::array<unsigned char, 64> value{};
-
-    SecretPackedKeyBytes() = default;
-    SecretPackedKeyBytes(const SecretPackedKeyBytes&) = delete;
-    SecretPackedKeyBytes& operator=(const SecretPackedKeyBytes&) = delete;
-    ~SecretPackedKeyBytes() {
-        detail::secure_clear_bytes(value.data(), value.size());
-    }
-};
+using SecretProofSeed = ::purify::detail::Secret<Scalar32>;
+using SecretPackedKeyBytes =
+    ::purify::detail::Secret<std::array<unsigned char, 64>>;
 
 void derive_secret_prover_seed(const SecretKey& secret, Scope scope,
                                std::span<const unsigned char> eval_input,
@@ -191,30 +160,6 @@ struct DerivedNonceData {
 private:
     void clear() noexcept {
         detail::secure_clear_bytes(scalar.data(), scalar.size());
-    }
-};
-
-struct SecretWitnessDataWiper {
-    BulletproofWitnessData* witness;
-
-    explicit SecretWitnessDataWiper(BulletproofWitnessData& value) noexcept
-        : witness(&value) {
-        static_assert(std::is_trivially_destructible_v<FieldElement>);
-    }
-    SecretWitnessDataWiper(const SecretWitnessDataWiper&) = delete;
-    SecretWitnessDataWiper& operator=(const SecretWitnessDataWiper&) = delete;
-    ~SecretWitnessDataWiper() {
-        detail::secure_clear_bytes(&witness->output, sizeof(witness->output));
-        clear(witness->assignment.left);
-        clear(witness->assignment.right);
-        clear(witness->assignment.output);
-        clear(witness->assignment.commitments);
-    }
-
-private:
-    static void clear(BulletproofWitnessColumn& values) noexcept {
-        detail::secure_clear_bytes(values.data(),
-                                   values.size() * sizeof(FieldElement));
     }
 };
 
@@ -303,7 +248,6 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
                                 "build_nonce_proof_from_template:prove_assignment_data");
     }
     BulletproofWitnessData& witness = *witness_result;
-    SecretWitnessDataWiper witness_wiper(witness);
     PURIFY_ASSIGN_OR_RETURN(auto partial_ok, circuit_template.partial_evaluate(witness.assignment),
                             "build_nonce_proof_from_template:partial_evaluate");
     if (!partial_ok) {
@@ -459,7 +403,7 @@ Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
                                 "PreparedNonce::sign_message:consumed");
     }
     available_ = false;
-    BurnScalarOnDestruction burn(scalar_);
+    WipeOnDestruction burn(scalar_);
     if (scope_ != Scope::Message) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_message:scope");
     }
@@ -495,7 +439,7 @@ Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
                                 "PreparedNonce::sign_topic_message:consumed");
     }
     available_ = false;
-    BurnScalarOnDestruction burn(scalar_);
+    WipeOnDestruction burn(scalar_);
     if (scope_ != Scope::Topic) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_topic_message:scope");
     }

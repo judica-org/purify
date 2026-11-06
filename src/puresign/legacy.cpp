@@ -16,6 +16,7 @@
 #include "detail/common.hpp"
 #include "purify/bppp.hpp"
 #include "purify/curve.hpp"
+#include "secure_cleanup.hpp"
 
 namespace purify::puresign {
 
@@ -30,20 +31,7 @@ Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<co
 
 namespace {
 
-class BurnScalarOnDestruction {
-public:
-    explicit BurnScalarOnDestruction(Scalar32& scalar) noexcept
-        : scalar_(&scalar) {}
-    BurnScalarOnDestruction(const BurnScalarOnDestruction&) = delete;
-    BurnScalarOnDestruction& operator=(
-        const BurnScalarOnDestruction&) = delete;
-    ~BurnScalarOnDestruction() {
-        detail::secure_clear_bytes(scalar_->data(), scalar_->size());
-    }
-
-private:
-    Scalar32* scalar_;
-};
+using ::purify::detail::WipeOnDestruction;
 
 constexpr std::string_view kMessageNonceTag = "PureSign/Nonce/Message/";
 constexpr std::string_view kTopicNonceTag = "PureSign/Nonce/Topic/";
@@ -328,7 +316,7 @@ Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
                                 "PreparedNonce::sign_message:consumed");
     }
     available_ = false;
-    BurnScalarOnDestruction burn(scalar_);
+    WipeOnDestruction burn(scalar_);
     if (scope_ != Scope::Message) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_message:scope");
     }
@@ -364,7 +352,7 @@ Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
                                 "PreparedNonce::sign_topic_message:consumed");
     }
     available_ = false;
-    BurnScalarOnDestruction burn(scalar_);
+    WipeOnDestruction burn(scalar_);
     if (scope_ != Scope::Topic) {
         return unexpected_error(ErrorCode::BindingMismatch, "PreparedNonce::sign_topic_message:scope");
     }

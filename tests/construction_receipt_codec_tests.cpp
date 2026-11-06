@@ -22,6 +22,7 @@ using purify::UInt512;
 using purify::accountable::AnchorReference;
 using purify::accountable::AnchorPunishmentPublicKey;
 using purify::accountable::ConstructionReceiptEntry;
+using purify::accountable::ConstructionReceiptEnvelope;
 using purify::accountable::ConstructionReceiptPayload;
 using purify::accountable::ResolvedConstructionReceiptEntry;
 using purify::accountable::ResolvedConstructionSetupDigest;
@@ -392,6 +393,69 @@ void test_noncanonical_and_framing_rejection(TestContext& ctx) {
 
 }
 
+void test_parent_envelope_layout_and_syntax(TestContext& ctx) {
+    auto fixture = make_fixture();
+    expect_ok(ctx, fixture, "envelope fixture constructs");
+    if (!fixture) return;
+    auto payload = make_payload(*fixture);
+    expect_ok(ctx, payload, "envelope payload constructs");
+    if (!payload) return;
+
+    static_assert(ConstructionReceiptEnvelope::kParentProofSize == 15'076);
+    Bytes parent_proof(
+        ConstructionReceiptEnvelope::kParentProofSize, 0xa5);
+    auto envelope = ConstructionReceiptEnvelope::create(
+        *payload, parent_proof);
+    expect_ok(ctx, envelope, "canonical parent envelope constructs");
+    if (!envelope) return;
+    const Bytes encoded = envelope->serialize();
+    const std::size_t expected_size =
+        69 + 224 * fixture->entries.size() + parent_proof.size();
+    ctx.expect(envelope->serialized_size() == expected_size &&
+                   encoded.size() == expected_size,
+               "envelope is exactly 69 + 224*N + 15,076 bytes");
+    const Bytes payload_bytes = payload->serialize();
+    ctx.expect(std::equal(payload_bytes.begin(), payload_bytes.end(),
+                          encoded.begin()),
+               "envelope starts with the canonical public payload");
+    auto decoded = ConstructionReceiptEnvelope::deserialize(encoded);
+    expect_ok(ctx, decoded, "canonical parent envelope decodes");
+    if (!decoded) return;
+    ctx.expect(decoded->serialize() == encoded &&
+                   decoded->parent_proof() == parent_proof,
+               "parent envelope round-trips exactly");
+
+    auto truncated = encoded;
+    truncated.pop_back();
+    expect_error(ctx,
+                 ConstructionReceiptEnvelope::deserialize(truncated),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "a truncated fixed-size parent proof is rejected");
+
+    auto trailing = encoded;
+    trailing.push_back(0);
+    expect_error(ctx,
+                 ConstructionReceiptEnvelope::deserialize(trailing),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "trailing parent-proof bytes are rejected");
+
+    auto short_proof = parent_proof;
+    short_proof.pop_back();
+    expect_error(ctx,
+                 ConstructionReceiptEnvelope::create(
+                     *payload, std::move(short_proof)),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "a short parent proof is rejected before publication");
+
+    auto long_proof = parent_proof;
+    long_proof.push_back(0);
+    expect_error(ctx,
+                 ConstructionReceiptEnvelope::create(
+                     *payload, std::move(long_proof)),
+                 purify::ErrorCode::InvalidFixedSize,
+                 "a long parent proof is rejected before publication");
+}
+
 void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     auto fixture = make_fixture();
     expect_ok(ctx, fixture, "statement fixture constructs");
@@ -619,5 +683,6 @@ void run_construction_receipt_codec_tests(TestContext& ctx) {
     test_canonical_layout_and_round_trip(ctx);
     test_construction_invariants(ctx);
     test_noncanonical_and_framing_rejection(ctx);
+    test_parent_envelope_layout_and_syntax(ctx);
     test_statement_digest_binds_all_inputs(ctx);
 }

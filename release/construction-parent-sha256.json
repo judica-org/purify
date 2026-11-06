@@ -1,0 +1,51 @@
+{
+  "schema": "purify-construction-parent-release-v1",
+  "protocol": "purify-construction-parent-v1",
+  "transcript_hash": "sha256",
+  "artifact": {
+    "filename": "sha256-parent-verifier.nvk.zst",
+    "encoded_bytes": 693735316,
+    "decoded_bytes": 3206748264,
+    "sha256": "c732e1309fd731b47c289c55082c613cb2c060ad5ff9bc790ebc4437462abe1e",
+    "tagged_sha256": {
+      "tag": "Purify/Accountable/DirectNovaVerifierArtifact/v2",
+      "digest": "3d4c4fa5aa00e170dd03936085f42ecfc9a4dfd089db70bdd2372ad209c8037d"
+    }
+  },
+  "suite": {
+    "relation_id": "92ee3f3572c6ff1c9c41c771995cd70881db8544472d87ac00a5675c9981bede",
+    "public_parameter_digest": "6dda8885554099ec7a183918ad481e430fd84d7b608ae95558259760519a6000",
+    "suite_id": "acd99f11320b566f7271fe54996fa025c2c5717e4d7433a6c333239ad8c871a6",
+    "state_arity": 20,
+    "primary_constraints": 9418599,
+    "primary_variables": 9372280,
+    "secondary_constraints": 728974,
+    "secondary_variables": 728211,
+    "proof_bytes": 15076,
+    "proof_sequences": 152
+  },
+  "source": {
+    "purify_qualification_commit": "338b44aa9e38a86049778a034143bd3b03585c43",
+    "purify_suite_commit": "8ba1d795b8f052de5da00c473db83c7a1e968cd0",
+    "purify_artifact_commit": "8ba1d795b8f052de5da00c473db83c7a1e968cd0",
+    "purify_acceptance_commit": "361b134fe9d4b4913301d2ac440b5f7d16821d27",
+    "nova_repository": "https://github.com/JeremyRubin/Nova",
+    "nova_commit": "aa42229024dc141e4edff89fcaa79f345e156d46"
+  },
+  "qualification_vectors": {
+    "accepted": {
+      "path": "tests/vectors/construction_parent_sha256_accepted.proof",
+      "sha256": "af83a6ee1d982471ba14913de71e67c5f8956e0a2dfcac60d18e0a41f6c528ab",
+      "prover_fixture_path": "tests/vectors/construction_parent_sha256_accepted.fixture",
+      "prover_fixture_bytes": 8314,
+      "prover_fixture_sha256": "7c819222679a52bfa216ed75262b5ca837d7f5032a15a67dea4eb18443032bb5"
+    },
+    "recursive_valid_native_rejected": {
+      "path": "tests/vectors/construction_parent_sha256_nondeciding.proof",
+      "sha256": "d7858448cebeb1c4778932e7f4ef6a36407ce1b1a05c3f0f375db37e6b6e9fbc",
+      "prover_fixture_path": "tests/vectors/construction_parent_sha256_nondeciding.fixture",
+      "prover_fixture_bytes": 8314,
+      "prover_fixture_sha256": "f2299a76e084e66e9185bf47445639f47367c1dc143061c31682dfad83de26ec"
+    }
+  }
+}

@@ -29,9 +29,10 @@ class RecoveryRootSetupProof;
 /**
  * Validate and bind one ordered nonce-host list to a coalition core.
  *
- * Bitcoin coalition registrations use `CoalitionFormation::id()` as the core
- * digest. The surrounding protocol must establish the corresponding UTXO
- * spend; this cryptographic boundary accepts an already authenticated core.
+ * Bitcoin coalition registrations use `CoalitionFormation::core_digest()` as
+ * the core digest. The surrounding protocol must establish the corresponding
+ * UTXO spend; this cryptographic boundary accepts an already authenticated
+ * core.
  */
 [[nodiscard]] Result<NonceHostBoundSigningRoster> bind_nonce_hosts(
     SigningRoster roster, const CoalitionCoreDigest& coalition_core_digest,

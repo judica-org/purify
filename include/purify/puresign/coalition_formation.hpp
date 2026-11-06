@@ -36,8 +36,8 @@ using CoalitionManifestDigest = std::array<unsigned char, 32>;
 /** Immutable coalition core bound by every accountable proof and response. */
 using CoalitionCoreDigest = std::array<unsigned char, 32>;
 
-/** Stable identity of one manifest's claim on one formation permit. */
-using CoalitionFormationId = CoalitionCoreDigest;
+/** Stable registry key for one deployment's claim on one Bitcoin output. */
+using CoalitionPermitId = std::array<unsigned char, 32>;
 
 /** Exact predecessor output consumed by a coalition formation transaction. */
 struct BitcoinOutpoint {
@@ -46,6 +46,14 @@ struct BitcoinOutpoint {
 
     friend bool operator==(const BitcoinOutpoint&,
                            const BitcoinOutpoint&) = default;
+};
+
+/** Named public inputs to one formation derivation. */
+struct CoalitionFormationInput {
+    BitcoinGenesisHash genesis_hash{};
+    CoalitionDeploymentId deployment_id{};
+    BitcoinOutpoint permit{};
+    CoalitionManifestDigest manifest_digest{};
 };
 
 /**
@@ -58,51 +66,45 @@ struct BitcoinOutpoint {
 class CoalitionFormation {
 public:
     [[nodiscard]] static Result<CoalitionFormation> create(
-        BitcoinGenesisHash genesis_hash,
-        CoalitionDeploymentId deployment_id,
-        BitcoinOutpoint permit,
-        CoalitionManifestDigest manifest_digest);
+        CoalitionFormationInput input);
 
     [[nodiscard]] const BitcoinGenesisHash& genesis_hash() const noexcept {
-        return genesis_hash_;
+        return input_.genesis_hash;
     }
 
     [[nodiscard]] const CoalitionDeploymentId& deployment_id()
         const noexcept {
-        return deployment_id_;
+        return input_.deployment_id;
     }
 
     [[nodiscard]] const BitcoinOutpoint& permit() const noexcept {
-        return permit_;
+        return input_.permit;
     }
 
     [[nodiscard]] const CoalitionManifestDigest& manifest_digest()
         const noexcept {
-        return manifest_digest_;
+        return input_.manifest_digest;
     }
 
-    [[nodiscard]] const CoalitionFormationId& id() const noexcept {
-        return id_;
+    [[nodiscard]] const CoalitionPermitId& permit_id() const noexcept {
+        return permit_id_;
+    }
+
+    [[nodiscard]] const CoalitionCoreDigest& core_digest() const noexcept {
+        return core_digest_;
     }
 
 private:
-    CoalitionFormation(
-        BitcoinGenesisHash genesis_hash,
-        CoalitionDeploymentId deployment_id,
-        BitcoinOutpoint permit,
-        CoalitionManifestDigest manifest_digest,
-        CoalitionFormationId id)
-        : genesis_hash_(genesis_hash),
-          deployment_id_(deployment_id),
-          permit_(permit),
-          manifest_digest_(manifest_digest),
-          id_(id) {}
+    CoalitionFormation(CoalitionFormationInput input,
+                       CoalitionPermitId permit_id,
+                       CoalitionCoreDigest core_digest)
+        : input_(input),
+          permit_id_(permit_id),
+          core_digest_(core_digest) {}
 
-    BitcoinGenesisHash genesis_hash_{};
-    CoalitionDeploymentId deployment_id_{};
-    BitcoinOutpoint permit_{};
-    CoalitionManifestDigest manifest_digest_{};
-    CoalitionFormationId id_{};
+    CoalitionFormationInput input_{};
+    CoalitionPermitId permit_id_{};
+    CoalitionCoreDigest core_digest_{};
 };
 
 } // namespace purify::accountable

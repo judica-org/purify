@@ -167,12 +167,16 @@ void run_accountable_response_tests(TestContext& ctx) {
     transaction_id.fill(0x72);
     CoalitionManifestDigest manifest_digest{};
     manifest_digest.fill(0x73);
-    auto formation = CoalitionFormation::create(
-        genesis_hash, deployment_id,
-        BitcoinOutpoint{transaction_id, 3}, manifest_digest);
+    auto formation = CoalitionFormation::create({
+        .genesis_hash = genesis_hash,
+        .deployment_id = deployment_id,
+        .permit = {transaction_id, 3},
+        .manifest_digest = manifest_digest,
+    });
     expect_ok(ctx, formation, "response coalition formation creates");
     if (!formation) return;
-    const CoalitionCoreDigest coalition_core_digest = formation->id();
+    const CoalitionCoreDigest coalition_core_digest =
+        formation->core_digest();
     bool saw_odd_raw_nonce = false;
     bool saw_positive_recovery_scalar = false;
     bool saw_negative_recovery_scalar = false;
@@ -304,14 +308,17 @@ void run_accountable_response_tests(TestContext& ctx) {
                       "each scalar-only partial matches its proved full point");
         }
         if (count == 1) {
-            auto alternate_formation = CoalitionFormation::create(
-                genesis_hash, deployment_id,
-                BitcoinOutpoint{transaction_id, 4}, manifest_digest);
+            auto alternate_formation = CoalitionFormation::create({
+                .genesis_hash = genesis_hash,
+                .deployment_id = deployment_id,
+                .permit = {transaction_id, 4},
+                .manifest_digest = manifest_digest,
+            });
             expect_ok(ctx, alternate_formation,
                       "alternate response formation creates");
             if (!alternate_formation) return;
             auto alternate_roster = purify::accountable::bind_nonce_hosts(
-                *raw_roster, alternate_formation->id(), hosts,
+                *raw_roster, alternate_formation->core_digest(), hosts,
                 secp.get());
             expect_ok(ctx, alternate_roster,
                       "same key and hosts bind to a second coalition core");
@@ -323,7 +330,7 @@ void run_accountable_response_tests(TestContext& ctx) {
                        "cross-core fixture preserves Q and U");
             auto alternate_context = context;
             alternate_context.coalition_core_digest =
-                alternate_formation->id();
+                alternate_formation->core_digest();
             ctx.expect(!purify::accountable::verify_coalition_nonce_set(
                            *alternate_roster, alternate_context, hosts,
                            proofs, secp.get(), &shared_cache),

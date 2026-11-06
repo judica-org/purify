@@ -30,6 +30,7 @@ use crate::nova_protocol_transcript::{
 };
 use crate::nova_secp::{allocate_encoded_point, DirectEncodedSecpPoint};
 use crate::nova_secp_scalar::{allocate_canonical_scalar, CanonicalSecpScalar};
+use crate::nova_session::NovaSessionStep;
 use crate::nova_sha256_transcript::{NovaByte, NovaTranscript};
 use crate::nova_types::DirectRelationId;
 use crate::Scalar;
@@ -185,6 +186,16 @@ impl StepCircuit<Scalar> for ConstructionParentStep {
         z: &[AllocatedNum<Scalar>],
     ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
         self.synthesize_relation(cs, z)
+    }
+}
+
+impl NovaSessionStep<ANCHOR_RECURRENCE_STATE_ARITY> for ConstructionParentStep {
+    fn relation_id(&self) -> DirectRelationId {
+        CONSTRUCTION_PARENT_DIRECT_RELATION_ID
+    }
+
+    fn input_state(&self) -> &[Scalar; ANCHOR_RECURRENCE_STATE_ARITY] {
+        ConstructionParentStep::input_state(self)
     }
 }
 

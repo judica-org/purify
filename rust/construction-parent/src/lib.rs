@@ -21,6 +21,8 @@ mod construction_profile;
 mod construction_recurrence;
 // This is an internal proof-codec foundation, not a receipt parser.
 mod fixed_serde;
+// This is an internal fixed-template integration layer, not a receipt API.
+mod nova_session;
 mod nova_types;
 // Production candidate accumulation constraints for qualification.
 #[cfg(test)]

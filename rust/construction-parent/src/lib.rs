@@ -37,9 +37,15 @@ mod nova_norm_reduction;
 // Transcript-derived opening-base constraints for qualification.
 #[cfg(test)]
 mod nova_opening_base;
+// Production construction recurrence constraints for qualification.
+#[cfg(test)]
+mod nova_construction_recurrence;
 // Shared typed transcript framing for direct Nova relations.
 #[cfg(test)]
 mod nova_protocol_transcript;
+// Allocation-bounded identity for direct Nova step relations.
+#[cfg(test)]
+mod nova_relation_identity;
 // Canonical secp256k1 scalar arithmetic for the direct Nova relation.
 #[cfg(test)]
 mod nova_secp_scalar;

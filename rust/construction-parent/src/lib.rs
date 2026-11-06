@@ -25,6 +25,9 @@ mod nova_types;
 // Production candidate accumulation constraints for qualification.
 #[cfg(test)]
 mod nova_candidate;
+// Production V4 transcript constraints for qualification.
+#[cfg(test)]
+mod nova_circuit_transcript;
 // Transcript-derived opening-base constraints for qualification.
 #[cfg(test)]
 mod nova_opening_base;

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -677,6 +678,25 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
                "statement digest binds each exact context digest");
 }
 
+#if defined(PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER)
+void test_construction_parent_verifier_requires_artifact_path(
+    TestContext& ctx) {
+    expect_error(
+        ctx,
+        purify::accountable::ConstructionParentVerifier::load({}),
+        purify::ErrorCode::RangeViolation,
+        "construction parent verifier rejects an empty artifact path");
+
+    const char embedded_nul[] = {'a', '\0', 'b'};
+    expect_error(
+        ctx,
+        purify::accountable::ConstructionParentVerifier::load(
+            std::string_view(embedded_nul, sizeof(embedded_nul))),
+        purify::ErrorCode::RangeViolation,
+        "construction parent verifier rejects an embedded NUL path");
+}
+#endif
+
 }  // namespace
 
 void run_construction_receipt_codec_tests(TestContext& ctx) {
@@ -685,4 +705,7 @@ void run_construction_receipt_codec_tests(TestContext& ctx) {
     test_noncanonical_and_framing_rejection(ctx);
     test_parent_envelope_layout_and_syntax(ctx);
     test_statement_digest_binds_all_inputs(ctx);
+#if defined(PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER)
+    test_construction_parent_verifier_requires_artifact_path(ctx);
+#endif
 }

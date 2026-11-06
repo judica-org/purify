@@ -33,8 +33,11 @@ using CoalitionDeploymentId = std::array<unsigned char, 32>;
  */
 using CoalitionManifestDigest = std::array<unsigned char, 32>;
 
+/** Immutable coalition core bound by every accountable proof and response. */
+using CoalitionCoreDigest = std::array<unsigned char, 32>;
+
 /** Stable identity of one manifest's claim on one formation permit. */
-using CoalitionFormationId = std::array<unsigned char, 32>;
+using CoalitionFormationId = CoalitionCoreDigest;
 
 /** Exact predecessor output consumed by a coalition formation transaction. */
 struct BitcoinOutpoint {

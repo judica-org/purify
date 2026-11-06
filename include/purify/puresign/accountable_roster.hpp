@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "purify/numeric.hpp"
+#include "purify/puresign/coalition_formation.hpp"
 
 namespace purify::puresign_plusplus {
 struct PublicKey;
@@ -17,14 +18,6 @@ struct PublicKey;
 
 namespace purify::accountable {
 
-/**
- * Digest of the immutable coalition core and pre-proof setup context.
- *
- * Applications must define a canonical, domain-separated preimage containing
- * every setup field not bound separately by this library. The preimage must
- * exclude this proof and any receipt containing it, which would be circular.
- */
-using CoalitionCoreDigest = std::array<unsigned char, 32>;
 /** Digest of the immutable ordered Purify nonce-host registration. */
 using NonceHostCommitment = std::array<unsigned char, 32>;
 
@@ -33,7 +26,13 @@ class NonceHostBoundSigningRoster;
 class RecoveryBoundSigningRoster;
 class RecoveryRootSetupProof;
 
-/** Validate and bind one ordered nonce-host list to a coalition core. */
+/**
+ * Validate and bind one ordered nonce-host list to a coalition core.
+ *
+ * Bitcoin coalition registrations use `CoalitionFormation::id()` as the core
+ * digest. The surrounding protocol must establish the corresponding UTXO
+ * spend; this cryptographic boundary accepts an already authenticated core.
+ */
 [[nodiscard]] Result<NonceHostBoundSigningRoster> bind_nonce_hosts(
     SigningRoster roster, const CoalitionCoreDigest& coalition_core_digest,
     std::span<const puresign_plusplus::PublicKey> ordered_hosts,

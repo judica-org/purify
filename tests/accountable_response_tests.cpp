@@ -16,7 +16,13 @@ namespace {
 
 using purify::FieldElement;
 using purify::Result;
+using purify::accountable::BitcoinGenesisHash;
+using purify::accountable::BitcoinOutpoint;
+using purify::accountable::BitcoinTransactionId;
 using purify::accountable::CoalitionCoreDigest;
+using purify::accountable::CoalitionDeploymentId;
+using purify::accountable::CoalitionFormation;
+using purify::accountable::CoalitionManifestDigest;
 using purify::accountable::ConflictContext;
 using purify::accountable::NonceHostBoundSigningRoster;
 using purify::accountable::PartialResponse;
@@ -153,8 +159,20 @@ void run_accountable_response_tests(TestContext& ctx) {
         purify::bytes_from_ascii("responses/domain=4/epoch=8/slot=4");
     const auto body = purify::bytes_from_ascii("decision:root-a");
     const auto other_body = purify::bytes_from_ascii("decision:root-b");
-    CoalitionCoreDigest coalition_core_digest{};
-    coalition_core_digest.fill(0x73);
+    BitcoinGenesisHash genesis_hash{};
+    genesis_hash.fill(0x70);
+    CoalitionDeploymentId deployment_id{};
+    deployment_id.fill(0x71);
+    BitcoinTransactionId transaction_id{};
+    transaction_id.fill(0x72);
+    CoalitionManifestDigest manifest_digest{};
+    manifest_digest.fill(0x73);
+    auto formation = CoalitionFormation::create(
+        genesis_hash, deployment_id,
+        BitcoinOutpoint{transaction_id, 3}, manifest_digest);
+    expect_ok(ctx, formation, "response coalition formation creates");
+    if (!formation) return;
+    const CoalitionCoreDigest coalition_core_digest = formation->id();
     bool saw_odd_raw_nonce = false;
     bool saw_positive_recovery_scalar = false;
     bool saw_negative_recovery_scalar = false;
@@ -286,10 +304,15 @@ void run_accountable_response_tests(TestContext& ctx) {
                       "each scalar-only partial matches its proved full point");
         }
         if (count == 1) {
-            auto alternate_core_digest = coalition_core_digest;
-            alternate_core_digest[0] ^= 1;
+            auto alternate_formation = CoalitionFormation::create(
+                genesis_hash, deployment_id,
+                BitcoinOutpoint{transaction_id, 4}, manifest_digest);
+            expect_ok(ctx, alternate_formation,
+                      "alternate response formation creates");
+            if (!alternate_formation) return;
             auto alternate_roster = purify::accountable::bind_nonce_hosts(
-                *raw_roster, alternate_core_digest, hosts, secp.get());
+                *raw_roster, alternate_formation->id(), hosts,
+                secp.get());
             expect_ok(ctx, alternate_roster,
                       "same key and hosts bind to a second coalition core");
             if (!alternate_roster) return;
@@ -300,7 +323,7 @@ void run_accountable_response_tests(TestContext& ctx) {
                        "cross-core fixture preserves Q and U");
             auto alternate_context = context;
             alternate_context.coalition_core_digest =
-                alternate_core_digest;
+                alternate_formation->id();
             ctx.expect(!purify::accountable::verify_coalition_nonce_set(
                            *alternate_roster, alternate_context, hosts,
                            proofs, secp.get(), &shared_cache),

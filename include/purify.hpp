@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Judica, Inc.
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or https://opensource.org/license/mit/.
+
+/**
+ * @file purify.hpp
+ * @brief Umbrella header that re-exports the public Purify API.
+ */
+
+#pragma once
+
+#include "purify/api.hpp"
+#include "purify/puresign/legacy.hpp"
+#include "purify/puresign/bppp.hpp"
+#include "purify/puresign/accountable.hpp"
+#include "purify/puresign/accountable_roster.hpp"
+#include "purify/puresign/accountable_responses.hpp"
+#include "purify/puresign/recovery_root.hpp"
+#include "purify/puresign/recovery_root_accumulation.hpp"
+#include "purify/puresign/anchor_escrow.hpp"
+#include "purify/puresign/anchor_escrow_accumulation.hpp"
+#include "purify/puresign/construction_receipt.hpp"
+#include "purify/puresign/construction_receipt_accumulation.hpp"
+#include "purify/puresign/construction_receipt_envelope.hpp"
+#include "purify/puresign/construction_parent_verifier.hpp"

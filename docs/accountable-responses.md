@@ -4,7 +4,8 @@ The accountable response API connects the ordered signing roster, exact
 PureSign++ deterministic-nonce proofs, scalar-only responses, and conflict
 extraction. The accepted-response path uses capability types with private
 constructors; a caller cannot promote an arbitrary nonce point or scalar into
-an accepted response.
+an accepted response. The optional recovery-root setup is not required for
+this path.
 
 ## Registered nonce hosts
 
@@ -20,7 +21,10 @@ roster key, list hash, member count, every full 33-byte member key, and every
 
 `bind_nonce_hosts` validates the ordered host bundles, computes this exact
 commitment, and returns `NonceHostBoundSigningRoster`. The capability retains
-the coalition core digest alongside the roster and host commitment.
+the coalition core digest alongside the roster and host commitment. The
+optional recovery-root setup produces the stronger
+`RecoveryBoundSigningRoster`, which is also usable anywhere the base
+nonce-host-bound capability is required.
 
 ## Proof-attested full nonces
 
@@ -79,7 +83,9 @@ values. It requires identical `Q`, `U`, coalition core digest, slot, and exact
 full aggregate nonce, plus distinct bodies and challenges. It performs the
 public extraction equation and verifies the exact point `qG = Q`. Success
 returns an `ExposedCoalitionKey` containing the exact aggregate scalar and its
-registry bindings.
+registry bindings. Deployments that registered a recovery root can validate
+that scalar against the stronger `RecoveryBoundSigningRoster` before
+companion-key or anchor recovery.
 
 The lower-level `reconstruct_nonce` and `recover_same_slot_key` helpers remain
 available for algebraic vectors. They do not create the accepted capability
@@ -90,12 +96,15 @@ types and must not be used as certificate-acceptance shortcuts.
 These APIs establish deterministic-nonce proof acceptance, exact response
 composition, and cryptographic conflict extraction. They do not by themselves
 establish registration authorization, member consent, semantic conflict,
-liability, durable pre-release signing state, transport policy, or a final
-recursive certificate. The secret multiparty signing protocol also remains a
-separate component.
+liability, durable pre-release signing state, or transport policy. The
+optional recovery-root setup prover currently receives the aggregate scalar
+centrally; a distributed setup protocol is a separate requirement for
+deployments that choose the experimental general-escrow path. It is not a
+dependency of accountable response extraction. A final recursive certificate
+and the secret multiparty signing protocol also remain separate components.
 
 The focused tests cover honest singleton and multi-member flows, odd raw nonce
 parity, missing/swapped/reordered proofs and hosts, duplicate hosts, changed
 `Q`/`U`/core/slot, replay across separately bound cores with the same `Q` and
 `U`, opposite full-point parity, scalar-only aggregation, attempted fresh
-nonces by an all-malicious roster, and typed extraction.
+nonces by an all-malicious roster, typed extraction, and recovery-root opening.

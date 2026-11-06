@@ -212,6 +212,28 @@ def scalar_checks():
         scale = pow(prod(folding) % N, -1, N)
         assert b[0] == evaluate([(scale, 0, [t * t % N for t in reversed(folding)])], 7)
 
+        # The coefficient opening uses a tensor vector, not geometric powers.
+        factors = gammas[:h.bit_length() - 1]
+        b = coefficients([(1, 0, factors)], h)
+        tensor_rounds = []
+        while len(b) > 1:
+            half, t = len(b) // 2, 47 + len(tensor_rounds)
+            inverse = pow(t, -1, N)
+            b = [(inverse * u + t * v) % N for u, v in zip(b[:half], b[half:])]
+            tensor_rounds.append(t)
+        expected = prod(pow(t, -1, N) + t * gamma
+                        for t, gamma in zip(tensor_rounds, reversed(factors))) % N
+        assert b[0] == expected
+        # Its folded-H obligation occupies the original H coordinates, even
+        # when h<g. A fresh nonzero chi combines both equations into one claim.
+        folded_h = (pow(prod(tensor_rounds) % N, -1, N), g,
+                    [t * t % N for t in reversed(tensor_rounds)])
+        chi = 53
+        raw_basis = list(range(61, 61 + 2 * g))
+        fused = terms + [(chi * folded_h[0] % N, folded_h[1], folded_h[2])]
+        assert dot(raw_basis, coefficients(fused, 2 * g)) == (
+            dot(raw_basis, actual) + chi * dot(raw_basis, coefficients([folded_h], 2 * g))) % N
+
 
 def prepare_norm(g, c, rho, commitment, proof, generators):
     public = (sb(rho) + size(g) + size(g + len(c))
@@ -241,32 +263,22 @@ def prepare_norm(g, c, rho, commitment, proof, generators):
     return result, norm_terms(g, len(c), rho, gammas, n, ell)
 
 
-def ipa_vector(g, c, domain, commitment, proof, rho=3):
-    generators = generator_stream(2 * g)
-    basis = generators[:]
-    for i, coefficient in enumerate(c):
-        basis[g + i] = add(basis[g + i], mul(coefficient))
-    claim_point, terms = prepare_norm(g, c, rho, commitment, proof, generators)
-    a = coefficients(terms, len(basis))
-    assert msm(basis, a) == claim_point
-    basis_digest = tagged_hash("Purify/BPPP/NormAccumBasisV1",
-                              size(len(domain)) + domain + size(g) + size(len(c))
-                              + b"".join(sb(value) for value in c)
-                              + b"".join(pb(point) for point in basis))
-    encoded = basis_digest + size(1) + pb(claim_point) + size(len(terms))
+def encode_polynomial(terms):
+    encoded = size(len(terms))
     for scale, offset, factors in terms:
         encoded += sb(scale) + size(offset) + size(len(factors)) + b"".join(map(sb, factors))
-    claims_digest = tagged_hash("Purify/BPPP/AccumClaimsV1", encoded)
-    beta = challenge("Purify/BPPP/AccumBatchV1", claims_digest)
-    encoded = claims_digest + sb(beta) + pb(claim_point)
-    x = challenge("Purify/BPPP/AccumEvaluationV1", encoded)
-    y = evaluate(terms, x)
-    encoded += sb(x) + sb(y)
-    opening_seed = tagged_hash("Purify/BPPP/AccumOpeningBaseV1", encoded)
-    opening_base = generator_from_seed(tagged_hash("Purify/BPPP/PublicHashToPointV1", opening_seed))
-    transcript = tagged_hash("Purify/BPPP/AccumOpeningV1", encoded + pb(opening_base))
-    b = [pow(x, i, N) for i in range(len(basis))]
-    running = add(claim_point, mul(y, opening_base))
+    return encoded
+
+
+def opening_context(prefix, encoded):
+    seed = tagged_hash(prefix + "OpeningBaseV1", encoded)
+    point = generator_from_seed(tagged_hash("Purify/BPPP/PublicHashToPointV1", seed))
+    return point, tagged_hash(prefix + "OpeningV1", encoded + pb(point))
+
+
+def run_ipa(basis, a, b, opening_base, transcript):
+    original_b = b[:]
+    running = add(msm(basis, a), mul(dot(a, b), opening_base))
     points = basis[:]
     lefts, rights, ts = [], [], []
     while len(a) > 1:
@@ -286,17 +298,62 @@ def ipa_vector(g, c, domain, commitment, proof, rho=3):
         rights.append(pb(right))
         ts.append(t)
     folded = (pow(prod(ts) % N, -1, N), 0, [t * t % N for t in reversed(ts)])
-    assert b[0] == evaluate([folded], x)
+    assert b[0] == dot(original_b, coefficients([folded], len(basis)))
     assert msm(basis, coefficients([folded], len(basis))) == points[0]
-    # Version-one wire format: interleaved L/R, terminal scalar, folded point.
-    step_bytes = b"\x01" + b"".join(left + right for left, right in zip(lefts, rights))
-    step_bytes += sb(a[0]) + pb(points[0])
+    raw = b"".join(left + right for left, right in zip(lefts, rights)) + sb(a[0]) + pb(points[0])
+    return raw, points[0], folded, a[0]
+
+
+def ipa_vector(g, c, domain, commitment, proof, rho=3):
+    basis = generator_stream(2 * g)
+    residual, norm_polynomial = prepare_norm(g, c, rho, commitment, proof, basis)
+    basis_digest = tagged_hash("Purify/BPPP/NormAccumBasisV2",
+                              size(len(domain)) + domain + size(g) + size(len(c))
+                              + b"".join(pb(point) for point in basis))
+    h_basis = basis[g:g + len(c)]
+    cc = msm(h_basis, c)
+    norm_binding = tagged_hash("Purify/BPPP/NormReduction/StatementV1",
+                              basis_digest + sb(rho) + commitment + b"".join(map(sb, c))
+                              + pb(cc) + size(len(proof)) + proof)
+    weights = [(1, 0, norm_polynomial[1][2])]
+    expanded_weights = coefficients(weights, len(c))
+    z = dot(c, expanded_weights)
+    norm_point = add(residual, mul(-norm_polynomial[1][0] * z))
+    assert norm_point == msm(basis, coefficients(norm_polynomial, 2 * g))
+    encoded = basis_digest + norm_binding + pb(cc) + encode_polynomial(weights) + sb(z)
+    reduction_base, reduction_transcript = opening_context("Purify/BPPP/NormReduction/", encoded)
+    opening, folded_h_point, folded_h, _ = run_ipa(
+        h_basis, c[:], expanded_weights, reduction_base, reduction_transcript)
+    folded_h = (folded_h[0], g, folded_h[2])
+    chi = challenge("Purify/BPPP/NormReduction/FusionV1",
+                    basis_digest + norm_binding + reduction_transcript + sb(z) + opening
+                    + pb(norm_point) + encode_polynomial(norm_polynomial) + pb(folded_h_point)
+                    + encode_polynomial([folded_h]))
+    claim_point = add(norm_point, mul(chi, folded_h_point))
+    terms = norm_polynomial + [(chi * folded_h[0] % N, g, folded_h[2])]
+    assert claim_point == msm(basis, coefficients(terms, 2 * g))
+
+    # One public step then accumulates the coupled norm/coefficient obligation.
+    claims_digest = tagged_hash("Purify/BPPP/AccumClaimsV1",
+                                basis_digest + size(1) + pb(claim_point) + encode_polynomial(terms))
+    beta = challenge("Purify/BPPP/AccumBatchV1", claims_digest)
+    encoded = claims_digest + sb(beta) + pb(claim_point)
+    x = challenge("Purify/BPPP/AccumEvaluationV1", encoded)
+    y = evaluate(terms, x)
+    encoded += sb(x) + sb(y)
+    opening_base, transcript = opening_context("Purify/BPPP/Accum", encoded)
+    step, folded_point, _, terminal = run_ipa(
+        basis, coefficients(terms, 2 * g), [pow(x, i, N) for i in range(2 * g)],
+        opening_base, transcript)
     return {
         "basis_digest": basis_digest.hex(), "claim_point": pb(claim_point).hex(),
+        "coefficient_commitment": pb(cc).hex(), "coefficient_evaluation": sb(z).hex(),
+        "reduction_opening_base": pb(reduction_base).hex(), "fusion_challenge": sb(chi).hex(),
+        "reduction_sha256": hashlib.sha256(b"\x01" + sb(z) + opening).hexdigest(),
         "beta": sb(beta).hex(), "x": sb(x).hex(), "y": sb(y).hex(),
         "opening_base": pb(opening_base).hex(),
-        "terminal_scalar": sb(a[0]).hex(), "folded_generator": pb(points[0]).hex(),
-        "step_sha256": hashlib.sha256(step_bytes).hexdigest(),
+        "terminal_scalar": sb(terminal).hex(), "folded_generator": pb(folded_point).hex(),
+        "step_sha256": hashlib.sha256(b"\x01" + step).hexdigest(),
     }
 
 
@@ -317,11 +374,12 @@ def vectors():
     result = ipa_vector(4, [20, 21], b"honest-test", commitment, proof)
     # These independently reproduced values also bind the fixture to the native
     # generator stream, transcript serialization and actual IPA point folds.
-    assert result["basis_digest"] == "f1063d8f343ffc9ff8b39722d5d575298468b947049062a791548cd1e4422502"
-    assert result["claim_point"] == "03a2e9b0d2f70839be9e427036160c45f18531b8111e5ee1a994a8d3d4af95d4df"
-    assert result["terminal_scalar"] == "a1584786c72756ac7e1f91a2cf5997c99a778aa93ff82d1ecedfaa71b38586b0"
-    assert result["folded_generator"] == "027804f7f8a1cdd10b0c1537f3162532b430f3fdbf66212fb22db2c1315ed4656d"
-    assert result["step_sha256"] == "662b6b3d9dd73e60a8ab438e184c83844db9a1b7affecb20128f57b33f75add5"
+    assert result["basis_digest"] == "4047eedb842ea65b60ce2a08b26117a40a684a431a6040dfabe5b271d65e919f"
+    assert result["claim_point"] == "03b10b0c0632a2dc3977de9d8e2e12bc8a09a058ab0fa9c17908e39429d9ec8b0a"
+    assert result["terminal_scalar"] == "79ab8d3019859228855d32bac455af58230434fcffe71a06cb52e6dfd837c7ee"
+    assert result["folded_generator"] == "0219933c1b1737b5017e255560cc4652ed0e84b2eeb350f6313b94d8b766285b5d"
+    assert result["reduction_sha256"] == "430ba5e3a0183d278ad3cb5251d081f70b27586db3e407a899b59660c8d59d87"
+    assert result["step_sha256"] == "b3a14ad17548fed019e02a5d90063be232826750d1f5987a72b22013585f7b1b"
     return result
 
 

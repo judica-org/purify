@@ -27,42 +27,50 @@ void PURIFY_UINT_FN(set_u64)(uint64_t out[PURIFY_UINT_WORDS], uint64_t value) {
 
 void PURIFY_UINT_FN(from_bytes_be)(uint64_t out[PURIFY_UINT_WORDS], const unsigned char* data, size_t size) {
     size_t i;
+    assert(size <= PURIFY_UINT_WORDS * sizeof(uint64_t));
     PURIFY_UINT_FN(set_zero)(out);
     for (i = 0; i < size; ++i) {
-        int ok = PURIFY_UINT_FN(try_mul_small)(out, 256);
-        ok = ok && PURIFY_UINT_FN(try_add_small)(out, data[i]);
-        assert(ok != 0);
+        (void)PURIFY_UINT_FN(try_mul_small)(out, 256);
+        (void)PURIFY_UINT_FN(try_add_small)(out, data[i]);
     }
 }
 
 int PURIFY_UINT_FN(is_zero)(const uint64_t value[PURIFY_UINT_WORDS]) {
+    uint64_t combined = 0;
     size_t i;
     for (i = 0; i < PURIFY_UINT_WORDS; ++i) {
-        if (value[i] != 0) {
-            return 0;
-        }
+        combined |= value[i];
     }
-    return 1;
+    return combined == 0;
 }
 
 int PURIFY_UINT_FN(compare)(const uint64_t lhs[PURIFY_UINT_WORDS], const uint64_t rhs[PURIFY_UINT_WORDS]) {
+    uint64_t less = 0;
+    uint64_t greater = 0;
     size_t i;
     for (i = PURIFY_UINT_WORDS; i != 0; --i) {
         size_t idx = i - 1u;
-        if (lhs[idx] < rhs[idx]) {
-            return -1;
-        }
-        if (lhs[idx] > rhs[idx]) {
-            return 1;
-        }
+        uint64_t undecided = (less | greater) ^ 1u;
+        less |= undecided & (uint64_t)(lhs[idx] < rhs[idx]);
+        greater |= undecided & (uint64_t)(lhs[idx] > rhs[idx]);
     }
-    return 0;
+    return (int)greater - (int)less;
+}
+
+void PURIFY_UINT_FN(conditional_assign)(uint64_t value[PURIFY_UINT_WORDS],
+                                        const uint64_t other[PURIFY_UINT_WORDS], int flag) {
+    volatile uint64_t selected = (uint64_t)(flag != 0);
+    const uint64_t mask = (uint64_t)0 - selected;
+    size_t i;
+    for (i = 0; i < PURIFY_UINT_WORDS; ++i) {
+        value[i] ^= mask & (value[i] ^ other[i]);
+    }
 }
 
 int PURIFY_UINT_FN(try_add_small)(uint64_t value[PURIFY_UINT_WORDS], uint32_t addend) {
     uint64_t carry = addend;
     size_t i;
-    for (i = 0; i < PURIFY_UINT_WORDS && carry != 0; ++i) {
+    for (i = 0; i < PURIFY_UINT_WORDS; ++i) {
         uint64_t sum = value[i] + carry;
         carry = sum < value[i] ? 1u : 0u;
         value[i] = sum;

@@ -453,6 +453,13 @@ static void test_uint_core(void) {
            "purify_u256_compare orders distinct values");
     expect(purify_u256_compare(other256, other256) == 0,
            "purify_u256_compare reports equality");
+    memcpy(tmp256, value256, sizeof(tmp256));
+    purify_u256_conditional_assign(tmp256, other256, 0);
+    expect(u256_eq(tmp256, value256),
+           "purify_u256_conditional_assign keeps the destination");
+    purify_u256_conditional_assign(tmp256, other256, 1);
+    expect(u256_eq(tmp256, other256),
+           "purify_u256_conditional_assign selects the source");
     purify_u256_set_zero(value256);
     value256[0] = UINT64_MAX;
     expect(purify_u256_try_add_small(value256, 1u) != 0 &&
@@ -536,6 +543,13 @@ static void test_uint_core(void) {
     purify_u320_set_u64(tmp320, 1u);
     expect(purify_u320_compare(value320, tmp320) > 0,
            "purify_u320_compare orders distinct values");
+    memcpy(other320, value320, sizeof(other320));
+    purify_u320_conditional_assign(other320, tmp320, 0);
+    expect(u320_eq(other320, value320),
+           "purify_u320_conditional_assign keeps the destination");
+    purify_u320_conditional_assign(other320, tmp320, 1);
+    expect(u320_eq(other320, tmp320),
+           "purify_u320_conditional_assign selects the source");
     purify_u320_set_zero(value320);
     value320[0] = UINT64_MAX;
     expect(purify_u320_try_add_small(value320, 1u) != 0 &&
@@ -624,6 +638,13 @@ static void test_uint_core(void) {
            "purify_u512_from_bytes_be round-trips through purify_u512_to_bytes_be");
     expect(purify_u512_compare(value512, other512) < 0,
            "purify_u512_compare orders distinct values");
+    memcpy(tmp512, value512, sizeof(tmp512));
+    purify_u512_conditional_assign(tmp512, other512, 0);
+    expect(u512_eq(tmp512, value512),
+           "purify_u512_conditional_assign keeps the destination");
+    purify_u512_conditional_assign(tmp512, other512, 1);
+    expect(u512_eq(tmp512, other512),
+           "purify_u512_conditional_assign selects the source");
     purify_u512_set_zero(value512);
     value512[0] = UINT64_MAX;
     expect(purify_u512_try_add_small(value512, 1u) != 0 &&
@@ -1021,10 +1042,16 @@ static void test_public_c_api(void) {
 
     expect(purify_derive_public_key(NULL, first.secret_key) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_public_key rejects a null output pointer");
+    memset(derived_public_key, 0xa5, sizeof(derived_public_key));
     expect(purify_derive_public_key(derived_public_key, NULL) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_public_key rejects a null secret pointer");
+    expect(all_zero(derived_public_key, sizeof(derived_public_key)),
+           "purify_derive_public_key clears output after a null secret");
+    memset(derived_public_key, 0xa5, sizeof(derived_public_key));
     expect(purify_derive_public_key(derived_public_key, invalid_secret) == PURIFY_ERROR_RANGE_VIOLATION,
            "purify_derive_public_key rejects out-of-range packed secrets");
+    expect(all_zero(derived_public_key, sizeof(derived_public_key)),
+           "purify_derive_public_key clears output after an invalid secret");
     expect(purify_derive_public_key(derived_public_key, first.secret_key) == PURIFY_ERROR_OK,
            "purify_derive_public_key succeeds");
     expect(memcmp(derived_public_key, first.public_key, sizeof(derived_public_key)) == 0,
@@ -1040,10 +1067,21 @@ static void test_public_c_api(void) {
 
     expect(purify_derive_bip340_key(NULL, first.secret_key, context) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_bip340_key rejects a null output pointer");
+    memset(&bip340, 0xa5, sizeof(bip340));
     expect(purify_derive_bip340_key(&bip340, NULL, context) == PURIFY_ERROR_MISSING_VALUE,
            "purify_derive_bip340_key rejects a null secret pointer");
+    expect(all_zero((const unsigned char*)&bip340, sizeof(bip340)),
+           "purify_derive_bip340_key clears output after a null secret");
+    memset(&bip340, 0xa5, sizeof(bip340));
     expect(purify_derive_bip340_key(&bip340, invalid_secret, context) == PURIFY_ERROR_RANGE_VIOLATION,
            "purify_derive_bip340_key rejects out-of-range packed secrets");
+    expect(all_zero((const unsigned char*)&bip340, sizeof(bip340)),
+           "purify_derive_bip340_key clears output after an invalid secret");
+    memset(&bip340, 0xa5, sizeof(bip340));
+    expect(purify_derive_bip340_key(&bip340, first.secret_key, NULL) == PURIFY_ERROR_MISSING_VALUE,
+           "purify_derive_bip340_key rejects a null secp context");
+    expect(all_zero((const unsigned char*)&bip340, sizeof(bip340)),
+           "purify_derive_bip340_key clears output after a null context");
     expect(purify_derive_bip340_key(&bip340, first.secret_key, context) == PURIFY_ERROR_OK,
            "purify_derive_bip340_key succeeds");
     expect(!all_zero(bip340.secret_key, sizeof(bip340.secret_key)),
@@ -1071,12 +1109,21 @@ static void test_public_c_api(void) {
 
     expect(purify_eval(NULL, first.secret_key, message, sizeof(message) - 1u) == PURIFY_ERROR_MISSING_VALUE,
            "purify_eval rejects a null output pointer");
+    memset(eval_a, 0xa5, sizeof(eval_a));
     expect(purify_eval(eval_a, NULL, message, sizeof(message) - 1u) == PURIFY_ERROR_MISSING_VALUE,
            "purify_eval rejects a null secret pointer");
+    expect(all_zero(eval_a, sizeof(eval_a)),
+           "purify_eval clears output after a null secret");
+    memset(eval_a, 0xa5, sizeof(eval_a));
     expect(purify_eval(eval_a, first.secret_key, NULL, 1u) == PURIFY_ERROR_MISSING_VALUE,
            "purify_eval rejects a null non-empty message pointer");
+    expect(all_zero(eval_a, sizeof(eval_a)),
+           "purify_eval clears output after a null message");
+    memset(eval_a, 0xa5, sizeof(eval_a));
     expect(purify_eval(eval_a, invalid_secret, message, sizeof(message) - 1u) == PURIFY_ERROR_RANGE_VIOLATION,
            "purify_eval rejects out-of-range packed secrets");
+    expect(all_zero(eval_a, sizeof(eval_a)),
+           "purify_eval clears output after an invalid secret");
     expect(purify_eval(eval_a, first.secret_key, message, sizeof(message) - 1u) == PURIFY_ERROR_OK,
            "purify_eval succeeds");
     expect(purify_eval(eval_b, first.secret_key, message, sizeof(message) - 1u) == PURIFY_ERROR_OK,
@@ -1517,9 +1564,13 @@ static void test_curve_core(void) {
     purify_u256_set_zero(z1);
     expect(purify_curve_mul_secret_affine(&secret_affine, &curve1, &generator1, z1) == 0,
            "purify_curve_mul_secret_affine rejects the point at infinity result for scalar zero");
+    expect(all_zero((const unsigned char*)&secret_affine, sizeof(secret_affine)),
+           "purify_curve_mul_secret_affine clears output after scalar rejection");
     purify_u256_set_u64(z1, 1u);
     expect(purify_curve_mul_secret_affine(&secret_affine, &curve1, &infinity, z1) == 0,
            "purify_curve_mul_secret_affine rejects an infinity input point");
+    expect(all_zero((const unsigned char*)&secret_affine, sizeof(secret_affine)),
+           "purify_curve_mul_secret_affine clears output after point rejection");
 
     purify_curve_affine(&affine1, &curve1, &generator1);
     purify_curve_add_mixed(&sum, &curve1, &generator1, &affine1);

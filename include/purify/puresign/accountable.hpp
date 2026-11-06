@@ -19,14 +19,16 @@ namespace purify::accountable {
 /**
  * @brief Public context shared by conflicting statements in one slashable slot.
  *
- * The caller authenticates the key and ordered Purify host/roster commitment
- * against its registry. The signing key is the even-Y x-only representation.
- * The slot is a canonical, nonempty application encoding and must outlive uses
- * of this view. Proof artifacts and local session identifiers are excluded.
+ * The caller authenticates the key, ordered Purify host/roster commitment, and
+ * immutable coalition core digest against its registry. The signing key is the
+ * even-Y x-only representation. The slot is a canonical, nonempty application
+ * encoding and must outlive uses of this view. Proof artifacts and local
+ * session identifiers are excluded.
  */
 struct ConflictContext {
     std::array<unsigned char, 32> signing_key{};
     std::array<unsigned char, 32> host_commitment{};
+    std::array<unsigned char, 32> coalition_core_digest{};
     std::span<const unsigned char> slot;
 };
 
@@ -47,14 +49,15 @@ private:
 /**
  * @brief Derive the candidate deterministic Purify input from the registered slot.
  *
- * This input binds the signing key, host/roster commitment, and slot. It contains
- * neither the decision body nor a nonce, proof, batch, or signing-attempt ID.
+ * This input binds the signing key, host/roster commitment, immutable coalition
+ * core, and slot. It contains neither the decision body nor a nonce, proof,
+ * batch, or signing-attempt ID.
  */
 [[nodiscard]] Result<std::array<unsigned char, 32>> nonce_evaluation_input(
     const ConflictContext& context, purify_secp_context* secp_context);
 
 /**
- * @brief Compute the versioned Q/U/T/body challenge, without a nonce point.
+ * @brief Compute the versioned Q/U/core/T/body challenge, without a nonce point.
  *
  * The SHA-256 digest is reduced modulo the secp256k1 group order. A zero result
  * rejects this statement; callers must not retry by changing its slot.
@@ -77,7 +80,7 @@ private:
 /**
  * @brief Recover the exact signing scalar exposed by two same-slot responses.
  *
- * Both responses are interpreted under the one supplied Q/U/T context. Rejects
+ * Both responses are interpreted under one supplied Q/U/core/T context. Rejects
  * equal challenges, a recovered scalar whose full public point differs from
  * the even-Y signing key, and a common nonce at infinity. The result is derived
  * entirely from public input, so it is returned as ordinary scalar bytes.

@@ -6,6 +6,14 @@
 
 #include "purify/bppp.hpp"
 
+namespace purify::accountable {
+class ConstructionReceiptAccumulator;
+}
+
+namespace purify::bppp::candidate {
+class PreparedCircuitZkNormArgV4;
+}
+
 namespace purify::bppp::accumulation {
 
 using Digest = std::array<unsigned char, 32>;
@@ -19,32 +27,129 @@ struct PolynomialTerm {
 
 /**
  * A deterministic, transparent norm basis with an exact semantic domain and
- * c-vector. Different c-vectors require different accumulation buckets.
+ * fixed dimensions. Canonical c-vectors are authenticated separately per norm.
  */
 class Basis {
 public:
     static Result<Basis> create(std::size_t n_vec_len,
-                                std::span<const ScalarBytes> c_vec,
+                                std::size_t l_vec_len,
                                 std::string_view semantic_domain,
                                 purify_secp_context* context);
 
     [[nodiscard]] std::size_t n_vec_len() const { return n_vec_len_; }
+    [[nodiscard]] std::size_t l_vec_len() const { return l_vec_len_; }
     [[nodiscard]] std::size_t dimension() const { return points_.size(); }
     [[nodiscard]] const Digest& digest() const { return digest_; }
-    [[nodiscard]] const std::vector<ScalarBytes>& c_vec() const { return c_vec_; }
     [[nodiscard]] const std::vector<PointBytes>& norm_generators() const { return norm_generators_; }
     [[nodiscard]] const std::vector<PointBytes>& points() const { return points_; }
 
 private:
     Basis() = default;
     std::size_t n_vec_len_ = 0;
-    std::vector<ScalarBytes> c_vec_;
+    std::size_t l_vec_len_ = 0;
     std::vector<PointBytes> norm_generators_;
     std::vector<PointBytes> points_;
     Digest digest_{};
 };
 
 struct StepProof;
+struct NormReductionProof;
+struct AlgebraicStepProof;
+struct AlgebraicNormReductionProof;
+class AlgebraicPreparedNorm;
+
+/**
+ * Parsed public norm data, including the coefficient commitment computed from
+ * its exact canonical c-vector. This object is not an accepted proof or an
+ * accumulator claim. Its private constructor prevents substituting a claimed
+ * coefficient commitment without authenticating it from c.
+ */
+class PreparedNorm {
+public:
+    [[nodiscard]] const Digest& basis_digest() const { return basis_digest_; }
+    [[nodiscard]] const Digest& transcript_digest() const { return transcript_digest_; }
+    [[nodiscard]] const std::vector<ScalarBytes>& c_vec() const { return c_vec_; }
+    [[nodiscard]] const PointBytes& coefficient_commitment() const { return coefficient_commitment_; }
+    [[nodiscard]] const PointBytes& residual() const { return residual_; }
+    [[nodiscard]] const std::array<PolynomialTerm, 2>& polynomial() const { return polynomial_; }
+
+private:
+    PreparedNorm(Digest basis_digest, Digest transcript_digest, std::vector<ScalarBytes> c_vec,
+                 PointBytes coefficient_commitment, PointBytes residual,
+                 std::array<PolynomialTerm, 2> polynomial)
+        : basis_digest_(basis_digest), transcript_digest_(transcript_digest), c_vec_(std::move(c_vec)),
+          coefficient_commitment_(coefficient_commitment), residual_(residual),
+          polynomial_(std::move(polynomial)) {}
+
+    Digest basis_digest_{};
+    Digest transcript_digest_{};
+    std::vector<ScalarBytes> c_vec_;
+    PointBytes coefficient_commitment_{};
+    PointBytes residual_{};
+    std::array<PolynomialTerm, 2> polynomial_;
+
+    friend Result<PreparedNorm> prepare_norm(const Basis&, const NormArgProof&, purify_secp_context*);
+    friend Result<PreparedNorm>
+    prepare_experimental_circuit_zk_norm_arg(
+        const Basis&, const NativeBulletproofCircuit&,
+        const ExperimentalCircuitZkNormArgProof&, purify_secp_context*,
+        std::span<const unsigned char>, ExperimentalCircuitBackend*);
+    friend Result<PreparedNorm>
+    prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+        const Basis&, const NativeBulletproofCircuit&,
+        const ExperimentalCircuitZkNormArgProof&,
+        std::span<const PointBytes>, purify_secp_context*,
+        std::span<const unsigned char>, ExperimentalCircuitBackend*);
+};
+
+/**
+ * A V4 pending norm obligation bridged to a caller-selected accumulation
+ * basis. Construction authenticates the exact raw points, not the basis's
+ * application semantic domain. The algebraic reduction must still verify,
+ * and its returned pending claim must pass decide().
+ */
+class AlgebraicPreparedNorm {
+public:
+    [[nodiscard]] const Digest& basis_digest() const {
+        return basis_digest_;
+    }
+    [[nodiscard]] const FieldElement& prepared_binding() const {
+        return prepared_binding_;
+    }
+    [[nodiscard]] const std::vector<ScalarBytes>& c_vec() const {
+        return c_vec_;
+    }
+    [[nodiscard]] const PointBytes& coefficient_commitment() const {
+        return coefficient_commitment_;
+    }
+    [[nodiscard]] const PointBytes& residual() const { return residual_; }
+    [[nodiscard]] const std::array<PolynomialTerm, 2>& polynomial() const {
+        return polynomial_;
+    }
+
+private:
+    AlgebraicPreparedNorm(
+        Digest basis_digest, FieldElement prepared_binding,
+        std::vector<ScalarBytes> c_vec,
+        PointBytes coefficient_commitment, PointBytes residual,
+        std::array<PolynomialTerm, 2> polynomial)
+        : basis_digest_(basis_digest),
+          prepared_binding_(prepared_binding), c_vec_(std::move(c_vec)),
+          coefficient_commitment_(coefficient_commitment),
+          residual_(residual), polynomial_(std::move(polynomial)) {}
+
+    Digest basis_digest_{};
+    FieldElement prepared_binding_;
+    std::vector<ScalarBytes> c_vec_;
+    PointBytes coefficient_commitment_{};
+    PointBytes residual_{};
+    std::array<PolynomialTerm, 2> polynomial_;
+
+    friend Result<AlgebraicPreparedNorm>
+    prepare_v4_circuit_norm_for_algebraic_reduction(
+        const Basis&, candidate::PreparedCircuitZkNormArgV4,
+        purify_secp_context*);
+};
 
 /**
  * An UNVERIFIED obligation point = MSM(basis, polynomial coefficients).
@@ -66,9 +171,20 @@ private:
     PointBytes point_{};
     std::vector<PolynomialTerm> polynomial_;
 
-    friend Result<PendingClaim> prepare_norm(const Basis&, const NormArgProof&, purify_secp_context*);
+    friend Result<PendingClaim> verify_norm_reduction(const Basis&, const PreparedNorm&,
+                                                     const NormReductionProof&, purify_secp_context*);
     friend Result<PendingClaim> verify_step(const Basis&, std::span<const PendingClaim>,
                                            const StepProof&, purify_secp_context*);
+    friend Result<PendingClaim> verify_algebraic_norm_reduction(
+        const Basis&, const AlgebraicPreparedNorm&,
+        const AlgebraicNormReductionProof&, purify_secp_context*);
+    friend Result<PendingClaim> verify_algebraic_step(
+        const Basis&, std::span<const PendingClaim>,
+        const AlgebraicStepProof&, purify_secp_context*);
+    friend Result<PendingClaim> parse_root_claim(
+        const Basis&, std::span<const unsigned char>,
+        purify_secp_context*);
+    friend class purify::accountable::ConstructionReceiptAccumulator;
 };
 
 /** Public one-vector IPA transcript; all-zero33 encodes the point at infinity. */
@@ -77,6 +193,30 @@ struct StepProof {
     std::vector<PointBytes> right;
     ScalarBytes terminal_scalar{};
     PointBytes folded_generator{};
+};
+
+/**
+ * Public opening of <c, tensor(norm challenges)> on the h-dimensional H basis.
+ * The IPA uses a separate statement domain from an accumulation step. A short
+ * verification always fuses both remaining equations into one pending claim.
+ */
+struct NormReductionProof {
+    ScalarBytes coefficient_evaluation{};
+    StepProof coefficient_opening;
+};
+
+/** Typed-SHA-256 IPA proof. It is not interchangeable with StepProof. */
+struct AlgebraicStepProof {
+    std::vector<PointBytes> left;
+    std::vector<PointBytes> right;
+    ScalarBytes terminal_scalar{};
+    PointBytes folded_generator{};
+};
+
+/** Typed-SHA-256 coefficient reduction. */
+struct AlgebraicNormReductionProof {
+    ScalarBytes coefficient_evaluation{};
+    AlgebraicStepProof coefficient_opening;
 };
 
 /**
@@ -89,9 +229,96 @@ Result<Bytes> serialize_step(const Basis& basis, const StepProof& proof,
 Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> encoded,
                              purify_secp_context* context);
 
-/** Checks the standalone norm encodings/transcript, leaving its fixed-basis MSM pending. */
-Result<PendingClaim> prepare_norm(const Basis& basis, const NormArgProof& proof,
+/**
+ * Canonical version-2 encoding for the typed SHA-256 accumulation suite.
+ * Version-1 bytes are rejected rather than interpreted under this transcript.
+ */
+Result<Bytes> serialize_algebraic_step(
+    const Basis& basis, const AlgebraicStepProof& proof,
+    purify_secp_context* context);
+Result<AlgebraicStepProof> parse_algebraic_step(
+    const Basis& basis, std::span<const unsigned char> encoded,
+    purify_secp_context* context);
+
+/**
+ * Canonical unframed final-claim encoding:
+ * point33 || scale32 || factors[log2(basis.dimension())]32.
+ *
+ * The sole polynomial term has implicit offset zero. Only a one-term claim
+ * returned by verify_step has this shape. Parsing validates syntax and binds
+ * the supplied basis digest; it never authenticates omitted transitions or
+ * accepts the claim. The caller must verify the parent and call decide().
+ */
+Result<Bytes> serialize_root_claim(const Basis& basis,
+                                   const PendingClaim& claim,
+                                   purify_secp_context* context);
+Result<PendingClaim> parse_root_claim(
+    const Basis& basis, std::span<const unsigned char> encoded,
+    purify_secp_context* context);
+
+/** Parses the norm transcript and computes C_c from its exact required public coefficients. */
+Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,
                                   purify_secp_context* context);
+
+/**
+ * Reconstructs a fixed-output V3 circuit proof and prepares its inner norm
+ * obligation on the stable raw circuit basis. Generic proofs require the
+ * public-output DLog fields to be zero.
+ */
+Result<PreparedNorm> prepare_experimental_circuit_zk_norm_arg(
+    const Basis& basis, const NativeBulletproofCircuit& circuit,
+    const ExperimentalCircuitZkNormArgProof& proof,
+    purify_secp_context* context,
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitBackend* cache = nullptr);
+
+/**
+ * Reconstructs a V3 circuit proof and prepares its inner norm obligation on
+ * the stable raw circuit basis. The batched public-output DLog proof is
+ * checked and the outer transcript is replayed before a pending obligation is
+ * returned.
+ */
+Result<PreparedNorm>
+prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+    const Basis& basis, const NativeBulletproofCircuit& circuit,
+    const ExperimentalCircuitZkNormArgProof& proof,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context* context,
+    std::span<const unsigned char> statement_binding = {},
+    ExperimentalCircuitBackend* cache = nullptr);
+
+/** Constructs the tensor opening using only the prepared public c-vector and transcript. */
+Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const PreparedNorm& norm,
+                                               purify_secp_context* context);
+
+/** Returns one pending claim containing BOTH the norm and coefficient-opening obligations. */
+Result<PendingClaim> verify_norm_reduction(const Basis& basis, const PreparedNorm& norm,
+                                          const NormReductionProof& proof, purify_secp_context* context);
+
+/** Version 1: version byte, evaluation scalar, h-dimensional IPA transcript without another version. */
+Result<Bytes> serialize_norm_reduction(const Basis& basis, const NormReductionProof& proof,
+                                       purify_secp_context* context);
+Result<NormReductionProof> parse_norm_reduction(const Basis& basis, std::span<const unsigned char> encoded,
+                                               purify_secp_context* context);
+
+/** Version-2 typed-SHA-256 coefficient-reduction encoding. */
+Result<Bytes> serialize_algebraic_norm_reduction(
+    const Basis& basis, const AlgebraicNormReductionProof& proof,
+    purify_secp_context* context);
+Result<AlgebraicNormReductionProof> parse_algebraic_norm_reduction(
+    const Basis& basis, std::span<const unsigned char> encoded,
+    purify_secp_context* context);
+
+/** Constructs the version-2 reduction from public prepared norm data. */
+Result<AlgebraicNormReductionProof> prove_algebraic_norm_reduction(
+    const Basis& basis, const AlgebraicPreparedNorm& norm,
+    purify_secp_context* context);
+
+/** Checks the version-2 reduction and returns both pending obligations. */
+Result<PendingClaim> verify_algebraic_norm_reduction(
+    const Basis& basis, const AlgebraicPreparedNorm& norm,
+    const AlgebraicNormReductionProof& proof,
+    purify_secp_context* context);
 
 /** Proves a step using only public claims and deterministic public basis points. */
 Result<StepProof> prove_step(const Basis& basis, std::span<const PendingClaim> claims,
@@ -100,6 +327,16 @@ Result<StepProof> prove_step(const Basis& basis, std::span<const PendingClaim> c
 /** Checks the short step equation; success returns a NEW UNVERIFIED obligation. */
 Result<PendingClaim> verify_step(const Basis& basis, std::span<const PendingClaim> claims,
                                  const StepProof& proof, purify_secp_context* context);
+
+/** Proves a step with the version-2 typed SHA-256 transcript. */
+Result<AlgebraicStepProof> prove_algebraic_step(
+    const Basis& basis, std::span<const PendingClaim> claims,
+    purify_secp_context* context);
+
+/** Checks the version-2 short equation and returns a pending obligation. */
+Result<PendingClaim> verify_algebraic_step(
+    const Basis& basis, std::span<const PendingClaim> claims,
+    const AlgebraicStepProof& proof, purify_secp_context* context);
 
 /** Final required linear-size MSM. Only success here discharges the supplied obligation. */
 Status decide(const Basis& basis, const PendingClaim& claim, purify_secp_context* context);

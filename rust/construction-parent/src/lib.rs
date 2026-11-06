@@ -8,6 +8,23 @@ use ff::PrimeField;
 use nova_snark::{provider::Secq256k1Sha256Engine, traits::Engine};
 use thiserror::Error;
 
+#[cfg(test)]
+mod candidate;
+#[cfg(test)]
+mod circuit_norm;
+#[cfg(test)]
+mod circuit_transcript;
+mod construction_manifest;
+mod construction_parent_input;
+mod construction_profile;
+#[cfg(test)]
+mod construction_recurrence;
+#[cfg(test)]
+mod opening_generators;
+mod secp_constants;
+mod secp_native;
+mod sha256_transcript;
+
 pub(crate) type Scalar = <Secq256k1Sha256Engine as Engine>::Scalar;
 
 pub(crate) fn scalar_from_canonical(bytes: &[u8; 32]) -> Option<Scalar> {

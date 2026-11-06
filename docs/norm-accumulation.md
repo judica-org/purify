@@ -8,17 +8,20 @@ that equation. The helper never receives the original norm witnesses.
 
 This native helper is an accumulation component, not a compressed construction
 receipt. Native callers using it alone still replay the child partial verifiers
-and every accumulation transition. A constrained construction parent must
-authenticate those computations before their transcripts can be discarded;
-its acceptance path must still complete the final native decision.
+and every accumulation transition. The selected construction-parent recurrence
+authenticates those computations recursively so their transcripts can be
+discarded after receipt construction. A separate purpose-specific acceptance
+boundary must still complete the final native decision.
 
-V4 is the selected circuit-leaf path. Its native producer, preparer, verifier,
-and `prepare_v4_circuit_norm_for_algebraic_reduction` adapter are implemented.
-The adapter converts an outer-authenticated V4 leaf into the same algebraic
+V4 is the selected circuit-leaf path. Its native producer,
+preparer, verifier, and constrained relation are implemented. The
+internal `prepare_v4_circuit_norm_for_algebraic_reduction` adapter
+converts an outer-authenticated V4 leaf into the same algebraic
 accumulation language. The result remains pending until coefficient reduction,
 every accumulation transition, and `decide` succeed. This native adapter alone
-does not turn an accumulation root into a recursive construction receipt; a
-future constrained parent must provide that separate authentication.
+does not turn an accumulation root into a recursive construction receipt; the
+selected Nova parent supplies recursive authentication, and the subsequent
+native decision supplies acceptance.
 
 ## Exact grouping rule
 
@@ -171,10 +174,10 @@ composition still requires the stated random-oracle assumptions and review.
 
 Coefficient preparation costs a native linear-size MSM per child. The public
 opening prover also does linear generator work. The opening's short equation
-uses logarithmically many proof points. A construction-parent recurrence must
-authenticate the derivation of `c` and `Cc`, including their dependence on
-child messages. This native API alone has not compressed or eliminated that
-requirement.
+uses logarithmically many proof points. The selected construction-parent
+recurrence authenticates the derivation of `c` and `Cc`, including their
+dependence on child messages. This native API alone has not compressed or
+eliminated that requirement.
 
 The raw-basis digest uses `Purify/BPPP/NormAccumBasisV2`, binding the framed
 semantic domain, `g,h` and all `2g` canonical points. The prepared statement
@@ -345,10 +348,13 @@ must still call `decide` for the mandatory final basis MSM.
 
 These openings are additional public transition data. Native verification
 retains them alongside the original child proofs; a final 1,122-byte step
-does not replace that history. A recursive parent may authenticate the history
-as a witness, but its public acceptance path must still complete the final
-native decision. Neither this helper nor recursive verification alone
-establishes acceptance.
+does not replace that history. The selected recurrence implements recursive
+authentication so this history can become a parent witness. The qualified
+two-anchor Nova lifecycle compresses that witness history. The qualified
+nondeciding proof authenticates a different pending root and demonstrates why
+the purpose-specific C++ acceptance layer completes the native decision.
+Neither the native helper nor recursive verification alone establishes
+acceptance.
 
 ## Historical generic varying-coefficient measurements
 
@@ -453,17 +459,18 @@ canonical reduction SHA256 is
 the final step SHA256 is
 `b3a14ad17548fed019e02a5d90063be232826750d1f5987a72b22013585f7b1b`.
 
-The native V4 adapter, coefficient reduction, and accumulation transitions are
-implemented and independently exercised. A construction parent must still
-constrain those exact operations, bind the purpose-owned semantic digest and
-registry coverage, and expose a verifier that always performs the final native
-decision. Until then, this machinery is a component of receipt construction,
-not receipt acceptance.
-
-Further work includes independent review of the V4 leaf and composition
-arguments, distributed custody and share-preserving child proving, the
-correlated-key confidentiality argument, and qualification at 100 to 1,000
-anchors.
+The selected parent authenticates the purpose-owned semantic digest and
+frontend constants, constrains V4 preparation, reduction, and every ordered
+accumulation transition, and binds exact registry coverage. The two-anchor
+recursive lifecycle and frozen external verifier identity are qualified. The
+backend ABI remains private, and the public C++ recursive-plus-native
+acceptance path is qualified by accepted and nondeciding proof vectors.
+Remaining work is specific: independently review the V4 leaf and composition
+arguments; implement distributed custody and share-preserving child proving;
+resolve the correlated-key confidentiality argument; qualify operation at 100
+to 1,000 anchors; and reduce or operationalize the roughly 662 MiB compressed,
+2.99 GiB decoded verifier. The native V4 adapter remains a component of that
+path, not receipt acceptance by itself.
 
 The construction-specific V3 adapter previously demonstrated setup-proof
 preparation and safe zero-extension into the anchor basis. That

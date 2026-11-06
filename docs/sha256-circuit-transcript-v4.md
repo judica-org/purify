@@ -1,10 +1,11 @@
 # SHA-256 circuit transcript V4
 
-Status: candidate native proof generation, preparation, and verification are
-implemented. The recursive parent must supply the matching constrained leaf
-described below. This suite does not accept a construction receipt by itself.
-The constrained leaf's reduced norm equation remains a pending fixed-basis
-obligation until the accumulator's final decision.
+Status: native proof production, preparation, and verification are implemented.
+The matching constrained leaf is implemented as qualification-only source for
+the frozen recursive verifier. The production Rust archive contains only that
+verifier. This suite does not accept a construction receipt by itself: the
+leaf's reduced norm equation remains a pending fixed-basis obligation until the
+accumulator's final decision.
 
 V4 derives every proof-dependent challenge with the chained typed SHA-256
 transcript. It does not change secret padding, mask, or nonce PRFs because a
@@ -103,8 +104,8 @@ authenticated inner norm obligation. Full native verification also
 discharges that norm argument. Preparation is deliberately not
 verification and is never receipt acceptance.
 
-The matching Rust leaf must consume the same allocated transcript variables
-and constrain:
+The qualification-only Rust leaf consumes the same allocated transcript
+variables and constrains:
 
 - the raw-plus-offset anchored commitment;
 - the public-mode batched Schnorr equation and nonzero response;
@@ -136,12 +137,14 @@ The shared public and hidden fixtures are
 `rust/construction-parent/tests/vectors/sha256_circuit_v4_hidden.json`. They are
 generated and checked by the stdlib-only Python oracle
 `tests/reference_sha256_circuit_v4.py`. The native implementation consumes the
-public fixture. The matching constrained implementation must consume both
-fixtures and check the hidden fixture's zero DLog branch.
+public fixture. The constrained implementation consumes both fixtures and
+checks the hidden fixture's zero DLog branch.
 
 Gate counts measured for the removed field-hash relation do not apply to this
-wire format. Production qualification must report the exact chained SHA-256
-relation, its Nova dimensions, proof size, peak memory, and end-to-end proving
-time before activation. See
-[the recursive construction receipt boundary](construction-receipt.md)
-for the complete acceptance boundary.
+wire format. The selected direct Nova relation has 21 inputs, 7,609,070
+auxiliary variables, and 7,653,610 constraints. Its augmented primary shape
+has 9,418,599 constraints and 9,372,280 variables; the secondary shape has
+728,974 constraints and 728,211 variables. The compressed proof is 15,076
+bytes. See
+[the anchor punishment-key relation](anchor-punishment-relation.md) for the
+qualified artifact and complete acceptance boundary.

@@ -112,24 +112,22 @@ exact full point and proof transcript. Omitting `R` from the 32-byte scalar
 response therefore does not let a caller substitute a fresh nonce in the
 typed acceptance path.
 
-### Candidate V4 receipt leaf
+### Selected V4 receipt leaf
 
 The V4 nonce proof's Fiat-Shamir transcript binds `R`, its circuit/relation,
 generators, host/context inputs, and all commitments needed by the
-construction. V4 is the candidate active leaf for a receipt. Its typed
+construction. V4 is the selected leaf for a receipt. Its typed
 transcript authenticates the exact statement, mode, shape, ordered public
 points, raw commitment, generator digest, and proof fields. Public mode
 retains a mandatory batched DLog equation for the advertised points.
 
-Native V4 proof generation, preparation, and verification are implemented.
-Preparation is not acceptance. A later parent must authenticate the same
-statement and semantic coverage, verify reduction and every transition, and
-reach the mandatory final decision. It cannot repair an unsound leaf relation.
-No compressed accountable-signature certificate implements that parent yet.
-
-The algebraic accumulation adapter is also implemented. Its output remains a
-pending obligation until reduction, every transition, and the native final
-decision succeed.
+Native V4 production, preparation, verification, and the algebraic
+accumulation adapter are implemented. Preparation is not acceptance. The
+selected parent authenticates the same statement and semantic coverage,
+verifies reduction and every transition, and reaches the mandatory final
+decision. It cannot repair an unsound leaf relation. The construction parent
+does not yet integrate an accountable-signature certificate into its relation
+or into consensus.
 
 ### Historical V3 public codec
 

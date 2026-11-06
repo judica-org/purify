@@ -18,22 +18,24 @@ Using `M` directly as the anchor root is an optional bootstrap shortcut. It
 requires choosing the initial coalition key before deriving those anchors.
 The encryption bridge is what preserves flexible joining and growth.
 
-The native API implements this relation as a fixed-size escrow record. It
+The production API implements this relation as a fixed-size escrow record. It
 does not establish correlated-key privacy, a distributed setup/prover, or
 certificate validity. It advances
 [scalar escrow #23](https://github.com/judica-org/purify/issues/23) without
 enabling enrollment. The independent leaf experiment is in
 [#37](https://github.com/judica-org/purify/pull/37).
 
-V4 is the candidate active leaf path for a construction receipt. Native
+V4 is the selected leaf path for a construction receipt. Native
 V4 proof production, preparation, verification, and the algebraic
 accumulation adapter are implemented. The fixed-size setup record and anchor
 record version 3 both encode V4 proofs. Their historical hidden-output sizes
 and timings below remain useful as an individual-proof baseline. The setup leaf
 is handled once at registry creation, and the record-version-3 public anchor
-leaf is the selected relation for a future homogeneous parent recurrence. No
-compressed parent or library acceptance path is implemented here. Enrollment
-remains disabled for the separate security and custody reasons below.
+leaf has been migrated into the homogeneous parent recurrence. The SHA-256
+parent backend is qualified through a complete two-anchor compression and
+artifact-reload lifecycle. Its purpose-specific public C++ verifier completes
+recursive-plus-native acceptance. Neither path activates consensus, and
+enrollment remains disabled for the security and custody reasons below.
 
 ## Groups, keys and canonical encodings
 
@@ -50,7 +52,7 @@ their public keys contain x-coordinates. Their 64-byte secret encoding is
 the mixed-radix integer `(d1-1) + floor(l1/2)*(d2-1)`. Packed zero is valid
 and represents `(1,1)`. It must never be reduced modulo `n`.
 
-A public pair is packed as `x1 + n*x2` in 64 bytes. The native parser
+A public pair is packed as `x1 + n*x2` in 64 bytes. The production parser
 validates the packed range, both coordinate encodings, curve membership,
 finiteness and subgroup membership before circuit construction. Ciphertext
 field elements have canonical 32-byte encodings in `F_n`, including zero.
@@ -147,10 +149,10 @@ argument. Encrypted plaintext relations remain native field/curve equations,
 not independently blinded Pedersen output values.
 
 The complete V4 transcript and pending norm obligation require reduction,
-parent authentication, and the final accumulator decision. This native layer
-implements reduction and decision primitives, but not the parent which must
-authenticate their ancestry. The individual escrow record is not receipt
-acceptance.
+parent authentication, and the final accumulator decision. The selected Nova
+parent authenticates the recursive stages. A purpose-specific caller must still
+perform the final native decision; the individual escrow record and recursive
+proof alone are not receipt acceptance.
 
 `recover_escrowed_anchor` first verifies the bridge and checks that an exposed
 coalition scalar opens the recovery-bound roster's exact `Q` and registered
@@ -262,7 +264,7 @@ guarantees.
 `canonical_recovery_root_tests.cpp` checks the comparator, independent bit
 recoding, both scalar signs, upper-bound companion normalization, a public
 setup proof, and toy accountable extraction followed by root/leaf recovery.
-`anchor_escrow_tests.cpp` checks the selected fixed-size codec, an old root
+`anchor_escrow_tests.cpp` checks the production fixed-size codec, an old root
 chosen before its recipient, exact same-slot scalar extraction followed by
 verified decryption, fresh encryption randomness, roster/context/root/
 ciphertext substitutions, and malformed public encodings. The lower-level
@@ -293,14 +295,21 @@ Recovery of a scalar is not by itself a proof of forced economic loss under
 Bitcoin's spend rules. Enrollment remains disabled while the distributed
 setup and prover are not implemented.
 
-The [construction receipt design](construction-receipt.md) treats the setup and
-encryption proofs as out-of-band inputs to a public assembler. V4 is the
-selected child relation for that design. The intended on-chain receipt retains
-the ciphertexts and replaces the child proofs with one parent proof, but that
-parent recurrence and verifier are not implemented here. The historical V3
-sizes above are not an estimate of parent prover cost.
+The selected [construction receipt](construction-receipt.md)
+treats the setup and encryption proofs as out-of-band inputs to a public
+assembler. V4 is the selected child relation for that design. The
+intended on-chain receipt retains the ciphertexts and replaces the child
+proofs with one parent proof. The recurrence and selected profile are
+implemented. Exact setup, two ordered full-scale folds, Spartan IPA
+compression, canonical verification, and external verifier-artifact reload
+have qualified. A private purpose-specific C ABI backs the public C++ API, which
+completes native `decide()`. The qualified nondeciding vector is intentionally
+valid under Nova and demonstrates why that final decision is mandatory. The
+historical V3 sizes above are not an estimate of parent prover cost.
 
-A future validity path would not change the unresolved boundaries above:
-distributed setup, custody, and share-preserving child proving are absent, the
-correlated-key confidentiality argument still requires review, and resource
-behavior at 100 to 1,000 anchors is not qualified.
+This completed validity path does not change the unresolved boundaries above:
+distributed setup, custody, and share-preserving child proving are absent, and
+the correlated-key confidentiality argument still requires review. Only two
+anchors have completed the full lifecycle; resource behavior at 100 to 1,000
+anchors is not qualified. The frozen artifact is about 662 MiB compressed and
+2.99 GiB decoded, so binary embedding and startup remain separate size work.

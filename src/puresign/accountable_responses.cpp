@@ -185,6 +185,15 @@ Result<NonceHostCommitment> nonce_host_commitment(
                                          secp_context);
 }
 
+Result<NonceHostBoundSigningRoster> bind_formation_nonce_hosts(
+    SigningRoster roster, const CoalitionFormation& formation,
+    std::span<const puresign_plusplus::PublicKey> ordered_hosts,
+    purify_secp_context* secp_context) {
+    return bind_nonce_hosts(
+        std::move(roster), formation.core_digest(), ordered_hosts,
+        secp_context);
+}
+
 Result<NonceHostBoundSigningRoster> bind_nonce_hosts(
     SigningRoster roster,
     const CoalitionCoreDigest& coalition_core_digest,

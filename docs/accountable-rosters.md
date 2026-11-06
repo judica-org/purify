@@ -13,6 +13,10 @@ Bitcoin registrations derive the immutable coalition core using the
 that proof context non-replayable; roster aggregation alone does not establish
 formation, consent, activation, or destruction.
 
+After Char validates the permit spend, it passes the typed formation through
+`bind_formation_nonce_hosts`. The lower-level `bind_nonce_hosts` accepts an
+already authenticated generic core and does not establish Bitcoin formation.
+
 ## Input and result
 
 The caller supplies a nonempty ordered list of compressed SEC1 individual

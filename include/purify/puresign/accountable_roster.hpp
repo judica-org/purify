@@ -27,12 +27,23 @@ class RecoveryBoundSigningRoster;
 class RecoveryRootSetupProof;
 
 /**
- * Validate and bind one ordered nonce-host list to a coalition core.
+ * Validate nonce hosts and bind them to a one-shot Bitcoin formation.
  *
- * Bitcoin coalition registrations use `CoalitionFormation::core_digest()` as
- * the core digest. The surrounding protocol must establish the corresponding
- * UTXO spend; this cryptographic boundary accepts an already authenticated
- * core.
+ * Char registration should use this entry point after validating that the
+ * enclosing transaction consumes `formation.permit()`.
+ */
+[[nodiscard]] Result<NonceHostBoundSigningRoster>
+bind_formation_nonce_hosts(
+    SigningRoster roster, const CoalitionFormation& formation,
+    std::span<const puresign_plusplus::PublicKey> ordered_hosts,
+    purify_secp_context* secp_context);
+
+/**
+ * Validate and bind nonce hosts to an already authenticated generic core.
+ *
+ * This lower-level boundary supports non-Bitcoin protocols and verification
+ * of already resolved registry data. It does not establish formation replay
+ * resistance. New Char registration must use `bind_formation_nonce_hosts`.
  */
 [[nodiscard]] Result<NonceHostBoundSigningRoster> bind_nonce_hosts(
     SigningRoster roster, const CoalitionCoreDigest& coalition_core_digest,

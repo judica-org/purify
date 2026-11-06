@@ -19,7 +19,6 @@ using purify::Result;
 using purify::accountable::BitcoinGenesisHash;
 using purify::accountable::BitcoinOutpoint;
 using purify::accountable::BitcoinTransactionId;
-using purify::accountable::CoalitionCoreDigest;
 using purify::accountable::CoalitionDeploymentId;
 using purify::accountable::CoalitionFormation;
 using purify::accountable::CoalitionManifestDigest;
@@ -175,8 +174,6 @@ void run_accountable_response_tests(TestContext& ctx) {
     });
     expect_ok(ctx, formation, "response coalition formation creates");
     if (!formation) return;
-    const CoalitionCoreDigest coalition_core_digest =
-        formation->core_digest();
     bool saw_odd_raw_nonce = false;
     bool saw_positive_recovery_scalar = false;
     bool saw_negative_recovery_scalar = false;
@@ -226,8 +223,9 @@ void run_accountable_response_tests(TestContext& ctx) {
         expect_ok(ctx, host_commitment,
                   "exact ordered nonce hosts commit to the roster");
         if (!host_commitment) return;
-        auto roster = purify::accountable::bind_nonce_hosts(
-            *raw_roster, coalition_core_digest, hosts, secp.get());
+        auto roster =
+            purify::accountable::bind_formation_nonce_hosts(
+                *raw_roster, *formation, hosts, secp.get());
         expect_ok(ctx, roster, "response nonce hosts bind");
         if (!roster) return;
         ctx.expect(roster->nonce_host_commitment() == *host_commitment,
@@ -317,9 +315,10 @@ void run_accountable_response_tests(TestContext& ctx) {
             expect_ok(ctx, alternate_formation,
                       "alternate response formation creates");
             if (!alternate_formation) return;
-            auto alternate_roster = purify::accountable::bind_nonce_hosts(
-                *raw_roster, alternate_formation->core_digest(), hosts,
-                secp.get());
+            auto alternate_roster =
+                purify::accountable::bind_formation_nonce_hosts(
+                    *raw_roster, *alternate_formation, hosts,
+                    secp.get());
             expect_ok(ctx, alternate_roster,
                       "same key and hosts bind to a second coalition core");
             if (!alternate_roster) return;

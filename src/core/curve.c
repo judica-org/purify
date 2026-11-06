@@ -76,6 +76,15 @@ static const uint64_t kPurifyFieldDi[4] = {
 
 static const char kPurifyHashToCurveTag[] = "Purify/HashToCurve";
 
+static void purify_curve_secure_clear(void* data, size_t size) {
+    volatile unsigned char* out = (volatile unsigned char*)data;
+    while (size != 0u) {
+        *out = 0;
+        ++out;
+        --size;
+    }
+}
+
 static void purify_curve_copy_u256(uint64_t out[4], const uint64_t value[4]) {
     memcpy(out, value, 4u * sizeof(uint64_t));
 }
@@ -269,6 +278,7 @@ static void purify_curve_complete_swap(purify_complete_projective_point* lhs,
     purify_complete_projective_point tmp = *lhs;
     purify_curve_complete_assign(lhs, rhs, flag);
     purify_curve_complete_assign(rhs, &tmp, flag);
+    purify_curve_secure_clear(&tmp, sizeof(tmp));
 }
 
 static purify_complete_projective_point
@@ -333,6 +343,16 @@ purify_curve_complete_add(const purify_curve* curve,
     out.x = x3;
     out.y = y3;
     out.z = z3;
+    purify_curve_secure_clear(&b3, sizeof(b3));
+    purify_curve_secure_clear(&t0, sizeof(t0));
+    purify_curve_secure_clear(&t1, sizeof(t1));
+    purify_curve_secure_clear(&t2, sizeof(t2));
+    purify_curve_secure_clear(&t3, sizeof(t3));
+    purify_curve_secure_clear(&t4, sizeof(t4));
+    purify_curve_secure_clear(&t5, sizeof(t5));
+    purify_curve_secure_clear(&x3, sizeof(x3));
+    purify_curve_secure_clear(&y3, sizeof(y3));
+    purify_curve_secure_clear(&z3, sizeof(z3));
     return out;
 }
 
@@ -386,6 +406,14 @@ purify_curve_complete_double(const purify_curve* curve,
     out.x = x3;
     out.y = y3;
     out.z = z3;
+    purify_curve_secure_clear(&b3, sizeof(b3));
+    purify_curve_secure_clear(&t0, sizeof(t0));
+    purify_curve_secure_clear(&t1, sizeof(t1));
+    purify_curve_secure_clear(&t2, sizeof(t2));
+    purify_curve_secure_clear(&t3, sizeof(t3));
+    purify_curve_secure_clear(&x3, sizeof(x3));
+    purify_curve_secure_clear(&y3, sizeof(y3));
+    purify_curve_secure_clear(&z3, sizeof(z3));
     return out;
 }
 
@@ -717,24 +745,31 @@ static void purify_curve_mul_secret_ladder_core(purify_complete_projective_point
                                                 const purify_jacobian_point* point, const uint64_t scalar[4]) {
     purify_complete_projective_point r0 = purify_curve_complete_identity();
     purify_complete_projective_point r1 = purify_curve_secret_input_point(curve, point);
+    purify_complete_projective_point sum = purify_curve_complete_identity();
+    purify_complete_projective_point doubled = purify_curve_complete_identity();
     unsigned int prev_bit = 0;
+    unsigned int bit = 0;
     size_t bits = purify_u256_bit_length(curve->n);
     size_t i;
 
     for (i = bits; i != 0; --i) {
         size_t idx = i - 1u;
-        unsigned int bit = purify_u256_bit(scalar, idx) != 0 ? 1u : 0u;
+        bit = purify_u256_bit(scalar, idx) != 0 ? 1u : 0u;
         purify_curve_complete_swap(&r0, &r1, (int)(bit ^ prev_bit));
-        {
-            purify_complete_projective_point sum = purify_curve_complete_add(curve, &r0, &r1);
-            purify_complete_projective_point doubled = purify_curve_complete_double(curve, &r0);
-            r1 = sum;
-            r0 = doubled;
-        }
+        sum = purify_curve_complete_add(curve, &r0, &r1);
+        doubled = purify_curve_complete_double(curve, &r0);
+        r1 = sum;
+        r0 = doubled;
         prev_bit = bit;
     }
     purify_curve_complete_swap(&r0, &r1, (int)prev_bit);
     *out = r0;
+    purify_curve_secure_clear(&r0, sizeof(r0));
+    purify_curve_secure_clear(&r1, sizeof(r1));
+    purify_curve_secure_clear(&sum, sizeof(sum));
+    purify_curve_secure_clear(&doubled, sizeof(doubled));
+    purify_curve_secure_clear(&bit, sizeof(bit));
+    purify_curve_secure_clear(&prev_bit, sizeof(prev_bit));
 }
 
 #if defined(PURIFY_VALGRIND_TESTING) || defined(PURIFY_CBMC_TESTING)
@@ -745,7 +780,7 @@ void purify_curve_mul_secret_ladder_only(purify_complete_projective_point* out, 
 
 void purify_curve_mul_secret_affine_unchecked(purify_affine_point* out, const purify_curve* curve,
                                               const purify_jacobian_point* point, const uint64_t scalar[4]) {
-    purify_complete_projective_point r0;
+    purify_complete_projective_point r0 = purify_curve_complete_identity();
     purify_fe inv;
 
     purify_curve_mul_secret_ladder_core(&r0, curve, point, scalar);
@@ -753,26 +788,35 @@ void purify_curve_mul_secret_affine_unchecked(purify_affine_point* out, const pu
     purify_fe_mul(&out->x, &r0.x, &inv);
     purify_fe_mul(&out->y, &r0.y, &inv);
     out->infinity = 0;
+    purify_curve_secure_clear(&r0, sizeof(r0));
+    purify_curve_secure_clear(&inv, sizeof(inv));
 }
 #endif
 
 int purify_curve_mul_secret_affine(purify_affine_point* out, const purify_curve* curve,
                                    const purify_jacobian_point* point, const uint64_t scalar[4]) {
-    purify_complete_projective_point r0;
+    purify_complete_projective_point r0 = purify_curve_complete_identity();
+    purify_fe inv;
+    int ok = 0;
 
     purify_curve_mul_secret_ladder_core(&r0, curve, point, scalar);
     if (purify_fe_is_zero(&r0.z) != 0) {
-        return 0;
+        goto cleanup;
     }
 
-    {
-        purify_fe inv;
-        purify_fe_inverse(&inv, &r0.z);
-        purify_fe_mul(&out->x, &r0.x, &inv);
-        purify_fe_mul(&out->y, &r0.y, &inv);
-        out->infinity = 0;
+    purify_fe_inverse(&inv, &r0.z);
+    purify_fe_mul(&out->x, &r0.x, &inv);
+    purify_fe_mul(&out->y, &r0.y, &inv);
+    out->infinity = 0;
+    ok = 1;
+
+cleanup:
+    if (ok == 0) {
+        purify_curve_secure_clear(out, sizeof(*out));
     }
-    return 1;
+    purify_curve_secure_clear(&r0, sizeof(r0));
+    purify_curve_secure_clear(&inv, sizeof(inv));
+    return ok;
 }
 
 int purify_curve_hash_to_curve(purify_jacobian_point* out, const purify_curve* curve,
@@ -852,12 +896,17 @@ static void purify_curve_unpack_secret_from_valid(uint64_t first[4], uint64_t se
     if (ok == 0) {
         purify_u256_set_zero(first);
         purify_u256_set_zero(second);
-        return;
+        goto cleanup;
     }
     purify_curve_u256_narrow_u512_unchecked(first, remainder);
     purify_curve_u256_narrow_u512_unchecked(second, quotient);
     purify_curve_u256_add_one_unchecked(first);
     purify_curve_u256_add_one_unchecked(second);
+
+cleanup:
+    purify_curve_secure_clear(denominator, sizeof(denominator));
+    purify_curve_secure_clear(quotient, sizeof(quotient));
+    purify_curve_secure_clear(remainder, sizeof(remainder));
 }
 
 int purify_curve_unpack_secret(uint64_t first[4], uint64_t second[4], const uint64_t value[8]) {

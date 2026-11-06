@@ -71,6 +71,36 @@ private:
 
 /** @brief Complete witness bundle for evaluating and proving a Purify instance. */
 struct BulletproofWitnessData {
+    BulletproofWitnessData(UInt512 public_key_value,
+                           FieldElement output_value,
+                           BulletproofAssignmentData assignment_value)
+        : public_key(std::move(public_key_value)), output(output_value),
+          assignment(std::move(assignment_value)) {}
+
+    BulletproofWitnessData(const BulletproofWitnessData&) = default;
+    BulletproofWitnessData& operator=(const BulletproofWitnessData&) = default;
+
+    BulletproofWitnessData(BulletproofWitnessData&& other) noexcept
+        : public_key(std::move(other.public_key)), output(other.output),
+          assignment(std::move(other.assignment)) {
+        detail::secure_clear_bytes(&other.output, sizeof(other.output));
+    }
+
+    BulletproofWitnessData& operator=(BulletproofWitnessData&& other) noexcept {
+        if (this != &other) {
+            detail::secure_clear_bytes(&output, sizeof(output));
+            public_key = std::move(other.public_key);
+            output = other.output;
+            assignment = std::move(other.assignment);
+            detail::secure_clear_bytes(&other.output, sizeof(other.output));
+        }
+        return *this;
+    }
+
+    ~BulletproofWitnessData() {
+        detail::secure_clear_bytes(&output, sizeof(output));
+    }
+
     UInt512 public_key;
     FieldElement output;
     BulletproofAssignmentData assignment;

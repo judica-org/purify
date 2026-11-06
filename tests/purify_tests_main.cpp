@@ -2,7 +2,6 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
-#include <array>
 #include <iostream>
 #include <string_view>
 
@@ -19,10 +18,22 @@ void run_norm_accumulation_tests(TestContext& ctx);
 void run_accountable_signature_tests(TestContext& ctx);
 void run_accountable_roster_tests(TestContext& ctx);
 void run_accountable_response_tests(TestContext& ctx);
+void run_slashability_native_tests(TestContext& ctx);
+#if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
+void run_slashability_e2e_tests(TestContext& ctx);
+#endif
 void run_canonical_recovery_root_tests(TestContext& ctx);
+void run_anchor_escrow_tests(TestContext& ctx);
 void run_companion_scalar_escrow_tests(TestContext& ctx);
 void run_construction_receipt_tests(TestContext& ctx);
-void run_receipt_sha256_tests(TestContext& ctx);
+void run_construction_receipt_codec_tests(TestContext& ctx);
+void run_aggregate_nonce_tests(TestContext& ctx);
+void run_aggregate_nonce_100_tests(TestContext& ctx);
+void run_nonce_batch_tests(TestContext& ctx);
+void run_nonce_certificate_tests(TestContext& ctx);
+void run_circuit_soundness_tests(TestContext& ctx);
+void run_sha256_transcript_tests(TestContext& ctx);
+void run_sha256_circuit_transcript_tests(TestContext& ctx);
 
 namespace {
 
@@ -33,7 +44,7 @@ struct SuiteSpec {
     SuiteFn run;
 };
 
-constexpr std::array<SuiteSpec, 13> kSuites{{
+constexpr SuiteSpec kSuites[]{
     {"core", &run_purify_tests},
     {"puresign", &run_puresign_tests},
     {"legacy_bulletproof", &run_legacy_bulletproof_tests},
@@ -43,11 +54,24 @@ constexpr std::array<SuiteSpec, 13> kSuites{{
     {"accountable_signature", &run_accountable_signature_tests},
     {"accountable_roster", &run_accountable_roster_tests},
     {"accountable_response", &run_accountable_response_tests},
+    {"slashability_native", &run_slashability_native_tests},
+#if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
+    {"slashability_e2e", &run_slashability_e2e_tests},
+#endif
     {"canonical_recovery_root", &run_canonical_recovery_root_tests},
+    {"anchor_escrow", &run_anchor_escrow_tests},
     {"companion_scalar_escrow", &run_companion_scalar_escrow_tests},
     {"construction_receipt", &run_construction_receipt_tests},
-    {"receipt_sha256", &run_receipt_sha256_tests},
-}};
+    {"construction_receipt_codec", &run_construction_receipt_codec_tests},
+    {"aggregate_nonce", &run_aggregate_nonce_tests},
+    {"aggregate_nonce_100", &run_aggregate_nonce_100_tests},
+    {"nonce_batch", &run_nonce_batch_tests},
+    {"nonce_certificate", &run_nonce_certificate_tests},
+    {"circuit_soundness", &run_circuit_soundness_tests},
+    {"sha256_transcript", &run_sha256_transcript_tests},
+    {"sha256_circuit_transcript",
+     &run_sha256_circuit_transcript_tests},
+};
 
 const SuiteSpec* find_suite(std::string_view name) {
     for (const SuiteSpec& suite : kSuites) {

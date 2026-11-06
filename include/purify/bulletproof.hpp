@@ -31,13 +31,15 @@ namespace purify {
 using BulletproofScalarBytes = std::array<unsigned char, 32>;
 using BulletproofPointBytes = std::array<unsigned char, 33>;
 using BulletproofGeneratorBytes = std::array<unsigned char, 33>;
+using BulletproofWitnessColumn =
+    std::vector<FieldElement, detail::SecureAllocator<FieldElement>>;
 
 /** @brief Columnar witness assignment compatible with the native Bulletproof circuit layout. */
 struct BulletproofAssignmentData {
-    std::vector<FieldElement> left;
-    std::vector<FieldElement> right;
-    std::vector<FieldElement> output;
-    std::vector<FieldElement> commitments;
+    BulletproofWitnessColumn left;
+    BulletproofWitnessColumn right;
+    BulletproofWitnessColumn output;
+    BulletproofWitnessColumn commitments;
 
     /** @brief Serializes the witness columns in the legacy assignment blob format. */
     Result<Bytes> serialize() const;
@@ -258,7 +260,7 @@ struct NativeBulletproofCircuit {
     /** @brief Reinitializes the circuit shape and clears all accumulated constraints. */
     void resize(std::size_t gates, std::size_t commitments, std::size_t bits = 0);
 
-    /** @brief Returns true when the sparse matrix vectors match the declared circuit dimensions. */
+    /** @brief Checks declared dimensions and every sparse constraint index. */
     bool has_valid_shape() const;
 
     /** @brief Appends a new linear constraint constant term and returns its index. */
@@ -293,15 +295,15 @@ private:
 /**
  * @brief Experimental single-proof wrapper over the imported legacy Bulletproof circuit backend.
  *
- * This artifact is wire-ready: when the circuit exposes one committed scalar it carries the exact
- * compressed public point alongside the proof bytes. The proof transcript is always bound to a
+ * This artifact carries the circuit's ordered compressed output points alongside the proof bytes.
+ * The proof transcript is always bound to a
  * canonical digest of the native circuit and optional statement-binding bytes supplied to the
  * prove/verify helpers below.
  */
 struct ExperimentalBulletproofProof {
-    static constexpr unsigned char kSerializationVersion = 2;
+    static constexpr unsigned char kSerializationVersion = 3;
 
-    BulletproofPointBytes commitment{};
+    std::vector<BulletproofPointBytes> commitments;
     Bytes proof;
 
     Result<Bytes> serialize() const;
@@ -367,6 +369,27 @@ public:
     Result<NativeBulletproofCircuit::PackedWithSlack> instantiate_packed(const UInt512& pubkey) const;
     Result<NativeBulletproofCircuit> instantiate(const UInt512& pubkey) const;
 
+    /**
+     * @brief Builds one circuit binding the sum of distinct hosts' outputs to one commitment.
+     *
+     * Hosts retain their supplied order. Every host uses this template's evaluation input;
+     * individual output commitments are replaced by one commitment to their field sum.
+     * Empty rosters, duplicate hosts, invalid dimensions, and overflow are rejected.
+     * This composes a circuit relation; it does not implement distributed proving.
+     */
+    Result<NativeBulletproofCircuit> instantiate_sum(std::span<const UInt512> public_keys) const;
+
+    /**
+     * @brief Validates and concatenates local assignments for `instantiate_sum`.
+     *
+     * Each assignment must satisfy this template and its corresponding host. Gate columns
+     * are padded with zeros, and the sole output commitment is the sum of member outputs.
+     * The caller receives every witness centrally; this is not a private MPC operation.
+     */
+    Result<BulletproofAssignmentData> sum_assignments(
+        std::span<const UInt512> public_keys,
+        std::span<const BulletproofAssignmentData> assignments) const;
+
 private:
     NativeBulletproofCircuit::PackedWithSlack base_packed_;
     Expr p1x_;
@@ -377,9 +400,9 @@ private:
 /**
  * @brief Proves a native circuit with the experimental imported Bulletproof circuit backend.
  *
- * This wrapper only supports circuits with exactly one committed scalar. Providing `blind =
- * std::nullopt` yields the exact public point commitment `assignment.commitments[0] *
- * value_generator`, which is the form needed for `R = rG` style statements.
+ * Circuits must have at least one committed scalar. An empty `blinds` span uses zero
+ * blinding for every output, yielding `assignment.commitments[i] * value_generator`.
+ * Otherwise supply exactly one blind per committed scalar, in circuit order.
  */
 Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
@@ -388,7 +411,7 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofGeneratorBytes& value_generator,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    std::optional<BulletproofScalarBytes> blind = std::nullopt,
+    std::span<const BulletproofScalarBytes> blinds = {},
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const NativeBulletproofCircuit::PackedWithSlack& circuit,
@@ -397,10 +420,10 @@ Result<ExperimentalBulletproofProof> prove_experimental_circuit(
     const BulletproofGeneratorBytes& value_generator,
     purify_secp_context* secp_context,
     std::span<const unsigned char> statement_binding = {},
-    std::optional<BulletproofScalarBytes> blind = std::nullopt,
+    std::span<const BulletproofScalarBytes> blinds = {},
     ExperimentalBulletproofBackendCache* backend_cache = nullptr);
 
-/** @brief Verifies a proof produced by `prove_experimental_circuit` against the same one-commitment native circuit. */
+/** @brief Verifies a proof produced by `prove_experimental_circuit` against the same native circuit and ordered output commitments. */
 Result<bool> verify_experimental_circuit(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalBulletproofProof& proof,
@@ -511,6 +534,10 @@ ExprPoint circuit_ec_add(Transcript& transcript, const ExprPoint& p1, const Expr
 
 /** @brief Symbolically adds two affine points and returns only the resulting x-coordinate. */
 Expr circuit_ec_add_x(Transcript& transcript, const ExprPoint& p1, const ExprPoint& p2);
+
+/** @brief Builds the symbolic affine-point multiplication gadget for one curve point. */
+ExprPoint circuit_ec_multiply_point(const EllipticCurve& curve, Transcript& transcript,
+                                    const JacobianPoint& point, const std::vector<Expr>& bits);
 
 /** @brief Builds the symbolic x-coordinate multiplication gadget for one curve point. */
 Expr circuit_ec_multiply_x(const EllipticCurve& curve, Transcript& transcript,

@@ -145,17 +145,23 @@ static void purify_core_secure_clear(void* data, size_t size) {
 }
 
 static int purify_core_compare_be(const unsigned char* lhs, const unsigned char* rhs, size_t size) {
+    unsigned int less = 0;
+    unsigned int greater = 0;
     size_t i = 0;
     for (i = 0; i < size; ++i) {
-        if (lhs[i] < rhs[i]) {
-            return -1;
-        }
-        if (lhs[i] > rhs[i]) {
-            return 1;
-        }
+        unsigned int undecided = (less | greater) ^ 1u;
+        less |= undecided & (unsigned int)(lhs[i] < rhs[i]);
+        greater |= undecided & (unsigned int)(lhs[i] > rhs[i]);
     }
-    return 0;
+    return (int)greater - (int)less;
 }
+
+#if defined(PURIFY_VALGRIND_TESTING)
+int purify_core_compare_be_test(const unsigned char* lhs,
+                                const unsigned char* rhs, size_t size) {
+    return purify_core_compare_be(lhs, rhs, size);
+}
+#endif
 
 static purify_error_code purify_core_validate_below(const unsigned char* value,
                                                     size_t size,

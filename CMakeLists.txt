@@ -713,6 +713,37 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_sanitizers(purify_tests)
     purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
 
+    if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
+        if(NOT CMAKE_CROSSCOMPILING)
+            add_test(NAME purify.tests.installed_package
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+                    "-DTEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+                    "-DTEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+                    "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                    "-DTEST_CONFIG=$<CONFIG>"
+                    "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installed_package/run.cmake"
+            )
+            set_tests_properties(purify.tests.installed_package
+                PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
+            )
+        endif()
+
+        get_target_property(PURIFY_TEST_LIBRARY_TYPE purify TYPE)
+        if(UNIX AND CMAKE_NM AND
+           PURIFY_TEST_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
+            add_test(NAME purify.tests.private_construction_parent_symbols
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_NM=${CMAKE_NM}"
+                    "-DTEST_LIBRARY=$<TARGET_FILE:purify>"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/shared_symbol_visibility.cmake"
+            )
+        endif()
+        unset(PURIFY_TEST_LIBRARY_TYPE)
+    endif()
+
     function(purify_add_cpp_suite_test suite_name)
         add_test(NAME "purify.tests.${suite_name}" COMMAND purify_tests --suite "${suite_name}")
     endfunction()

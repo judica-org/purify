@@ -17,6 +17,7 @@ void run_secure_cleanup_tests(TestContext& ctx);
 void run_norm_protocol_tests(TestContext& ctx);
 void run_norm_accumulation_tests(TestContext& ctx);
 void run_accountable_signature_tests(TestContext& ctx);
+void run_coalition_formation_tests(TestContext& ctx);
 void run_accountable_roster_tests(TestContext& ctx);
 void run_accountable_response_tests(TestContext& ctx);
 void run_slashability_native_tests(TestContext& ctx);
@@ -54,6 +55,7 @@ constexpr SuiteSpec kSuites[]{
     {"norm_protocol", &run_norm_protocol_tests},
     {"norm_accumulation", &run_norm_accumulation_tests},
     {"accountable_signature", &run_accountable_signature_tests},
+    {"coalition_formation", &run_coalition_formation_tests},
     {"accountable_roster", &run_accountable_roster_tests},
     {"accountable_response", &run_accountable_response_tests},
     {"slashability_native", &run_slashability_native_tests},

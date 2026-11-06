@@ -23,6 +23,9 @@ mod construction_parent_qualification;
 mod construction_profile;
 #[cfg(test)]
 mod construction_recurrence;
+// This authenticates a pending construction root. Native decide remains
+// mandatory before receipt acceptance.
+mod construction_parent_verifier;
 // This is an internal proof-codec foundation, not a receipt parser.
 mod fixed_serde;
 // This is an internal fixed-template integration layer, not a receipt API.

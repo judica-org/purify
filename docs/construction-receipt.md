@@ -42,6 +42,13 @@ For an already registered exact coalition point `Q=qG`, a receipt must establish
    roots, omissions, substitutions, or extra entries. Public references resolve
    to the same roots used by the child verifiers.
 
+The registry record supplying that setup should derive its coalition core from
+the [one-shot Bitcoin formation](coalition-formation.md) rule. Its resolved
+setup digest must retain that exact core and formation record. This changes no
+parent-proof field: the construction statement already authenticates the
+resolved setup digest, while the child setup and escrow relations already bind
+the coalition core.
+
 The assembler may receive packets in any order. Reordering delivery does not
 require new owner proofs. The application supplies the authoritative manifest;
 an assembler-selected subset cannot establish that all intended collateral was

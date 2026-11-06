@@ -1,0 +1,131 @@
+# One-shot Bitcoin coalition formation
+
+Accountable proofs already bind a 32-byte coalition core. A Bitcoin registry
+can make that core non-replayable by deriving it from a predecessor output that
+the formation transaction consumes. Bitcoin then supplies the one-time
+linearization point; Purify supplies the cryptographic context binding.
+
+This design prevents stale formation consent from reviving a dissolved
+coalition. It does not prevent every member from deliberately forming a new
+coalition with a fresh permit and fresh consent.
+
+## Formation identity
+
+`accountable::CoalitionFormation` derives the coalition core as:
+
+```text
+D = TaggedSHA256(
+      "Purify/Accountable/CoalitionFormation/v1",
+      bitcoin_genesis_hash32 ||
+      deployment_id32 ||
+      permit_txid32 ||
+      permit_vout_u32le ||
+      manifest_digest32)
+```
+
+Every field has fixed width. `bitcoin_genesis_hash32` and `permit_txid32` are
+the raw `uint256` bytes emitted by Bitcoin consensus serialization. They are
+not RPC display-order hex. The explicit genesis hash prevents cross-network
+replay. `deployment_id32` separates Char deployments sharing one Bitcoin
+network.
+
+The permit is the exact pre-existing output consumed by the transaction that
+finalizes formation. It is not an output of that transaction. Hashing the
+formation transaction's own txid would be circular because that transaction
+commits the record containing `D` and its dependent proofs.
+
+`manifest_digest32` commits the canonical, immutable, acyclic formation
+intent. The Char manifest should include every semantic identity and policy
+field not bound independently, including its version, ordered members, bond
+references, signing and management keys, nonce-host keys, and lifecycle
+policy. It must exclude:
+
+- the formation transaction ID or witness transaction ID;
+- any setup proof whose transcript contains `D`;
+- anchor ciphertexts or proofs generated from a roster containing `D`;
+- a complete-record hash containing those dependent values; and
+- any receipt or certificate that commits `D`.
+
+A separate record-body hash may authenticate ciphertexts, proofs, and carrier
+framing. Its preimage excludes the authorizations themselves. Each member
+formation authorization binds both `D` and that exact record-body hash. The
+aggregate slashable signing key is not a formation or management authorization
+key: exposure of that scalar must not let an attacker register a fresh
+instance.
+
+## Char acceptance rule
+
+Purify validates the null-outpoint boundary and derives `D`. It cannot decide
+whether a Bitcoin transaction actually consumed the permit. Char accepts a
+formation only when all of these conditions hold:
+
+1. The canonical record and all member authorizations validate.
+2. The record's `D` recomputes from the manifest and the declared permit.
+3. The transaction completing the record consumes that exact permit.
+4. That transaction contains exactly one formation claim for the permit.
+5. No other complete record was accepted for the same permit in that
+   canonical history.
+6. Confirmation and epoch-delay rules make the record active only at their
+   specified boundary.
+
+The fourth rule covers two different records placed in the same transaction.
+Bitcoin's double-spend rule covers claims placed in conflicting transactions;
+only the transaction in the canonical chain can complete formation.
+
+If a large record is assembled from earlier chunks, those chunks have no
+registry effect. The final transaction must spend the permit and commit the
+complete canonical record. Keeping completion at this one linearization point
+avoids a separate reservation or rollback protocol.
+
+The registry state for one core is monotonic within a canonical history:
+
+```text
+unseen -> pending -> active -> dissolved
+```
+
+There is no `dissolved -> active` transition. A destroy message binds `D`, is
+authorized by the separate management role, and changes only future
+eligibility after the protocol delay. It does not erase old escrow,
+certificates, signing reservations, or liability. A replacement is a new
+formation with a fresh permit, a new `D`, and fresh member authorization.
+
+## Replay and chain behavior
+
+- Copying an old record into a later transaction fails because the later
+  transaction does not consume the bound permit.
+- Substituting a fresh permit changes `D`, invalidating the old setup,
+  escrow, nonce, response, and member-authorization contexts.
+- Reposting the original transaction cannot create a second transition in one
+  valid Bitcoin history because its input is already spent.
+- Fee replacement may preserve `D` when it preserves the permit and manifest.
+  The canonical confirmed transaction supplies the inclusion position.
+- A disconnect rolls formation and destruction state back with the Bitcoin
+  block. Re-inclusion on the replacement branch is ordinary canonical-chain
+  processing, not resurrection in one history.
+- Spending the permit elsewhere aborts formation. That is a liveness failure,
+  not an ambiguous registry state.
+
+An entirely malicious roster can always use a fresh UTXO and authorize a new
+instance. Preventing that would require a permanent ban keyed by a stable
+member or roster identity, adding the historical proving surface this design
+is intended to avoid. The enforceable invariant is that old consent and old
+proofs cannot authorize a new instance.
+
+## Light-client boundary
+
+The consumed-permit rule is a positive, transaction-local check. A syncing
+client verifies the complete formation commitment and finds the exact permit
+among that transaction's inputs. It does not prove that a referenced state
+coin remains unspent, nor search for a global first-registration winner.
+
+This assumes the client follows a Bitcoin chain whose transactions satisfy
+Bitcoin consensus. A txid Merkle proof alone does not authenticate SegWit
+witness bytes. If formation data is carried in witness, the publication format
+must also verify the block witness commitment or place a commitment to the
+complete record in txid-committed output data. Purify deliberately does not
+select that carrier.
+
+The derivation adds no proof or receipt bytes. The genesis and deployment are
+protocol constants, and the permit is available from the enclosing Bitcoin
+transaction. A carrier may therefore avoid serializing them inside every
+dependent proof while still recomputing `D` at the registry boundary.

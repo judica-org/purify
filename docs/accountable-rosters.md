@@ -8,6 +8,11 @@ primitives. It does not implement MuSig2 signing or transfer MuSig2's security
 proof to the different [accountable signature](accountable-signatures.md)
 construction.
 
+Bitcoin registrations derive the immutable coalition core using the
+[one-shot formation](coalition-formation.md) primitive. The spent permit makes
+that proof context non-replayable; roster aggregation alone does not establish
+formation, consent, activation, or destruction.
+
 ## Input and result
 
 The caller supplies a nonempty ordered list of compressed SEC1 individual

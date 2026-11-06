@@ -23,6 +23,9 @@ mod construction_parent_qualification;
 mod construction_profile;
 #[cfg(test)]
 mod construction_recurrence;
+// This private ABI returns only a proof-authenticated pending root. The C++
+// acceptance boundary must parse and decide that root before exposing success.
+mod construction_parent_ffi;
 // This authenticates a pending construction root. Native decide remains
 // mandatory before receipt acceptance.
 mod construction_parent_verifier;

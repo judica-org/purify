@@ -19,12 +19,15 @@ roster key, list hash, member count, every full 33-byte member key, and every
 - malformed bundle keys; and
 - any member key other than the even point `02 || bundle.bip340_pubkey`.
 
-`bind_nonce_hosts` validates the ordered host bundles, computes this exact
-commitment, and returns `NonceHostBoundSigningRoster`. The capability retains
-the coalition core digest alongside the roster and host commitment. The
-optional recovery-root setup produces the stronger
-`RecoveryBoundSigningRoster`, which is also usable anywhere the base
-nonce-host-bound capability is required.
+`bind_formation_nonce_hosts` is the Bitcoin registration constructor. It
+validates the ordered host bundles, computes this exact commitment, and binds
+the result to a typed one-shot `CoalitionFormation`. The lower-level
+`bind_nonce_hosts` accepts an already authenticated raw core for generic
+protocols and resolved registry data; it does not establish formation replay
+resistance. Both return `NonceHostBoundSigningRoster`, which retains the
+coalition core digest alongside the roster and host commitment. The optional
+recovery-root setup produces the stronger `RecoveryBoundSigningRoster`, which
+is also usable anywhere the base nonce-host-bound capability is required.
 
 ## Proof-attested full nonces
 

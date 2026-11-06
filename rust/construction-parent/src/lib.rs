@@ -28,6 +28,12 @@ mod nova_candidate;
 // Production V4 transcript constraints for qualification.
 #[cfg(test)]
 mod nova_circuit_transcript;
+// Production circuit-norm equations for qualification.
+#[cfg(test)]
+mod nova_circuit_norm_leaf;
+// Production coefficient reduction constraints for qualification.
+#[cfg(test)]
+mod nova_norm_reduction;
 // Transcript-derived opening-base constraints for qualification.
 #[cfg(test)]
 mod nova_opening_base;

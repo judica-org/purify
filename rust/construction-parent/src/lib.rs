@@ -16,6 +16,10 @@ mod circuit_norm;
 mod circuit_transcript;
 mod construction_manifest;
 mod construction_parent_input;
+#[cfg(test)]
+mod construction_parent_prover_fixture;
+#[cfg(test)]
+mod construction_parent_qualification;
 mod construction_profile;
 #[cfg(test)]
 mod construction_recurrence;

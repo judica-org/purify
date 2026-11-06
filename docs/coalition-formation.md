@@ -38,6 +38,11 @@ finalizes formation. It is not an output of that transaction. Hashing the
 formation transaction's own txid would be circular because that transaction
 commits the record containing `D` and its dependent proofs.
 
+The canonical formation claim declares this exact outpoint. A transaction may
+have any number of inputs; Char does not infer the permit from input position
+or select the first otherwise-eligible input. It instead requires that one of
+the transaction's inputs exactly matches the outpoint declared by the claim.
+
 `manifest_digest32` commits the canonical, immutable, acyclic formation
 intent. The Char manifest should include every semantic identity and policy
 field not bound independently, including its version, ordered members, bond
@@ -148,6 +153,6 @@ permit is cryptographically valid but parent replacement or malleation can
 invalidate expensive proofs prepared against its transaction ID.
 
 The derivation adds no proof or receipt bytes. The genesis and deployment are
-protocol constants, and the permit is available from the enclosing Bitcoin
-transaction. A carrier may therefore avoid serializing them inside every
-dependent proof while still recomputing `D` at the registry boundary.
+protocol constants, and the permit is serialized once by the formation claim.
+A carrier need not repeat them inside every dependent proof while still
+recomputing `D` at the registry boundary.

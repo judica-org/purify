@@ -463,7 +463,7 @@ void test_assume_valid_proof_matches_validated_proof(TestContext& ctx) {
             continue;
         }
 
-        ctx.expect(validated->commitment == skipped->commitment,
+        ctx.expect(validated->commitments == skipped->commitments,
                    "assume-valid and validated proving produce the same commitment");
         ctx.expect(validated->proof == skipped->proof,
                    "assume-valid and validated proving produce identical proof bytes");

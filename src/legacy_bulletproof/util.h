@@ -218,15 +218,20 @@ static void secp256k1_bulletproof_update_commit_n(unsigned char *commit, const s
     unsigned char lrparity = 0;
     size_t i;
 
-    VERIFY_CHECK(n < 8);
-
-    for (i = 0; i < n; i++) {
-        lrparity |= secp256k1_fe_is_square_var(&pt[i].y) << i;
-    }
-
     secp256k1_sha256_initialize(&sha256);
     secp256k1_sha256_write(&sha256, commit, 32);
-    secp256k1_sha256_write(&sha256, &lrparity, 1);
+    /* Preserve the single parity byte for zero through eight points and
+     * include one additional byte for each further group of eight. */
+    for (i = 0; i < n; i++) {
+        lrparity |= secp256k1_fe_is_square_var(&pt[i].y) << (i % 8);
+        if (i % 8 == 7) {
+            secp256k1_sha256_write(&sha256, &lrparity, 1);
+            lrparity = 0;
+        }
+    }
+    if (n == 0 || n % 8 != 0) {
+        secp256k1_sha256_write(&sha256, &lrparity, 1);
+    }
     for (i = 0; i < n; i++) {
         secp256k1_fe pointx;
         pointx = pt[i].x;

@@ -10,6 +10,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <utility>
@@ -253,7 +254,10 @@ struct TopicProofCache {
 };
 
 struct NonceProof {
-    static constexpr unsigned char kSerializationVersion = 1;
+    // Version 3 commits raw circuit coordinates before deriving fold weights.
+    static constexpr unsigned char kSerializationVersion = 3;
+    static constexpr std::size_t kInnerProofSize = 844;
+    static constexpr std::size_t kSerializedSize = 228 + kInnerProofSize;
 
     Nonce nonce;
     bppp::PointBytes commitment_point{};
@@ -265,7 +269,9 @@ struct NonceProof {
 };
 
 struct ProvenSignature {
-    static constexpr unsigned char kSerializationVersion = 1;
+    static constexpr unsigned char kSerializationVersion = 2;
+    static constexpr std::size_t kSerializedSize =
+        1 + NonceProof::kSerializedSize + Signature::kSerializedSize;
 
     Signature signature;
     NonceProof nonce_proof;
@@ -303,13 +309,23 @@ public:
         return nonce_;
     }
 
+    /** @brief Returns whether the secret nonce remains available to consume. */
+    [[nodiscard]] bool available() const noexcept {
+        return available_;
+    }
+
     /**
      * @brief Explicitly exports the secret nonce scalar.
      *
      * This is intentionally a copy-returning accessor so callers have to opt in to handling the
      * secret value.
+     * @return A scalar copy, or UninitializedState after the nonce is consumed.
      */
-    [[nodiscard]] Scalar32 scalar() const {
+    [[nodiscard]] Result<Scalar32> scalar() const {
+        if (!available_) {
+            return unexpected_error(ErrorCode::UninitializedState,
+                                    "PreparedNonce::scalar:consumed");
+        }
         return scalar_;
     }
 
@@ -356,6 +372,7 @@ private:
     Nonce nonce_{};
     XOnly32 signer_pubkey_{};
     XOnly32 binding_digest_{};
+    bool available_{false};
 };
 
 class PreparedNonceWithProof {
@@ -375,6 +392,11 @@ public:
         return prepared_.public_nonce();
     }
 
+    /** @brief Returns whether the wrapped secret nonce remains available. */
+    [[nodiscard]] bool available() const noexcept {
+        return prepared_.available();
+    }
+
     /**
      * @brief Returns the public nonce proof carried by this bundle.
      * @return The BPPP-backed nonce proof paired with the prepared nonce.
@@ -385,11 +407,21 @@ public:
 
     /**
      * @brief Explicitly exports the secret nonce scalar from the wrapped prepared nonce.
-     * @return A copy of the secret nonce scalar.
+     * @return A scalar copy, or UninitializedState after the nonce is consumed.
      */
-    [[nodiscard]] Scalar32 scalar() const {
+    [[nodiscard]] Result<Scalar32> scalar() const {
         return prepared_.scalar();
     }
+
+    /**
+     * @brief Explicitly exports the scalar for the proof's full raw point.
+     *
+     * `scalar()` follows BIP340's even-point normalization. This accessor
+     * reverses that normalization when the proof binds an odd compressed
+     * point, so the returned scalar always satisfies
+     * `raw_scalar * G == proof().commitment_point`.
+     */
+    [[nodiscard]] Result<Scalar32> raw_scalar() const;
 
     /**
      * @brief Bundles a prepared nonce with its matching BPPP-backed public nonce proof.

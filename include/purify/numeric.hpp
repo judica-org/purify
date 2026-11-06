@@ -150,6 +150,9 @@ struct BigUIntCBridge<words> { \
     } \
     static bool is_zero(const std::uint64_t* value) { return purify_u##bits##_is_zero(value) != 0; } \
     static int compare(const std::uint64_t* lhs, const std::uint64_t* rhs) { return purify_u##bits##_compare(lhs, rhs); } \
+    static void conditional_assign(std::uint64_t* value, const std::uint64_t* other, bool flag) { \
+        purify_u##bits##_conditional_assign(value, other, static_cast<int>(flag)); \
+    } \
     static bool try_add_small(std::uint64_t* value, std::uint32_t addend) { \
         return purify_u##bits##_try_add_small(value, addend) != 0; \
     } \
@@ -302,21 +305,37 @@ struct BigUInt {
         if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
             return detail::BigUIntCBridge<Words>::compare(limbs.data(), other.limbs.data());
         } else {
+            std::uint64_t less = 0;
+            std::uint64_t greater = 0;
             for (std::size_t i = Words; i != 0; --i) {
                 const std::size_t idx = i - 1;
-                if (limbs[idx] < other.limbs[idx]) {
-                    return -1;
-                }
-                if (limbs[idx] > other.limbs[idx]) {
-                    return 1;
-                }
+                const std::uint64_t undecided = (less | greater) ^ 1U;
+                less |= undecided * static_cast<std::uint64_t>(
+                                          limbs[idx] < other.limbs[idx]);
+                greater |= undecided * static_cast<std::uint64_t>(
+                                             limbs[idx] > other.limbs[idx]);
             }
-            return 0;
+            return static_cast<int>(greater) - static_cast<int>(less);
+        }
+    }
+
+    /** @brief Constant-time conditional assignment for secret integers. */
+    void conditional_assign(const BigUInt& other, bool flag) {
+        if constexpr (detail::BigUIntCBridge<Words>::kAvailable) {
+            detail::BigUIntCBridge<Words>::conditional_assign(
+                limbs.data(), other.limbs.data(), flag);
+        } else {
+            volatile std::uint64_t selected =
+                static_cast<std::uint64_t>(flag);
+            const std::uint64_t mask = 0U - selected;
+            for (std::size_t i = 0; i < Words; ++i) {
+                limbs[i] ^= mask & (limbs[i] ^ other.limbs[i]);
+            }
         }
     }
 
     bool operator==(const BigUInt& other) const {
-        return limbs == other.limbs;
+        return compare(other) == 0;
     }
 
     bool operator!=(const BigUInt& other) const {

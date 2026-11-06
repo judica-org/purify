@@ -5,6 +5,7 @@
 #include "purify.h"
 #include "purify.hpp"
 #include "purify/bppp.hpp"
+#include "purify/accumulation.hpp"
 
 int purify_public_header_hygiene_c_then_cpp()
 {

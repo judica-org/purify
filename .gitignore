@@ -1,6 +1,7 @@
 /build/
 /build-docs/
 /build-pages/
+/build-parent/
 /docs/paper/build/
 
 # LaTeX artifacts
@@ -15,7 +16,6 @@
 /a.out
 /purify_cpp
 /bench_purify
-/libpurify_bppp_support.a
 
 # Compiler outputs
 *.o

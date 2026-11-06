@@ -44,7 +44,10 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build --preset tagged --parallel --target purify_tests purify_c_tests
+        run: >
+          cmake --build --preset tagged --parallel
+          --target purify_tests purify_c_tests
+          purify_opening_base_vector_tests
 
       - name: Show sccache stats
         run: sccache --show-stats
@@ -53,6 +56,67 @@ jobs:
         run: >
           ctest --test-dir build-tagged --output-on-failure
           -R 'purify\.tests\..*|purify\.c_api'
+
+  construction-parent-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            deployment_target: ""
+          - os: macos-latest
+            deployment_target: "13.0"
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }} / construction parent package boundary
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/build-construction-parent/construction-parent-target
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Rust formatting
+        working-directory: rust/construction-parent
+        run: cargo fmt -- --check
+
+      - name: Test Rust backend
+        working-directory: rust/construction-parent
+        run: >
+          cargo test --locked --release
+          -- --test-threads=1
+
+      - name: Lint Rust backend
+        working-directory: rust/construction-parent
+        run: >
+          cargo clippy --locked --release --all-targets
+          -- -D warnings
+
+      - name: Initialize required submodule
+        run: git submodule update --init --depth 1 third_party/secp256k1-zkp
+
+      - name: Configure construction-parent package tests
+        run: >
+          cmake -S . -B build-construction-parent
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_SHARED_LIBS=ON
+          -DPURIFY_BUILD_TESTS=ON
+          -DPURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=ON
+          -DPURIFY_BUILD_CLI=OFF
+          -DPURIFY_BUILD_BENCH=OFF
+          -DPURIFY_BUILD_DOCS=OFF
+          -DPURIFY_BUILD_FUZZ=OFF
+
+      - name: Build construction-parent package tests
+        run: >
+          cmake --build build-construction-parent --parallel 1
+          --target purify_tests
+
+      - name: Test construction-parent package boundaries
+        run: >
+          ctest --test-dir build-construction-parent --output-on-failure
+          -R '^purify\.tests\.(construction_receipt_codec|installed_package|private_construction_parent_symbols)$'
 
   build-and-test:
     strategy:

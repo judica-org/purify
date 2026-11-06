@@ -96,8 +96,16 @@ void test_puresign_message_signing(TestContext& ctx) {
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
                "message-bound public nonces are deterministic");
-    ctx.expect(prepared_a->scalar() == prepared_b->scalar(),
-               "message-bound secret nonce scalars are deterministic");
+    auto prepared_a_scalar = prepared_a->scalar();
+    auto prepared_b_scalar = prepared_b->scalar();
+    expect_ok(ctx, prepared_a_scalar,
+              "first message-bound secret nonce scalar exports");
+    expect_ok(ctx, prepared_b_scalar,
+              "second message-bound secret nonce scalar exports");
+    if (prepared_a_scalar && prepared_b_scalar) {
+        ctx.expect(*prepared_a_scalar == *prepared_b_scalar,
+                   "message-bound secret nonce scalars are deterministic");
+    }
 
     Result<purify::puresign::Signature> direct = key_pair->sign_message(message, context.get());
     expect_ok(ctx, direct, "KeyPair::sign_message succeeds");
@@ -289,8 +297,16 @@ void test_puresign_topic_signing(TestContext& ctx) {
 
     ctx.expect(prepared_a->public_nonce().xonly == prepared_b->public_nonce().xonly,
                "topic-bound public nonces are deterministic");
-    ctx.expect(prepared_a->scalar() == prepared_b->scalar(),
-               "topic-bound secret nonce scalars are deterministic");
+    auto prepared_a_scalar = prepared_a->scalar();
+    auto prepared_b_scalar = prepared_b->scalar();
+    expect_ok(ctx, prepared_a_scalar,
+              "first topic-bound secret nonce scalar exports");
+    expect_ok(ctx, prepared_b_scalar,
+              "second topic-bound secret nonce scalar exports");
+    if (prepared_a_scalar && prepared_b_scalar) {
+        ctx.expect(*prepared_a_scalar == *prepared_b_scalar,
+                   "topic-bound secret nonce scalars are deterministic");
+    }
 
     Result<purify::puresign::Signature> direct = key_pair->sign_with_topic(message, topic, context.get());
     expect_ok(ctx, direct, "KeyPair::sign_with_topic succeeds");
@@ -304,6 +320,16 @@ void test_puresign_topic_signing(TestContext& ctx) {
     Result<purify::puresign::ProvenSignature> proven =
         key_pair->sign_with_prepared_topic_proof(message, std::move(*prepared_with_proof), context.get());
     expect_ok(ctx, proven, "KeyPair::sign_with_prepared_topic_proof succeeds");
+    ctx.expect(!prepared_with_proof->available(),
+               "successful proof signing consumes the wrapped nonce");
+    expect_error(ctx, prepared_with_proof->scalar(),
+                 ErrorCode::UninitializedState,
+                 "a consumed proof bundle cannot export its scalar");
+    expect_error(ctx,
+                 key_pair->sign_with_prepared_topic_proof(
+                     message, std::move(*prepared_with_proof), context.get()),
+                 ErrorCode::UninitializedState,
+                 "a consumed proof bundle cannot sign a second time");
     Result<purify::puresign::ProvenSignature> cached_proven =
         key_pair->sign_with_topic_proof(message, *proof_cache, context.get());
     expect_ok(ctx, cached_proven, "KeyPair::sign_with_topic_proof succeeds with a cached template");
@@ -409,6 +435,13 @@ void test_puresign_binding_checks(TestContext& ctx) {
         expect_error(ctx, key_pair->sign_message_with_prepared(wrong_message, std::move(*message_nonce), context.get()),
                      ErrorCode::BindingMismatch,
                      "message-bound prepared nonces reject signing a different message");
+        ctx.expect(!message_nonce->available(),
+                   "a binding failure consumes the prepared nonce");
+        expect_error(ctx,
+                     key_pair->sign_message_with_prepared(
+                         message, std::move(*message_nonce), context.get()),
+                     ErrorCode::UninitializedState,
+                     "a binding-failed nonce cannot later sign");
     }
 
     Result<purify::puresign::PreparedNonce> topic_nonce = key_pair->prepare_topic_nonce(topic, context.get());
@@ -417,6 +450,107 @@ void test_puresign_binding_checks(TestContext& ctx) {
         expect_error(ctx, key_pair->sign_message_with_prepared(message, std::move(*topic_nonce), context.get()),
                      ErrorCode::BindingMismatch,
                      "topic-bound prepared nonces reject the message-bound signing API");
+        ctx.expect(!topic_nonce->available(),
+                   "a scope failure consumes the prepared nonce");
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*topic_nonce), context.get()),
+                     ErrorCode::UninitializedState,
+                     "a scope-failed nonce cannot later sign");
+    }
+
+    auto missing_context_nonce =
+        key_pair->prepare_topic_nonce(topic, context.get());
+    expect_ok(ctx, missing_context_nonce,
+              "topic nonce prepares for context-failure consumption");
+    if (missing_context_nonce) {
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*missing_context_nonce), nullptr),
+                     ErrorCode::MissingValue,
+                     "a missing signing context rejects before signing");
+        ctx.expect(!missing_context_nonce->available(),
+                   "a context failure still consumes the prepared nonce");
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*missing_context_nonce),
+                         context.get()),
+                     ErrorCode::UninitializedState,
+                     "a context-failed nonce cannot later sign");
+    }
+}
+
+void test_puresign_plusplus_prepared_nonce_consumption(TestContext& ctx) {
+    auto secret = sample_secret();
+    expect_ok(ctx, secret,
+              "sample secret parses for PureSign++ nonce consumption");
+    if (!secret) return;
+    auto context = make_test_secp_context(ctx);
+    if (!context) return;
+
+    const auto message = sample_message();
+    const auto wrong_message = purify::bytes_from_ascii("wrong-message");
+    const auto topic = purify::bytes_from_ascii("one-shot-topic");
+    auto key_pair = purify::puresign_plusplus::KeyPair::from_secret(
+        *secret, context.get());
+    expect_ok(ctx, key_pair,
+              "PureSign++ key pair derives for nonce consumption");
+    if (!key_pair) return;
+
+    auto successful = key_pair->prepare_topic_nonce(topic, context.get());
+    expect_ok(ctx, successful, "PureSign++ topic nonce prepares");
+    if (successful) {
+        auto signature = key_pair->sign_with_prepared_topic(
+            message, std::move(*successful), context.get());
+        expect_ok(ctx, signature,
+                  "PureSign++ prepared topic nonce signs once");
+        ctx.expect(!successful->available(),
+                   "successful PureSign++ signing consumes its nonce");
+        expect_error(ctx, successful->scalar(), ErrorCode::UninitializedState,
+                     "consumed PureSign++ nonce cannot export its scalar");
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         wrong_message, std::move(*successful), context.get()),
+                     ErrorCode::UninitializedState,
+                     "PureSign++ nonce reuse rejects a second message");
+    }
+
+    auto binding_failure =
+        key_pair->prepare_message_nonce(message, context.get());
+    expect_ok(ctx, binding_failure,
+              "PureSign++ message nonce prepares for binding failure");
+    if (binding_failure) {
+        expect_error(ctx,
+                     key_pair->sign_message_with_prepared(
+                         wrong_message, std::move(*binding_failure),
+                         context.get()),
+                     ErrorCode::BindingMismatch,
+                     "PureSign++ rejects the wrong message binding");
+        ctx.expect(!binding_failure->available(),
+                   "PureSign++ binding failure consumes its nonce");
+        expect_error(ctx,
+                     key_pair->sign_message_with_prepared(
+                         message, std::move(*binding_failure), context.get()),
+                     ErrorCode::UninitializedState,
+                     "PureSign++ binding-failed nonce cannot later sign");
+    }
+
+    auto context_failure = key_pair->prepare_topic_nonce(topic, context.get());
+    expect_ok(ctx, context_failure,
+              "PureSign++ topic nonce prepares for context failure");
+    if (context_failure) {
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*context_failure), nullptr),
+                     ErrorCode::MissingValue,
+                     "PureSign++ rejects a missing signing context");
+        ctx.expect(!context_failure->available(),
+                   "PureSign++ context failure consumes its nonce");
+        expect_error(ctx,
+                     key_pair->sign_with_prepared_topic(
+                         message, std::move(*context_failure), context.get()),
+                     ErrorCode::UninitializedState,
+                     "PureSign++ context-failed nonce cannot later sign");
     }
 }
 
@@ -511,24 +645,103 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
     ctx.expect(direct->bytes == proven->signature.bytes,
                "PureSign++ proof signing preserves the deterministic BIP340 signature bytes");
 
+    auto dlog_tampered_proof = proven->nonce_proof;
+    dlog_tampered_proof.proof.public_commitment_dlog_response.back() ^= 1;
+    Result<bool> dlog_tampered_ok = public_key.verify_message_nonce_proof(
+        message, dlog_tampered_proof, context.get());
+    expect_ok(ctx, dlog_tampered_ok,
+              "PureSign++ verifies a tampered DLog response without parser ambiguity");
+    if (dlog_tampered_ok.has_value()) {
+        ctx.expect(!*dlog_tampered_ok,
+                   "PureSign++ rejects a tampered public-commitment DLog response");
+    }
+
     Result<Bytes> nonce_proof_bytes = proven->nonce_proof.serialize(context.get());
     expect_ok(ctx, nonce_proof_bytes, "PureSign++ NonceProof serializes");
     if (nonce_proof_bytes.has_value()) {
+        ctx.expect((*nonce_proof_bytes)[0] == 3,
+                   "PureSign++ NonceProof identifies the raw-precommit transcript");
+        ctx.expect(nonce_proof_bytes->size() == 1072 &&
+                       nonce_proof_bytes->size() ==
+                           purify::puresign_plusplus::NonceProof::kSerializedSize,
+                   "PureSign++ V3 nonce proof stays within its measured wire budget");
+        auto old_transcript_frame = *nonce_proof_bytes;
+        old_transcript_frame[0] = 1;
+        expect_error(ctx, purify::puresign_plusplus::NonceProof::deserialize(old_transcript_frame, context.get()),
+                     purify::ErrorCode::BackendRejectedInput,
+                     "PureSign++ NonceProof rejects the previous transcript version");
         Result<purify::puresign_plusplus::NonceProof> parsed_nonce_proof =
             purify::puresign_plusplus::NonceProof::deserialize(*nonce_proof_bytes, context.get());
         expect_ok(ctx, parsed_nonce_proof, "PureSign++ NonceProof round-trips");
 
-        Bytes length_tampered_nonce_proof = *nonce_proof_bytes;
-        overwrite_u32_le(length_tampered_nonce_proof, 1, 0xffffffffU);
+        Bytes truncated_nonce_proof = *nonce_proof_bytes;
+        truncated_nonce_proof.pop_back();
         expect_error(ctx,
-                     purify::puresign_plusplus::NonceProof::deserialize(length_tampered_nonce_proof, context.get()),
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         truncated_nonce_proof, context.get()),
                      ErrorCode::InvalidFixedSize,
-                     "PureSign++ NonceProof rejects a huge declared proof length");
+                     "PureSign++ NonceProof rejects a truncated inner proof");
+
+        Bytes oversized_nonce_proof = *nonce_proof_bytes;
+        oversized_nonce_proof.push_back(0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         oversized_nonce_proof, context.get()),
+                     ErrorCode::InvalidFixedSize,
+                     "PureSign++ NonceProof rejects an oversized inner proof");
+
+        Bytes invalid_a = *nonce_proof_bytes;
+        std::fill_n(invalid_a.begin() + 66, 33, 0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         invalid_a, context.get()),
+                     ErrorCode::BackendRejectedInput,
+                     "PureSign++ NonceProof rejects an invalid A commitment");
+
+        Bytes invalid_s = *nonce_proof_bytes;
+        std::fill_n(invalid_s.begin() + 99, 33, 0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         invalid_s, context.get()),
+                     ErrorCode::BackendRejectedInput,
+                     "PureSign++ NonceProof rejects an invalid S commitment");
+
+        Bytes noncanonical_t2 = *nonce_proof_bytes;
+        std::fill_n(noncanonical_t2.begin() + 132, 32, 0xff);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         noncanonical_t2, context.get()),
+                     ErrorCode::RangeViolation,
+                     "PureSign++ NonceProof rejects a non-canonical t2 scalar");
+
+        Bytes zero_dlog_response = *nonce_proof_bytes;
+        std::fill_n(zero_dlog_response.begin() + 196, 32, 0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         zero_dlog_response, context.get()),
+                     ErrorCode::BackendRejectedInput,
+                     "PureSign++ NonceProof rejects a zero DLog response");
+
+        Bytes noncanonical_dlog_response = *nonce_proof_bytes;
+        std::fill_n(noncanonical_dlog_response.begin() + 196, 32, 0xff);
+        expect_error(ctx,
+                     purify::puresign_plusplus::NonceProof::deserialize(
+                         noncanonical_dlog_response, context.get()),
+                     ErrorCode::RangeViolation,
+                     "PureSign++ NonceProof rejects a non-canonical DLog response");
+
     }
 
     Result<Bytes> proven_bytes = proven->serialize(context.get());
     expect_ok(ctx, proven_bytes, "PureSign++ ProvenSignature serializes");
     if (proven_bytes.has_value()) {
+        ctx.expect((*proven_bytes)[0] == 2,
+                   "PureSign++ ProvenSignature identifies its fixed framing");
+        ctx.expect(
+            proven_bytes->size() == 1137 &&
+                proven_bytes->size() ==
+                    purify::puresign_plusplus::ProvenSignature::kSerializedSize,
+                   "PureSign++ V3 proven signature stays within its measured wire budget");
         Result<purify::puresign_plusplus::ProvenSignature> parsed_proven =
             purify::puresign_plusplus::ProvenSignature::deserialize(*proven_bytes, context.get());
         expect_ok(ctx, parsed_proven, "PureSign++ ProvenSignature round-trips");
@@ -541,12 +754,28 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
             }
         }
 
-        Bytes length_tampered_proven = *proven_bytes;
-        overwrite_u32_le(length_tampered_proven, 1, 0xffffffffU);
+        Bytes old_framing_proven = *proven_bytes;
+        old_framing_proven[0] = 1;
         expect_error(ctx,
-                     purify::puresign_plusplus::ProvenSignature::deserialize(length_tampered_proven, context.get()),
+                     purify::puresign_plusplus::ProvenSignature::deserialize(
+                         old_framing_proven, context.get()),
+                     ErrorCode::BackendRejectedInput,
+                     "PureSign++ ProvenSignature rejects the length-framed version");
+
+        Bytes truncated_proven = *proven_bytes;
+        truncated_proven.pop_back();
+        expect_error(ctx,
+                     purify::puresign_plusplus::ProvenSignature::deserialize(
+                         truncated_proven, context.get()),
                      ErrorCode::InvalidFixedSize,
-                     "PureSign++ ProvenSignature rejects a huge declared nonce-proof length");
+                     "PureSign++ ProvenSignature rejects truncation");
+        Bytes oversized_proven = *proven_bytes;
+        oversized_proven.push_back(0);
+        expect_error(ctx,
+                     purify::puresign_plusplus::ProvenSignature::deserialize(
+                         oversized_proven, context.get()),
+                     ErrorCode::InvalidFixedSize,
+                     "PureSign++ ProvenSignature rejects extension");
     }
 }
 
@@ -591,6 +820,16 @@ void test_puresign_plusplus_topic_signing(TestContext& ctx) {
     Result<purify::puresign_plusplus::ProvenSignature> proven =
         key_pair->sign_with_prepared_topic_proof(message, std::move(*prepared_with_proof), context.get());
     expect_ok(ctx, proven, "PureSign++ KeyPair::sign_with_prepared_topic_proof succeeds");
+    ctx.expect(!prepared_with_proof->available(),
+               "PureSign++ proof signing consumes the wrapped nonce");
+    expect_error(ctx, prepared_with_proof->scalar(),
+                 ErrorCode::UninitializedState,
+                 "consumed PureSign++ proof cannot export its scalar");
+    expect_error(ctx,
+                 key_pair->sign_with_prepared_topic_proof(
+                     message, std::move(*prepared_with_proof), context.get()),
+                 ErrorCode::UninitializedState,
+                 "PureSign++ consumed proof bundle cannot sign twice");
     Result<purify::puresign_plusplus::ProvenSignature> cached_proven =
         key_pair->sign_with_topic_proof(message, *proof_cache, context.get());
     expect_ok(ctx, cached_proven, "PureSign++ KeyPair::sign_with_topic_proof succeeds with a cached template");
@@ -715,11 +954,7 @@ void test_puresign_plusplus_topic_proof_cache_clone_for_thread(TestContext& ctx)
         return;
     }
 
-    std::size_t l_vec_len = 1;
-    while (l_vec_len < circuit->n_gates + 1) {
-        l_vec_len <<= 1;
-    }
-    const std::size_t generator_count = 4 * circuit->n_gates + l_vec_len;
+    const std::size_t generator_count = 4 * circuit->n_gates;
     Result<std::vector<purify::bppp::PointBytes>> generators =
         purify::bppp::create_generators(generator_count, context.get());
     expect_ok(ctx, generators, "PureSign++ reconstructs the cached generator line for cloning");
@@ -758,6 +993,7 @@ void run_puresign_tests(purify_test::TestContext& ctx) {
     test_puresign_topic_signing(ctx);
     test_puresign_topic_proof_cache_clone_for_thread(ctx);
     test_puresign_binding_checks(ctx);
+    test_puresign_plusplus_prepared_nonce_consumption(ctx);
     test_puresign_plusplus_message_signing(ctx);
     test_puresign_plusplus_topic_signing(ctx);
     test_puresign_plusplus_topic_proof_cache_reuse(ctx);

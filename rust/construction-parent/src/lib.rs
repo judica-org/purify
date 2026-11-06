@@ -19,6 +19,8 @@ mod construction_parent_input;
 mod construction_profile;
 #[cfg(test)]
 mod construction_recurrence;
+// This is an internal proof-codec foundation, not a receipt parser.
+mod fixed_serde;
 #[cfg(test)]
 mod opening_generators;
 mod secp_constants;

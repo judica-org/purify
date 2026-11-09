@@ -62,7 +62,7 @@ std::optional<purify::Bytes> load_parent_proof(
 }
 
 std::optional<
-    purify::accountable::ConstructionReceiptStatementDigest>
+    purify::accountable::VerifiedConstructionReceipt>
 accept_qualified_construction_parent(
     TestContext& ctx,
     const purify_test::slashability::
@@ -180,7 +180,7 @@ accept_qualified_construction_parent(
         purify::ErrorCode::EquationMismatch,
         "recursive-valid nondeciding parent root is rejected");
 
-    return accepted->statement_digest();
+    return std::move(*accepted);
 }
 #endif
 
@@ -402,11 +402,14 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
 
     auto accepted_statement = construction->statement;
 #if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
+    std::optional<purify::accountable::VerifiedConstructionReceipt>
+        accepted_receipt;
     if (verify_parent) {
-        auto parent_statement = accept_qualified_construction_parent(
+        auto parent_receipt = accept_qualified_construction_parent(
             ctx, *construction, secp.get());
-        if (!parent_statement) return;
-        accepted_statement = *parent_statement;
+        if (!parent_receipt) return;
+        accepted_statement = parent_receipt->statement_digest();
+        accepted_receipt.emplace(std::move(*parent_receipt));
     }
 #else
     ctx.expect(!verify_parent,
@@ -469,6 +472,50 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
             construction->anchors[1].record, secp.get()),
         purify::ErrorCode::EquationMismatch,
         "one decided anchor cannot substitute another escrow proof");
+
+#if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
+    if (verify_parent) {
+        ctx.expect(accepted_receipt.has_value(),
+                   "qualified parent returns a recovery capability");
+        if (!accepted_receipt) return;
+
+        std::vector<std::array<unsigned char, 32>> expected_secrets;
+        std::vector<purify::accountable::AnchorPunishmentPublicKey>
+            expected_public_keys;
+        for (const auto& anchor : construction->anchors) {
+            expected_secrets.push_back(
+                anchor.punishment_key.bip340_key().seckey);
+            expected_public_keys.push_back(
+                anchor.punishment_key.public_key());
+        }
+        construction->anchors.clear();
+        construction->resolved_entries.clear();
+
+        for (std::size_t i = 0; i < expected_secrets.size(); ++i) {
+            auto recovered = accepted_receipt->recover_anchor(
+                exposed->scalar(), i, secp.get());
+            expect_ok(ctx, recovered,
+                      "verified parent recovers without child proof");
+            if (!recovered) return;
+            ctx.expect(
+                recovered->bip340_key().seckey == expected_secrets[i] &&
+                    recovered->public_key() == expected_public_keys[i],
+                "compact recovery returns the authenticated punishment key");
+        }
+        expect_error(
+            ctx,
+            accepted_receipt->recover_anchor(
+                exposed->scalar().negate(), 0, secp.get()),
+            purify::ErrorCode::BindingMismatch,
+            "compact recovery rejects a wrong coalition scalar");
+        expect_error(
+            ctx,
+            accepted_receipt->recover_anchor(
+                exposed->scalar(), expected_secrets.size(), secp.get()),
+            purify::ErrorCode::IndexOutOfRange,
+            "compact recovery rejects an out-of-range anchor");
+    }
+#endif
 }
 
 } // namespace

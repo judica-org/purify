@@ -1,7 +1,8 @@
 foreach(required IN ITEMS
         TEST_BINARY_DIR
         TEST_GENERATOR
-        TEST_CXX_COMPILER)
+        TEST_CXX_COMPILER
+        TEST_BACKEND_RELATIVE_PATH)
     if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
         message(FATAL_ERROR "missing installed-package input: ${required}")
     endif()
@@ -25,13 +26,11 @@ if(NOT install_result EQUAL 0)
     message(FATAL_ERROR "Purify package installation failed")
 endif()
 
-file(GLOB_RECURSE leaked_construction_parent_backend
-    "${prefix}/*purify_construction_parent*"
-)
-if(leaked_construction_parent_backend)
+set(installed_backend "${prefix}/${TEST_BACKEND_RELATIVE_PATH}")
+if(NOT EXISTS "${installed_backend}" OR IS_DIRECTORY "${installed_backend}")
     message(FATAL_ERROR
-        "installed package exposed the private construction-parent backend: "
-        "${leaked_construction_parent_backend}"
+        "installed package is missing the construction-parent backend: "
+        "${installed_backend}"
     )
 endif()
 

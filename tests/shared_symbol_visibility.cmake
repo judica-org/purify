@@ -5,7 +5,7 @@ foreach(required IN ITEMS TEST_NM TEST_LIBRARY)
 endforeach()
 
 execute_process(
-    COMMAND "${TEST_NM}" -g "${TEST_LIBRARY}"
+    COMMAND "${TEST_NM}" -g -U "${TEST_LIBRARY}"
     RESULT_VARIABLE nm_result
     OUTPUT_VARIABLE global_symbols
     ERROR_VARIABLE nm_error
@@ -21,7 +21,7 @@ foreach(private_symbol IN ITEMS
     string(FIND "${global_symbols}" "${private_symbol}" symbol_offset)
     if(NOT symbol_offset EQUAL -1)
         message(FATAL_ERROR
-            "private construction-parent symbol is globally visible: ${private_symbol}"
+            "private construction-parent symbol is defined by Purify: ${private_symbol}"
         )
     endif()
 endforeach()

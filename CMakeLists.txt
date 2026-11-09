@@ -395,21 +395,6 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
             "The construction-parent backend requires a 64-bit target."
         )
     endif()
-    if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
-        message(FATAL_ERROR
-            "The construction-parent backend requires an explicit "
-            "CMAKE_OSX_DEPLOYMENT_TARGET so CMake and Cargo use the same "
-            "minimum macOS version."
-        )
-    endif()
-    get_target_property(PURIFY_CONSTRUCTION_PARENT_LIBRARY_TYPE purify TYPE)
-    if(NOT PURIFY_CONSTRUCTION_PARENT_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
-        message(FATAL_ERROR
-            "PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER requires a shared "
-            "Purify library."
-        )
-    endif()
-    unset(PURIFY_CONSTRUCTION_PARENT_LIBRARY_TYPE)
     find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
     set(PURIFY_CONSTRUCTION_PARENT_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/rust/construction-parent"
@@ -422,14 +407,14 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
         "${PURIFY_CONSTRUCTION_PARENT_DIR}/src/*.rs"
     )
     set(PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS build --locked --release)
-    set(PURIFY_CONSTRUCTION_PARENT_ARCHIVE_DIR
+    set(PURIFY_CONSTRUCTION_PARENT_LIBRARY_DIR
         "${PURIFY_CONSTRUCTION_PARENT_TARGET_DIR}/release"
     )
     if(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
         list(APPEND PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS
             --target "${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}"
         )
-        set(PURIFY_CONSTRUCTION_PARENT_ARCHIVE_DIR
+        set(PURIFY_CONSTRUCTION_PARENT_LIBRARY_DIR
             "${PURIFY_CONSTRUCTION_PARENT_TARGET_DIR}/${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}/release"
         )
     elseif(CMAKE_CROSSCOMPILING)
@@ -438,8 +423,30 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
             "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
         )
     endif()
-    set(PURIFY_CONSTRUCTION_PARENT_ARCHIVE
-        "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}purify_construction_parent${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    set(PURIFY_CONSTRUCTION_PARENT_LIBRARY
+        "${PURIFY_CONSTRUCTION_PARENT_LIBRARY_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}purify_construction_parent${CMAKE_SHARED_LIBRARY_SUFFIX}"
+    )
+    set(PURIFY_CONSTRUCTION_PARENT_VALIDATION_STAMP
+        "${PURIFY_CONSTRUCTION_PARENT_TARGET_DIR}/backend.validated"
+    )
+    # The shared Purify library resolves its private backend dependency. Static
+    # Purify consumers resolve the same dependency in their own link step.
+    set_property(TARGET purify APPEND PROPERTY
+        BUILD_RPATH "${PURIFY_CONSTRUCTION_PARENT_LIBRARY_DIR}"
+    )
+    if(APPLE)
+        set_property(TARGET purify APPEND PROPERTY
+            INSTALL_RPATH "@loader_path"
+        )
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set_property(TARGET purify APPEND PROPERTY
+            INSTALL_RPATH "$ORIGIN"
+        )
+    endif()
+    # Keep static-Purify build-tree executables runnable without exposing an
+    # absolute backend path through the installed target interface.
+    list(APPEND CMAKE_BUILD_RPATH
+        "${PURIFY_CONSTRUCTION_PARENT_LIBRARY_DIR}"
     )
     set(PURIFY_CONSTRUCTION_PARENT_CARGO_ENV
         --unset=MAKEFLAGS
@@ -448,70 +455,98 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
         "CARGO_INCREMENTAL=0"
         "CARGO_TARGET_DIR=${PURIFY_CONSTRUCTION_PARENT_TARGET_DIR}"
     )
-    if(APPLE)
+    if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
         list(APPEND PURIFY_CONSTRUCTION_PARENT_CARGO_ENV
             "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
         )
     endif()
+    set(PURIFY_CONSTRUCTION_PARENT_VALIDATE_ARGS
+        "-DBACKEND_LIBRARY=${PURIFY_CONSTRUCTION_PARENT_LIBRARY}"
+        "-DBACKEND_NM=${CMAKE_NM}"
+        "-DBACKEND_APPLE=${APPLE}"
+    )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        if(CMAKE_READELF)
+            set(PURIFY_READELF_EXECUTABLE "${CMAKE_READELF}")
+        else()
+            find_program(PURIFY_READELF_EXECUTABLE
+                NAMES llvm-readelf readelf
+                REQUIRED
+            )
+        endif()
+        list(APPEND PURIFY_CONSTRUCTION_PARENT_VALIDATE_ARGS
+            "-DBACKEND_READELF=${PURIFY_READELF_EXECUTABLE}"
+            "-DBACKEND_SONAME=${CMAKE_SHARED_LIBRARY_PREFIX}purify_construction_parent${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        )
+    endif()
+    if(APPLE)
+        find_program(PURIFY_INSTALL_NAME_TOOL_EXECUTABLE
+            install_name_tool REQUIRED
+        )
+        set(PURIFY_CONSTRUCTION_PARENT_POST_BUILD
+            COMMAND "${PURIFY_INSTALL_NAME_TOOL_EXECUTABLE}"
+                -id "@rpath/${CMAKE_SHARED_LIBRARY_PREFIX}purify_construction_parent${CMAKE_SHARED_LIBRARY_SUFFIX}"
+                "${PURIFY_CONSTRUCTION_PARENT_LIBRARY}"
+        )
+    endif()
     add_custom_command(
-        OUTPUT "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE}"
+        OUTPUT "${PURIFY_CONSTRUCTION_PARENT_LIBRARY}"
         COMMAND "${CMAKE_COMMAND}" -E env
             ${PURIFY_CONSTRUCTION_PARENT_CARGO_ENV}
             "${PURIFY_CARGO_EXECUTABLE}" ${PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS}
+        ${PURIFY_CONSTRUCTION_PARENT_POST_BUILD}
         DEPENDS
             "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.lock"
             "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.toml"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/build.rs"
             "${PURIFY_CONSTRUCTION_PARENT_DIR}/rust-toolchain.toml"
             ${PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES}
         WORKING_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_DIR}"
         COMMENT "Building transparent construction-parent verifier backend"
         VERBATIM
     )
-    unset(PURIFY_CONSTRUCTION_PARENT_CARGO_ENV)
-    add_custom_target(purify_construction_parent_backend_build
-        DEPENDS "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE}"
+    add_custom_command(
+        OUTPUT "${PURIFY_CONSTRUCTION_PARENT_VALIDATION_STAMP}"
+        COMMAND "${CMAKE_COMMAND}" -E rm -f
+            "${PURIFY_CONSTRUCTION_PARENT_VALIDATION_STAMP}"
+        COMMAND "${CMAKE_COMMAND}"
+            ${PURIFY_CONSTRUCTION_PARENT_VALIDATE_ARGS}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateConstructionParentBackend.cmake"
+        COMMAND "${CMAKE_COMMAND}" -E touch
+            "${PURIFY_CONSTRUCTION_PARENT_VALIDATION_STAMP}"
+        DEPENDS
+            "${PURIFY_CONSTRUCTION_PARENT_LIBRARY}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateConstructionParentBackend.cmake"
+        COMMENT "Validating construction-parent verifier backend"
+        VERBATIM
     )
-    if(APPLE)
-        target_link_directories(purify PRIVATE
-            "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE_DIR}"
-        )
-        target_link_libraries(purify PRIVATE
-            "-Wl,-hidden-lpurify_construction_parent"
-        )
-        add_dependencies(purify purify_construction_parent_backend_build)
-    else()
-        add_library(purify_construction_parent_backend STATIC IMPORTED)
-        set_target_properties(purify_construction_parent_backend PROPERTIES
-            IMPORTED_LOCATION "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE}"
-        )
-        add_dependencies(purify_construction_parent_backend
-            purify_construction_parent_backend_build
-        )
-        find_package(Threads REQUIRED)
-        target_link_libraries(purify_construction_parent_backend INTERFACE
-            Threads::Threads
-            ${CMAKE_DL_LIBS}
-            m
-        )
-        target_link_libraries(purify PRIVATE
-            purify_construction_parent_backend
-        )
-    endif()
+    unset(PURIFY_CONSTRUCTION_PARENT_CARGO_ENV)
+    unset(PURIFY_CONSTRUCTION_PARENT_POST_BUILD)
+    unset(PURIFY_CONSTRUCTION_PARENT_VALIDATE_ARGS)
+    unset(PURIFY_READELF_EXECUTABLE)
+    add_custom_target(purify_construction_parent_backend_build
+        DEPENDS "${PURIFY_CONSTRUCTION_PARENT_VALIDATION_STAMP}"
+    )
+    unset(PURIFY_CONSTRUCTION_PARENT_VALIDATION_STAMP)
+    add_library(purify_construction_parent_backend SHARED IMPORTED GLOBAL)
+    set_target_properties(purify_construction_parent_backend PROPERTIES
+        IMPORTED_LOCATION "${PURIFY_CONSTRUCTION_PARENT_LIBRARY}"
+    )
+    add_dependencies(purify_construction_parent_backend
+        purify_construction_parent_backend_build
+    )
+    target_link_libraries(purify PRIVATE
+        purify_construction_parent_backend
+    )
     target_sources(purify PRIVATE
         src/puresign/construction_parent_verifier.cpp
     )
     target_compile_definitions(purify PUBLIC
         PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
     )
-    if(UNIX AND NOT APPLE)
-        get_filename_component(PURIFY_CONSTRUCTION_PARENT_ARCHIVE_NAME
-            "${PURIFY_CONSTRUCTION_PARENT_ARCHIVE}" NAME
-        )
-        target_link_options(purify PRIVATE
-            "LINKER:--exclude-libs,${PURIFY_CONSTRUCTION_PARENT_ARCHIVE_NAME}"
-        )
-        unset(PURIFY_CONSTRUCTION_PARENT_ARCHIVE_NAME)
-    endif()
+    install(FILES "${PURIFY_CONSTRUCTION_PARENT_LIBRARY}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
 endif()
 
 if(WIN32)
@@ -773,6 +808,7 @@ if(PURIFY_BUILD_TESTS)
                     "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
                     "-DTEST_CONFIG=$<CONFIG>"
                     "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                    "-DTEST_BACKEND_RELATIVE_PATH=${CMAKE_INSTALL_LIBDIR}/${CMAKE_SHARED_LIBRARY_PREFIX}purify_construction_parent${CMAKE_SHARED_LIBRARY_SUFFIX}"
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installed_package/run.cmake"
             )
             set_tests_properties(purify.tests.installed_package

@@ -480,9 +480,18 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
         )
     endif()
     if(APPLE)
-        find_program(PURIFY_INSTALL_NAME_TOOL_EXECUTABLE
-            install_name_tool REQUIRED
-        )
+        if(CMAKE_INSTALL_NAME_TOOL AND
+           EXISTS "${CMAKE_INSTALL_NAME_TOOL}")
+            set(PURIFY_INSTALL_NAME_TOOL_EXECUTABLE
+                "${CMAKE_INSTALL_NAME_TOOL}"
+            )
+        else()
+            find_program(PURIFY_INSTALL_NAME_TOOL_EXECUTABLE
+                NAMES llvm-install-name-tool install_name_tool
+                REQUIRED
+                NO_CACHE
+            )
+        endif()
         set(PURIFY_CONSTRUCTION_PARENT_POST_BUILD
             COMMAND "${PURIFY_INSTALL_NAME_TOOL_EXECUTABLE}"
                 -id "@rpath/${CMAKE_SHARED_LIBRARY_PREFIX}purify_construction_parent${CMAKE_SHARED_LIBRARY_SUFFIX}"

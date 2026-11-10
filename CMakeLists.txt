@@ -578,6 +578,7 @@ configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/purifyConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/purifyConfig.cmake"
     INSTALL_DESTINATION "${PURIFY_INSTALL_CMAKEDIR}"
+    PATH_VARS CMAKE_INSTALL_LIBDIR
     NO_SET_AND_CHECK_MACRO
     NO_CHECK_REQUIRED_COMPONENTS_MACRO
 )
@@ -813,6 +814,23 @@ if(PURIFY_BUILD_TESTS)
             )
             set_tests_properties(purify.tests.installed_package
                 PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
+            )
+            add_test(NAME purify.tests.absolute_install_libdir_config
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+                    "-DTEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+                    "-DTEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+                    "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                    "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                    "-DTEST_SHARED_LIBRARY_PREFIX=${CMAKE_SHARED_LIBRARY_PREFIX}"
+                    "-DTEST_SHARED_LIBRARY_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installed_package/absolute_libdir.cmake"
+            )
+            set_tests_properties(
+                purify.tests.absolute_install_libdir_config
+                PROPERTIES RUN_SERIAL TRUE TIMEOUT 120
             )
         endif()
 

@@ -13,6 +13,7 @@
 #include <span>
 
 #include "purify/numeric.hpp"
+#include "purify/puresign/coalition_formation.hpp"
 
 namespace purify::accountable {
 
@@ -28,7 +29,7 @@ namespace purify::accountable {
 struct ConflictContext {
     std::array<unsigned char, 32> signing_key{};
     std::array<unsigned char, 32> host_commitment{};
-    std::array<unsigned char, 32> coalition_core_digest{};
+    CoalitionCoreDigest coalition_core_digest{};
     std::span<const unsigned char> slot;
 };
 

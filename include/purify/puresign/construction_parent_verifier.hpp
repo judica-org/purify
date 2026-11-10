@@ -13,6 +13,8 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "purify/puresign/construction_receipt_accumulation.hpp"
 #include "purify/puresign/construction_receipt_envelope.hpp"
@@ -39,15 +41,34 @@ public:
         return anchor_count_;
     }
 
+    /**
+     * Recover one ordered anchor after the coalition signing scalar leaks.
+     *
+     * The parent verification that created this capability authenticated the
+     * exact roster, ciphertext, anchor root, punishment key, and context. The
+     * discarded child proof is therefore not needed again during recovery.
+     */
+    [[nodiscard]] Result<AnchorPunishmentKey> recover_anchor(
+        const FieldElement& exposed_signing_scalar,
+        std::size_t anchor_index,
+        purify_secp_context* secp_context) const;
+
 private:
     VerifiedConstructionReceipt(
         ConstructionReceiptStatementDigest statement_digest,
-        std::uint32_t anchor_count)
+        RecoveryBoundSigningRoster roster,
+        std::vector<ConstructionReceiptEntry> entries,
+        std::vector<ResolvedConstructionReceiptEntry> resolved_entries)
         : statement_digest_(statement_digest),
-          anchor_count_(anchor_count) {}
+          anchor_count_(static_cast<std::uint32_t>(entries.size())),
+          roster_(std::move(roster)), entries_(std::move(entries)),
+          resolved_entries_(std::move(resolved_entries)) {}
 
     ConstructionReceiptStatementDigest statement_digest_{};
     std::uint32_t anchor_count_{};
+    RecoveryBoundSigningRoster roster_;
+    std::vector<ConstructionReceiptEntry> entries_;
+    std::vector<ResolvedConstructionReceiptEntry> resolved_entries_;
 
     friend class ConstructionParentVerifier;
 };

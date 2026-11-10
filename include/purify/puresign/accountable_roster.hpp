@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "purify/numeric.hpp"
+#include "purify/puresign/coalition_formation.hpp"
 
 namespace purify::puresign_plusplus {
 struct PublicKey;
@@ -17,14 +18,6 @@ struct PublicKey;
 
 namespace purify::accountable {
 
-/**
- * Digest of the immutable coalition core and pre-proof setup context.
- *
- * Applications must define a canonical, domain-separated preimage containing
- * every setup field not bound separately by this library. The preimage must
- * exclude this proof and any receipt containing it, which would be circular.
- */
-using CoalitionCoreDigest = std::array<unsigned char, 32>;
 /** Digest of the immutable ordered Purify nonce-host registration. */
 using NonceHostCommitment = std::array<unsigned char, 32>;
 
@@ -33,7 +26,25 @@ class NonceHostBoundSigningRoster;
 class RecoveryBoundSigningRoster;
 class RecoveryRootSetupProof;
 
-/** Validate and bind one ordered nonce-host list to a coalition core. */
+/**
+ * Validate nonce hosts and bind them to a one-shot Bitcoin formation.
+ *
+ * Char registration should use this entry point after validating that the
+ * enclosing transaction consumes `formation.permit()`.
+ */
+[[nodiscard]] Result<NonceHostBoundSigningRoster>
+bind_formation_nonce_hosts(
+    SigningRoster roster, const CoalitionFormation& formation,
+    std::span<const puresign_plusplus::PublicKey> ordered_hosts,
+    purify_secp_context* secp_context);
+
+/**
+ * Validate and bind nonce hosts to an already authenticated generic core.
+ *
+ * This lower-level boundary supports non-Bitcoin protocols and verification
+ * of already resolved registry data. It does not establish formation replay
+ * resistance. New Char registration must use `bind_formation_nonce_hosts`.
+ */
 [[nodiscard]] Result<NonceHostBoundSigningRoster> bind_nonce_hosts(
     SigningRoster roster, const CoalitionCoreDigest& coalition_core_digest,
     std::span<const puresign_plusplus::PublicKey> ordered_hosts,

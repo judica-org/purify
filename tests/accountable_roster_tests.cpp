@@ -13,7 +13,13 @@ using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
 using purify::FieldElement;
+using purify::accountable::BitcoinGenesisHash;
+using purify::accountable::BitcoinOutpoint;
+using purify::accountable::BitcoinTransactionId;
 using purify::accountable::CoalitionCoreDigest;
+using purify::accountable::CoalitionDeploymentId;
+using purify::accountable::CoalitionFormation;
+using purify::accountable::CoalitionManifestDigest;
 using purify::accountable::NonceHostBoundSigningRoster;
 using purify::accountable::SigningRoster;
 
@@ -181,13 +187,32 @@ void run_accountable_roster_tests(TestContext& ctx) {
     auto raw_roster = SigningRoster::aggregate(recovery_keys, secp.get());
     expect_ok(ctx, raw_roster, "recovery-binding fixture roster aggregates");
     if (!raw_roster) return;
-    CoalitionCoreDigest coalition_core_digest{};
-    coalition_core_digest.fill(0xa5);
+    BitcoinGenesisHash genesis_hash{};
+    genesis_hash.fill(0xa1);
+    CoalitionDeploymentId deployment_id{};
+    deployment_id.fill(0xa2);
+    BitcoinTransactionId transaction_id{};
+    transaction_id.fill(0xa3);
+    CoalitionManifestDigest manifest_digest{};
+    manifest_digest.fill(0xa4);
+    const BitcoinOutpoint formation_permit{transaction_id, 7};
+    auto formation = CoalitionFormation::create({
+        .genesis_hash = genesis_hash,
+        .deployment_id = deployment_id,
+        .permit = formation_permit,
+        .manifest_digest = manifest_digest,
+    });
+    expect_ok(ctx, formation,
+              "recovery-binding coalition formation creates");
+    if (!formation) return;
+    const CoalitionCoreDigest coalition_core_digest =
+        formation->core_digest();
     auto hosts = nonce_hosts(recovery_keys, 0x81, secp.get());
     expect_ok(ctx, hosts, "recovery-binding nonce hosts derive");
     if (!hosts) return;
-    auto nonce_bound = purify::accountable::bind_nonce_hosts(
-        *raw_roster, coalition_core_digest, *hosts, secp.get());
+    auto nonce_bound =
+        purify::accountable::bind_formation_nonce_hosts(
+            *raw_roster, *formation, *hosts, secp.get());
     expect_ok(ctx, nonce_bound,
               "recovery-binding roster validates its nonce hosts");
     if (!nonce_bound) return;
@@ -219,10 +244,19 @@ void run_accountable_roster_tests(TestContext& ctx) {
     ctx.expect(recovery_bound->recovery_root() == recovery_root->public_key,
                "recovery-bound roster retains the proven recovery root");
 
-    auto altered_digest = coalition_core_digest;
-    altered_digest[0] ^= 1;
-    auto altered_core_roster = purify::accountable::bind_nonce_hosts(
-        *raw_roster, altered_digest, *hosts, secp.get());
+    auto altered_formation = CoalitionFormation::create({
+        .genesis_hash = genesis_hash,
+        .deployment_id = deployment_id,
+        .permit = {
+            transaction_id, formation_permit.output_index + 1},
+        .manifest_digest = manifest_digest,
+    });
+    expect_ok(ctx, altered_formation,
+              "alternate formation permit creates another core");
+    if (!altered_formation) return;
+    auto altered_core_roster =
+        purify::accountable::bind_formation_nonce_hosts(
+            *raw_roster, *altered_formation, *hosts, secp.get());
     expect_ok(ctx, altered_core_roster,
               "alternate core can bind the same valid hosts");
     if (!altered_core_roster) return;
@@ -235,8 +269,9 @@ void run_accountable_roster_tests(TestContext& ctx) {
     auto alternate_hosts = nonce_hosts(recovery_keys, 0x82, secp.get());
     expect_ok(ctx, alternate_hosts, "alternate nonce hosts derive");
     if (!alternate_hosts) return;
-    auto altered_host_roster = purify::accountable::bind_nonce_hosts(
-        *raw_roster, coalition_core_digest, *alternate_hosts, secp.get());
+    auto altered_host_roster =
+        purify::accountable::bind_formation_nonce_hosts(
+            *raw_roster, *formation, *alternate_hosts, secp.get());
     expect_ok(ctx, altered_host_roster,
               "alternate nonce hosts bind to the same roster");
     if (!altered_host_roster) return;
@@ -279,9 +314,9 @@ void run_accountable_roster_tests(TestContext& ctx) {
               "parity-changed full-key roster remains algebraically valid");
     if (parity_changed_roster) {
         expect_error(ctx,
-                     purify::accountable::bind_nonce_hosts(
-                         *parity_changed_roster, coalition_core_digest,
-                         *hosts, secp.get()),
+                     purify::accountable::bind_formation_nonce_hosts(
+                         *parity_changed_roster, *formation, *hosts,
+                         secp.get()),
                      purify::ErrorCode::BindingMismatch,
                      "nonce-host binding rejects an odd member point");
     }
@@ -294,9 +329,10 @@ void run_accountable_roster_tests(TestContext& ctx) {
     if (reordered_roster) {
         const std::array reordered_hosts{
             (*hosts)[1], (*hosts)[0], (*hosts)[2]};
-        auto reordered_bound = purify::accountable::bind_nonce_hosts(
-            *reordered_roster, coalition_core_digest, reordered_hosts,
-            secp.get());
+        auto reordered_bound =
+            purify::accountable::bind_formation_nonce_hosts(
+                *reordered_roster, *formation, reordered_hosts,
+                secp.get());
         expect_ok(ctx, reordered_bound,
                   "reordered roster binds matching reordered hosts");
         if (!reordered_bound) return;

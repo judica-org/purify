@@ -366,6 +366,7 @@ add_library(purify
     src/puresign/bppp.cpp
     src/puresign/codecs/bppp.cpp
     src/puresign/accountable.cpp
+    src/puresign/coalition_formation.cpp
     src/puresign/accountable_roster.cpp
     src/puresign/accountable_responses.cpp
     src/puresign/recovery_root.cpp
@@ -593,6 +594,7 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/bppp.cpp
         src/puresign/codecs/bppp.cpp
         src/puresign/accountable.cpp
+        src/puresign/coalition_formation.cpp
         src/puresign/accountable_roster.cpp
         src/puresign/accountable_responses.cpp
         src/puresign/recovery_root.cpp
@@ -716,6 +718,7 @@ if(PURIFY_BUILD_TESTS)
         tests/norm_protocol_tests.cpp
         tests/norm_accumulation_tests.cpp
         tests/accountable_signature_tests.cpp
+        tests/coalition_formation_tests.cpp
         tests/accountable_roster_tests.cpp
         tests/accountable_response_tests.cpp
         tests/slashability_e2e_fixture.cpp
@@ -828,8 +831,14 @@ if(PURIFY_BUILD_TESTS)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_sha256_circuit_v4.py")
         set_tests_properties(purify.tests.sha256_circuit_v4_reference
             PROPERTIES TIMEOUT 30)
+        add_test(NAME purify.tests.coalition_formation_reference
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_coalition_formation.py")
+        set_tests_properties(purify.tests.coalition_formation_reference
+            PROPERTIES TIMEOUT 30)
     endif()
     purify_add_cpp_suite_test(accountable_signature)
+    purify_add_cpp_suite_test(coalition_formation)
     purify_add_cpp_suite_test(accountable_roster)
     purify_add_cpp_suite_test(accountable_response)
     purify_add_cpp_suite_test(slashability_native)

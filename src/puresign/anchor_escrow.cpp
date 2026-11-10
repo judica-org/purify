@@ -1080,10 +1080,25 @@ Result<AnchorPunishmentKey> recover_escrowed_anchor(
         return unexpected_error(ErrorCode::EquationMismatch,
                                 "anchor_escrow:invalid_proof");
     }
+    return recover_authenticated_anchor_ciphertext(
+        recipient, advertised_anchor_root, punishment_key,
+        record.ciphertext(), secp_context);
+}
+
+Result<AnchorPunishmentKey> recover_authenticated_anchor_ciphertext(
+    const GeneratedKey& recovered_recipient,
+    const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
+    const AnchorEscrowCiphertext& ciphertext,
+    purify_secp_context* secp_context) {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v3_hash_suite(
+            "anchor_escrow:recover_authenticated_hash_suite"),
+        "anchor_escrow:recover_authenticated_hash_suite");
     PURIFY_ASSIGN_OR_RETURN(
         auto recovered_anchor,
-        decrypt_anchor(recipient, advertised_anchor_root,
-                       record.ciphertext()),
+        decrypt_anchor(recovered_recipient, advertised_anchor_root,
+                       ciphertext),
         "anchor_escrow:recover_anchor");
     PURIFY_ASSIGN_OR_RETURN(
         auto recovered_punishment,

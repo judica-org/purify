@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "../bridge/construction_parent_bridge.h"
+#include "anchor_escrow_internal.hpp"
+#include "purify/puresign/recovery_root.hpp"
 
 namespace purify::accountable {
 namespace {
@@ -98,6 +100,31 @@ ConstructionParentVerifier& ConstructionParentVerifier::operator=(
     ConstructionParentVerifier&&) noexcept = default;
 
 ConstructionParentVerifier::~ConstructionParentVerifier() = default;
+
+Result<AnchorPunishmentKey> VerifiedConstructionReceipt::recover_anchor(
+    const FieldElement& exposed_signing_scalar,
+    std::size_t anchor_index,
+    purify_secp_context* secp_context) const {
+    if (entries_.size() != resolved_entries_.size() ||
+        entries_.size() != anchor_count_) {
+        return unexpected_error(ErrorCode::InternalMismatch,
+                                "construction_parent:receipt_entries");
+    }
+    if (anchor_index >= entries_.size()) {
+        return unexpected_error(ErrorCode::IndexOutOfRange,
+                                "construction_parent:anchor_index");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& recipient,
+        recover_registered_root(roster_, exposed_signing_scalar,
+                                secp_context),
+        "construction_parent:recover_recipient");
+    const auto& entry = entries_[anchor_index];
+    const auto& resolved = resolved_entries_[anchor_index];
+    return recover_authenticated_anchor_ciphertext(
+        recipient, resolved.anchor_root, resolved.punishment_key,
+        entry.ciphertext, secp_context);
+}
 
 Result<ConstructionParentVerifier> ConstructionParentVerifier::load(
     std::string_view artifact_path) {
@@ -204,7 +231,11 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
         bppp::accumulation::decide(
             anchors.basis(), final_claim, secp_context),
         "construction_parent:decide");
-    return VerifiedConstructionReceipt(statement_digest, anchor_count);
+    return VerifiedConstructionReceipt(
+        statement_digest, setup.roster(),
+        std::vector<ConstructionReceiptEntry>(entries.begin(), entries.end()),
+        std::vector<ResolvedConstructionReceiptEntry>(
+            resolved_entries.begin(), resolved_entries.end()));
 }
 
 }  // namespace purify::accountable

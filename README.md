@@ -59,13 +59,13 @@ For multi-config generators such as Xcode, build benchmarks with `--config Relea
 
 The optional construction-parent verifier is a purpose-specific C++ API backed
 by the qualified transparent SHA-256 Nova profile. It is supported only in
-shared 64-bit macOS and Linux builds. Rust 1.98.1 is pinned for the private
+64-bit macOS and Linux builds. The ordinary Purify library may remain static;
+the verifier is an isolated Rust `cdylib`. Rust 1.98.1 is pinned for that
 backend:
 
 ```sh
 cmake -S . -B build-parent \
   -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_SHARED_LIBS=ON \
   -DPURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=ON \
   -DPURIFY_BUILD_TESTS=OFF \
   -DPURIFY_BUILD_CLI=OFF \
@@ -75,18 +75,21 @@ cmake -S . -B build-parent \
 CARGO_BUILD_JOBS=1 cmake --build build-parent --parallel
 ```
 
-On macOS, also pass an explicit minimum deployment target, such as
-`-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0`. This keeps the C++ library and Cargo's C
-dependencies on the same platform boundary.
+When a macOS minimum deployment target is supplied, Purify forwards it to
+Cargo so the C++ library and the backend use the same platform boundary.
+
+The installed verifier backend is approximately 2.4 MB on arm64 macOS. Its
+exact size is platform-dependent. It exports only the three private load,
+verify, and destroy ABI entry points. The private ABI header is not installed;
+applications use `ConstructionParentVerifier` from the C++ library.
 
 The 693,735,316-byte verifier artifact remains an external deployment
 resource. `ConstructionParentVerifier::load()` accepts only its exact compiled
-length, suite, and tagged digest. The linked Rust archive contains only the
+length, suite, and tagged digest. The installed Rust backend contains only the
 verifier; setup, proving, and artifact writing compile only into its
-qualification tests. The archive and private C ABI are neither installed nor
-exported. Deploy the artifact through an immutable, read-only snapshot so
-concurrent writes cannot waste verifier resources before authentication rejects
-the changed file.
+qualification tests. Deploy the artifact through an immutable, read-only
+snapshot so concurrent writes cannot waste verifier resources before
+authentication rejects the changed file.
 
 The ordinary CI job builds and tests the Rust, package, codec, and private
 symbol boundaries without downloading this artifact. It does not claim
@@ -98,7 +101,6 @@ Run that release gate with the authenticated artifact:
 ```sh
 cmake -S . -B build-parent \
   -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_SHARED_LIBS=ON \
   -DPURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=ON \
   -DPURIFY_BUILD_TESTS=ON \
   -DPURIFY_BUILD_CLI=OFF \

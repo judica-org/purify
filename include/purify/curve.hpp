@@ -264,6 +264,19 @@ Result<std::pair<UInt256, UInt256>> unpack_secret(const UInt512& z);
 /** @brief Splits a packed public key into its two x-coordinates. */
 Result<std::pair<UInt256, UInt256>> unpack_public(const UInt512& packed);
 
+/**
+ * @brief Decodes and validates both curve points in a packed public key.
+ *
+ * This rejects non-canonical encodings, coordinates outside the field,
+ * coordinates that do not lift to finite curve points, and points outside
+ * the respective prime-order subgroups.
+ */
+Result<std::pair<JacobianPoint, JacobianPoint>>
+unpack_public_points(const UInt512& packed);
+
+/** @brief Validates both curve points in a packed public key. */
+Status validate_public_points(const UInt512& packed);
+
 /** @brief Packs two x-coordinates into the reference 512-bit public-key encoding. */
 UInt512 pack_public(const UInt256& x1, const UInt256& x2);
 

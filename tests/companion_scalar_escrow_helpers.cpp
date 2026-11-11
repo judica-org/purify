@@ -28,17 +28,7 @@ using PointPair = std::pair<purify::JacobianPoint, purify::JacobianPoint>;
 // A local honest-witness experiment. No production codec, decryption service,
 // malicious-prover soundness, chosen-ciphertext or MPC claim is made here.
 Result<PointPair> decode_points(const UInt512& encoded) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& coords, purify::unpack_public(encoded), "scalar_escrow:unpack");
-    PURIFY_ASSIGN_OR_RETURN(const auto& x1, FieldElement::try_from_uint256(coords.first), "scalar_escrow:x1");
-    PURIFY_ASSIGN_OR_RETURN(const auto& x2, FieldElement::try_from_uint256(coords.second), "scalar_escrow:x2");
-    const auto first = purify::curve1().lift_x(x1);
-    const auto second = purify::curve2().lift_x(x2);
-    if (!first || !second || first->infinity || second->infinity ||
-        !purify::curve1().mul(*first, purify::order_n1()).infinity ||
-        !purify::curve2().mul(*second, purify::order_n2()).infinity) {
-        return purify::unexpected_error(purify::ErrorCode::BackendRejectedInput, "scalar_escrow:points");
-    }
-    return PointPair{*first, *second};
+    return purify::unpack_public_points(encoded);
 }
 
 Result<purify::GeneratedKey> key_from_pair(UInt256 first, UInt256 second) {

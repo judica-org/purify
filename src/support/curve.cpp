@@ -345,6 +345,36 @@ Result<std::pair<UInt256, UInt256>> unpack_public(const UInt512& packed) {
     return std::make_pair(first, second);
 }
 
+Result<std::pair<JacobianPoint, JacobianPoint>>
+unpack_public_points(const UInt512& packed) {
+    PURIFY_ASSIGN_OR_RETURN(const auto& coordinates, unpack_public(packed),
+                            "unpack_public_points:unpack");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& first_x,
+        FieldElement::try_from_uint256(coordinates.first),
+        "unpack_public_points:first_x");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& second_x,
+        FieldElement::try_from_uint256(coordinates.second),
+        "unpack_public_points:second_x");
+
+    const auto first = curve1().lift_x(first_x);
+    const auto second = curve2().lift_x(second_x);
+    if (!first || !second || first->infinity || second->infinity ||
+        !curve1().mul(*first, order_n1()).infinity ||
+        !curve2().mul(*second, order_n2()).infinity) {
+        return unexpected_error(ErrorCode::BackendRejectedInput,
+                                "unpack_public_points:invalid_points");
+    }
+    return std::make_pair(*first, *second);
+}
+
+Status validate_public_points(const UInt512& packed) {
+    PURIFY_RETURN_IF_ERROR(unpack_public_points(packed),
+                           "validate_public_points:unpack");
+    return {};
+}
+
 UInt512 pack_public(const UInt256& x1, const UInt256& x2) {
     UInt512 out;
     purify_curve_pack_public(out.limbs.data(), x1.limbs.data(), x2.limbs.data());

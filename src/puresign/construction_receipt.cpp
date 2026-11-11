@@ -21,29 +21,10 @@ namespace {
 const TaggedHash kConstructionReceiptStatementHash(
     "Purify/Accountable/ConstructionReceiptStatement/v3");
 
-Status validate_public_root(const UInt512& encoded, const char* label) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& coords, unpack_public(encoded), label);
-    PURIFY_ASSIGN_OR_RETURN(const auto& first_x,
-                            FieldElement::try_from_uint256(coords.first),
-                            label);
-    PURIFY_ASSIGN_OR_RETURN(const auto& second_x,
-                            FieldElement::try_from_uint256(coords.second),
-                            label);
-    const auto first = curve1().lift_x(first_x);
-    const auto second = curve2().lift_x(second_x);
-    if (!first || !second || first->infinity || second->infinity ||
-        !curve1().mul(*first, order_n1()).infinity ||
-        !curve2().mul(*second, order_n2()).infinity) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, label);
-    }
-    return {};
-}
-
 Status validate_ciphertext(const AnchorEscrowCiphertext& ciphertext) {
     for (const UInt512& ephemeral : ciphertext.ephemeral_keys) {
         PURIFY_RETURN_IF_ERROR(
-            validate_public_root(ephemeral,
-                                 "construction_receipt:ephemeral_key"),
+            validate_public_points(ephemeral),
             "construction_receipt:ephemeral_key");
     }
     if (ciphertext.ephemeral_keys[0] == ciphertext.ephemeral_keys[1]) {
@@ -173,8 +154,7 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::create(
     UInt512 recovery_root,
     std::vector<ConstructionReceiptEntry> entries) {
     PURIFY_RETURN_IF_ERROR(
-        validate_public_root(recovery_root,
-                             "construction_receipt:recovery_root"),
+        validate_public_points(recovery_root),
         "construction_receipt:recovery_root");
     PURIFY_RETURN_IF_ERROR(validate_entries(entries),
                            "construction_receipt:entries");
@@ -213,8 +193,7 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::deserialize(
         UInt512::from_bytes_be(encoded.data() + offset, 64);
     offset += 64;
     PURIFY_RETURN_IF_ERROR(
-        validate_public_root(recovery_root,
-                             "construction_receipt:recovery_root"),
+        validate_public_points(recovery_root),
         "construction_receipt:recovery_root");
 
     const std::span<const unsigned char, 4> encoded_count(
@@ -301,8 +280,7 @@ construction_receipt_statement_digest(
             }
         }
         PURIFY_RETURN_IF_ERROR(
-            validate_public_root(resolved.anchor_root,
-                                 "construction_receipt:anchor_root"),
+            validate_public_points(resolved.anchor_root),
             "construction_receipt:anchor_root");
         append_array(statement, resolved.anchor_reference);
         append_array(statement, resolved.anchor_root.to_bytes_be());

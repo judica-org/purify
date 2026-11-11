@@ -633,6 +633,44 @@ void test_public_key_validation(TestContext& ctx) {
                  "verifier rejects the packed-public-key upper bound");
     expect_error(ctx, purify::verifier_circuit(message, invalid), ErrorCode::RangeViolation,
                  "verifier_circuit rejects the packed-public-key upper bound");
+
+    const auto first_generator =
+        purify::curve1().affine(purify::generator1());
+    const auto second_generator =
+        purify::curve2().affine(purify::generator2());
+    const UInt512 valid_points = purify::pack_public(
+        first_generator.x.to_uint256(), second_generator.x.to_uint256());
+    expect_ok(ctx, purify::unpack_public_points(valid_points),
+              "unpack_public_points accepts finite subgroup points");
+    expect_ok(ctx, purify::validate_public_points(valid_points),
+              "validate_public_points accepts finite subgroup points");
+
+    expect_error(ctx, purify::unpack_public_points(invalid),
+                 ErrorCode::RangeViolation,
+                 "unpack_public_points rejects a non-canonical encoding");
+    expect_error(ctx, purify::validate_public_points(invalid),
+                 ErrorCode::RangeViolation,
+                 "validate_public_points rejects a non-canonical encoding");
+
+    const UInt512 invalid_first_point = purify::pack_public(
+        UInt256::from_u64(2), second_generator.x.to_uint256());
+    expect_ok(ctx, purify::validate_public_key(invalid_first_point),
+              "range validation accepts an encoded non-point");
+    expect_error(ctx, purify::unpack_public_points(invalid_first_point),
+                 ErrorCode::BackendRejectedInput,
+                 "unpack_public_points rejects an invalid first point");
+    expect_error(ctx, purify::validate_public_points(invalid_first_point),
+                 ErrorCode::BackendRejectedInput,
+                 "validate_public_points rejects an invalid first point");
+
+    const UInt512 invalid_second_point = purify::pack_public(
+        first_generator.x.to_uint256(), UInt256::from_u64(2));
+    expect_error(ctx, purify::unpack_public_points(invalid_second_point),
+                 ErrorCode::BackendRejectedInput,
+                 "unpack_public_points rejects an invalid second point");
+    expect_error(ctx, purify::validate_public_points(invalid_second_point),
+                 ErrorCode::BackendRejectedInput,
+                 "validate_public_points rejects an invalid second point");
 }
 
 void test_equal_lowering(TestContext& ctx) {

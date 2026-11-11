@@ -40,17 +40,7 @@ Result<PointBytes> secp_point(const FieldElement& value, purify_secp_context* co
 }
 
 Result<PointPair> decode_root(const UInt512& encoded) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& coords, purify::unpack_public(encoded), "root_setup:unpack");
-    PURIFY_ASSIGN_OR_RETURN(const auto& x1, FieldElement::try_from_uint256(coords.first), "root_setup:x1");
-    PURIFY_ASSIGN_OR_RETURN(const auto& x2, FieldElement::try_from_uint256(coords.second), "root_setup:x2");
-    const auto p1 = purify::curve1().lift_x(x1);
-    const auto p2 = purify::curve2().lift_x(x2);
-    if (!p1 || !p2 || p1->infinity || p2->infinity ||
-        !purify::curve1().mul(*p1, purify::order_n1()).infinity ||
-        !purify::curve2().mul(*p2, purify::order_n2()).infinity) {
-        return purify::unexpected_error(purify::ErrorCode::BackendRejectedInput, "root_setup:points");
-    }
-    return PointPair{*p1, *p2};
+    return purify::unpack_public_points(encoded);
 }
 
 Result<purify::GeneratedKey> root_from_scalar(const FieldElement& scalar) {

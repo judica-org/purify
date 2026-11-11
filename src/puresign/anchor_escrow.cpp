@@ -178,25 +178,6 @@ Status require_roster(const RecoveryBoundSigningRoster& roster,
     return {};
 }
 
-Result<PointPair> decode_root(const UInt512& encoded,
-                              const char* label) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& coords, unpack_public(encoded), label);
-    PURIFY_ASSIGN_OR_RETURN(const auto& first_x,
-                            FieldElement::try_from_uint256(coords.first),
-                            label);
-    PURIFY_ASSIGN_OR_RETURN(const auto& second_x,
-                            FieldElement::try_from_uint256(coords.second),
-                            label);
-    const auto first = curve1().lift_x(first_x);
-    const auto second = curve2().lift_x(second_x);
-    if (!first || !second || first->infinity || second->infinity ||
-        !curve1().mul(*first, order_n1()).infinity ||
-        !curve2().mul(*second, order_n2()).infinity) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, label);
-    }
-    return PointPair{*first, *second};
-}
-
 Result<GeneratedKey> key_from_scalars(UInt256 first, UInt256 second) {
     WipeOnDestruction first_guard(first);
     WipeOnDestruction second_guard(second);
@@ -221,7 +202,7 @@ Result<FieldElement> shared_pad(const SecretKey& secret,
                             "anchor_escrow:shared_secret");
     WipeOnDestruction scalars_guard(scalars);
     PURIFY_ASSIGN_OR_RETURN(const auto& points,
-                            decode_root(peer, "anchor_escrow:shared_peer"),
+                            unpack_public_points(peer),
                             "anchor_escrow:shared_peer");
     PURIFY_ASSIGN_OR_RETURN(
         auto first,
@@ -329,13 +310,12 @@ Result<CircuitMainResult> escrow_relation(
     const EscrowOpening* opening) {
     PURIFY_ASSIGN_OR_RETURN(
         const auto& receiver,
-        decode_root(recipient, "anchor_escrow:recipient"),
+        unpack_public_points(recipient),
         "anchor_escrow:recipient");
     std::array<std::pair<UInt256, UInt256>, 2> ephemeral_coords;
     for (std::size_t i = 0; i < ciphertext.ephemeral_keys.size(); ++i) {
         PURIFY_RETURN_IF_ERROR(
-            decode_root(ciphertext.ephemeral_keys[i],
-                        "anchor_escrow:ephemeral"),
+            validate_public_points(ciphertext.ephemeral_keys[i]),
             "anchor_escrow:ephemeral");
         PURIFY_ASSIGN_OR_RETURN(
             ephemeral_coords[i], unpack_public(ciphertext.ephemeral_keys[i]),
@@ -445,7 +425,7 @@ Result<CircuitMainResult> escrow_relation(
 Result<NativeBulletproofCircuit> public_escrow_circuit(
     const UInt512& recipient, const UInt512& payload,
     const AnchorEscrowCiphertext& ciphertext) {
-    PURIFY_RETURN_IF_ERROR(decode_root(payload, "anchor_escrow:anchor_root"),
+    PURIFY_RETURN_IF_ERROR(validate_public_points(payload),
                            "anchor_escrow:anchor_root");
     Transcript transcript;
     PURIFY_ASSIGN_OR_RETURN(
@@ -612,7 +592,7 @@ anchor_escrow_circuit_shape_for_testing(
         require_anchor_v3_hash_suite("anchor_escrow:shape_hash_suite"),
         "anchor_escrow:shape_hash_suite");
     PURIFY_RETURN_IF_ERROR(
-        decode_root(anchor_root, "anchor_escrow:shape_anchor_root"),
+        validate_public_points(anchor_root),
         "anchor_escrow:shape_anchor_root");
     Transcript transcript;
     PURIFY_ASSIGN_OR_RETURN(
@@ -642,7 +622,7 @@ Status AnchorEscrowRecord::validate_encoding(
         "anchor_escrow:record");
     for (const auto& ephemeral : ciphertext_.ephemeral_keys) {
         PURIFY_RETURN_IF_ERROR(
-            decode_root(ephemeral, "anchor_escrow:ciphertext_ephemeral"),
+            validate_public_points(ephemeral),
             "anchor_escrow:ciphertext_ephemeral");
     }
     if (ciphertext_.ephemeral_keys[0] ==

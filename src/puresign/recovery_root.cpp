@@ -23,7 +23,6 @@ namespace purify::accountable {
 namespace {
 
 using PointBytes = bppp::PointBytes;
-using PointPair = std::pair<JacobianPoint, JacobianPoint>;
 using ::purify::detail::WipeOnDestruction;
 
 using SecretScalarBytes = ::purify::detail::Secret<bppp::ScalarBytes>;
@@ -82,26 +81,6 @@ Result<PointBytes> secp_point(const FieldElement& value,
         &detail::FieldElementAccess::raw(value));
     return bppp::pedersen_commit_char(zero, encoded_value.value, context,
                                       generator, generator);
-}
-
-Result<PointPair> decode_root(const UInt512& encoded) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& coords, unpack_public(encoded),
-                            "recovery_root:unpack");
-    PURIFY_ASSIGN_OR_RETURN(const auto& x1,
-                            FieldElement::try_from_uint256(coords.first),
-                            "recovery_root:x1");
-    PURIFY_ASSIGN_OR_RETURN(const auto& x2,
-                            FieldElement::try_from_uint256(coords.second),
-                            "recovery_root:x2");
-    const auto p1 = curve1().lift_x(x1);
-    const auto p2 = curve2().lift_x(x2);
-    if (!p1 || !p2 || p1->infinity || p2->infinity ||
-        !curve1().mul(*p1, order_n1()).infinity ||
-        !curve2().mul(*p2, order_n2()).infinity) {
-        return unexpected_error(ErrorCode::BackendRejectedInput,
-                                "recovery_root:points");
-    }
-    return PointPair{*p1, *p2};
 }
 
 std::vector<Expr> ordinary_bits(Transcript& transcript,
@@ -190,7 +169,8 @@ Result<CircuitMainResult> setup_relation(
 }
 
 Result<NativeBulletproofCircuit> public_setup_circuit(const UInt512& root) {
-    PURIFY_RETURN_IF_ERROR(decode_root(root), "recovery_root:root");
+    PURIFY_RETURN_IF_ERROR(validate_public_points(root),
+                           "recovery_root:root");
     Transcript transcript;
     PURIFY_ASSIGN_OR_RETURN(const auto& relation, setup_relation(transcript),
                             "recovery_root:relation");

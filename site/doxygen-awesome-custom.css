@@ -1,0 +1,43 @@
+html {
+  --primary-color: #609fb0;
+  --primary-dark-color: #305c67;
+  --primary-light-color: #9fc7d2;
+
+  --page-background-color: #f8fbf9;
+  --page-foreground-color: #1b262b;
+  --page-secondary-foreground-color: #5d6b70;
+
+  --fragment-background: #eef5f6;
+  --fragment-foreground: #27414a;
+
+  --border-radius-small: 6px;
+  --border-radius-medium: 12px;
+  --border-radius-large: 16px;
+
+  --content-maxwidth: 1100px;
+
+  --side-nav-arrow-opacity: 0.35;
+  --side-nav-arrow-hover-opacity: 0.88;
+}
+
+#projectname {
+  letter-spacing: -0.02em;
+}
+
+.contents a,
+.textblock a,
+.memberdecls a,
+.memitem a {
+  text-underline-offset: 0.12em;
+  text-decoration-thickness: 0.08em;
+}
+
+.fragment,
+.memitem,
+.directory,
+.contents > .toc,
+.header,
+.summary,
+table.memberdecls {
+  box-shadow: 0 10px 24px rgba(36, 58, 64, 0.05);
+}

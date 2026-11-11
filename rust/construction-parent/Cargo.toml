@@ -1,0 +1,23 @@
+[package]
+name = "purify-construction-parent"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98.1"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bincode = { version = "=2.0.1", features = ["serde"] }
+ff = { version = "0.13", default-features = false }
+nova-snark = { git = "https://github.com/JeremyRubin/Nova", rev = "aa42229024dc141e4edff89fcaa79f345e156d46", version = "=0.76.0", default-features = false }
+rayon = "=1.12.0"
+serde = { version = "=1.0.228", features = ["derive"] }
+sha2 = "0.10"
+thiserror = "2"
+zstd = { version = "=0.14.3", default-features = false, features = ["vendored"] }
+
+[dev-dependencies]
+num-bigint = { version = "=0.4.8", default-features = false }

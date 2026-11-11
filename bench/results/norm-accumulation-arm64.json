@@ -1,0 +1,66 @@
+{
+  "measured_date": "2026-10-30",
+  "platform": "macOS arm64",
+  "compiler": "AppleClang 16.0.0.16000026",
+  "language": "C++20",
+  "configuration": "Release -O3",
+  "library_commit": "f81f970",
+  "samples_per_configuration": 1,
+  "peak_memory_measured": false,
+  "runs": [
+    {
+      "scope": "synthetic_standalone_norm_accumulation",
+      "common_c_vector_required": true,
+      "private_witnesses_needed_for_accumulation": false,
+      "original_inputs_and_authenticated_transitions_required": true,
+      "compressed_construction_receipt": false,
+      "claims": 2,
+      "norm_size": 32768,
+      "linear_size": 16384,
+      "basis_dimension": 65536,
+      "step_proof_bytes": 1122,
+      "child_norm_proof_bytes": 2078,
+      "retained_public_leaf_record_bytes": 2208,
+      "shared_c_bytes": 524288,
+      "public_claim_descriptor_count": 2,
+      "public_polynomial_term_count": 4,
+      "public_polynomial_scalar_count": 62,
+      "timings_ms": {
+        "basis": 1759.535,
+        "leaf_publication": 2959.231,
+        "prepare": 256.608,
+        "prove_step": 4609.166,
+        "codec_roundtrip": 0.222,
+        "verify_step": 0.401,
+        "decide": 327.873
+      }
+    },
+    {
+      "scope": "synthetic_standalone_norm_accumulation",
+      "common_c_vector_required": true,
+      "private_witnesses_needed_for_accumulation": false,
+      "original_inputs_and_authenticated_transitions_required": true,
+      "compressed_construction_receipt": false,
+      "claims": 100,
+      "norm_size": 32768,
+      "linear_size": 16384,
+      "basis_dimension": 65536,
+      "step_proof_bytes": 1122,
+      "child_norm_proof_bytes": 103900,
+      "retained_public_leaf_record_bytes": 110400,
+      "shared_c_bytes": 524288,
+      "public_claim_descriptor_count": 100,
+      "public_polynomial_term_count": 200,
+      "public_polynomial_scalar_count": 3100,
+      "timings_ms": {
+        "basis": 1714.756,
+        "leaf_publication": 125736.131,
+        "prepare": 12139.958,
+        "prove_step": 4217.384,
+        "codec_roundtrip": 0.215,
+        "verify_step": 1.515,
+        "decide": 284.398
+      }
+    }
+  ]
+}

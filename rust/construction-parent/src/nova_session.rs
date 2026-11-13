@@ -475,22 +475,19 @@ impl ExpectedDirectNovaSuite {
     }
 }
 
-// These versions and all IDs below describe the last centralized artifact.
-// They are retained only so the fail-closed loader can recognize that stale
-// profile. They do not identify or qualify the mixed construction relation.
 const QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION: ConstructionPayloadVersion =
-    ConstructionPayloadVersion::new(3);
+    ConstructionPayloadVersion::new(4);
 const QUALIFIED_CONSTRUCTION_STATEMENT_VERSION: ConstructionStatementVersion =
-    ConstructionStatementVersion::new(4);
+    ConstructionStatementVersion::new(5);
 const QUALIFIED_CONSTRUCTION_MANIFEST_VERSION: ConstructionManifestVersion =
-    ConstructionManifestVersion::new(2);
+    ConstructionManifestVersion::new(3);
 
 /// Candidate-decision v1 binds `CandidateAccumStep/v1` and the native linear
 /// decision over `point:33 || scale:32 || factors:15*32`, the current 545-byte
 /// construction-root semantics.
 const QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION: ConstructionNativeDecisionVersion =
     ConstructionNativeDecisionVersion::new(1);
-const QUALIFIED_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
+pub(crate) const QUALIFIED_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
     DirectNovaConstructionVersions::new(
         QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION,
         QUALIFIED_CONSTRUCTION_STATEMENT_VERSION,
@@ -498,49 +495,29 @@ const QUALIFIED_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
         QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION,
     );
 
-/// Versions selected by the mixed construction-parent qualification run.
-///
-/// This is not a production selector. Qualification derives the remaining
-/// suite identity from the exact streamed relation and generated parameters;
-/// a later reviewed pin must replace the stale production profile atomically.
-#[cfg(test)]
-pub(crate) const MIXED_CONSTRUCTION_QUALIFICATION_VERSIONS: DirectNovaConstructionVersions =
-    DirectNovaConstructionVersions::new(
-        ConstructionPayloadVersion::new(4),
-        ConstructionStatementVersion::new(5),
-        ConstructionManifestVersion::new(3),
-        ConstructionNativeDecisionVersion::new(1),
-    );
 const QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID: [u8; 32] = [
-    0xd5, 0x42, 0xc5, 0xae, 0x37, 0x63, 0xee, 0x86, 0x75, 0xf0, 0x07, 0xeb, 0x16, 0x2c, 0x6f, 0xce,
-    0xd4, 0x7b, 0x64, 0x6a, 0xca, 0x26, 0x6e, 0xce, 0x41, 0x6c, 0x23, 0xf5, 0x12, 0x00, 0x18, 0xbc,
+    0xa6, 0x6c, 0x58, 0xa8, 0x6a, 0xfc, 0xe6, 0x4b, 0x2b, 0x69, 0xd5, 0x3e, 0x83, 0xd3, 0xd5, 0x43,
+    0x0d, 0x08, 0x0f, 0xaf, 0x0b, 0x68, 0x06, 0x4c, 0xad, 0xb3, 0xa6, 0xd8, 0xb4, 0x39, 0xee, 0xa9,
 ];
 const QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST: [u8; 32] = [
-    0x6d, 0xda, 0x88, 0x85, 0x55, 0x40, 0x99, 0xec, 0x7a, 0x18, 0x39, 0x18, 0xad, 0x48, 0x1e, 0x43,
-    0x0f, 0xd8, 0x4d, 0x7b, 0x60, 0x8a, 0xe9, 0x55, 0x58, 0x25, 0x97, 0x60, 0x51, 0x9a, 0x60, 0x00,
+    0x12, 0x4d, 0x07, 0x56, 0x20, 0x3e, 0xbf, 0x5b, 0x41, 0x6b, 0x6f, 0x12, 0x30, 0x35, 0x6e, 0xf9,
+    0x92, 0x1f, 0xb3, 0x05, 0x38, 0xa8, 0xf7, 0xfc, 0xeb, 0xb1, 0x06, 0x18, 0x19, 0x49, 0x71, 0x00,
 ];
-// The artifact loader rejects this stale suite with a typed
-// qualification-pending error until mixed-profile qualification replaces the
-// full relation, suite, parameter, proof-shape, and artifact set.
 const QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID: DirectNovaSuiteId = DirectNovaSuiteId::new([
-    0xbb, 0x51, 0x25, 0x48, 0x7e, 0xed, 0x11, 0x9c, 0xd1, 0x54, 0x86, 0xef, 0x81, 0xfc, 0x51, 0x8b,
-    0xed, 0xe1, 0xdc, 0x7c, 0x20, 0x8f, 0xd7, 0x81, 0x75, 0xa6, 0xdf, 0xac, 0xa3, 0x75, 0x60, 0x2d,
+    0xcc, 0xba, 0x9e, 0xd4, 0xb0, 0xee, 0xc0, 0x37, 0xc8, 0xdc, 0x34, 0xbf, 0x33, 0xfd, 0x29, 0x2c,
+    0xc4, 0x76, 0x37, 0x5e, 0xc4, 0x70, 0x0a, 0x36, 0xc0, 0x70, 0xe3, 0x71, 0x0d, 0xd1, 0xa9, 0x02,
 ]);
-/// Transport slot inherited from the stale profile, not a mixed qualification.
-pub(crate) const PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH: usize = 15_076;
+pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH: usize = 15_076;
 
-/// Stale selector retained only to pin the pre-qualification suite frame.
-///
-/// The artifact loader rejects this selector until resource-gated mixed
-/// qualification replaces every inherited identity and shape value.
+/// Exact mixed construction-parent profile selected by qualification.
 pub(crate) static QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE: ExpectedDirectNovaSuite =
     ExpectedDirectNovaSuite::new(
         QUALIFIED_CONSTRUCTION_VERSIONS,
         QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
         QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
-        FrozenNovaDimensions::new(9_418_599, 9_372_280),
+        FrozenNovaDimensions::new(9_418_542, 9_372_224),
         FrozenNovaDimensions::new(728_974, 728_211),
-        FrozenNovaProofMetrics::new(PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH as u64, 152),
+        FrozenNovaProofMetrics::new(QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH as u64, 152),
         QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID,
     );
 
@@ -1165,16 +1142,16 @@ mod tests {
     }
 
     #[test]
-    fn stale_construction_parent_suite_frame_is_frozen() {
+    fn qualified_construction_parent_suite_frame_is_frozen() {
         let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
-            NovaR1csDimensions::new(9_418_599, 9_372_280),
+            NovaR1csDimensions::new(9_418_542, 9_372_224),
             NovaR1csDimensions::new(728_974, 728_211),
             TEST_ARITY,
         )
-        .expect("stale SHA-256 proof shape");
+        .expect("qualified SHA-256 proof shape");
         assert_eq!(
             proof_shape.encoded_len(),
-            PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH
+            QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
         );
         assert_eq!(proof_shape.sequence_count(), 152);
 
@@ -1183,8 +1160,8 @@ mod tests {
                 QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
             ),
             public_parameter_digest: QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
-            primary_constraints: 9_418_599,
-            primary_variables: 9_372_280,
+            primary_constraints: 9_418_542,
+            primary_variables: 9_372_224,
             secondary_constraints: 728_974,
             secondary_variables: 728_211,
             proof_length: proof_shape.encoded_len(),
@@ -1192,11 +1169,11 @@ mod tests {
         };
         let suite_id = metadata
             .suite_id::<TEST_ARITY>(&proof_shape, QUALIFIED_CONSTRUCTION_VERSIONS)
-            .expect("stale SHA-256 suite ID");
+            .expect("qualified SHA-256 suite ID");
         assert_eq!(suite_id, QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID);
         QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE
             .validate::<TEST_ARITY>(&metadata, &proof_shape)
-            .expect("stale SHA-256 suite profile");
+            .expect("qualified SHA-256 suite profile");
     }
 
     const TEST_EXPECTED_SUITE: ExpectedDirectNovaSuite = ExpectedDirectNovaSuite::new(

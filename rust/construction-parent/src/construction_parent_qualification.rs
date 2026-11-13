@@ -30,12 +30,12 @@ use crate::construction_recurrence::{
 };
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
 use crate::nova_construction_recurrence::{
-    ConstructionParentStep, TestConstructionParentStep, PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID,
+    ConstructionParentStep, TestConstructionParentStep, QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
 };
 use crate::nova_relation_identity::direct_step_relation_shape;
 use crate::nova_session::{
     NovaSessionStep, NovaSessionSuite, SelectedNovaSessionSuite,
-    MIXED_CONSTRUCTION_QUALIFICATION_VERSIONS, PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH,
+    QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH, QUALIFIED_CONSTRUCTION_VERSIONS,
 };
 use crate::nova_types::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine};
 use crate::secp_native::{standard_generator, SecpEncodedPointWitness, SecpScalarWitness};
@@ -415,7 +415,7 @@ fn direct_construction_step_fixes_profile_and_input_state() {
     assert_eq!(step.input_state(), &expected_input);
     assert_eq!(
         NovaSessionStep::relation_id(&step),
-        PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
+        QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
     );
 
     let shape = small_leaf_shape();
@@ -451,7 +451,7 @@ fn direct_construction_step_relation_shape_is_deterministic() {
     assert_eq!(first.auxiliary(), DIRECT_PARENT_AUXILIARY);
     assert_eq!(first.constraints(), DIRECT_PARENT_CONSTRAINTS);
     eprintln!(
-        "pending relation_id={} inputs={} auxiliary={} constraints={}",
+        "qualified relation_id={} inputs={} auxiliary={} constraints={}",
         hex(first.relation_id().bytes()),
         first.inputs(),
         first.auxiliary(),
@@ -460,8 +460,8 @@ fn direct_construction_step_relation_shape_is_deterministic() {
 }
 
 #[test]
-#[ignore = "run explicitly in release mode; checks provisional geometry"]
-fn direct_construction_step_augmented_shape_matches_provisional_slot() {
+#[ignore = "run explicitly in release mode; checks qualified geometry"]
+fn direct_construction_step_augmented_shape_matches_qualified_profile() {
     let step = production_direct_step(0x31, 1);
     let augmented =
         PublicParams::<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, _>::shape_metrics(&step)
@@ -478,7 +478,7 @@ fn direct_construction_step_augmented_shape_matches_provisional_slot() {
     .expect("direct construction proof shape");
 
     eprintln!(
-        "qualification-pending augmented shape={augmented:#?}\n\
+        "qualified augmented shape={augmented:#?}\n\
          verifier_payload_length={verifier_payload_length}\n\
          proof_length={} proof_sequences={}",
         proof_shape.encoded_len(),
@@ -499,7 +499,7 @@ fn direct_construction_step_augmented_shape_matches_provisional_slot() {
     assert_eq!(verifier_payload_length, 3_206_736_424);
     assert_eq!(
         proof_shape.encoded_len(),
-        PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH
+        QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
     );
     assert_eq!(proof_shape.sequence_count(), 152);
 }
@@ -615,7 +615,7 @@ fn bind_qualification_fixture(
         assert_eq!(*step.input_state(), expected_input);
         assert_eq!(
             NovaSessionStep::relation_id(&step),
-            PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
+            QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
         );
         let output = synthesize_output(&step);
         state = recurrence_state_from_fields(
@@ -663,7 +663,7 @@ fn bind_both_qualification_fixtures(
         .iter()
         .chain(&nondeciding_bound.steps)
         .all(|step| {
-            NovaSessionStep::relation_id(step) == PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
+            NovaSessionStep::relation_id(step) == QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
         }));
     (trusted_step, accepted_bound, nondeciding_bound)
 }
@@ -737,7 +737,7 @@ fn exported_sha_parent_fixtures_reconstruct_one_shape() {
     assert_eq!(nondeciding_bound.steps.len(), nondeciding.leaves.len());
     assert_eq!(
         NovaSessionStep::relation_id(&trusted_step),
-        PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
+        QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
     );
 }
 
@@ -792,10 +792,10 @@ fn native_profile_sha_parent_qualification_is_exact() {
         )
         .expect("unselected mixed qualification suite");
     let selected = unselected
-        .select_generated_for_qualification(MIXED_CONSTRUCTION_QUALIFICATION_VERSIONS)
+        .select_generated_for_qualification(QUALIFIED_CONSTRUCTION_VERSIONS)
         .expect("select generated mixed qualification suite");
     let metadata = selected.metadata();
-    let versions = MIXED_CONSTRUCTION_QUALIFICATION_VERSIONS.values();
+    let versions = QUALIFIED_CONSTRUCTION_VERSIONS.values();
     eprintln!(
         "sha_parent_qualification: setup_seconds={:.3}\n\
          payload_version={} statement_version={} manifest_version={} \

@@ -16,9 +16,7 @@ use crate::construction_parent_verifier::{
     verify_construction_parent, ConstructionParentVerifierError,
 };
 use crate::construction_profile::{CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES};
-use crate::nova_session::{
-    SelectedDirectNovaVerifier, PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH,
-};
+use crate::nova_session::{SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH};
 
 /// Stable values mirrored by the private construction-parent bridge header.
 #[repr(C)]
@@ -190,7 +188,7 @@ unsafe fn verify_inner(
             None => return PurifyConstructionParentStatus::Malformed,
         };
     if leaf_descriptors_length != expected_descriptors
-        || proof_length != PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH
+        || proof_length != QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
     {
         return PurifyConstructionParentStatus::Malformed;
     }

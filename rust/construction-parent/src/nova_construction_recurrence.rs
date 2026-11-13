@@ -39,12 +39,12 @@ use crate::Scalar;
 
 const FIELD_BITS: usize = 256;
 
-/// Stale relation ID retained only while mixed-profile qualification is pending.
-pub(crate) const PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID: DirectRelationId =
+/// Relation ID frozen by the mixed construction-parent qualification.
+pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID: DirectRelationId =
     DirectRelationId::from_frozen_bytes([
-        0xd5, 0x42, 0xc5, 0xae, 0x37, 0x63, 0xee, 0x86, 0x75, 0xf0, 0x07, 0xeb, 0x16, 0x2c, 0x6f,
-        0xce, 0xd4, 0x7b, 0x64, 0x6a, 0xca, 0x26, 0x6e, 0xce, 0x41, 0x6c, 0x23, 0xf5, 0x12, 0x00,
-        0x18, 0xbc,
+        0xa6, 0x6c, 0x58, 0xa8, 0x6a, 0xfc, 0xe6, 0x4b, 0x2b, 0x69, 0xd5, 0x3e, 0x83, 0xd3, 0xd5,
+        0x43, 0x0d, 0x08, 0x0f, 0xaf, 0x0b, 0x68, 0x06, 0x4c, 0xad, 0xb3, 0xa6, 0xd8, 0xb4, 0x39,
+        0xee, 0xa9,
     ]);
 
 pub(crate) struct DirectPriorState {
@@ -113,7 +113,7 @@ impl ConstructionParentStep {
             proof,
             input_state,
             #[cfg(test)]
-            relation_id: PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID,
+            relation_id: QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
         })
     }
 
@@ -211,7 +211,7 @@ impl NovaSessionStep<CONSTRUCTION_RECURRENCE_STATE_ARITY> for ConstructionParent
         }
         #[cfg(not(test))]
         {
-            PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
+            QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
         }
     }
 

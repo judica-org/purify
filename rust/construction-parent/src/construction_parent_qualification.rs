@@ -14,6 +14,7 @@ use crate::circuit_transcript::{
 };
 use crate::construction_parent_prover_binding::BoundConstructionParentWitness;
 use crate::construction_parent_prover_fixture::ConstructionParentProverFixture;
+use crate::construction_parent_verifier::load_qualified_construction_parent_verifier;
 use crate::construction_profile::{
     CONSTRUCTION_LEAF_GATE_COUNT, CONSTRUCTION_LEAF_NORM_LENGTH, CONSTRUCTION_LEAF_ROUNDS,
     CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
@@ -29,10 +30,12 @@ use crate::nova_construction_recurrence::{
 };
 use crate::nova_relation_identity::direct_step_relation_shape;
 use crate::nova_session::{
-    NovaSessionStep, NovaSessionSuite, SelectedNovaSessionSuite,
-    QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH, QUALIFIED_CONSTRUCTION_VERSIONS,
+    NovaSessionStep, NovaSessionSuite, SelectedNovaProver, SelectedNovaSessionSuite,
+    QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
+    QUALIFIED_CONSTRUCTION_VERSIONS,
 };
 use crate::nova_types::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine};
+use crate::prover::ConstructionParentWitness;
 use crate::secp_native::{standard_generator, SecpEncodedPointWitness, SecpScalarWitness};
 type ConstructionParentNovaSuite =
     SelectedNovaSessionSuite<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>;
@@ -335,7 +338,7 @@ fn production_relation_digests_match_the_native_leaf_profile() {
     );
 }
 
-fn read_qualification_fixture(environment: &str) -> ConstructionParentProverFixture {
+fn read_qualification_wit3(environment: &str) -> Vec<u8> {
     let path = std::env::var_os(environment)
         .unwrap_or_else(|| panic!("set {environment} before qualification"));
     let bytes = std::fs::read(path).expect("read construction parent prover fixture");
@@ -344,7 +347,11 @@ fn read_qualification_fixture(environment: &str) -> ConstructionParentProverFixt
         bytes.len(),
         hex(&Sha256::digest(&bytes)),
     );
-    ConstructionParentProverFixture::parse(&bytes)
+    bytes
+}
+
+fn read_qualification_fixture(environment: &str) -> ConstructionParentProverFixture {
+    ConstructionParentProverFixture::parse(&read_qualification_wit3(environment))
         .expect("parse construction parent prover fixture")
 }
 
@@ -449,6 +456,34 @@ fn qualification_output_path(environment: &str) -> std::path::PathBuf {
     assert!(!path.as_os_str().is_empty(), "{environment} is empty");
     assert!(!path.exists(), "{environment} already exists");
     path
+}
+
+fn qualification_input_path(environment: &str) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(
+        std::env::var_os(environment)
+            .unwrap_or_else(|| panic!("set {environment} before qualification")),
+    );
+    assert!(!path.as_os_str().is_empty(), "{environment} is empty");
+    assert!(path.is_file(), "{environment} is not a regular file");
+    path
+}
+
+fn qualification_file_sha256(path: &std::path::Path) -> [u8; 32] {
+    use std::io::Read;
+
+    let mut input = std::fs::File::open(path).expect("open qualification output for hashing");
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .expect("read qualification output for hashing");
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    digest.finalize().into()
 }
 
 fn write_new_qualification_output(path: &std::path::Path, bytes: &[u8]) {
@@ -628,5 +663,122 @@ fn native_profile_sha_parent_qualification_is_exact() {
     eprintln!(
         "sha_parent_qualification: total_seconds={:.3}",
         total_started.elapsed().as_secs_f64()
+    );
+}
+
+/// Persist and reload qualified prover state, then produce one fresh proof.
+///
+/// Recursive verification here is necessary but not receipt acceptance. The
+/// emitted proof must subsequently pass the C++ ConstructionParentVerifier,
+/// including its native final accumulation decision, before the PK1 identity
+/// can be promoted into production constants.
+#[test]
+#[ignore = "performs production setup, PK1 persistence, and fresh proving"]
+fn setup_only_qualification_persists_a_usable_prover() {
+    let total_started = std::time::Instant::now();
+    let prover_artifact_path =
+        qualification_output_path("PURIFY_CONSTRUCTION_PARENT_PROVER_ARTIFACT_OUT");
+    let fresh_proof_path = qualification_output_path("PURIFY_CONSTRUCTION_PARENT_FRESH_PROOF_OUT");
+    let verifier_artifact_path =
+        qualification_input_path("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT");
+
+    let witness = ConstructionParentWitness::decode(&read_qualification_wit3(
+        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
+    ))
+    .expect("decode accepted construction parent Wit3")
+    .bind()
+    .expect("bind accepted construction parent witness");
+    let trusted_step = witness
+        .trusted_setup_step()
+        .expect("accepted construction parent has a setup step");
+
+    let setup_started = std::time::Instant::now();
+    let selected = NovaSessionSuite::<
+        CONSTRUCTION_RECURRENCE_STATE_ARITY,
+        ConstructionParentStep,
+    >::setup_exact(trusted_step, &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE)
+    .expect("setup exact qualified construction parent prover");
+    let setup_seconds = setup_started.elapsed().as_secs_f64();
+
+    let artifact_started = std::time::Instant::now();
+    let mut artifact = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&prover_artifact_path)
+        .expect("create new qualification prover artifact");
+    let descriptor = selected
+        .into_prover()
+        .write_artifact(&mut artifact)
+        .expect("write qualification prover artifact");
+    artifact
+        .sync_all()
+        .expect("sync qualification prover artifact");
+    drop(artifact);
+    let artifact_sha256 = qualification_file_sha256(&prover_artifact_path);
+    let artifact_seconds = artifact_started.elapsed().as_secs_f64();
+
+    eprintln!(
+        "setup_only_qualification: prover_artifact={} encoded_bytes={} \
+         decoded_bytes={} tagged_digest={} sha256={} setup_seconds={:.3} \
+         artifact_seconds={:.3}",
+        prover_artifact_path.display(),
+        descriptor.encoded_length(),
+        descriptor.decoded_payload_length(),
+        hex(&descriptor.digest()),
+        hex(&artifact_sha256),
+        setup_seconds,
+        artifact_seconds,
+    );
+
+    let reload_started = std::time::Instant::now();
+    let mut artifact = std::fs::File::open(&prover_artifact_path)
+        .expect("open qualification prover artifact read-only");
+    let prover = SelectedNovaProver::<
+        CONSTRUCTION_RECURRENCE_STATE_ARITY,
+        ConstructionParentStep,
+    >::from_artifact_reader(
+        &mut artifact,
+        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+        &descriptor,
+    )
+    .expect("reload qualification prover artifact");
+    drop(artifact);
+    let reload_seconds = reload_started.elapsed().as_secs_f64();
+
+    let proving_started = std::time::Instant::now();
+    let unverified = witness
+        .prove_with(prover)
+        .expect("produce fresh construction parent proof");
+    let proving_seconds = proving_started.elapsed().as_secs_f64();
+
+    // `prove_with` has dropped all PP/PK state before this independently
+    // pinned verifier artifact is opened.
+    let verification_started = std::time::Instant::now();
+    let mut verifier_artifact = std::fs::File::open(&verifier_artifact_path)
+        .expect("open qualified verifier artifact read-only");
+    let verifier = load_qualified_construction_parent_verifier(&mut verifier_artifact)
+        .expect("load qualified construction parent verifier");
+    drop(verifier_artifact);
+    let proof = unverified
+        .verify_with(verifier)
+        .expect("verify exact fresh construction parent state")
+        .into_bytes();
+    let verification_seconds = verification_started.elapsed().as_secs_f64();
+    let proof_sha256: [u8; 32] = Sha256::digest(&proof).into();
+
+    write_new_qualification_output(&fresh_proof_path, &proof);
+    eprintln!(
+        "setup_only_qualification: fresh_proof={} proof_bytes={} \
+         proof_sha256={} reload_seconds={:.3} proving_seconds={:.3} \
+         verification_seconds={:.3} total_seconds={:.3} \
+         cpp_native_decide_required=true",
+        fresh_proof_path.display(),
+        proof.len(),
+        hex(&proof_sha256),
+        reload_seconds,
+        proving_seconds,
+        verification_seconds,
+        total_started.elapsed().as_secs_f64(),
     );
 }

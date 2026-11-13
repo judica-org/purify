@@ -36,6 +36,30 @@ Using the centered representative is essential. Interpreting the unsigned
 secp representative `p-m` on a different-order companion curve would not be
 equivalent to `-m`.
 
+## Two-phase formation
+
+The recovery root is part of Char's coalition manifest, while the proof for a
+member contribution is bound to the core derived from that manifest. Formation
+therefore has two explicit phases:
+
+1. Fix the ordered `SigningRoster`.
+2. Each member calls `derive_recovery_root_share()` with that roster, its exact
+   index, and its own signing secret, then publishes the resulting 66-byte
+   share.
+3. Anyone aggregates the ordered shares into the provisional recovery root
+   `M`, which the application commits in its manifest.
+4. After the one-shot permit, formation core, and nonce-host list are fixed,
+   each member calls `prove_recovery_root_contribution()` for that formation.
+5. The assembler requires the proof record to contain the exact share from
+   phase two, verifies every ordered proof, and requires the finalized
+   aggregate root to equal the manifest root.
+
+Phase-one shares are deterministic public points, not authorization. They do
+not reveal a member secret, and no participant or assembler combines secret
+scalars. The post-formation proof recomputes the same share from its private
+witness and binds it to the permit, core, roster index, and nonce hosts. This
+breaks the manifest/core dependency without an MPC proving round.
+
 ## Independent member contribution
 
 Member `i` publishes the exact full companion points:
@@ -91,8 +115,10 @@ can consume both proof types.
 
 ## Public aggregation
 
-After verifying one contribution for every roster member in exact roster
-order, anyone computes:
+Before formation, anyone may compute the provisional root from the ordered
+public shares. After formation, the same computation is authoritative only
+after verifying one contribution for every roster member in exact roster
+order:
 
 ```
 T1 = sum_i T_i1

@@ -64,12 +64,12 @@ struct ConstructionReceiptEntry {
  */
 class ConstructionReceiptPayload {
 public:
-    static constexpr unsigned char kSerializationVersion = 2;
+    static constexpr unsigned char kSerializationVersion = 3;
     static constexpr std::size_t kFixedHeaderSize = 1 + 64 + 4;
     static constexpr std::size_t kEntrySize =
         AnchorEscrowCiphertext::kSerializedSize +
         bppp::ScalarBytes{}.size();
-    static_assert(kEntrySize == 224);
+    static_assert(kEntrySize == 128);
 
     [[nodiscard]] static Result<ConstructionReceiptPayload> create(
         UInt512 recovery_root,

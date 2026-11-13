@@ -122,8 +122,8 @@ Result<AnchorPunishmentKey> VerifiedConstructionReceipt::recover_anchor(
     const auto& entry = entries_[anchor_index];
     const auto& resolved = resolved_entries_[anchor_index];
     return recover_authenticated_anchor_ciphertext(
-        recipient, resolved.anchor_root, resolved.punishment_key,
-        entry.ciphertext, secp_context);
+        recipient, resolved.punishment_key, entry.ciphertext,
+        secp_context);
 }
 
 Result<ConstructionParentVerifier> ConstructionParentVerifier::load(

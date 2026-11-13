@@ -28,7 +28,7 @@ using Point = std::array<unsigned char, 33>;
 
 constexpr std::array<unsigned char, 16> kParentProverFixtureMagic{
     'P', 'u', 'r', 'i', 'f', 'y', '/', 'N',
-    'o', 'v', 'a', '/', 'W', 'i', 't', '1'};
+    'o', 'v', 'a', '/', 'W', 'i', 't', '2'};
 constexpr std::size_t kParentDescriptorSize = 130;
 constexpr std::size_t kReductionProofSize = 1'022;
 constexpr std::size_t kParentStepProofSize = 1'056;
@@ -269,8 +269,9 @@ make_native_accumulation_reference(
             "slashability_fixture:anchor_key");
         PURIFY_ASSIGN_OR_RETURN(
             auto punishment_key,
-            purify::accountable::derive_anchor_punishment_key(
-                recovery_key, secp_context),
+            purify::accountable::AnchorPunishmentKey::from_secret(
+                FieldElement::from_u64(0x31 + i).to_bytes_be(),
+                secp_context),
             "slashability_fixture:punishment_key");
         const auto context = anchor_context(i);
         purify::bppp::ScalarBytes auxiliary_randomness{};
@@ -280,8 +281,8 @@ make_native_accumulation_reference(
             auto record,
             purify::accountable::
                 create_anchor_escrow_with_aux_randomness(
-                    coalition.recovery_roster, recovery_key,
-                    punishment_key.public_key(), context,
+                    coalition.recovery_roster, recovery_key.public_key,
+                    punishment_key, context,
                     auxiliary_randomness, secp_context,
                     &shared_cache),
             "slashability_fixture:anchor_escrow");

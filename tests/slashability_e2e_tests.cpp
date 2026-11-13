@@ -388,14 +388,14 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
               "construction prover fixture serializes canonically");
     if (!prover_fixture) return;
     ctx.expect(
-        prover_fixture->size() == 8'314 &&
+        prover_fixture->size() == 8'122 &&
             std::equal(prover_fixture->begin(),
                        prover_fixture->begin() + 16,
                        std::array<unsigned char, 16>{
                            'P', 'u', 'r', 'i', 'f', 'y', '/', 'N',
-                           'o', 'v', 'a', '/', 'W', 'i', 't', '1'}
+                           'o', 'v', 'a', '/', 'W', 'i', 't', '2'}
                            .begin()),
-        "construction prover fixture has the exact v1 frame");
+        "construction prover fixture has the exact v2 frame");
     write_parent_prover_fixture_if_requested(
         ctx, *prover_fixture,
         "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE_OUT");

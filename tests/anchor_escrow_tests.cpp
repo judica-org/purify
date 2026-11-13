@@ -121,7 +121,7 @@ void expect_rejected(TestContext& ctx, Result<bool> result,
     ctx.expect(!result || !*result, message);
 }
 
-void test_anchor_punishment_derivation(TestContext& ctx) {
+void test_anchor_punishment_key(TestContext& ctx) {
     auto secp = purify::make_secp_context();
     ctx.expect(secp != nullptr,
                "anchor punishment secp context creates");
@@ -170,170 +170,54 @@ void test_anchor_punishment_derivation(TestContext& ctx) {
             invalid_punishment_xonly, nullptr),
         purify::ErrorCode::MissingValue,
         "punishment public-key parsing requires a secp context");
-    auto minimum_secret = purify::SecretKey::from_packed(
-        purify::UInt512::zero());
-    expect_ok(ctx, minimum_secret,
-              "minimum canonical anchor secret parses");
-    if (!minimum_secret) return;
-    auto anchor = purify::derive_key(std::move(*minimum_secret));
-    expect_ok(ctx, anchor,
-              "minimum canonical anchor recovery key derives");
-    if (!anchor) return;
-#if PURIFY_USE_LEGACY_FIELD_HASHES
-    expect_error(
-        ctx,
-        purify::accountable::derive_anchor_punishment_key(
-            *anchor, secp.get()),
-        purify::ErrorCode::UnsupportedSymbol,
-        "anchor v3 derivation rejects the legacy field-hash suite");
-    return;
-#else
-    expect_error(
-        ctx,
-        purify::accountable::derive_anchor_punishment_key(*anchor,
-                                                          nullptr),
-        purify::ErrorCode::MissingValue,
-        "punishment-key derivation requires a secp context");
-    auto punishment =
-        purify::accountable::derive_anchor_punishment_key(*anchor,
-                                                          secp.get());
-    expect_ok(ctx, punishment,
-              "fixed-domain anchor punishment key derives");
-    if (!punishment) return;
-    const auto punishment_key = punishment->public_key();
-    auto raw_punishment = purify::eval(
-        anchor->secret,
-        purify::bytes_from_ascii(
-            "Purify/Accountable/AnchorPunishmentKey/v1"));
-    expect_ok(ctx, raw_punishment,
-              "pinned punishment evaluation input derives");
-    if (!raw_punishment) return;
-    auto canonical_punishment = raw_punishment->to_bytes_be();
-    std::array<unsigned char, 32> canonical_punishment_xonly{};
-    constexpr auto kMinimumRaw =
-        "74e11ba824a807f9b33bf4f7bf1c9a4d"
-        "5ebc612adf2fa1a81e3500a6582b19c5";
-    constexpr auto kMinimumXonly =
-        "3ea23ca101b865e6edc3b299bc92592c"
-        "69f1f8d506b05b284bf8a6f0c651dca2";
-    ctx.expect(
-        raw_punishment->to_hex() == kMinimumRaw &&
-            purify_bip340_key_from_seckey(
-                secp.get(), canonical_punishment.data(),
-                canonical_punishment_xonly.data()) != 0 &&
-            canonical_punishment == punishment->bip340_key().seckey &&
-            canonical_punishment_xonly == punishment_key.xonly() &&
-            purify::UInt256::from_bytes_be(
-                punishment_key.xonly().data(),
-                punishment_key.xonly().size()).to_hex() ==
-                kMinimumXonly,
-        "minimum anchor matches the even fixed-domain key vector");
-
-    auto parsed_punishment =
+    auto parsed_public =
         purify::accountable::AnchorPunishmentPublicKey::create(
-            punishment_key.xonly(), secp.get());
-    expect_ok(ctx, parsed_punishment,
-              "derived punishment public key reparses");
-    if (!parsed_punishment) return;
-    ctx.expect(*parsed_punishment == punishment_key,
+            parsed_secret->public_key().xonly(), secp.get());
+    expect_ok(ctx, parsed_public,
+              "typed punishment public key reparses");
+    if (!parsed_public) return;
+    ctx.expect(*parsed_public == parsed_secret->public_key(),
                "punishment public key has one canonical x-only form");
 
-    std::array<unsigned char, 32> seed{};
-    seed.fill(0x48);
-    auto other_anchor = purify::generate_key(seed);
-    expect_ok(ctx, other_anchor,
-              "distinct punishment derivation anchor generates");
-    if (!other_anchor) return;
-    auto other_punishment =
-        purify::accountable::derive_anchor_punishment_key(
-            *other_anchor, secp.get());
-    expect_ok(ctx, other_punishment,
-              "distinct fixed-domain punishment key derives");
-    if (!other_punishment) return;
-    ctx.expect(other_punishment->public_key() != punishment_key,
-               "fixed-domain punishment derivation depends on the anchor");
-
-    auto anchor_secret_copy = anchor->secret.clone();
-    expect_ok(ctx, anchor_secret_copy,
-              "punishment mismatch fixture clones its secret");
-    if (!anchor_secret_copy) return;
-    purify::GeneratedKey mismatched_anchor{
-        std::move(*anchor_secret_copy), other_anchor->public_key};
-    expect_error(
-        ctx,
-        purify::accountable::derive_anchor_punishment_key(
-            mismatched_anchor, secp.get()),
-        purify::ErrorCode::BindingMismatch,
-        "punishment derivation rejects a mismatched anchor keypair");
-
-    auto odd_secret = purify::SecretKey::from_packed(
-        purify::UInt512::from_u64(8));
-    expect_ok(ctx, odd_secret,
-              "odd fixed-domain vector secret parses");
-    if (!odd_secret) return;
-    auto odd_anchor = purify::derive_key(std::move(*odd_secret));
-    expect_ok(ctx, odd_anchor,
-              "odd fixed-domain vector anchor derives");
-    if (!odd_anchor) return;
-    auto odd_punishment =
-        purify::accountable::derive_anchor_punishment_key(
-            *odd_anchor, secp.get());
-    expect_ok(ctx, odd_punishment,
-              "odd fixed-domain punishment key derives");
-    if (!odd_punishment) return;
-    auto odd_raw = purify::eval(
-        odd_anchor->secret,
-        purify::bytes_from_ascii(
-            "Purify/Accountable/AnchorPunishmentKey/v1"));
-    expect_ok(ctx, odd_raw,
-              "odd fixed-domain raw evaluation derives");
-    if (!odd_raw) return;
-    constexpr auto kOddRaw =
-        "3e271baaafdb9ac9fea6ef734e3579b2"
-        "eb8a855bbbedfcfee9cabcc8058797f9";
-    constexpr auto kOddNormalized =
-        "c1d8e455502465360159108cb1ca864b"
-        "cf24578af35aa33cd607a1c4caaea948";
-    constexpr auto kOddXonly =
-        "966bb6ac89e212303f3bbeb495fdf212"
-        "828eb31ced01d7650acac9e1378d4824";
-    ctx.expect(
-        odd_raw->to_hex() == kOddRaw &&
-            purify::UInt256::from_bytes_be(
-                odd_punishment->bip340_key().seckey.data(),
-                odd_punishment->bip340_key().seckey.size()).to_hex() ==
-                kOddNormalized &&
-            purify::UInt256::from_bytes_be(
-                odd_punishment->public_key().xonly().data(),
-                odd_punishment->public_key().xonly().size()).to_hex() ==
-                kOddXonly &&
-            odd_raw->to_bytes_be() !=
-                odd_punishment->bip340_key().seckey,
-        "odd raw output normalizes to the frozen even-Y key vector");
-#endif
+    auto odd_secret = FieldElement::from_u64(6).to_bytes_be();
+    auto normalized_secret = odd_secret;
+    std::array<unsigned char, 32> normalized_xonly{};
+    ctx.expect(purify_bip340_key_from_seckey(
+                   secp.get(), normalized_secret.data(),
+                   normalized_xonly.data()) != 0,
+               "odd-Y punishment fixture normalizes");
+    auto normalized =
+        purify::accountable::AnchorPunishmentKey::from_secret(
+            odd_secret, secp.get());
+    expect_ok(ctx, normalized,
+              "odd-Y punishment secret constructs");
+    if (!normalized) return;
+    ctx.expect(normalized->bip340_key().seckey == normalized_secret &&
+                   normalized->public_key().xonly() == normalized_xonly,
+               "punishment factory stores only the even-Y representative");
 }
 
-void test_anchor_v3_hash_suite_mode(TestContext& ctx) {
+void test_anchor_v4_hash_suite_mode(TestContext& ctx) {
 #if PURIFY_USE_LEGACY_FIELD_HASHES
     auto secp = purify::make_secp_context();
     ctx.expect(secp != nullptr,
-               "anchor v3 suite-mode secp context creates");
+               "anchor v4 suite-mode secp context creates");
     if (!secp) return;
     auto anchor_secret = purify::SecretKey::from_packed(
         purify::UInt512::from_u64(8));
     expect_ok(ctx, anchor_secret,
-              "anchor v3 suite-mode secret parses");
+               "anchor v4 suite-mode secret parses");
     if (!anchor_secret) return;
     auto anchor = purify::derive_key(std::move(*anchor_secret));
     expect_ok(ctx, anchor,
-              "anchor v3 suite-mode key derives");
+               "anchor v4 suite-mode key derives");
     if (!anchor) return;
     expect_error(
         ctx,
         purify::accountable::anchor_escrow_circuit_shape_for_testing(
-            anchor->public_key, anchor->public_key, {}),
+            anchor->public_key, {}),
         purify::ErrorCode::UnsupportedSymbol,
-        "anchor v3 circuit construction rejects legacy field hashes");
+        "anchor v4 circuit construction rejects legacy field hashes");
     auto accumulator =
         purify::accountable::AnchorEscrowAccumulator::create(secp.get());
     expect_ok(ctx, accumulator,
@@ -359,51 +243,42 @@ void test_anchor_escrow(TestContext& ctx) {
     if (!anchor_secret) return;
     auto anchor = purify::derive_key(std::move(*anchor_secret));
     expect_ok(ctx, anchor,
-              "odd-output anchor recovery key derives");
+              "anchor recovery root fixture derives");
     if (!anchor) return;
+    auto punishment =
+        purify::accountable::AnchorPunishmentKey::from_secret(
+            FieldElement::from_u64(31).to_bytes_be(), secp.get());
+    expect_ok(ctx, punishment,
+              "anchor punishment key constructs independently");
+    if (!punishment) return;
+    const auto punishment_key = punishment->public_key();
+    ctx.expect(
+        punishment->bip340_key().seckey !=
+            FieldElement::from_u64(8).to_bytes_be(),
+        "anchor root and punishment key use distinct secret material");
 #if PURIFY_USE_LEGACY_FIELD_HASHES
-    auto legacy_point = public_point(FieldElement::one(), secp.get());
-    expect_ok(ctx, legacy_point,
-              "legacy rejection punishment point derives");
-    if (!legacy_point) return;
-    std::array<unsigned char, 32> legacy_xonly{};
-    std::copy(legacy_point->begin() + 1, legacy_point->end(),
-              legacy_xonly.begin());
-    auto legacy_punishment_key =
-        purify::accountable::AnchorPunishmentPublicKey::create(
-            legacy_xonly, secp.get());
-    expect_ok(ctx, legacy_punishment_key,
-              "legacy rejection punishment key parses");
-    if (!legacy_punishment_key) return;
     const AnchorEscrowContextDigest legacy_context{};
     const purify::bppp::ScalarBytes legacy_auxiliary_randomness{};
     expect_error(
         ctx,
         purify::accountable::create_anchor_escrow(
-            fixture->roster, *anchor, *legacy_punishment_key,
+            fixture->roster, anchor->public_key, *punishment,
             legacy_context, secp.get()),
         purify::ErrorCode::UnsupportedSymbol,
-        "anchor v3 creation rejects the legacy field-hash suite");
+        "anchor v4 creation rejects the legacy field-hash suite");
     expect_error(
         ctx,
         purify::accountable::create_anchor_escrow_with_aux_randomness(
-            fixture->roster, *anchor, *legacy_punishment_key,
+            fixture->roster, anchor->public_key, *punishment,
             legacy_context, legacy_auxiliary_randomness, secp.get()),
         purify::ErrorCode::UnsupportedSymbol,
-        "deterministic anchor v3 creation rejects legacy field hashes");
+        "deterministic anchor v4 creation rejects legacy field hashes");
     auto legacy_construction_accumulator = purify::accountable::
         ConstructionReceiptAccumulator::create(secp.get());
     expect_ok(ctx, legacy_construction_accumulator,
               "legacy builds retain non-accepting envelope basis syntax");
     return;
 #endif
-    auto punishment =
-        purify::accountable::derive_anchor_punishment_key(*anchor,
-                                                          secp.get());
-    expect_ok(ctx, punishment,
-              "anchor escrow punishment key derives");
-    if (!punishment) return;
-    const auto punishment_key = punishment->public_key();
     std::array<unsigned char, 32> seed{};
     const AnchorEscrowContextDigest context =
         purify::TaggedHash("Purify/Test/AnchorEscrowContext/v1")
@@ -411,10 +286,17 @@ void test_anchor_escrow(TestContext& ctx) {
                 "anchor=alice/bond=7/purpose=slash/domain=3"));
 
     purify::bppp::ScalarBytes auxiliary_randomness{};
+    expect_error(
+        ctx,
+        purify::accountable::create_anchor_escrow_with_aux_randomness(
+            fixture->roster, fixture->roster.recovery_root(),
+            *punishment, context, auxiliary_randomness, secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "anchor escrow rejects the coalition recovery root as an anchor");
     const auto started = std::chrono::steady_clock::now();
     auto record =
         purify::accountable::create_anchor_escrow_with_aux_randomness(
-            fixture->roster, *anchor, punishment_key, context,
+            fixture->roster, anchor->public_key, *punishment, context,
             auxiliary_randomness, secp.get());
     const auto proved = std::chrono::steady_clock::now();
     expect_ok(ctx, record,
@@ -422,23 +304,26 @@ void test_anchor_escrow(TestContext& ctx) {
     if (!record) return;
     auto circuit_shape =
         purify::accountable::anchor_escrow_circuit_shape_for_testing(
-            fixture->roster.recovery_root(), anchor->public_key,
-            record->ciphertext());
+            fixture->roster.recovery_root(), record->ciphertext());
     expect_ok(ctx, circuit_shape,
-              "fixed-domain punishment circuit shape derives");
+              "scalar-only punishment circuit shape derives");
     if (!circuit_shape) return;
-    ctx.expect(circuit_shape->unpadded_gates == 6938 &&
+    ctx.expect(circuit_shape->relation_multiplications == 2030 &&
                    circuit_shape->padded_gates == 8192,
-               "fixed-domain punishment relation stays in 8192 gates");
-    ctx.expect(record->ciphertext().ephemeral_keys[0] !=
-                   record->ciphertext().ephemeral_keys[1],
-               "separate derivation tags give each pad a distinct key");
+               "scalar-only relation has 2030 multiplications in 8192 gates");
     auto accepted = purify::accountable::verify_anchor_escrow(
         fixture->roster, anchor->public_key, punishment_key, context,
         *record, secp.get());
     const auto verified = std::chrono::steady_clock::now();
     ctx.expect(accepted && *accepted,
                "exact recovery-bound escrow statement verifies");
+    expect_error(
+        ctx,
+        purify::accountable::verify_anchor_escrow(
+            fixture->roster, fixture->roster.recovery_root(),
+            punishment_key, context, *record, secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "verification rejects a recovery-root alias for the anchor");
 
     auto encoded = record->serialize(secp.get());
     expect_ok(ctx, encoded, "anchor escrow has a canonical encoding");
@@ -453,11 +338,11 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::MissingValue,
         "anchor escrow parsing requires a secp context");
     ctx.expect(
-        encoded->size() == 1329 &&
+        encoded->size() == 1233 &&
             encoded->size() ==
                 purify::accountable::AnchorEscrowRecord::kSerializedSize &&
-            encoded->front() == 3,
-        "anchor escrow is one version byte plus 192 and 1136 bytes");
+            encoded->front() == 4,
+        "anchor escrow is one version byte plus 96 and 1136 bytes");
     auto parsed = purify::accountable::AnchorEscrowRecord::deserialize(
         *encoded, secp.get());
     expect_ok(ctx, parsed, "canonical anchor escrow reparses");
@@ -487,6 +372,13 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, prepared,
               "typed adapter prepares the exact anchor escrow statement");
     if (!prepared) return;
+    expect_error(
+        ctx,
+        accumulator->prepare(
+            fixture->roster, fixture->roster.recovery_root(),
+            punishment_key, context, *parsed, secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "parent preparation rejects a recovery-root alias for the anchor");
     ctx.expect(
         std::any_of(prepared->circuit_precommitment().begin(),
                     prepared->circuit_precommitment().end(),
@@ -499,6 +391,14 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, parent_constants,
               "anchor parent constants derive from public payload data");
     if (!parent_constants) return;
+    expect_error(
+        ctx,
+        accumulator->derive_parent_constants(
+            fixture->roster, fixture->roster.recovery_root(),
+            punishment_key, context, parsed->ciphertext(),
+            prepared->circuit_precommitment(), secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "parent constants reject a recovery-root alias for the anchor");
     ctx.expect(
         parent_constants->raw_generator_digest ==
                 raw_generator_digest(
@@ -533,17 +433,6 @@ void test_anchor_escrow(TestContext& ctx) {
             secp.get()),
         purify::ErrorCode::RangeViolation,
         "anchor parent constants reject a zero precommitment");
-    auto duplicate_ciphertext = parsed->ciphertext();
-    duplicate_ciphertext.ephemeral_keys[1] =
-        duplicate_ciphertext.ephemeral_keys[0];
-    expect_error(
-        ctx,
-        accumulator->derive_parent_constants(
-            fixture->roster, anchor->public_key, punishment_key, context,
-            duplicate_ciphertext, prepared->circuit_precommitment(),
-            secp.get()),
-        purify::ErrorCode::BindingMismatch,
-        "anchor parent constants reject duplicate ephemeral keys");
     auto reduction =
         purify::bppp::accumulation::prove_algebraic_norm_reduction(
             accumulator->basis(), prepared->norm(), secp.get());
@@ -616,6 +505,27 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::BindingMismatch,
         "an exposed scalar for the opposite coalition point cannot decrypt");
 
+    auto recipient = purify::accountable::recover_registered_root(
+        fixture->roster, extracted_scalar, secp.get());
+    expect_ok(ctx, recipient,
+              "registered recovery recipient reconstructs");
+    if (!recipient) return;
+    auto punishment_scalar = FieldElement::try_from_bytes32(
+        punishment->bip340_key().seckey);
+    expect_ok(ctx, punishment_scalar,
+              "normalized punishment scalar reparses");
+    if (!punishment_scalar) return;
+    auto odd_plaintext = parsed->ciphertext();
+    odd_plaintext.masked_scalar =
+        odd_plaintext.masked_scalar - *punishment_scalar -
+        *punishment_scalar;
+    expect_error(
+        ctx,
+        purify::accountable::recover_authenticated_anchor_ciphertext(
+            *recipient, punishment_key, odd_plaintext, secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "recovery rejects the odd-Y representative before key matching");
+
     auto changed_context = context;
     changed_context[0] ^= 1;
     expect_rejected(
@@ -645,10 +555,10 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, other_anchor, "substitution anchor fixture generates");
     if (!other_anchor) return;
     auto other_punishment =
-        purify::accountable::derive_anchor_punishment_key(
-            *other_anchor, secp.get());
+        purify::accountable::AnchorPunishmentKey::from_secret(
+            FieldElement::from_u64(9).to_bytes_be(), secp.get());
     expect_ok(ctx, other_punishment,
-              "substitution punishment key derives");
+              "substitution punishment key constructs");
     if (!other_punishment) return;
     expect_rejected(
         ctx,
@@ -657,32 +567,12 @@ void test_anchor_escrow(TestContext& ctx) {
             other_punishment->public_key(), context, *record,
             secp.get()),
         "public-mode proof cannot move to another punishment key");
-    expect_error(
-        ctx,
-        purify::accountable::create_anchor_escrow(
-            fixture->roster, *anchor, other_punishment->public_key(),
-            context, secp.get()),
-        purify::ErrorCode::BindingMismatch,
-        "escrow creation rejects a mismatched punishment key");
     expect_rejected(
         ctx,
         purify::accountable::verify_anchor_escrow(
             fixture->roster, other_anchor->public_key, punishment_key,
             context, *record, secp.get()),
         "escrow proof cannot advertise another anchor root");
-    auto anchor_secret_copy = anchor->secret.clone();
-    expect_ok(ctx, anchor_secret_copy,
-              "mismatched keypair fixture clones its secret");
-    if (!anchor_secret_copy) return;
-    purify::GeneratedKey mismatched_anchor{
-        std::move(*anchor_secret_copy), other_anchor->public_key};
-    expect_error(
-        ctx,
-        purify::accountable::create_anchor_escrow(
-            fixture->roster, mismatched_anchor, punishment_key, context,
-            secp.get()),
-        purify::ErrorCode::BindingMismatch,
-        "escrow creation rejects a mismatched anchor keypair");
     auto changed_record_bytes = *encoded;
     std::array<unsigned char, 32> changed_mask_bytes{};
     std::copy_n(changed_record_bytes.begin() + 65,
@@ -761,17 +651,6 @@ void test_anchor_escrow(TestContext& ctx) {
                    accumulator->basis(), *changed_inner_claim, secp.get()),
                "final MSM rejects the changed inner proof");
 
-    auto legacy_record = *encoded;
-    legacy_record[0] = 2;
-    legacy_record.erase(legacy_record.begin() + 291,
-                        legacy_record.begin() + 355);
-    expect_error(
-        ctx,
-        purify::accountable::AnchorEscrowRecord::deserialize(
-            legacy_record, secp.get()),
-        purify::ErrorCode::InvalidFixedSize,
-        "legacy hidden-mode anchor record has no compatibility alias");
-
     auto other_fixture = make_roster(0x62, 0x9d, secp.get());
     expect_ok(ctx, other_fixture,
               "second setup statement constructs a bound roster");
@@ -795,7 +674,7 @@ void test_anchor_escrow(TestContext& ctx) {
 
     auto repeated_record =
         purify::accountable::create_anchor_escrow_with_aux_randomness(
-            fixture->roster, *anchor, punishment_key, context,
+            fixture->roster, anchor->public_key, *punishment, context,
             auxiliary_randomness, secp.get());
     expect_ok(ctx, repeated_record,
               "identical auxiliary input recreates the escrow");
@@ -810,7 +689,7 @@ void test_anchor_escrow(TestContext& ctx) {
     changed_auxiliary.back() = 1;
     auto changed_aux_record =
         purify::accountable::create_anchor_escrow_with_aux_randomness(
-            fixture->roster, *anchor, punishment_key, context,
+            fixture->roster, anchor->public_key, *punishment, context,
             changed_auxiliary, secp.get());
     expect_ok(ctx, changed_aux_record,
               "changed auxiliary input creates another valid escrow");
@@ -829,7 +708,8 @@ void test_anchor_escrow(TestContext& ctx) {
 
     auto changed_context_record =
         purify::accountable::create_anchor_escrow_with_aux_randomness(
-            fixture->roster, *anchor, punishment_key, changed_context,
+            fixture->roster, anchor->public_key, *punishment,
+            changed_context,
             auxiliary_randomness, secp.get());
     expect_ok(ctx, changed_context_record,
               "changed context creates a separately hedged escrow");
@@ -848,7 +728,8 @@ void test_anchor_escrow(TestContext& ctx) {
                "changed-context escrow verifies for its own statement");
 
     auto production_record = purify::accountable::create_anchor_escrow(
-        fixture->roster, *anchor, punishment_key, context, secp.get());
+        fixture->roster, anchor->public_key, *punishment, context,
+        secp.get());
     expect_ok(ctx, production_record,
               "production escrow samples operating-system auxiliary input");
     if (!production_record) return;
@@ -869,27 +750,27 @@ void test_anchor_escrow(TestContext& ctx) {
               "maximum canonical anchor recovery key derives");
     if (!maximum_anchor) return;
     auto maximum_punishment =
-        purify::accountable::derive_anchor_punishment_key(
-            *maximum_anchor, secp.get());
+        purify::accountable::AnchorPunishmentKey::from_secret(
+            FieldElement::one().negate().to_bytes_be(), secp.get());
     expect_ok(ctx, maximum_punishment,
-              "maximum fixed-domain punishment key derives");
+              "high punishment scalar normalizes");
     if (!maximum_punishment) return;
     auto maximum_context = context;
     maximum_context.back() ^= 1;
     auto maximum_record =
         purify::accountable::create_anchor_escrow_with_aux_randomness(
-            fixture->roster, *maximum_anchor,
-            maximum_punishment->public_key(), maximum_context,
+            fixture->roster, maximum_anchor->public_key,
+            *maximum_punishment, maximum_context,
             auxiliary_randomness, secp.get());
     expect_ok(ctx, maximum_record,
-              "maximum canonical anchor encrypts");
+              "high punishment scalar encrypts");
     if (!maximum_record) return;
     auto maximum_recovered = purify::accountable::recover_escrowed_anchor(
         fixture->roster, fixture->signing_scalar,
         maximum_anchor->public_key, maximum_punishment->public_key(),
         maximum_context, *maximum_record, secp.get());
     expect_ok(ctx, maximum_recovered,
-              "maximum canonical anchor decrypts exactly");
+              "high punishment scalar decrypts exactly");
     if (maximum_recovered) {
         ctx.expect(maximum_recovered->bip340_key().seckey ==
                        maximum_punishment->bip340_key().seckey,
@@ -913,13 +794,13 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::InvalidFixedSize,
         "oversized escrow record rejects");
     malformed = *encoded;
-    malformed[0] = 2;
+    malformed[0] = 3;
     expect_error(
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
             malformed, secp.get()),
         purify::ErrorCode::UnsupportedSymbol,
-        "same-size anchor record version 2 has no compatibility alias");
+        "anchor record version 3 has no compatibility alias");
     malformed = *encoded;
     std::fill_n(malformed.begin() + 1, 64, 0xff);
     ctx.expect(!purify::accountable::AnchorEscrowRecord::deserialize(
@@ -934,16 +815,7 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::RangeViolation,
         "noncanonical masked scalar rejects");
     malformed = *encoded;
-    std::copy_n(malformed.begin() + 1, 64,
-                malformed.begin() + 97);
-    expect_error(
-        ctx,
-        purify::accountable::AnchorEscrowRecord::deserialize(
-            malformed, secp.get()),
-        purify::ErrorCode::BindingMismatch,
-        "identical ephemeral keys reject");
-    malformed = *encoded;
-    std::fill_n(malformed.begin() + 193, 33, 0);
+    std::fill_n(malformed.begin() + 97, 33, 0);
     expect_error(
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
@@ -951,7 +823,7 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::BackendRejectedInput,
         "invalid escrow A commitment rejects");
     malformed = *encoded;
-    std::fill_n(malformed.begin() + 226, 33, 0);
+    std::fill_n(malformed.begin() + 130, 33, 0);
     expect_error(
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
@@ -959,7 +831,7 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::BackendRejectedInput,
         "invalid escrow S commitment rejects");
     malformed = *encoded;
-    std::fill_n(malformed.begin() + 259, 32, 0xff);
+    std::fill_n(malformed.begin() + 163, 32, 0xff);
     expect_error(
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
@@ -967,7 +839,7 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::RangeViolation,
         "noncanonical escrow t2 rejects");
     malformed = *encoded;
-    std::fill_n(malformed.begin() + 291, 32, 0xff);
+    std::fill_n(malformed.begin() + 195, 32, 0xff);
     expect_error(
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
@@ -975,7 +847,7 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::BackendRejectedInput,
         "invalid public-commitment DLog nonce rejects");
     malformed = *encoded;
-    std::fill_n(malformed.begin() + 323, 32, 0xff);
+    std::fill_n(malformed.begin() + 227, 32, 0xff);
     expect_error(
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
@@ -983,7 +855,7 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::RangeViolation,
         "noncanonical public-commitment DLog response rejects");
     malformed = *encoded;
-    std::fill_n(malformed.begin() + 323, 32, 0);
+    std::fill_n(malformed.begin() + 227, 32, 0);
     expect_error(
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
@@ -993,7 +865,7 @@ void test_anchor_escrow(TestContext& ctx) {
     malformed = *encoded;
     std::copy(other_punishment->public_key().xonly().begin(),
               other_punishment->public_key().xonly().end(),
-              malformed.begin() + 291);
+              malformed.begin() + 195);
     auto changed_dlog_nonce =
         purify::accountable::AnchorEscrowRecord::deserialize(
             malformed, secp.get());
@@ -1008,7 +880,7 @@ void test_anchor_escrow(TestContext& ctx) {
         "public-mode transcript binds the exact DLog nonce");
     malformed = *encoded;
     std::array<unsigned char, 32> dlog_response_bytes{};
-    std::copy_n(malformed.begin() + 323, dlog_response_bytes.size(),
+    std::copy_n(malformed.begin() + 227, dlog_response_bytes.size(),
                 dlog_response_bytes.begin());
     auto dlog_response = FieldElement::try_from_bytes32(
         dlog_response_bytes);
@@ -1018,7 +890,7 @@ void test_anchor_escrow(TestContext& ctx) {
     dlog_response_bytes =
         (*dlog_response + FieldElement::one()).to_bytes_be();
     std::copy(dlog_response_bytes.begin(), dlog_response_bytes.end(),
-              malformed.begin() + 323);
+              malformed.begin() + 227);
     auto changed_dlog_response =
         purify::accountable::AnchorEscrowRecord::deserialize(
             malformed, secp.get());
@@ -1032,7 +904,7 @@ void test_anchor_escrow(TestContext& ctx) {
             *changed_dlog_response, secp.get()),
         "public-mode transcript binds the exact DLog response");
     malformed = *encoded;
-    malformed[355] = 4;
+    malformed[259] = 4;
     expect_error(
         ctx,
         purify::accountable::AnchorEscrowRecord::deserialize(
@@ -1040,8 +912,8 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::ErrorCode::RangeViolation,
         "noncanonical escrow round parity rejects");
     malformed = *encoded;
-    std::copy_n(malformed.begin() + 226, 33,
-                malformed.begin() + 193);
+    std::copy_n(malformed.begin() + 130, 33,
+                malformed.begin() + 97);
     auto changed_raw_record =
         purify::accountable::AnchorEscrowRecord::deserialize(
             malformed, secp.get());
@@ -1055,7 +927,7 @@ void test_anchor_escrow(TestContext& ctx) {
             *changed_raw_record, secp.get()),
         "V4 anchor precommitment binds the exact raw commitment");
     malformed = *encoded;
-    malformed[355] ^= 1;
+    malformed[259] ^= 1;
     auto opaque_inner =
         purify::accountable::AnchorEscrowRecord::deserialize(
             malformed, secp.get());
@@ -1085,7 +957,7 @@ void test_anchor_escrow(TestContext& ctx) {
 } // namespace
 
 void run_anchor_escrow_tests(TestContext& ctx) {
-    test_anchor_punishment_derivation(ctx);
-    test_anchor_v3_hash_suite_mode(ctx);
+    test_anchor_punishment_key(ctx);
+    test_anchor_v4_hash_suite_mode(ctx);
     test_anchor_escrow(ctx);
 }

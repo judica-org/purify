@@ -85,28 +85,20 @@ Result<ReceiptFixture> make_fixture() {
 
     fixture.entries.resize(2);
     PURIFY_ASSIGN_OR_RETURN(
-        fixture.entries[0].ciphertext.ephemeral_keys[0],
+        fixture.entries[0].ciphertext.ephemeral_key,
         public_root(2),
-        "construction_receipt_codec_test:ephemeral_0_0");
-    PURIFY_ASSIGN_OR_RETURN(
-        fixture.entries[0].ciphertext.ephemeral_keys[1],
-        public_root(3),
-        "construction_receipt_codec_test:ephemeral_0_1");
-    fixture.entries[0].ciphertext.masked_scalars = {
-        FieldElement::from_u64(11), FieldElement::from_u64(12)};
+        "construction_receipt_codec_test:ephemeral_0");
+    fixture.entries[0].ciphertext.masked_scalar =
+        FieldElement::from_u64(11);
     fixture.entries[0].circuit_precommitment =
         FieldElement::from_u64(31).to_bytes_be();
 
     PURIFY_ASSIGN_OR_RETURN(
-        fixture.entries[1].ciphertext.ephemeral_keys[0],
+        fixture.entries[1].ciphertext.ephemeral_key,
         public_root(4),
-        "construction_receipt_codec_test:ephemeral_1_0");
-    PURIFY_ASSIGN_OR_RETURN(
-        fixture.entries[1].ciphertext.ephemeral_keys[1],
-        public_root(5),
-        "construction_receipt_codec_test:ephemeral_1_1");
-    fixture.entries[1].ciphertext.masked_scalars = {
-        FieldElement::from_u64(21), FieldElement::from_u64(22)};
+        "construction_receipt_codec_test:ephemeral_1");
+    fixture.entries[1].ciphertext.masked_scalar =
+        FieldElement::from_u64(21);
     fixture.entries[1].circuit_precommitment =
         FieldElement::from_u64(32).to_bytes_be();
 
@@ -143,18 +135,18 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
     expect_ok(ctx, payload, "canonical payload constructs");
     if (!payload) return;
 
-    constexpr std::size_t kExpectedSize = 1 + 64 + 4 + 2 * 224;
+    constexpr std::size_t kExpectedSize = 1 + 64 + 4 + 2 * 128;
     static_assert(ConstructionReceiptPayload::kFixedHeaderSize == 69);
-    static_assert(ConstructionReceiptPayload::kEntrySize == 224);
+    static_assert(ConstructionReceiptPayload::kEntrySize == 128);
     const Bytes encoded = payload->serialize();
     ctx.expect(payload->serialized_size() == kExpectedSize,
                "reported size accounts for every fixed field");
     ctx.expect(encoded.size() == kExpectedSize,
-               "wire size is exactly 69 + 224*N bytes");
+               "wire size is exactly 69 + 128*N bytes");
     ctx.expect(encoded[0] ==
                        ConstructionReceiptPayload::kSerializationVersion &&
-                   encoded[0] == 2,
-               "wire starts with construction receipt version 2");
+                   encoded[0] == 3,
+               "wire starts with construction receipt version 3");
     const auto recovery_root_bytes = fixture->recovery_root.to_bytes_be();
     ctx.expect(std::equal(recovery_root_bytes.begin(),
                           recovery_root_bytes.end(),
@@ -167,23 +159,17 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
     constexpr std::size_t kFirstCiphertextOffset =
         ConstructionReceiptPayload::kFixedHeaderSize;
     const auto first_ephemeral =
-        fixture->entries[0].ciphertext.ephemeral_keys[0].to_bytes_be();
+        fixture->entries[0].ciphertext.ephemeral_key.to_bytes_be();
     ctx.expect(std::equal(first_ephemeral.begin(),
                           first_ephemeral.end(),
                           encoded.begin() + kFirstCiphertextOffset),
                "ciphertext starts with its first 64-byte ephemeral key");
     const auto first_masked =
-        fixture->entries[0].ciphertext.masked_scalars[0].to_bytes_be();
+        fixture->entries[0].ciphertext.masked_scalar.to_bytes_be();
     ctx.expect(std::equal(first_masked.begin(),
                           first_masked.end(),
                           encoded.begin() + kFirstCiphertextOffset + 64),
-               "ciphertext interleaves its first 32-byte masked scalar");
-    const auto second_ephemeral =
-        fixture->entries[0].ciphertext.ephemeral_keys[1].to_bytes_be();
-    ctx.expect(std::equal(second_ephemeral.begin(),
-                          second_ephemeral.end(),
-                          encoded.begin() + kFirstCiphertextOffset + 96),
-               "ciphertext carries its second ephemeral key in order");
+               "ciphertext appends its 32-byte masked scalar");
     constexpr std::size_t kFirstPrecommitmentOffset =
         kFirstCiphertextOffset +
         purify::accountable::AnchorEscrowCiphertext::kSerializedSize;
@@ -196,7 +182,7 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
     constexpr std::size_t kSecondEntryOffset =
         kFirstCiphertextOffset + ConstructionReceiptPayload::kEntrySize;
     const auto second_entry_ephemeral =
-        fixture->entries[1].ciphertext.ephemeral_keys[0].to_bytes_be();
+        fixture->entries[1].ciphertext.ephemeral_key.to_bytes_be();
     ctx.expect(
         std::equal(second_entry_ephemeral.begin(),
                    second_entry_ephemeral.end(),
@@ -207,7 +193,7 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
                 encoded.begin() + kSecondEntryOffset +
                     purify::accountable::AnchorEscrowCiphertext::
                         kSerializedSize),
-        "entry stride is exactly 224 bytes");
+        "entry stride is exactly 128 bytes");
 
     auto decoded = ConstructionReceiptPayload::deserialize(encoded);
     expect_ok(ctx, decoded, "canonical wire payload decodes");
@@ -237,16 +223,6 @@ void test_construction_invariants(TestContext& ctx) {
                      {}),
                  purify::ErrorCode::EmptyInput,
                  "empty entry collections are rejected");
-
-    auto duplicate_ephemerals = fixture->entries;
-    duplicate_ephemerals[0].ciphertext.ephemeral_keys[1] =
-        duplicate_ephemerals[0].ciphertext.ephemeral_keys[0];
-    expect_error(ctx,
-                 ConstructionReceiptPayload::create(
-                     fixture->recovery_root,
-                     std::move(duplicate_ephemerals)),
-                 purify::ErrorCode::BindingMismatch,
-                 "duplicate ciphertext ephemerals are rejected");
 
     expect_error(ctx,
                  ConstructionReceiptPayload::create(
@@ -359,16 +335,6 @@ void test_noncanonical_and_framing_rejection(TestContext& ctx) {
     ctx.expect(!ConstructionReceiptPayload::deserialize(invalid_scalar),
                "noncanonical masked scalars are rejected");
 
-    auto duplicate_ephemeral = encoded;
-    std::copy_n(duplicate_ephemeral.begin() + kFirstCiphertext,
-                64,
-                duplicate_ephemeral.begin() + kFirstCiphertext + 96);
-    expect_error(ctx,
-                 ConstructionReceiptPayload::deserialize(
-                     duplicate_ephemeral),
-                 purify::ErrorCode::BindingMismatch,
-                 "duplicate ephemeral keys are rejected on decode");
-
     constexpr std::size_t kFirstPrecommitment =
         kFirstCiphertext +
         purify::accountable::AnchorEscrowCiphertext::kSerializedSize;
@@ -411,10 +377,10 @@ void test_parent_envelope_layout_and_syntax(TestContext& ctx) {
     if (!envelope) return;
     const Bytes encoded = envelope->serialize();
     const std::size_t expected_size =
-        69 + 224 * fixture->entries.size() + parent_proof.size();
+        69 + 128 * fixture->entries.size() + parent_proof.size();
     ctx.expect(envelope->serialized_size() == expected_size &&
                    encoded.size() == expected_size,
-               "envelope is exactly 69 + 224*N + 15,076 bytes");
+               "envelope is exactly 69 + 128*N + 15,076 bytes");
     const Bytes payload_bytes = payload->serialize();
     ctx.expect(std::equal(payload_bytes.begin(), payload_bytes.end(),
                           encoded.begin()),
@@ -475,9 +441,9 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     ctx.expect(
         purify::UInt256::from_bytes_be(digest->data(), digest->size())
                 .to_hex() ==
-            "e888642f3a2f97f87f030c98b8b11e92"
-            "020f95d5ac361692f05c7b1f85fc55d2",
-        "statement digest matches the canonical V3 tagged-hash vector");
+            "c2d06dccf726299944769fd0daa2a5f3"
+            "d0473584e06ab5aa153379f29407d45e",
+        "statement digest matches the canonical V4 tagged-hash vector");
 #endif
     auto repeated =
         purify::accountable::construction_receipt_statement_digest(
@@ -607,8 +573,8 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
                "statement digest binds every anchor reference");
 
     auto changed_ciphertext = *fixture;
-    changed_ciphertext.entries[0].ciphertext.masked_scalars[0] =
-        changed_ciphertext.entries[0].ciphertext.masked_scalars[0] +
+    changed_ciphertext.entries[0].ciphertext.masked_scalar =
+        changed_ciphertext.entries[0].ciphertext.masked_scalar +
         FieldElement::one();
     auto changed_ciphertext_payload = make_payload(changed_ciphertext);
     expect_ok(ctx, changed_ciphertext_payload,

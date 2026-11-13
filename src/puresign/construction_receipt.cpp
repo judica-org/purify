@@ -19,19 +19,10 @@ namespace purify::accountable {
 namespace {
 
 const TaggedHash kConstructionReceiptStatementHash(
-    "Purify/Accountable/ConstructionReceiptStatement/v3");
+    "Purify/Accountable/ConstructionReceiptStatement/v4");
 
 Status validate_ciphertext(const AnchorEscrowCiphertext& ciphertext) {
-    for (const UInt512& ephemeral : ciphertext.ephemeral_keys) {
-        PURIFY_RETURN_IF_ERROR(
-            validate_public_points(ephemeral),
-            "construction_receipt:ephemeral_key");
-    }
-    if (ciphertext.ephemeral_keys[0] == ciphertext.ephemeral_keys[1]) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "construction_receipt:duplicate_ephemeral");
-    }
-    return {};
+    return validate_public_points(ciphertext.ephemeral_key);
 }
 
 Status validate_circuit_precommitment(
@@ -90,10 +81,8 @@ void append_array(Bytes& out, const std::array<unsigned char, Size>& value) {
 
 void append_ciphertext(Bytes& out,
                        const AnchorEscrowCiphertext& ciphertext) {
-    for (std::size_t i = 0; i < ciphertext.ephemeral_keys.size(); ++i) {
-        append_array(out, ciphertext.ephemeral_keys[i].to_bytes_be());
-        append_array(out, ciphertext.masked_scalars[i].to_bytes_be());
-    }
+    append_array(out, ciphertext.ephemeral_key.to_bytes_be());
+    append_array(out, ciphertext.masked_scalar.to_bytes_be());
 }
 
 Result<AnchorEscrowCiphertext> parse_ciphertext(
@@ -101,20 +90,17 @@ Result<AnchorEscrowCiphertext> parse_ciphertext(
         encoded) {
     AnchorEscrowCiphertext ciphertext;
     std::size_t offset = 0;
-    for (std::size_t i = 0; i < ciphertext.ephemeral_keys.size(); ++i) {
-        ciphertext.ephemeral_keys[i] =
-            UInt512::from_bytes_be(encoded.data() + offset, 64);
-        offset += 64;
-        std::array<unsigned char, 32> encoded_scalar{};
-        std::copy_n(encoded.data() + offset,
-                    encoded_scalar.size(),
-                    encoded_scalar.begin());
-        PURIFY_ASSIGN_OR_RETURN(
-            ciphertext.masked_scalars[i],
-            FieldElement::try_from_bytes32(encoded_scalar),
-            "construction_receipt:masked_scalar");
-        offset += 32;
-    }
+    ciphertext.ephemeral_key =
+        UInt512::from_bytes_be(encoded.data() + offset, 64);
+    offset += 64;
+    std::array<unsigned char, 32> encoded_scalar{};
+    std::copy_n(encoded.data() + offset,
+                encoded_scalar.size(), encoded_scalar.begin());
+    PURIFY_ASSIGN_OR_RETURN(
+        ciphertext.masked_scalar,
+        FieldElement::try_from_bytes32(encoded_scalar),
+        "construction_receipt:masked_scalar");
+    offset += 32;
     assert(offset == encoded.size());
     PURIFY_RETURN_IF_ERROR(validate_ciphertext(ciphertext),
                            "construction_receipt:ciphertext");

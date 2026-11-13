@@ -85,28 +85,25 @@ private:
 
     Bip340Key key_;
     AnchorPunishmentPublicKey public_key_;
-
-    friend Result<AnchorPunishmentKey> derive_anchor_punishment_key(
-        const GeneratedKey&, purify_secp_context*);
 };
 
-/** Public ciphertext carrying both scalars of one Purify recovery key. */
+/** Public ciphertext carrying one BIP340 punishment scalar. */
 struct AnchorEscrowCiphertext {
-    static constexpr std::size_t kSerializedSize = 192;
+    static constexpr std::size_t kSerializedSize = 96;
 
-    std::array<UInt512, 2> ephemeral_keys{};
-    std::array<FieldElement, 2> masked_scalars{};
+    UInt512 ephemeral_key{};
+    FieldElement masked_scalar{};
 };
 
 /**
- * Fixed-size proof that an exact anchor recovery key is encrypted to a
- * recovery-bound coalition and derives one exact BIP340 punishment key.
- * Record version 3 fixes Purify's modern tagged field-hash suite; legacy-hash
- * builds reject proof construction and verification. Parsing is syntax only.
+ * Fixed-size proof that one exact BIP340 punishment scalar is encrypted to a
+ * recovery-bound coalition. Record version 4 fixes Purify's modern tagged
+ * field-hash suite; legacy-hash builds reject proof construction and
+ * verification. Parsing is syntax only.
  */
 class AnchorEscrowRecord {
 public:
-    static constexpr unsigned char kSerializationVersion = 3;
+    static constexpr unsigned char kSerializationVersion = 4;
     static constexpr std::size_t kNormProofSize = 974;
     static constexpr std::size_t kProofPayloadSize = 1136;
     static constexpr std::size_t kSerializedSize =
@@ -142,14 +139,14 @@ private:
     Bytes norm_proof_;
 
     friend Result<AnchorEscrowRecord> create_anchor_escrow(
-        const RecoveryBoundSigningRoster&, const GeneratedKey&,
-        const AnchorPunishmentPublicKey&, const AnchorEscrowContextDigest&,
+        const RecoveryBoundSigningRoster&, const UInt512&,
+        const AnchorPunishmentKey&, const AnchorEscrowContextDigest&,
         purify_secp_context*,
         bppp::ExperimentalCircuitBackend*);
     friend Result<AnchorEscrowRecord>
     create_anchor_escrow_with_aux_randomness(
-        const RecoveryBoundSigningRoster&, const GeneratedKey&,
-        const AnchorPunishmentPublicKey&, const AnchorEscrowContextDigest&,
+        const RecoveryBoundSigningRoster&, const UInt512&,
+        const AnchorPunishmentKey&, const AnchorEscrowContextDigest&,
         const bppp::ScalarBytes&,
         purify_secp_context*, bppp::ExperimentalCircuitBackend*);
     friend Result<bool> verify_anchor_escrow(
@@ -165,35 +162,23 @@ static_assert(AnchorEscrowRecord::kProofPayloadSize ==
                   2 * bppp::ScalarBytes{}.size() +
                   std::array<unsigned char, 32>{}.size() +
                   AnchorEscrowRecord::kNormProofSize);
-static_assert(AnchorEscrowRecord::kSerializedSize == 1329);
+static_assert(AnchorEscrowRecord::kSerializedSize == 1233);
 
 /**
- * Evaluate the anchor's fixed punishment-key domain and normalize it to the
- * even-Y BIP340 representative committed by the escrow proof.
+ * Encrypt an anchor's existing punishment scalar to a verified coalition root.
  *
- * A zero evaluation is rejected. The caller must replace the anchor recovery
- * key; this suite has no counter-based rekey branch whose choice could diverge
- * between the native derivation and circuit relation.
- * `PURIFY_USE_LEGACY_FIELD_HASHES` builds return
- * `ErrorCode::UnsupportedSymbol` for this versioned derivation.
- */
-[[nodiscard]] Result<AnchorPunishmentKey> derive_anchor_punishment_key(
-    const GeneratedKey& anchor_recovery_key,
-    purify_secp_context* secp_context);
-
-/**
- * Encrypt an existing anchor recovery key to a verified coalition root.
- *
- * Operating-system auxiliary randomness is hedged with the anchor secret and
- * exact roster, root, and context statement. Separately tagged derivations
- * produce both ephemeral keys and the proof seed. The proof binds the exact
+ * Operating-system auxiliary randomness is hedged with the punishment secret
+ * and exact roster, root, and context statement. Separately tagged derivations
+ * produce the ephemeral key and proof seed. The proof binds the exact
  * advertised anchor root, canonical punishment key, ciphertext,
- * recovery-bound roster, and application context.
+ * recovery-bound roster, and application context. The advertised anchor root
+ * must differ from the coalition recovery root so exposure cannot directly
+ * reconstruct the advertised anchor key.
  */
 [[nodiscard]] Result<AnchorEscrowRecord> create_anchor_escrow(
     const RecoveryBoundSigningRoster& roster,
-    const GeneratedKey& anchor_recovery_key,
-    const AnchorPunishmentPublicKey& punishment_key,
+    const UInt512& advertised_anchor_root,
+    const AnchorPunishmentKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache = nullptr);
@@ -213,9 +198,8 @@ static_assert(AnchorEscrowRecord::kSerializedSize == 1329);
  *
  * This is intentionally the only public decryption operation: it first checks
  * that the scalar recovers the roster's registered root, then verifies the
- * escrow proof, decrypts the registered anchor root, evaluates the pinned
- * punishment-key domain, and checks the resulting even-Y BIP340 key against
- * the exact advertised punishment key.
+ * escrow proof, decrypts the punishment scalar, and checks its normalized
+ * even-Y BIP340 key against the exact advertised punishment key.
  */
 [[nodiscard]] Result<AnchorPunishmentKey> recover_escrowed_anchor(
     const RecoveryBoundSigningRoster& roster,

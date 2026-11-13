@@ -56,24 +56,28 @@ public:
 private:
     VerifiedConstructionReceipt(
         ConstructionReceiptStatementDigest statement_digest,
-        RecoveryBoundSigningRoster roster,
-        std::vector<ConstructionReceiptEntry> entries,
+        NonceHostBoundSigningRoster roster,
+        RecoveryRootShareAggregate aggregate,
+        std::vector<ConstructionReceiptAnchorEntry> entries,
         std::vector<ResolvedConstructionReceiptEntry> resolved_entries)
         : statement_digest_(statement_digest),
           anchor_count_(static_cast<std::uint32_t>(entries.size())),
-          roster_(std::move(roster)), entries_(std::move(entries)),
+          roster_(std::move(roster), aggregate.recovery_root()),
+          aggregate_(std::move(aggregate)),
+          entries_(std::move(entries)),
           resolved_entries_(std::move(resolved_entries)) {}
 
     ConstructionReceiptStatementDigest statement_digest_{};
     std::uint32_t anchor_count_{};
     RecoveryBoundSigningRoster roster_;
-    std::vector<ConstructionReceiptEntry> entries_;
+    RecoveryRootShareAggregate aggregate_;
+    std::vector<ConstructionReceiptAnchorEntry> entries_;
     std::vector<ResolvedConstructionReceiptEntry> resolved_entries_;
 
     friend class ConstructionParentVerifier;
 };
 
-/** The one locally qualified recursive construction-parent verifier. */
+/** The locally configured recursive construction-parent verifier. */
 class ConstructionParentVerifier {
 public:
     ConstructionParentVerifier(const ConstructionParentVerifier&) = delete;
@@ -85,7 +89,7 @@ public:
     ~ConstructionParentVerifier();
 
     /**
-     * Loads the qualified verifier from an explicit UTF-8 storage path.
+     * Loads the configured verifier from an explicit UTF-8 storage path.
      *
      * The path cannot select artifact identity. A digest or shape mismatch is
      * an internal deployment error, not a peer-retry condition. Deploy the
@@ -108,7 +112,7 @@ public:
         const ResolvedConstructionSetup& setup,
         const ConstructionReceiptEnvelope& envelope,
         std::span<const ResolvedConstructionReceiptEntry> resolved_entries,
-        const AnchorEscrowAccumulator& anchors,
+        const ConstructionLeafAccumulator& leaves,
         purify_secp_context* secp_context) const;
 
 private:

@@ -1,46 +1,39 @@
-# Construction parent proof vectors
+# Construction parent qualification vectors
 
-The two SHA-256 construction-parent proofs are each exactly 15,076 bytes.
+The mixed distributed construction-parent qualification pins four vectors:
 
-- `construction_parent_sha256_accepted.proof` binds the deterministic
-  two-anchor C++ fixture and reaches a natively deciding accumulation root.
-- `construction_parent_sha256_nondeciding.proof` has the same public
-  construction inputs and is valid under the recursive verifier, but
-  authenticates a pending root rejected by native `decide()`.
+- `construction_parent_sha256_accepted.wit3` is the deterministic public
+  witness for an accepted two-anchor construction;
+- `construction_parent_sha256_nondeciding.wit3` has identical public inputs
+  and a distinct final root that is recursively valid but fails native
+  accumulation decision;
+- `construction_parent_sha256_accepted.proof` is the matching accepted Nova
+  proof; and
+- `construction_parent_sha256_nondeciding.proof` is the matching recursive
+  proof for the nondeciding root.
 
-The corresponding `*.fixture` files are each exactly 8,314 bytes. They are
-the canonical prover inputs from which the two proofs were qualified. Keeping
-them beside the proofs makes the qualification reproducible from a fresh
-checkout without reconstructing private test state.
+Both Wit3 fixtures are 17,977 bytes and both proofs are 15,076 bytes. Normal
+C++ tests regenerate and byte-compare the Wit3 fixtures. Rust tests parse the
+same checked bytes. The artifact-backed release gate verifies both proofs and
+requires the nondeciding proof to fail only at the native decision boundary.
 
-The proof hashes identify these qualification fixtures; they are not protocol
-constants. The compiled suite and verifier-artifact identities are the actual
-acceptance constants. See
-[`release/construction-parent-sha256.json`](../../release/construction-parent-sha256.json)
-for all pinned lengths and hashes.
+| Vector | SHA256 |
+| --- | --- |
+| Accepted Wit3 | `b39168a9e4fb6a5a893a9a4a9479ff55abe4fa3b50708a8c874a08bcd0bbe9f5` |
+| Nondeciding Wit3 | `46a89f4401eb0d34325912ad59c12ac5f9e54d4a57f2ac810ddba6af647d2db7` |
+| Accepted proof | `74b66a779134a39560185472708d94e9a1532240f7fcf9c66a88d91728e8d779` |
+| Nondeciding proof | `a869016dea8d439f579b8c7be6c3613bc3e5f5e9f18f6177ee27c6050038b072` |
 
-The 693,735,316-byte authenticated verifier artifact is deliberately external
-and is not committed to this repository. The release acceptance test receives
-its path through `PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT`.
+The 693,708,278-byte verifier artifact remains external. Its authenticated
+identity and all vector hashes are recorded in
+[`release/construction-parent-sha256.json`](../../release/construction-parent-sha256.json).
 
-Given the authenticated artifact, verify both checked-in proofs with:
-
-```sh
-PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE="$PWD/tests/vectors/construction_parent_sha256_accepted.fixture" \
-PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE="$PWD/tests/vectors/construction_parent_sha256_nondeciding.fixture" \
-PURIFY_CONSTRUCTION_PARENT_PROOF="$PWD/tests/vectors/construction_parent_sha256_accepted.proof" \
-PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROOF="$PWD/tests/vectors/construction_parent_sha256_nondeciding.proof" \
-PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=/path/to/sha256-parent-verifier.nvk.zst \
-cargo test --manifest-path rust/construction-parent/Cargo.toml --release \
-  qualified_sha_parent_artifact_verifies_both_outputs -- --ignored --nocapture
-```
-
-Regenerating the proofs and artifact is an explicit native-resource release
-operation. Each output path must not already exist:
+Requalification is an explicit native-resource release operation. Every
+output path must not exist before running:
 
 ```sh
-PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE="$PWD/tests/vectors/construction_parent_sha256_accepted.fixture" \
-PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE="$PWD/tests/vectors/construction_parent_sha256_nondeciding.fixture" \
+PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE=/new/path/accepted.wit3 \
+PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE=/new/path/nondeciding.wit3 \
 PURIFY_CONSTRUCTION_PARENT_PROOF_OUT=/new/path/accepted.proof \
 PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROOF_OUT=/new/path/nondeciding.proof \
 PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT=/new/path/sha256-parent-verifier.nvk.zst \

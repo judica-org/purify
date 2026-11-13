@@ -23,6 +23,7 @@ extern "C" {
 enum {
     PURIFY_CONSTRUCTION_PARENT_ROOT_SIZE = 545,
     PURIFY_CONSTRUCTION_PARENT_DESCRIPTOR_SIZE = 130,
+    /* Fixed by the mixed SHA-256 construction-parent qualification. */
     PURIFY_CONSTRUCTION_PARENT_PROOF_SIZE = 15076,
 };
 
@@ -40,7 +41,7 @@ typedef struct purify_construction_parent_verifier
     purify_construction_parent_verifier;
 
 /**
- * Opens the sole qualified verifier at an explicit UTF-8 storage path.
+ * Opens the configured verifier at an explicit UTF-8 storage path.
  *
  * The path cannot select verifier identity. `verifier_output` is cleared
  * before validation and owns one verifier only on success.
@@ -60,13 +61,13 @@ purify_construction_parent_status purify_construction_parent_verify(
     const purify_construction_parent_verifier* verifier,
     const uint8_t construction_statement_digest[32],
     const uint8_t resolved_setup_record_digest[32],
-    const uint8_t* canonical_seed_root,
-    size_t canonical_seed_root_length,
+    const uint8_t recovery_root[64],
     const uint8_t native_basis_digest[32],
     const uint8_t native_raw_generator_digest[32],
+    uint32_t setup_count,
     uint32_t anchor_count,
-    const uint8_t* anchor_descriptors,
-    size_t anchor_descriptors_length,
+    const uint8_t* leaf_descriptors,
+    size_t leaf_descriptors_length,
     const uint8_t* proof,
     size_t proof_length,
     uint8_t* pending_root_output,

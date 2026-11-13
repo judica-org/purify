@@ -57,8 +57,8 @@ For multi-config generators such as Xcode, build benchmarks with `--config Relea
 
 ### Construction parent verifier
 
-The optional construction-parent verifier is a purpose-specific C++ API backed
-by the qualified transparent SHA-256 Nova profile. It is supported only in
+The optional construction-parent verifier is a purpose-specific C++ API for
+the transparent SHA-256 Nova profile. It is supported only in
 64-bit macOS and Linux builds. The ordinary Purify library may remain static;
 the verifier is an isolated Rust `cdylib`. Rust 1.98.1 is pinned for that
 backend:
@@ -83,18 +83,18 @@ exact size is platform-dependent. It exports only the three private load,
 verify, and destroy ABI entry points. The private ABI header is not installed;
 applications use `ConstructionParentVerifier` from the C++ library.
 
-The 693,735,316-byte verifier artifact remains an external deployment
-resource. `ConstructionParentVerifier::load()` accepts only its exact compiled
-length, suite, and tagged digest. The installed Rust backend contains only the
-verifier; setup, proving, and artifact writing compile only into its
-qualification tests. Deploy the artifact through an immutable, read-only
-snapshot so concurrent writes cannot waste verifier resources before
-authentication rejects the changed file.
+The mixed distributed-setup profile is qualified. Its loader accepts only the
+exact external artifact length, suite, and tagged digest recorded in
+`release/construction-parent-sha256.json`; stale centralized artifacts remain
+rejected. The installed Rust backend contains only the verifier. Transparent
+setup, qualification proving, and artifact writing compile only into tests.
+The qualified artifact remains an external deployment resource rather than a
+file embedded in the library or repository.
 
 The ordinary CI job builds and tests the Rust, package, codec, and private
 symbol boundaries without downloading this artifact. It does not claim
-recursive proof acceptance. Artifact-backed acceptance is the explicit release
-gate below.
+recursive proof acceptance. Artifact-backed acceptance remains the explicit
+release gate.
 
 Run that release gate with the authenticated artifact:
 
@@ -112,6 +112,11 @@ CARGO_BUILD_JOBS=1 cmake --build build-parent --parallel
 ctest --test-dir build-parent --output-on-failure \
   -R '^(purify.tests.slashability_e2e|purify.tests.installed_package|purify.tests.private_construction_parent_symbols)$'
 ```
+
+This release profile does not yet provide a reusable production prover
+artifact or standalone proving CLI. The qualified proving path is a
+resource-gated test operation; packaging authenticated reusable prover state
+is a separate follow-up from deploying the verifier above.
 
 This verifies a construction proof and completes the native accumulation
 decision before returning a verified receipt. Library verification does not

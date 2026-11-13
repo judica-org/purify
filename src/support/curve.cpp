@@ -336,6 +336,27 @@ Result<std::pair<UInt256, UInt256>> unpack_secret(const UInt512& z) {
     return unpacked;
 }
 
+Result<UInt512> pack_secret(const UInt256& first, const UInt256& second) {
+    if (first.is_zero() || half_n1() < first ||
+        second.is_zero() || half_n2() < second) {
+        return unexpected_error(ErrorCode::RangeViolation,
+                                "pack_secret:scalar_range");
+    }
+    auto first_offset = first;
+    WipeOnDestruction first_offset_guard(first_offset);
+    first_offset.sub_assign(UInt256::one());
+    auto second_offset = second;
+    WipeOnDestruction second_offset_guard(second_offset);
+    second_offset.sub_assign(UInt256::one());
+    auto packed = multiply(half_n1(), second_offset);
+    WipeOnDestruction packed_guard(packed);
+    packed.add_assign(widen<8>(first_offset));
+    assert(is_valid_secret_key(packed) &&
+           "pack_secret() output must be canonical");
+    Result<UInt512> result{packed};
+    return result;
+}
+
 Result<std::pair<UInt256, UInt256>> unpack_public(const UInt512& packed) {
     UInt256 first;
     UInt256 second;

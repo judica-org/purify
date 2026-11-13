@@ -5,6 +5,8 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
+#include <limits>
 #include <span>
 #include <utility>
 #include <vector>
@@ -25,6 +27,8 @@ class SigningRoster;
 class NonceHostBoundSigningRoster;
 class RecoveryBoundSigningRoster;
 class RecoveryRootSetupProof;
+class VerifiedDistributedRecoverySetup;
+class VerifiedConstructionReceipt;
 
 /**
  * Validate nonce hosts and bind them to a one-shot Bitcoin formation.
@@ -55,9 +59,10 @@ bind_formation_nonce_hosts(
  *
  * The circuit wrapper's external-commitment proof establishes knowledge of the
  * exact final aggregate signing scalar. The root relation derives the exact
- * registered companion root from that same witness. Success is the sole
- * cryptographic constructor for `RecoveryBoundSigningRoster`; member consent
- * is separate application policy.
+ * registered companion root from that same witness. This is the centralized
+ * constructor for `RecoveryBoundSigningRoster`; distributed contribution
+ * verification supplies the other constructor. Member consent is separate
+ * application policy.
  */
 [[nodiscard]] Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
     NonceHostBoundSigningRoster roster, const UInt512& recovery_root,
@@ -82,6 +87,9 @@ struct SigningRosterMember {
  */
 class SigningRoster {
 public:
+    static constexpr std::size_t kMaxMembers =
+        std::numeric_limits<std::uint32_t>::max();
+
     [[nodiscard]] static Result<SigningRoster> aggregate(
         std::span<const std::array<unsigned char, 33>> ordered_public_keys,
         purify_secp_context* secp_context);
@@ -117,6 +125,11 @@ private:
  */
 class NonceHostBoundSigningRoster {
 public:
+    /** Public pre-formation roster used to derive deterministic shares. */
+    [[nodiscard]] const SigningRoster& signing_roster() const noexcept {
+        return roster_;
+    }
+
     [[nodiscard]] std::span<const SigningRosterMember> members() const {
         return roster_.members();
     }
@@ -157,7 +170,7 @@ private:
 };
 
 /**
- * @brief A nonce-host-bound roster with a verified recovery-root proof.
+ * @brief A nonce-host-bound roster with an authorized recovery-root relation.
  *
  * This stronger capability is needed only by companion-key recovery and
  * anchor escrow. Accountable nonce and response verification consume the
@@ -182,6 +195,8 @@ private:
     friend Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
         NonceHostBoundSigningRoster, const UInt512&,
         const RecoveryRootSetupProof&, purify_secp_context*);
+    friend class VerifiedDistributedRecoverySetup;
+    friend class VerifiedConstructionReceipt;
 };
 
 } // namespace purify::accountable

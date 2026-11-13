@@ -184,6 +184,15 @@ if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
             "existing regular file."
         )
     endif()
+    file(SIZE "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
+        PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_SIZE)
+    if(NOT PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_SIZE EQUAL 693708278)
+        message(FATAL_ERROR
+            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT has the wrong "
+            "qualified size."
+        )
+    endif()
+    unset(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_SIZE)
 endif()
 
 if(NOT PURIFY_CXX_STANDARD MATCHES "^(20|23)$")
@@ -382,6 +391,12 @@ add_library(purify
 add_library(purify::purify ALIAS purify)
 
 purify_configure_library_target(purify)
+
+if(PURIFY_BUILD_TESTS)
+    target_compile_definitions(purify PRIVATE
+        PURIFY_INTERNAL_TEST_SUPPORT=1
+    )
+endif()
 
 if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
     if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -770,11 +785,11 @@ if(PURIFY_BUILD_TESTS)
         tests/slashability_e2e_tests.cpp
         tests/canonical_recovery_root_tests.cpp
         tests/canonical_recovery_root_helpers.cpp
+        tests/recovery_root_share_tests.cpp
+        tests/recovery_root_contribution_tests.cpp
         tests/anchor_escrow_tests.cpp
         tests/companion_scalar_escrow_tests.cpp
         tests/companion_scalar_escrow_helpers.cpp
-        tests/construction_receipt_helpers.cpp
-        tests/construction_receipt_tests.cpp
         tests/construction_receipt_codec_tests.cpp
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
@@ -797,6 +812,10 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_warnings(purify_tests)
     purify_enable_sanitizers(purify_tests)
     purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
+    target_compile_definitions(purify_tests PRIVATE
+        "PURIFY_TEST_CONSTRUCTION_PARENT_WIT3_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_accepted.wit3\""
+        "PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_WIT3_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_nondeciding.wit3\""
+    )
 
     if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
         target_compile_definitions(purify_tests PRIVATE
@@ -906,9 +925,10 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(accountable_response)
     purify_add_cpp_suite_test(slashability_native)
     purify_add_cpp_suite_test(canonical_recovery_root)
+    purify_add_cpp_suite_test(recovery_root_share)
+    purify_add_cpp_suite_test(recovery_root_contribution)
     purify_add_cpp_suite_test(anchor_escrow)
     purify_add_cpp_suite_test(companion_scalar_escrow)
-    purify_add_cpp_suite_test(construction_receipt)
     purify_add_cpp_suite_test(construction_receipt_codec)
     purify_add_cpp_suite_test(sha256_transcript)
     purify_add_cpp_suite_test(sha256_circuit_transcript)
@@ -916,7 +936,6 @@ if(PURIFY_BUILD_TESTS)
     # These proof suites saturate sanitizer runners. Keep their work
     # out of the property suites' bounded execution time.
     set_tests_properties(
-        purify.tests.construction_receipt
         purify.tests.slashability_native
         PROPERTIES RUN_SERIAL TRUE
     )

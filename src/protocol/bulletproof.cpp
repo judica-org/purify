@@ -1839,7 +1839,17 @@ void BulletproofTranscript::add_assignment(Symbol symbol, Expr expr) {
     assignments_.push_back({symbol, std::move(expr), is_v});
 }
 
-Status BulletproofTranscript::from_transcript(const Transcript& transcript, std::size_t n_bits) {
+Status BulletproofTranscript::from_transcript(
+    const Transcript& transcript, std::size_t n_bits,
+    std::size_t minimum_gate_count) {
+    if (!is_power_of_two_size(minimum_gate_count) ||
+        minimum_gate_count >
+            static_cast<std::size_t>(
+                std::numeric_limits<std::uint32_t>::max())) {
+        return unexpected_error(
+            ErrorCode::InvalidDimensions,
+            "BulletproofTranscript::from_transcript:minimum_gate_count");
+    }
     assignments_.clear();
     constraints_.clear();
     witness_to_a_.assign(transcript.varmap().size(), std::nullopt);
@@ -1872,11 +1882,30 @@ Status BulletproofTranscript::from_transcript(const Transcript& transcript, std:
         }
     }
 
-    std::size_t total_gates = source_muls + unmapped_transcript_vars.size();
+    std::size_t total_gates = 0;
+    if (!checked_add_size(source_muls, unmapped_transcript_vars.size(),
+                          total_gates)) {
+        return unexpected_error(
+            ErrorCode::Overflow,
+            "BulletproofTranscript::from_transcript:total_gates");
+    }
+    if (total_gates >
+        static_cast<std::size_t>(
+            std::numeric_limits<std::uint32_t>::max())) {
+        return unexpected_error(
+            ErrorCode::InvalidDimensions,
+            "BulletproofTranscript::from_transcript:total_gate_count");
+    }
     n_muls_ = 1;
     while (n_muls_ < std::max<std::size_t>(1, total_gates)) {
+        if (n_muls_ > std::numeric_limits<std::size_t>::max() / 2) {
+            return unexpected_error(
+                ErrorCode::Overflow,
+                "BulletproofTranscript::from_transcript:natural_gate_count");
+        }
         n_muls_ <<= 1;
     }
+    n_muls_ = std::max(n_muls_, minimum_gate_count);
 
     for (std::size_t i = 0; i < unmapped_transcript_vars.size(); ++i) {
         std::size_t gate_idx = source_muls + i;
@@ -1904,6 +1933,41 @@ Status BulletproofTranscript::from_transcript(const Transcript& transcript, std:
     return {};
 }
 
+Status BulletproofTranscript::bind_output_to_commitment(Expr output) {
+    if (n_muls_ == 0) {
+        return unexpected_error(
+            ErrorCode::UninitializedState,
+            "BulletproofTranscript::bind_output_to_commitment:transcript");
+    }
+    replace_expr_v_with_bp_var(output);
+    for (const auto& [symbol, scalar] : output.linear()) {
+        (void)scalar;
+        switch (symbol.kind) {
+        case SymbolKind::Left:
+        case SymbolKind::Right:
+        case SymbolKind::Output:
+            if (symbol.index >= n_muls_) {
+                return unexpected_error(
+                    ErrorCode::IndexOutOfRange,
+                    "BulletproofTranscript::bind_output_to_commitment:wire_index");
+            }
+            break;
+        case SymbolKind::Witness:
+        case SymbolKind::Commitment:
+            return unexpected_error(
+                ErrorCode::UnsupportedSymbol,
+                "BulletproofTranscript::bind_output_to_commitment:symbol");
+        default:
+            return unexpected_error(
+                ErrorCode::InvalidSymbol,
+                "BulletproofTranscript::bind_output_to_commitment:symbol_kind");
+        }
+    }
+    constraints_.push_back(
+        {output - Expr::variable(Symbol::commitment(0)), Expr(0)});
+    return {};
+}
+
 Status BulletproofTranscript::add_pubkey_and_out(const UInt512& pubkey, Expr p1x, Expr p2x, Expr out) {
     Result<std::pair<UInt256, UInt256>> unpacked = unpack_public(pubkey);
     if (!unpacked.has_value()) {
@@ -1927,8 +1991,12 @@ Status BulletproofTranscript::add_pubkey_and_out(const UInt512& pubkey, Expr p1x
     if (!p2_status.has_value()) {
         return unexpected_error(p2_status.error(), "BulletproofTranscript::add_pubkey_and_out:p2x");
     }
-    replace_expr_v_with_bp_var(out);
-    constraints_.push_back({out - Expr::variable(Symbol::commitment(0)), Expr(0)});
+    Status output_status = bind_output_to_commitment(std::move(out));
+    if (!output_status.has_value()) {
+        return unexpected_error(
+            output_status.error(),
+            "BulletproofTranscript::add_pubkey_and_out:output");
+    }
     return {};
 }
 

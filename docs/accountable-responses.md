@@ -99,12 +99,12 @@ types and must not be used as certificate-acceptance shortcuts.
 These APIs establish deterministic-nonce proof acceptance, exact response
 composition, and cryptographic conflict extraction. They do not by themselves
 establish registration authorization, member consent, semantic conflict,
-liability, durable pre-release signing state, or transport policy. The
-optional recovery-root setup prover currently receives the aggregate scalar
-centrally; a distributed setup protocol is a separate requirement for
-deployments that choose the experimental general-escrow path. It is not a
-dependency of accountable response extraction. A final recursive certificate
-and the secret multiparty signing protocol also remain separate components.
+liability, durable pre-release signing state, or transport policy. Standalone
+centralized recovery APIs remain available, but the selected construction
+path aggregates public member contributions noninteractively and no setup
+process receives the aggregate scalar. Recovery setup is not a dependency of
+accountable response extraction. A final recursive certificate and the secret
+multiparty signing protocol also remain separate components.
 
 The focused tests cover honest singleton and multi-member flows, odd raw nonce
 parity, missing/swapped/reordered proofs and hosts, duplicate hosts, changed

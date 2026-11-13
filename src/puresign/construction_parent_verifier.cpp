@@ -116,14 +116,14 @@ Result<AnchorPunishmentKey> VerifiedConstructionReceipt::recover_anchor(
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto& recipient,
-        recover_registered_root(roster_, exposed_signing_scalar,
-                                secp_context),
+        recover_aggregated_recovery_root(
+            roster_, aggregate_, exposed_signing_scalar, secp_context),
         "construction_parent:recover_recipient");
     const auto& entry = entries_[anchor_index];
     const auto& resolved = resolved_entries_[anchor_index];
     return recover_authenticated_anchor_ciphertext(
-        recipient, resolved.anchor_root, resolved.punishment_key,
-        entry.ciphertext, secp_context);
+        recipient, resolved.punishment_key, entry.ciphertext,
+        secp_context);
 }
 
 Result<ConstructionParentVerifier> ConstructionParentVerifier::load(
@@ -152,7 +152,7 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     const ResolvedConstructionSetup& setup,
     const ConstructionReceiptEnvelope& envelope,
     std::span<const ResolvedConstructionReceiptEntry> resolved_entries,
-    const AnchorEscrowAccumulator& anchors,
+    const ConstructionLeafAccumulator& leaves,
     purify_secp_context* secp_context) const {
     if (!impl_ || impl_->verifier == nullptr) {
         return unexpected_error(ErrorCode::UninitializedState,
@@ -160,9 +160,28 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     }
 
     const ConstructionReceiptPayload& payload = envelope.payload();
-    if (payload.recovery_root() != setup.roster().recovery_root()) {
+    if (payload.recovery_root() != setup.recovery_root()) {
         return unexpected_error(ErrorCode::BindingMismatch,
                                 "construction_parent:recovery_root");
+    }
+    const auto setup_entries = payload.setup_entries();
+    const auto anchor_entries = payload.anchor_entries();
+    if (setup_entries.size() != setup.roster().members().size()) {
+        return unexpected_error(ErrorCode::SizeMismatch,
+                                "construction_parent:setup_count");
+    }
+    std::vector<RecoveryRootShare> setup_shares;
+    setup_shares.reserve(setup_entries.size());
+    for (const auto& entry : setup_entries) {
+        setup_shares.push_back(entry.share);
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto aggregate,
+        aggregate_recovery_root_shares(setup_shares),
+        "construction_parent:setup_aggregate");
+    if (aggregate.recovery_root() != setup.recovery_root()) {
+        return unexpected_error(ErrorCode::BindingMismatch,
+                                "construction_parent:setup_root");
     }
     PURIFY_ASSIGN_OR_RETURN(
         auto statement_digest,
@@ -170,37 +189,65 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
             payload, setup.resolved_digest(), resolved_entries),
         "construction_parent:statement");
 
-    const auto entries = payload.entries();
-    const auto anchor_count = static_cast<std::uint32_t>(entries.size());
-    if (entries.size() >
+    const auto setup_count =
+        static_cast<std::uint32_t>(setup_entries.size());
+    const auto anchor_count =
+        static_cast<std::uint32_t>(anchor_entries.size());
+    std::size_t leaf_count = 0;
+    if (!checked_add_size(setup_entries.size(), anchor_entries.size(),
+                          leaf_count) ||
+        leaf_count >
         std::numeric_limits<std::size_t>::max() /
             PURIFY_CONSTRUCTION_PARENT_DESCRIPTOR_SIZE) {
         return unexpected_error(ErrorCode::Overflow,
                                 "construction_parent:descriptors");
     }
     std::vector<unsigned char> descriptors;
-    descriptors.reserve(entries.size() *
+    descriptors.reserve(leaf_count *
                         PURIFY_CONSTRUCTION_PARENT_DESCRIPTOR_SIZE);
 
     std::array<unsigned char, 32> raw_generator_digest{};
-    for (std::size_t index = 0; index < entries.size(); ++index) {
-        const auto& resolved = resolved_entries[index];
-        const auto& entry = entries[index];
+    bool have_raw_generator_digest = false;
+    for (std::size_t index = 0; index < setup_entries.size(); ++index) {
+        const auto& entry = setup_entries[index];
         PURIFY_ASSIGN_OR_RETURN(
             auto constants,
-            anchors.derive_parent_constants(
-                setup.roster(), resolved.anchor_root,
-                resolved.punishment_key, resolved.context_digest,
-                entry.ciphertext, entry.circuit_precommitment,
-                secp_context),
-            "construction_parent:anchor_constants");
-        if (index != 0 &&
+            leaves.derive_parent_constants(
+                setup.roster(), setup.formation(), index, entry.share,
+                entry.circuit_precommitment, secp_context),
+            "construction_parent:setup_constants");
+        if (have_raw_generator_digest &&
             raw_generator_digest != constants.raw_generator_digest) {
             return unexpected_error(
                 ErrorCode::BindingMismatch,
                 "construction_parent:raw_generator_digest");
         }
         raw_generator_digest = constants.raw_generator_digest;
+        have_raw_generator_digest = true;
+        append(descriptors, constants.circuit_binding_digest);
+        append(descriptors, entry.circuit_precommitment);
+        append(descriptors, constants.coefficient_commitment);
+        append(descriptors, constants.anchored_offset);
+    }
+    for (std::size_t index = 0; index < anchor_entries.size(); ++index) {
+        const auto& resolved = resolved_entries[index];
+        const auto& entry = anchor_entries[index];
+        PURIFY_ASSIGN_OR_RETURN(
+            auto constants,
+            leaves.derive_pending_anchor_parent_constants(
+                setup.roster(), setup.recovery_root(), resolved.anchor_root,
+                resolved.punishment_key, resolved.context_digest,
+                entry.ciphertext, entry.circuit_precommitment,
+                secp_context),
+            "construction_parent:anchor_constants");
+        if (have_raw_generator_digest &&
+            raw_generator_digest != constants.raw_generator_digest) {
+            return unexpected_error(
+                ErrorCode::BindingMismatch,
+                "construction_parent:raw_generator_digest");
+        }
+        raw_generator_digest = constants.raw_generator_digest;
+        have_raw_generator_digest = true;
         append(descriptors, constants.circuit_binding_digest);
         append(descriptors, entry.circuit_precommitment);
         append(descriptors, constants.coefficient_commitment);
@@ -209,13 +256,14 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     std::array<unsigned char,
                ConstructionReceiptAccumulator::kRootClaimSerializedSize>
         pending_root{};
-    const auto& basis_digest = anchors.basis().digest();
+    const auto& basis_digest = leaves.basis().digest();
+    const auto recovery_root = setup.recovery_root().to_bytes_be();
     const Bytes& proof = envelope.parent_proof();
     const auto status = purify_construction_parent_verify(
         impl_->verifier, statement_digest.data(),
-        setup.resolved_digest().bytes().data(), setup.seed_root().data(),
-        setup.seed_root().size(), basis_digest.data(),
-        raw_generator_digest.data(), anchor_count, descriptors.data(),
+        setup.resolved_digest().bytes().data(), recovery_root.data(),
+        basis_digest.data(), raw_generator_digest.data(), setup_count,
+        anchor_count, descriptors.data(),
         descriptors.size(), proof.data(), proof.size(), pending_root.data(),
         pending_root.size());
     if (status != PURIFY_CONSTRUCTION_PARENT_OK) {
@@ -225,15 +273,16 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     PURIFY_ASSIGN_OR_RETURN(
         auto final_claim,
         bppp::accumulation::parse_root_claim(
-            anchors.basis(), pending_root, secp_context),
+            leaves.basis(), pending_root, secp_context),
         "construction_parent:parse_root");
     PURIFY_RETURN_IF_ERROR(
         bppp::accumulation::decide(
-            anchors.basis(), final_claim, secp_context),
+            leaves.basis(), final_claim, secp_context),
         "construction_parent:decide");
     return VerifiedConstructionReceipt(
-        statement_digest, setup.roster(),
-        std::vector<ConstructionReceiptEntry>(entries.begin(), entries.end()),
+        statement_digest, setup.roster(), std::move(aggregate),
+        std::vector<ConstructionReceiptAnchorEntry>(
+            anchor_entries.begin(), anchor_entries.end()),
         std::vector<ResolvedConstructionReceiptEntry>(
             resolved_entries.begin(), resolved_entries.end()));
 }

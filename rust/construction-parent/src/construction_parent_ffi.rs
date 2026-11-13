@@ -9,13 +9,13 @@ use core::ptr;
 use std::slice;
 
 use crate::construction_parent_input::{
-    ConstructionParentInputs, CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES,
+    ConstructionParentInputs, CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES,
 };
 use crate::construction_parent_verifier::{
     load_qualified_construction_parent_verifier, verify_construction_parent,
     ConstructionParentVerifierError,
 };
-use crate::construction_profile::{ANCHOR_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES};
+use crate::construction_profile::{CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES};
 use crate::nova_session::{SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH};
 
 /// Stable values mirrored by the private construction-parent bridge header.
@@ -31,10 +31,10 @@ pub(crate) enum PurifyConstructionParentStatus {
     InternalError = 6,
 }
 
-/// Opaque owner of the one locally qualified construction verifier.
+/// Opaque owner of the locally configured construction verifier.
 #[repr(C)]
 pub(crate) struct PurifyConstructionParentVerifier {
-    verifier: SelectedDirectNovaVerifier<ANCHOR_RECURRENCE_STATE_ARITY>,
+    verifier: SelectedDirectNovaVerifier<CONSTRUCTION_RECURRENCE_STATE_ARITY>,
 }
 
 struct RootOutput {
@@ -108,7 +108,7 @@ fn verifier_status(error: ConstructionParentVerifierError) -> PurifyConstruction
     }
 }
 
-/// Opens and authenticates the sole qualified verifier artifact.
+/// Opens and authenticates the configured verifier artifact.
 ///
 /// `artifact_path` is an explicit UTF-8 path. The output is set to null before
 /// any validation or I/O. The path selects only a storage location; artifact
@@ -156,28 +156,34 @@ unsafe fn verify_inner(
     verifier: &PurifyConstructionParentVerifier,
     construction_statement_digest: *const u8,
     resolved_setup_record_digest: *const u8,
-    canonical_seed_root: *const u8,
-    canonical_seed_root_length: usize,
+    recovery_root: *const u8,
     native_basis_digest: *const u8,
     native_raw_generator_digest: *const u8,
-    anchor_count: u32,
-    anchor_descriptors: *const u8,
-    anchor_descriptors_length: usize,
+    setup_leaf_count: u32,
+    anchor_leaf_count: u32,
+    leaf_descriptors: *const u8,
+    leaf_descriptors_length: usize,
     proof: *const u8,
     proof_length: usize,
     output: RootOutput,
 ) -> PurifyConstructionParentStatus {
-    let anchor_count_usize = match usize::try_from(anchor_count) {
-        Ok(0) | Err(_) => return PurifyConstructionParentStatus::Malformed,
+    if setup_leaf_count == 0 || anchor_leaf_count == 0 {
+        return PurifyConstructionParentStatus::Malformed;
+    }
+    let leaf_count = match setup_leaf_count.checked_add(anchor_leaf_count) {
+        Some(value) => value,
+        None => return PurifyConstructionParentStatus::Malformed,
+    };
+    let leaf_count_usize = match usize::try_from(leaf_count) {
         Ok(value) => value,
+        Err(_) => return PurifyConstructionParentStatus::Malformed,
     };
     let expected_descriptors =
-        match anchor_count_usize.checked_mul(CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES) {
+        match leaf_count_usize.checked_mul(CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES) {
             Some(value) => value,
             None => return PurifyConstructionParentStatus::Malformed,
         };
-    if canonical_seed_root_length != CONSTRUCTION_ROOT_BYTES
-        || anchor_descriptors_length != expected_descriptors
+    if leaf_descriptors_length != expected_descriptors
         || proof_length != QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
     {
         return PurifyConstructionParentStatus::Malformed;
@@ -193,11 +199,10 @@ unsafe fn verify_inner(
             Ok(value) => value,
             Err(error) => return error,
         };
-    let canonical_seed_root =
-        match unsafe { borrow_input(canonical_seed_root, canonical_seed_root_length) } {
-            Ok(value) => value,
-            Err(error) => return error,
-        };
+    let recovery_root = match unsafe { read_array::<64>(recovery_root) } {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
     let native_basis_digest = match unsafe { read_array::<32>(native_basis_digest) } {
         Ok(value) => value,
         Err(error) => return error,
@@ -207,11 +212,11 @@ unsafe fn verify_inner(
         Ok(value) => value,
         Err(error) => return error,
     };
-    let anchor_descriptors =
-        match unsafe { borrow_input(anchor_descriptors, anchor_descriptors_length) } {
-            Ok(value) => value,
-            Err(error) => return error,
-        };
+    let leaf_descriptors = match unsafe { borrow_input(leaf_descriptors, leaf_descriptors_length) }
+    {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
     let proof = match unsafe { borrow_input(proof, proof_length) } {
         Ok(value) => value,
         Err(error) => return error,
@@ -220,11 +225,12 @@ unsafe fn verify_inner(
     let inputs = match ConstructionParentInputs::parse(
         construction_statement_digest,
         resolved_setup_record_digest,
-        canonical_seed_root,
+        recovery_root,
         native_basis_digest,
         native_raw_generator_digest,
-        anchor_count,
-        anchor_descriptors,
+        setup_leaf_count,
+        anchor_leaf_count,
+        leaf_descriptors,
     ) {
         Ok(value) => value,
         Err(_) => return PurifyConstructionParentStatus::Malformed,
@@ -241,7 +247,7 @@ unsafe fn verify_inner(
 ///
 /// The output is cleared before any input or proof check. It must not alias
 /// any input. Success is still not receipt acceptance: the private C++ caller
-/// must immediately parse this root against the anchor basis and call the
+/// must immediately parse this root against the construction-leaf basis and call the
 /// native final decision.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
@@ -249,13 +255,13 @@ pub(crate) unsafe extern "C" fn purify_construction_parent_verify(
     verifier: *const PurifyConstructionParentVerifier,
     construction_statement_digest: *const u8,
     resolved_setup_record_digest: *const u8,
-    canonical_seed_root: *const u8,
-    canonical_seed_root_length: usize,
+    recovery_root: *const u8,
     native_basis_digest: *const u8,
     native_raw_generator_digest: *const u8,
-    anchor_count: u32,
-    anchor_descriptors: *const u8,
-    anchor_descriptors_length: usize,
+    setup_leaf_count: u32,
+    anchor_leaf_count: u32,
+    leaf_descriptors: *const u8,
+    leaf_descriptors_length: usize,
     proof: *const u8,
     proof_length: usize,
     pending_root_output: *mut u8,
@@ -275,13 +281,13 @@ pub(crate) unsafe extern "C" fn purify_construction_parent_verify(
             verifier,
             construction_statement_digest,
             resolved_setup_record_digest,
-            canonical_seed_root,
-            canonical_seed_root_length,
+            recovery_root,
             native_basis_digest,
             native_raw_generator_digest,
-            anchor_count,
-            anchor_descriptors,
-            anchor_descriptors_length,
+            setup_leaf_count,
+            anchor_leaf_count,
+            leaf_descriptors,
+            leaf_descriptors_length,
             proof,
             proof_length,
             output,
@@ -289,7 +295,7 @@ pub(crate) unsafe extern "C" fn purify_construction_parent_verify(
     }
 }
 
-/// Releases a verifier returned by the qualified-artifact loader.
+/// Releases a verifier returned by the configured-artifact loader.
 #[no_mangle]
 pub(crate) unsafe extern "C" fn purify_construction_parent_verifier_destroy(
     verifier: *mut PurifyConstructionParentVerifier,
@@ -333,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn loader_reports_missing_artifact_without_an_owner() {
+    fn loader_reports_a_missing_artifact() {
         let path = std::env::temp_dir().join(format!(
             "purify-missing-construction-parent-{}",
             std::process::id()
@@ -353,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn loader_treats_post_open_storage_failure_as_rejection() {
+    fn loader_rejects_an_unauthenticated_artifact() {
         let path = std::env::temp_dir().join(format!(
             "purify-rejected-construction-parent-{}",
             std::process::id()
@@ -394,9 +400,9 @@ mod tests {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
                 0,
-                ptr::null(),
-                ptr::null(),
                 0,
                 ptr::null(),
                 0,
@@ -422,9 +428,9 @@ mod tests {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
                 0,
-                ptr::null(),
-                ptr::null(),
                 0,
                 ptr::null(),
                 0,

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -438,6 +439,30 @@ void test_key_space_derivation(TestContext& ctx) {
                    "the largest valid packed secret decodes to (half_n1, half_n2)");
     }
 
+    const auto first = UInt256::from_u64(17);
+    const auto second = UInt256::from_u64(29);
+    const auto packed_secret = purify::pack_secret(first, second);
+    expect_ok(ctx, packed_secret, "canonical secret scalars pack");
+    if (packed_secret.has_value()) {
+        const auto unpacked = purify::unpack_secret(*packed_secret);
+        expect_ok(ctx, unpacked, "packed canonical secret scalars unpack");
+        ctx.expect(unpacked && unpacked->first == first &&
+                       unpacked->second == second,
+                   "secret scalar packing round trips");
+    }
+    ctx.expect(!purify::pack_secret(UInt256::zero(), second),
+               "zero first secret scalar rejects");
+    ctx.expect(!purify::pack_secret(first, UInt256::zero()),
+               "zero second secret scalar rejects");
+    auto first_too_large = purify::half_n1();
+    first_too_large.add_assign(UInt256::one());
+    auto second_too_large = purify::half_n2();
+    second_too_large.add_assign(UInt256::one());
+    ctx.expect(!purify::pack_secret(first_too_large, second),
+               "oversized first secret scalar rejects");
+    ctx.expect(!purify::pack_secret(first, second_too_large),
+               "oversized second secret scalar rejects");
+
     const UInt512 derived_public_space = purify::multiply(purify::prime_p(), purify::prime_p());
     ctx.expect(derived_public_space == purify::packed_public_key_space_size(),
                "packed public key space size is p^2");
@@ -700,6 +725,142 @@ void test_equal_lowering(TestContext& ctx) {
     if (good_assignment.has_value()) {
         ctx.expect(circuit.evaluate(*good_assignment), "lowered equality constraint accepts the satisfying witness");
     }
+}
+
+void test_bulletproof_gate_floor(TestContext& ctx) {
+    Transcript small_transcript;
+    Expr small_left =
+        small_transcript.secret(FieldElement::from_int(3));
+    Expr small_right =
+        small_transcript.secret(FieldElement::from_int(5));
+    small_transcript.mul(small_left, small_right);
+
+    BulletproofTranscript fixed;
+    Status fixed_status =
+        fixed.from_transcript(small_transcript, 0, 8192);
+    expect_ok(ctx, fixed_status,
+              "from_transcript accepts an exact fixed gate floor");
+    if (fixed_status.has_value()) {
+        ctx.expect(fixed.native_circuit().n_gates == 8192,
+                   "fixed gate floor pads the circuit to exactly 8192");
+    }
+
+    BulletproofTranscript invalid;
+    expect_error(ctx, invalid.from_transcript(small_transcript, 0, 0),
+                 ErrorCode::InvalidDimensions,
+                 "zero gate floor is rejected");
+    expect_error(ctx, invalid.from_transcript(small_transcript, 0, 3),
+                 ErrorCode::InvalidDimensions,
+                 "non-power-of-two gate floor is rejected");
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
+        constexpr std::size_t kUnrepresentableGateFloor =
+            static_cast<std::size_t>(
+                std::numeric_limits<std::uint32_t>::max()) +
+            1;
+        expect_error(
+            ctx,
+            invalid.from_transcript(small_transcript, 0,
+                                    kUnrepresentableGateFloor),
+            ErrorCode::InvalidDimensions,
+            "gate floor beyond the wire-index range is rejected");
+    }
+
+    Transcript larger_transcript;
+    Expr accumulator =
+        larger_transcript.secret(FieldElement::from_int(2));
+    Expr factor = larger_transcript.secret(FieldElement::from_int(7));
+    for (std::size_t i = 0; i < 5; ++i) {
+        accumulator = larger_transcript.mul(accumulator, factor);
+    }
+    BulletproofTranscript natural;
+    Status natural_status =
+        natural.from_transcript(larger_transcript, 0, 4);
+    expect_ok(ctx, natural_status,
+              "from_transcript retains a larger natural circuit");
+    if (natural_status.has_value()) {
+        ctx.expect(natural.native_circuit().n_gates == 8,
+                   "natural power-of-two size takes precedence over floor");
+    }
+}
+
+void test_output_commitment_lowering(TestContext& ctx) {
+    Transcript transcript;
+    Expr x = transcript.secret(FieldElement::from_int(3));
+    Expr y = transcript.secret(FieldElement::from_int(5));
+    Expr output = transcript.mul(x, y) + x;
+
+    BulletproofTranscript bp;
+    Status lower_status = bp.from_transcript(transcript, 0);
+    expect_ok(ctx, lower_status,
+              "from_transcript lowers the output relation");
+    if (!lower_status.has_value()) {
+        return;
+    }
+    Status bind_status = bp.bind_output_to_commitment(output);
+    expect_ok(ctx, bind_status,
+              "output expression binds without public-key coordinates");
+    if (!bind_status.has_value()) {
+        return;
+    }
+
+    const NativeBulletproofCircuit circuit = bp.native_circuit();
+    const auto vars = transcript.varmap();
+    for (const auto& [commitment, expected] :
+         std::array<std::pair<FieldElement, bool>, 2>{
+             std::pair{FieldElement::from_int(18), true},
+             std::pair{FieldElement::from_int(19), false}}) {
+        const bool lowered_result = bp.evaluate(vars, commitment);
+        Result<BulletproofAssignmentData> assignment =
+            bp.assignment_data(vars, commitment);
+        expect_ok(ctx, assignment,
+                  "output relation materializes a native assignment");
+        if (!assignment.has_value()) {
+            continue;
+        }
+        const bool native_result = circuit.evaluate(*assignment);
+        ctx.expect(lowered_result == native_result,
+                   "symbolic and native output relations agree");
+        ctx.expect(native_result == expected,
+                   "output relation enforces the public commitment value");
+    }
+
+    BulletproofTranscript uninitialized;
+    expect_error(ctx, uninitialized.bind_output_to_commitment(Expr(0)),
+                 ErrorCode::UninitializedState,
+                 "output binding requires a lowered transcript");
+
+    Transcript malformed_transcript;
+    Expr unmapped =
+        malformed_transcript.secret(FieldElement::from_int(7));
+    BulletproofTranscript malformed;
+    Status malformed_lower = malformed.from_transcript(
+        malformed_transcript, 0);
+    expect_ok(ctx, malformed_lower,
+              "empty relation lowers before malformed output checks");
+    if (!malformed_lower.has_value()) {
+        return;
+    }
+    expect_error(ctx, malformed.bind_output_to_commitment(unmapped),
+                 ErrorCode::UnsupportedSymbol,
+                 "output binding rejects an unmapped transcript witness");
+    expect_error(
+        ctx,
+        malformed.bind_output_to_commitment(
+            Expr::variable(purify::Symbol::commitment(0))),
+        ErrorCode::UnsupportedSymbol,
+        "output binding rejects a self-referential commitment");
+    expect_error(
+        ctx,
+        malformed.bind_output_to_commitment(
+            Expr::variable(purify::Symbol::left(1))),
+        ErrorCode::IndexOutOfRange,
+        "output binding rejects a wire outside the lowered circuit");
+    expect_error(
+        ctx,
+        malformed.bind_output_to_commitment(Expr::variable(purify::Symbol{
+            static_cast<purify::SymbolKind>(0xff), 0})),
+        ErrorCode::InvalidSymbol,
+        "output binding rejects an invalid symbol kind");
 }
 
 void test_expr_builder(TestContext& ctx) {
@@ -1228,6 +1389,8 @@ void run_purify_tests(TestContext& ctx) {
     test_secret_key_validation(ctx);
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);
+    test_bulletproof_gate_floor(ctx);
+    test_output_commitment_lowering(ctx);
     test_expr_builder(ctx);
     test_expr_cache_ordering(ctx);
     test_bppp_move_overload(ctx);

@@ -1,350 +1,181 @@
 # Public construction receipts for coalition escrow
 
-This began as the design experiment after
-[companion scalar escrow](companion-scalar-escrow.md). The implementation now
-has a transparent SHA-256 Nova parent backend and a qualified 15,076-byte proof
-profile. A private purpose-specific C ABI backs the public C++ verifier, which
-requires both recursive verification and native accumulation decision before
-returning a verified receipt. Neither backend qualification nor that local
-acceptance path enables enrollment or establishes the child proof system's
-security.
+A construction receipt is intended to compress independently published
+coalition setup and anchor-escrow proofs into one authenticated parent result.
+Child proofs are distributed out of band. The compact public payload retains
+the data required to recover punishment keys after coalition exposure.
 
-Transparent setup is a hard requirement for the completed library: public
-parameters must not depend on a trusted ceremony or retained trapdoor. This
-requirement is separate from zero knowledge. Child proofs must still protect
-the owners' secrets; an outer proof whose witnesses are public need not hide
-those witnesses merely to satisfy the setup requirement.
+The native scalar-only anchor leaf and C++ two-stage acceptance boundary are
+implemented. The current recurrence still derives its seed from the separate
+centralized setup proof and processes only anchor leaves. Its matching
+scalar-only verifier artifact is not qualified or published, so there is not
+yet a production-accepted recursive receipt. The mixed distributed-setup
+parent described below remains the cutover target.
 
-## Publication and recovery
+Transparent setup is required. The selected parent path uses the accumulated
+BP++ obligations as the authenticated recurrence input and requires a native
+final decision. Recursive verification without that decision is not receipt
+acceptance.
 
-The coalition distributes its recipient-setup proof **out of band**. Each root
-owner independently distributes an encryption proof and ciphertext out of band.
-An assembler uses those public objects to construct the final receipt. Owners
-do not send secrets to the assembler or participate in another proving round.
+## Publication flow
 
-The intended on-chain object contains the coalition reference, recipient `M`,
-an ordered list of recovery-root references and ciphertexts, application context,
-and one final proof. The independent child proofs are not on-chain payloads.
-They are witnesses for the final prover, although they contain no additional
-secret inputs and may be distributed publicly.
+The coalition publishes setup contributions for the exact ordered roster,
+coalition core, nonce-host commitment, and recovery root `M`. Every anchor
+owner independently publishes:
 
-Bitcoin-only verification and recovery must remain possible after the children
-are unavailable. The final proof authenticates the construction; the ciphertexts
-and their exact root associations provide the data needed for recovery. A hash
-of unavailable ciphertexts cannot fulfill this requirement.
+- its anchor reference and advertised root `D_i`;
+- its registered BIP340 punishment key `K_i`;
+- its application context;
+- a 96-byte ciphertext `E_i`; and
+- a v4 child proof binding the ciphertext to `M` and `K_i`.
 
-For an already registered exact coalition point `Q=qG`, a receipt must establish:
+An assembler may receive child records in any order, but the registry supplies
+the authoritative ordered manifest. The assembler cannot omit, duplicate, or
+substitute anchors and still produce the same construction statement.
 
-1. The setup proof accepts for the exact `Q`, recipient `M`, and setup context.
-2. For every listed root `D_i`, its encryption proof accepts for the exact
-   `M`, `D_i`, ciphertext `E_i`, and enrollment context.
-3. The list covers the externally authorized manifest exactly, with no duplicate
-   roots, omissions, substitutions, or extra entries. Public references resolve
-   to the same roots used by the child verifiers.
+Owners do not reveal their punishment keys, Purify keys, or the coalition
+scalar to the assembler. They do not participate in a second proving round.
 
-The registry record supplying that setup should derive its coalition core from
-the [one-shot Bitcoin formation](coalition-formation.md) rule. Its resolved
-setup digest must retain that exact core and formation record. This changes no
-parent-proof field: the construction statement already authenticates the
-resolved setup digest, while the child setup and escrow relations already bind
-the coalition core.
+## Compact payload
 
-The assembler may receive packets in any order. Reordering delivery does not
-require new owner proofs. The application supplies the authoritative manifest;
-an assembler-selected subset cannot establish that all intended collateral was
-enrolled. Changing a receipt's manifest changes its statement.
-
-The reference experiment uses one shared context for setup and bridge proofs;
-their existing tagged hashes already separate the two relations. The final
-parent must bind that context and the complete ordered statement. Child contexts
-must not depend on receipt arrival order or the random bytes of other proofs.
-Consent, activation, stake accounting and historical liability remain registry
-rules, not consequences of proof verification.
-
-## Statement and proof boundary
-
-Let `pi_setup` and `pi_i` be completed independent child proofs. The intended
-parent relation is the conjunction:
+Construction payload version 3 is:
 
 ```
-VerifySetup(Q, M, setup_context, pi_setup)
-AND for every i:
-    VerifyEscrow(M, D_i, E_i, enrollment_context, pi_i)
+version8 || recovery_root64 || count32be || entry[0] || ...
 ```
 
-The final verifier authenticates the statement and verifies a proof of this
-relation. Calling the ordinary C++ child verifiers before signing or hashing a
-packet is not such a proof. Neither is taking a claimed verification result,
-Fiat-Shamir challenge, or elliptic-curve sum as an unconstrained witness.
-
-All child acceptance checks must be represented: canonical encodings and point
-validation, exact proof lengths, transcript challenges and rejection rules,
-output binding, arithmetic reductions, and the final group equations. Public
-preprocessing is useful only when the final verifier authenticates or recomputes
-it; a prover-supplied precomputed result is not trusted.
-
-Use a reviewed composition argument, including its knowledge/extraction and
-random-oracle requirements. A parent cannot repair an unsound child relation.
-The current experimental circuit wrapper has identified structural soundness
-defects: its constraint-folding challenges precede a commitment to the original
-witness, and acceptance of the reduced norm equation does not establish that
-its coordinates belong to the original circuit reduction's image. These are
-not merely missing documentation or an outstanding general audit. Running this
-acceptance predicate does not establish a sound verifiable-encryption proof.
-
-The native relations and honest round trips remain reference experiments. A
-sound replacement must also establish exact secp output binding and the claimed
-privacy properties. Recursively proving acceptance of the current defective
-wrapper would preserve its defects. Removing ZK from a parent whose witnesses
-are public does not remove these obligations. No production receipt, nonce
-certificate or enrollment may rely on the current wrapper.
-
-Conditional recovery remains:
+Each 128-byte entry is:
 
 ```
-valid same-slot conflicting certificates -> extracted q
-q -> canonical recipient secrets -> decrypt each old root -> punishment keys
+ephemeral_root64 || masked_punishment_scalar32 ||
+circuit_precommitment32
 ```
 
-The current honest fixtures exercise extraction algebra and recovery. They do
-not validate full decision certificates or establish forced economic loss under
-Bitcoin spending rules. Arbitrary misbehavior does not necessarily reveal `q`.
-Published escrow cannot be revoked cryptographically by leaving a coalition.
-
-## Size target
-
-The current experimental wrapper serializes an honest setup transcript in
-1,007 bytes, alongside a 64-byte public recipient. Each bridge has a
-1,137-byte honest transcript and 192-byte ciphertext. These are measurements of
-the defective wrapper, not sizes of an established sound argument. If a sound
-final proof replaces the setup and bridge transcripts while retaining this
-ciphertext format, incremental data with an explicit recipient would be:
+The total serialized size is:
 
 ```
-64 + 192*N + size(final_proof)
+69 + 128*N bytes
 ```
 
-Here `N` counts independently encrypted recovery roots, not necessarily anchors.
-Root/coalition references, context, framing, consents and existing anchor leaves
-are additional. The reference statement includes full public roots instead of
-assuming an unimplemented on-chain index; its serialized size is therefore
-larger than this incremental formula.
+The payload contains the ciphertexts, not merely their hashes, so Bitcoin-only
+recovery remains possible if the out-of-band child proofs disappear. Anchor
+references, advertised roots, punishment keys, and contexts are resolved from
+the authenticated registry rather than duplicated in every compact entry.
 
-The qualified parent proof is 15,076 bytes, not the original 1-2 KB target.
-Its 693,735,316-byte local verifier artifact expands to 3,206,748,264 bytes.
-These measurements qualify the selected recursive backend; they do not resolve
-the child argument's security review, distributed proving, or a production
-assembler-prover API. Public witness reconstruction currently exists only in
-test helpers. Combining all native witnesses centrally would not satisfy the
-required public assembler interface.
+## Authenticated statement
 
-## Public prehashing measured in the current wrapper
+`construction_receipt_statement_digest()` uses
+`Purify/Accountable/ConstructionReceiptStatement/v4` and commits to:
 
-The revised experimental transcript separates statement-only preprocessing
-from proof-dependent hashing. In the current defective outer reduction, `rho`,
-the ordered generators and the coefficient vector depend only on the circuit
-and public statement. They do not depend on the child's `A`, `S`, `t2` or folding
-messages. The implemented digest is:
+1. the exact serialized payload;
+2. the immutable resolved setup-record digest; and
+3. for each entry in payload order, the unique anchor reference, exact anchor
+   root, exact compressed even-Y punishment key, and context digest.
+
+The statement rejects a count mismatch, repeated anchor reference, repeated
+anchor root, or repeated punishment key. The setup digest must resolve the
+payload recovery root one-to-one to the registry record containing the exact
+roster, coalition core, nonce-host commitment, and setup context.
+
+The advertised anchor root is metadata authenticated by this statement and by
+the child v4 binding. It is not a witness from which the punishment key is
+derived. Child APIs also reject an anchor root equal to the coalition recovery
+root, preventing the detectable recovery-key alias.
+
+## Parent relation and acceptance
+
+For verified ordered setup and anchor records, native preparation produces one
+pending algebraic obligation per child. Parent constants are derived from the
+same public circuit, ciphertext or full share, public output, context, and
+child precommitment. The planned mixed recurrence starts from the canonical
+empty claim and authenticates every setup leaf, every anchor leaf, the ordered
+manifest, each transition, and the final claim.
+
+The current anchor-only recurrence instead consumes a seed produced by the
+independently verified centralized setup record. It does not recursively prove
+that setup record.
+
+The acceptance boundary is deliberately two-stage:
+
+1. verify the purpose-specific recursive parent proof for the exact statement;
+2. run the native accumulation decision for the authenticated final claim.
+
+Only the conjunction returns a `VerifiedConstructionReceipt`. A claimed child
+verification result, unconstrained Fiat-Shamir challenge, or recursive proof
+without the final decision is insufficient.
+
+## Recovery
+
+After valid same-slot conflicting coalition certificates expose `q`:
 
 ```
-D = TaggedHash("Purify/BPPP/NormArg/PublicDataV1",
-    rho32 || norm_count64le || generator_count64le || generators33[]
-    || coefficient_count64le || coefficients32[])
+q
+ -> verify the registered coalition recovery root
+ -> authenticate the construction receipt
+ -> decrypt every payload ciphertext
+ -> validate exact normalized punishment-secret bytes
+ -> validate every registered punishment public key
 ```
 
-Points use canonical compressed SEC1 encodings; scalars use canonical big-endian
-32-byte encodings. The norm transcript starts with a different domain tag,
-`Purify/BPPP/NormArg/TranscriptV1`, followed by `D || commitment33`. Existing
-ordered round messages and challenge extraction then continue normally.
+The recovery path needs the compact payload, registry resolution, and accepted
+parent result. It does not need the original child proof packets.
 
-The native verifier recomputes `D`; there is no API accepting an unchecked
-assembler-supplied digest. For this current data flow, a parent verifier could
-likewise recompute it from the authenticated public statement and bind it to
-the constrained child transcript. Proof-dependent commitment/round hashing
-would remain inside the parent circuit.
+Char must bind each recovered punishment key to that member's BIP340 coalition
+point. Recovery intentionally does not reveal the anchor's Purify nonce-host
+secret. A public nonce proof is not secret nonce material. An accepted prior
+response can reveal the raw nonce for that exact nonce set; future slots still
+need retained nonce secrets, the nonce-host secret, or an explicit
+exposed-member policy authenticated by the exposure record.
 
-That split is not a security repair. Fixing the original witness before random
-constraint folding can make challenges and reduction coefficients depend on
-child-proof messages. Such data cannot then be treated as statement-only public
-preprocessing merely because the current wrapper does so. Static generators
-and genuinely statement-fixed data can still be prehashed where the final
-verifier authenticates them. A sound replacement must specify its actual
-dependencies before any recursive workload estimate is accepted.
+## Version boundary
 
-This is a new experimental transcript, not an alternate verifier for old
-proofs. PureSign++ nonce-proof encoding advances to version 2 and rejects
-version 1. The outer signature container layout is unchanged. Domain separation
-and canonical public-data binding distinguish these transcript bytes; they do
-not fix the witness-ordering or reduction-image defects.
+The scalar-only protocol is an incompatible cutover:
 
-Source-derived SHA-256 compression counts for this experimental wrapper,
-including challenge forks and the first outer challenge attempt, are:
+| Component | Version/domain |
+| --- | --- |
+| Anchor escrow record | 4 |
+| Construction payload | 3 |
+| Anchor binding and randomness | `/v4` |
+| Construction statement | `/v4` |
+| Anchor accumulation basis | `/v4` |
+| Parent-prover witness frame | `Purify/Nova/Wit2` |
 
-| Child | Padded gates | Public bytes hashed outside | Previous layout | Factored layout |
-| --- | ---: | ---: | ---: | ---: |
-| Recipient setup | 2,048 | 536,632 | 8,414 | 30 |
-| One root encryption | 8,192 | 2,146,360 | 33,570 | 34 |
+Record v3, payload v2, old statement digests, old accumulation parameters, and
+the `Wit1` parent fixture are not compatibility inputs. The Rust recurrence,
+qualification vectors, relation ID, and verifier artifact must be regenerated
+against this exact version set before release; old artifacts cannot qualify
+the new statement.
 
-For this wrapper, one setup plus two encryption children goes from 75,554 to
-98 proof-dependent blocks; 100 encryption children go from 3,365,414 to 3,430.
-Those counts are not a claim that a sound recursive receipt needs only 98 or
-3,430 blocks. They rely on the current statement-only reduction coefficients
-and must be recomputed for the sound replacement. Public hashing has moved,
-not disappeared, and remains part of full verifier cost. Tagged midstates are
-treated as constants. These are source-derived experimental workloads, not
-measured parent gates or a final proof-size estimate.
+## Size accounting
 
-The previous layout placed the variable commitment before the public arrays,
-so those arrays could not be prehashed as an independent SHA-256 prefix. The
-profiler retains that historical layout only for comparison, not compatibility.
+The public construction envelope contains:
 
-### Historical backend-selection assessment
-
-Purify's key/nonce relation avoids hashing secret material by combining public
-hash-to-curve preprocessing with constrained secret scalar multiplication. It
-does not remove the proof system's Fiat-Shamir hash. An off-chain child proof
-becomes a witness to its parent, so the child's proof-dependent challenges
-still require constrained derivation. The original SHA-256 experiment measured
-that workload but did not by itself select a final backend.
-
-The qualified profile now explicitly selects the chained SHA-256 transcript.
-Its native Nova `StepCircuit` relation implements canonical non-native
-secp256k1 arithmetic and complete group-edge handling, and the production
-archive verifies the resulting frozen Nova profile. This establishes the
-implemented validity path; it does not supply the missing independent child and
-composition security review. Purify's PRF security would not justify replacing
-the selected random oracle without a new suite and security argument.
-
-The historical inner checks had 12,288 setup and 49,152 encryption
-fixed-generator terms before separately reviewed batch optimization. Those
-measurements motivated the accumulation design but do not estimate the
-qualified parent prover from the small experimental child transcripts.
-
-### Full verifier circuits and accumulation are different designs
-
-These counts describe executing the current child verifier. They are not a
-lower bound for transparent recursive composition. In particular, they do not
-model Halo-style accumulation of an inner-product verification obligation.
-
-An IPA verifier's expensive final generator combination can be represented as
-a commitment to a polynomial whose evaluation is cheap to compute from the
-folding challenges. A recursive proof checks the small part of verification
-and the transition to a new accumulator. The final verifier must discharge the
-remaining linear-time generator check. Omitting that final check is unsound;
-repeating it inside every recursive circuit is not the only design. This is
-the route described in the [Halo2 recursion explanation](https://zcash.github.io/halo2/background/recursion.html)
-and formalized by [accumulation schemes](https://eprint.iacr.org/2020/499).
-
-Bulletproofs' inner-product machinery is part of that lineage. The BP++ weighted
-norm argument has related folding structure, but its smaller proofs and support
-for joint aggregation do not by themselves specify a public accumulator for
-completed BP++ circuit proofs. Adapting the accumulation route requires an exact
-reduction/accumulator relation, transcript, final decision procedure and security
-argument for that relation. The native
-[norm accumulator](norm-accumulation.md) now implements partial norm
-verification, public coefficient openings for varying `c`, accumulation
-transitions and a mandatory final decision. Its API requires all child
-statements and transition transcripts. The selected SHA-256 Nova recurrence
-now authenticates those transitions, but it does not repair an unsound child
-argument, and the concrete protocol still requires cryptographic review.
-Neither native accumulation nor batch verification alone is a compressed
-construction receipt.
-
-The selected backend takes this accumulation route. Its cost accounting keeps
-the recursive circuit, final verifier, public accumulator bytes, and
-authenticated manifest separate. Other curve cycles or transcript suites may
-reduce recursive arithmetic costs, but would define new protocol profiles. The
-selected accumulator still needs sound child proofs and cannot repair the
-current outer-circuit wrapper.
-
-Anchor punishment-key derivation was also a design variable. The selected leaf
-now derives `k = Purify(d, punishment_domain)` under one fixed domain and
-constrains the exact public `kG`; public hash-to-curve bases are reconstructed
-outside the circuit. See
-[the anchor punishment-key relation](anchor-punishment-relation.md). This avoids
-hashing an unknown secret in-circuit but introduces the documented related-output
-security assumption.
-
-An owner who does not know a shared root still needs distributed evaluation, so
-this choice cannot silently change shared-root custody into individual custody.
-Anchor-key topics remain domain-separated from signing-nonce topics, and root
-reuse retains every historical escrow authority's exposure. The aggregate
-`q`-to-recipient construction requires distributed proving to avoid
-reconstructing `q` at a coordinator, and its correlated-key privacy argument
-remains unresolved.
-
-## Implementation status
-
-Completed validity work includes public child-packet assembly, independently
-checked SHA-256 transcripts, canonical child parsing, constrained secp256k1
-verification, the authenticated manifest recurrence, transparent Nova
-qualification, fixed accepted and nondeciding proof vectors, and the public C++
-recursive-plus-native acceptance boundary.
-
-Remaining production work is narrower but security-critical:
-
-1. Repair or independently justify the child argument and review the V4 leaf,
-   accumulation, composition, and related-output assumptions.
-2. Implement distributed setup, custody, and share-preserving proving without
-   reconstructing coalition secrets at a coordinator.
-3. Publish the authenticated verifier artifact through an immutable release
-   channel and qualify resource behavior at 100 to 1,000 anchors, including
-   distribution and startup.
-4. Integrate accepted certificate recovery with registry, consensus, redemption,
-   and punishment rules before enabling enrollment.
-
-No receipt should be accepted merely because its public inputs passed the
-reference assembler. Backend qualification does not replace the remaining
-composition and protocol review.
-
-## Running the experiments
-
-The construction fixture shares the exact existing child verifiers through
-test-only helpers. It runs their experimental acceptance predicates; it does
-not establish sound proof acceptance. Its assembler accepts the externally
-supplied ordered roots and public packets; its signature accepts no secret,
-witness assignment or callback to a participant. The tested mutations reject
-incomplete coverage, duplicate roots, crossed child proofs, and changed
-recipients, coalitions, contexts or ciphertexts.
-After preparation, recovery uses only the statement and extracted toy scalar;
-it does not retain the child proofs. This historical fixture models the public
-data flow; it is not the qualified recursive verifier or receipt acceptance.
-
-The two-root fixture has 3,281 bytes of out-of-band child proofs and a 662-byte
-public statement, including full roots, the coalition point, context and framing.
-Its recipient and ciphertext portion is 448 bytes. Those historical statement
-measurements exclude the separately qualified 15,076-byte parent proof.
-
-The removed standalone SHA-256 fixture constrained symbolic input bits and
-bounded 32-bit additions, checked padding boundaries against the independent C
-hash, and produced an honest transcript for that locally checked relation. It
-did not establish a sound proof of a hash preimage through the current wrapper.
-That standalone hash relation was insufficient; the qualified recurrence
-separately connects the exact chained transcript to its constrained child
-relation.
-
-An AppleClang 16 / arm64 C++20 Release run measured the `abc` relation at 32,768
-padded gates and a 1,267-byte experimental transcript, with about 13.76 seconds
-generating it and 5.40 seconds running its acceptance predicate. Those timings
-exclude circuit/witness construction. Message
-lengths 0, 3 and 55 use 32,768 padded gates; lengths 56 and 64 require two SHA-256
-blocks and 65,536 gates. These are standalone hash-relation measurements using
-the defective wrapper, not an extrapolated size or runtime for a sound complete
-receipt.
-
-The larger honest circuit exposed a fixed 16 MiB BP++ scratch allocation that
-could not hold its live vector copies. The accompanying resource fix reserves
-an overflow-checked dimension-dependent frame in addition to MSM work space,
-for both cached and uncached calls. It changes allocation capacity, not the
-proof relation or transcript.
-
-```sh
-ctest --test-dir build --output-on-failure \
-  -R '^purify\.tests\.construction_receipt(_codec)?$'
+```
+69 + 128*N + size(parent_proof)
 ```
 
-The general composition approach is described in
-[Recursive Proof Composition without a Trusted Setup](https://eprint.iacr.org/2019/1021).
-[BP++](https://eprint.iacr.org/2022/510) supports joint proving and aggregation;
-that does not provide an implemented public compressor for these completed
-Fiat-Shamir proofs.
+This excludes registry data already addressed by the statement, Bitcoin
+carrier framing, and out-of-band child records. Each independent child record
+is 1,233 bytes, but its 1,136-byte proof portion is consumed during
+construction rather than repeated in the compact payload.
+
+Parent proof and verifier-artifact sizes belong to the selected recurrence
+profile and must be reported from the matching post-cutover qualification.
+Numbers from the superseded full-root child relation are not estimates for the
+v4 scalar-only profile.
+
+## Integration boundary
+
+Proof verification does not define coalition activation, consent, expiry,
+stake accounting, conflict validity, or Bitcoin punishment spending rules.
+Those remain Char registry and consensus responsibilities. In particular:
+
+- the authoritative manifest must come from deterministic registry state;
+- registry resolution must be immutable for the receipt's lifetime;
+- a historical receipt remains usable after a member leaves;
+- exposure must be established by the certificate-conflict rules; and
+- accepted recovery must feed the actual punishment path before enrollment is
+  enabled.
+
+The parent proof compresses the cryptographic construction statement; it does
+not replace these consensus checks.

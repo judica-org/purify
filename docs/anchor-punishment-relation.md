@@ -1,123 +1,128 @@
-# Anchor punishment-key relation
+# Anchor punishment-key escrow
 
-An anchor escrow proves one relation over the same canonical companion-curve
-secret `(d1, d2)`:
+Anchor escrow version 4 encrypts one existing BIP340 punishment scalar to a
+coalition recovery root. It does not encrypt the anchor's Purify key and does
+not derive the punishment key from that key.
 
-1. `D = (x(d1 G1), x(d2 G2))` is the advertised anchor recovery root.
-2. The ciphertext decrypts to `(d1, d2)` under the coalition recovery root.
-3. `k_raw = PurifyEval((d1, d2), punishment_domain)`.
-4. `k = k_raw` or `-k_raw`, selected so `k G` has even Y.
-5. The sole circuit output is `k`, publicly committed as canonical
-   `02 || x(k G)` by the V4 public-commitment proof.
+Let:
 
-The pinned evaluation input is the exact ASCII byte string
-`Purify/Accountable/AnchorPunishmentKey/v1`. The ordinary Purify evaluation
-bases are therefore
-`H2C("Eval/1/" || punishment_domain)` and
-`H2C("Eval/2/" || punishment_domain)`. This 41-byte input cannot equal an
-accountable PureSign nonce input. Its nonce context is first reduced to a
-32-byte digest under `Purify/Accountable/Nonce/v2`, then the actual Purify
-input is `PureSign/Nonce/Topic/ || digest`. There is no SHA-256 gadget in the
-anchor V4 leaf circuit.
+- `M = (M1, M2)` be the coalition recovery root;
+- `D` be the advertised anchor or nonce-host root;
+- `k` be the anchor's normalized, even-Y BIP340 punishment scalar;
+- `K = 02 || x(kG)` be its registered punishment public key; and
+- `e = (e1, e2)` be a fresh Purify ephemeral secret with public root
+  `E = (x(e1 G1), x(e2 G2))`.
 
-Record version 3 fixes the modern tagged hash-to-curve mode. A build configured
-with `PURIFY_USE_LEGACY_FIELD_HASHES` returns `UnsupportedSymbol` before
-deriving, proving, preparing, verifying, or recovering this suite. Record
-parsing, basis construction, and envelope framing remain syntax-only transport
-operations; none accepts a proof. Generic legacy-mode Purify APIs remain
-available, but they cannot create an alternate anchor-v3 protocol under the
-same record and statement versions. The construction-parent verifier cannot be
-configured with legacy field hashes, so an incompatible process cannot load
-the modern anchor-v3 public parameters.
+The ciphertext is:
 
-The relation reuses the escrow's existing `d1` and `d2` bit witnesses and
-generator multiplications. A second multiplication of the same bits by each
-fixed message base costs 335 gates rather than 423 because its 88 bit-only
-lookup products are already present. The exact shape is:
+```
+E
+c = k + Combine(x(e1 M1), x(e2 M2))
+```
 
-| Component | Gates |
-| --- | ---: |
-| Existing escrow relation | 6,262 |
-| Two fixed-base evaluation multiplications | 670 |
-| Purify output combiner | 4 |
-| Boolean sign and conditional negation | 2 |
-| Total unpadded | 6,938 |
-| Padded suite | 8,192 |
+The zero-knowledge relation proves that the same signed-window witnesses
+`e1,e2`:
 
-Consequently the existing 14-round, 974-byte norm proof and 16,384-element
-accumulation basis remain unchanged. Public commitment mode adds its 32-byte
-DLog nonce and 32-byte response. The independent record is therefore 1,329
-bytes: one version byte, 192 bytes of ciphertext, and 1,136 proof bytes.
+1. open the two coordinates of `E`;
+2. produce the shared pad against `M`; and
+3. satisfy the ciphertext equation for a scalar committed in public slot 0.
 
-The construction payload remains `69 + 224*N` bytes. Its resolved statement,
-which is authenticated by the parent receipt, binds the canonical punishment
-key in addition to the anchor reference, recovery root, and context. The
-punishment key is deliberately not duplicated in the payload.
+The public-commitment DLog proof binds slot 0 to the exact compressed point
+`K`. Consequently an accepted record proves encryption of the registered
+punishment scalar, rather than merely encryption of some scalar with a
+prover-chosen public point.
 
-## Security boundary
+`D` is authenticated statement metadata only. It is included in the v4
+randomness statement, proof binding, and construction-receipt statement, but
+there is deliberately no circuit relation between `D` and `k`. The anchor may
+therefore retain its independent Purify nonce-host secret after its punishment
+key is exposed. The public API rejects `D == M`, ruling out the detectable
+case in which coalition exposure would directly reconstruct the advertised
+anchor key as the coalition recovery key.
 
-The fixed-domain construction relies on a related-output extension of
-Purify's multi-query PRF/key-recovery assumption: an adversary sees the
-secp256k1 point of the fixed-domain output alongside nonce-domain queries, and
-later learns the scalar only when coalition exposure intentionally enables
-punishment. This related-output extension is an explicit protocol assumption,
-not a reduction established by this implementation.
-Using a cheaper linear projection such as `d1 + h*d2` would instead add a
-correlated multi-group discrete-log/related-key assumption and make future
-linear outputs accumulate equations in the recovery secret. The linear
-projection is not part of this suite.
+## Canonical key handling
 
-Native construction rejects a zero evaluation before proving. It validates
-the supplied `GeneratedKey`, canonicalizes the evaluation scalar with the
-secp256k1 BIP340 helper, and checks the exact x-only key supplied by the
-application. Recovery repeats all three checks after decryption and returns a
-move-only purpose-specific key. Raw, normalized, assignment, and decrypted
-secret copies are wiped at their ownership boundaries.
+`AnchorPunishmentKey::from_secret()` accepts a nonzero secp256k1 scalar and
+normalizes it to the even-Y BIP340 representative. Proof creation accepts this
+move-only typed key; there is no public API that derives it from an anchor
+root.
 
-Zero has no counter-based retry encoding. An application encountering the
-negligible zero case must generate a different anchor recovery key before the
-anchor is published, so native and circuit evaluation cannot select different
-rekey branches.
+Recovery first authenticates the complete escrow statement. Under the current
+centralized setup it derives the coalition recovery key directly from the
+exposed coalition signing scalar. Under the distributed setup it instead
+resolves the bounded centered-share carry against the authenticated full
+companion-point aggregate. It then decrypts `c` and checks both:
 
-## Recurrence integration boundary
+1. the decrypted 32 bytes already equal the normalized even-Y secret bytes;
+2. that secret produces the exact registered x-only punishment key.
 
-The qualified and frozen Rust recurrence selects the public V4 leaf and
-constrains the punishment-key DLog equation under the exact resolved statement.
-The construction statement digest and initial manifest bind that resolution.
-The complete recurrence is pinned by relation ID
-`92ee3f3572c6ff1c9c41c771995cd70881db8544472d87ac00a5675c9981bede`;
-the preceding hidden-anchor recurrence is not compatible with record version
-3. The `69 + 224*N` payload boundary is unchanged, and no punishment key is
-added to the payload entry.
+The first check is important: x-only public keys alone cannot distinguish
+`k` from `-k`. A malleated ciphertext that decrypts to the odd-Y
+representative is rejected before the public-key comparison.
 
-This relation migration is exercised by the Rust construction-parent
-qualification tests. The production Rust archive contains only the fixed
-verifier and does not activate consensus or enrollment. The purpose-specific
-public C++ API authenticates the recursive result and requires native
-accumulation decision before returning a verified receipt. The selected
-profile freezes public-parameter digest
-`6dda8885554099ec7a183918ad481e430fd84d7b608ae95558259760519a6000`
-and suite ID
-`acd99f11320b566f7271fe54996fa025c2c5717e4d7433a6c333239ad8c871a6`.
-One transparent setup, two ordered full-scale folds for each of the accepted
-and nondeciding fixtures, Spartan IPA compression, canonical verification, and
-authenticated artifact reload have qualified. Each proof is 15,076 bytes.
-The complete qualification took 3h 07m 56.5s on its qualification host,
-including 11m 25.3s for transparent setup. Those measurements do not isolate
-per-proof generation time or peak memory.
+## Transcript and framing
 
-The local verifier artifact is 693,735,316 encoded bytes and expands to a
-3,206,748,264-byte canonical payload. Its v2 tagged digest is
-`3d4c4fa5aa00e170dd03936085f42ecfc9a4dfd089db70bdd2372ad209c8037d`.
-A setup-free regression loads that exact artifact and verifies both qualified
-outcomes. Measured runs loaded it in about 191 seconds and verified each proof
-in 53 to 68 seconds. The private purpose-specific C ABI backs a public C++
-acceptance boundary that mandates native `decide()`; recursive validity alone
-does not accept a construction receipt.
+The scalar-only cutover is a new protocol suite. Old records are not accepted.
 
-These validity results do not resolve this relation's explicit related-output
-security assumption, distributed setup and custody, share-preserving child
-proving, or correlated-key pre-conflict confidentiality. Qualification covers
-two anchors rather than operation at 100 to 1,000 anchors. The roughly 662 MiB
-compressed verifier and 2.99 GiB decoded state remain impractical for binary
-embedding; startup remains separate qualification work.
+| Item | Selected value |
+| --- | --- |
+| Escrow record version | 4 |
+| Construction payload version | 3 |
+| Escrow binding domain | `Purify/Accountable/AnchorEscrow/v4` |
+| Construction statement domain | `Purify/Accountable/ConstructionReceiptStatement/v4` |
+| Accumulation domain | `Purify/Accountable/AnchorEscrowAccumulation/v4` |
+| Parent-prover fixture frame | `Purify/Nova/Wit2` |
+
+The randomness-statement, randomness-master, ephemeral, and proof-seed tags
+also use their corresponding `/v4` domains. The proof suite requires the
+modern tagged field-hash mode. A legacy-field-hash build may parse transport
+syntax but rejects v4 proof construction, verification, preparation, and
+recovery.
+
+## Circuit and wire size
+
+The semantic relation has 2,030 multiplication constraints and 510 signed
+window bits. Lowering allocates one additional assignment gate for the output
+scalar, so the circuit contains 2,031 gates before explicit padding to 8,192.
+This retains the 16,384-element, 14-round norm-proof profile.
+
+One independent escrow record is 1,233 bytes:
+
+```
+1 version + 96 ciphertext + 1,136 proof
+```
+
+The ciphertext is one 64-byte ephemeral root followed by one 32-byte masked
+scalar. A construction payload is:
+
+```
+69 + 128*N bytes
+```
+
+Each 128-byte entry contains the 96-byte ciphertext and the exact 32-byte v4
+circuit precommitment. Anchor references, roots, punishment keys, and context
+digests are resolved from the registry and authenticated by the construction
+statement rather than duplicated in the compact payload.
+
+## Exposure boundary
+
+Coalition-key exposure recovers each enrolled punishment scalar. The generic
+Purify leaf does not associate that scalar with a roster member. Char must
+bind each member's BIP340 roster point to the punishment key resolved for that
+member's anchor. With that registry invariant, the recovered punishment
+scalar is also the member response key. It is deliberately not the anchor's
+Purify nonce-host secret.
+
+The distinction matters for liveness. A public nonce proof exposes the nonce
+point, not its scalar, so the response key and proof alone cannot produce a
+response. A replacement can recover the raw nonce from an accepted response
+for that exact nonce set, or use separately retained nonce-secret material.
+Future slots still need the nonce-host secret, retained prepared nonces, or an
+explicit exposed-member verifier rule. Otherwise the coalition must reform.
+That runtime policy is outside the v4 leaf relation.
+
+The construction parent acceptance API requires both recursive verification
+and the native accumulation decision. The scalar-only parent profile is not
+yet qualified or published, so no production recursive receipt is currently
+accepted. Recursive validity will not substitute for the final native
+decision once the matching profile is available.

@@ -3,7 +3,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -13,6 +13,11 @@ use purify_construction_parent::prover::{
     QualifiedConstructionParentProvingError,
 };
 use thiserror::Error;
+
+// Formation V3 admits at most 100 setup and 100 anchor entries. The Wit3
+// frame is 152 header bytes, 3,444 bytes per setup entry, 3,474 bytes per
+// anchor entry, and one 545-byte final root.
+const MAX_DEPLOYMENT_WIT3_BYTES: usize = 152 + 100 * 3_444 + 100 * 3_474 + 545;
 
 #[derive(Debug, Error)]
 enum CommandError {
@@ -29,12 +34,23 @@ enum CommandError {
     },
     #[error("construction-parent proof output already exists: {path}")]
     OutputExists { path: PathBuf },
+    #[error("cannot open construction-parent witness {path}: {source}")]
+    OpenWitness {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("cannot read construction-parent witness {path}: {source}")]
     ReadWitness {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    #[error(
+        "construction-parent witness {path} exceeds the {maximum}-byte \
+         deployment limit"
+    )]
+    WitnessTooLarge { path: PathBuf, maximum: usize },
     #[error(transparent)]
     Decode(#[from] ConstructionParentWitnessDecodeError),
     #[error(transparent)]
@@ -110,14 +126,40 @@ fn require_absent(path: &Path) -> Result<(), CommandError> {
     }
 }
 
+fn read_witness(path: &Path) -> Result<Vec<u8>, CommandError> {
+    let input = fs::File::open(path).map_err(|source| CommandError::OpenWitness {
+        path: path.to_owned(),
+        source,
+    })?;
+    let initial_capacity = input
+        .metadata()
+        .map_err(|source| CommandError::ReadWitness {
+            path: path.to_owned(),
+            source,
+        })?
+        .len()
+        .min(MAX_DEPLOYMENT_WIT3_BYTES as u64 + 1) as usize;
+    let mut witness = Vec::with_capacity(initial_capacity);
+    input
+        .take(MAX_DEPLOYMENT_WIT3_BYTES as u64 + 1)
+        .read_to_end(&mut witness)
+        .map_err(|source| CommandError::ReadWitness {
+            path: path.to_owned(),
+            source,
+        })?;
+    if witness.len() > MAX_DEPLOYMENT_WIT3_BYTES {
+        return Err(CommandError::WitnessTooLarge {
+            path: path.to_owned(),
+            maximum: MAX_DEPLOYMENT_WIT3_BYTES,
+        });
+    }
+    Ok(witness)
+}
+
 fn run(arguments: Arguments) -> Result<(), CommandError> {
     require_absent(&arguments.output)?;
 
-    let witness_bytes =
-        fs::read(&arguments.witness).map_err(|source| CommandError::ReadWitness {
-            path: arguments.witness.clone(),
-            source,
-        })?;
+    let witness_bytes = read_witness(&arguments.witness)?;
     let witness = ConstructionParentWitness::decode(&witness_bytes)?.bind()?;
 
     let proof = prove_qualified_construction_parent(
@@ -234,6 +276,24 @@ mod tests {
         fs::write(&arguments.witness, []).expect("write malformed witness");
 
         assert!(matches!(run(arguments), Err(CommandError::Decode(_))));
+        assert!(!directory.join("proof.out").exists());
+        fs::remove_dir_all(directory).expect("remove prover CLI test directory");
+    }
+
+    #[test]
+    fn oversized_witness_rejects_before_unbounded_allocation() {
+        let directory = test_directory("oversized-witness");
+        let arguments = nonexistent_inputs(&directory);
+        fs::write(&arguments.witness, vec![0; MAX_DEPLOYMENT_WIT3_BYTES + 1])
+            .expect("write oversized witness");
+
+        assert!(matches!(
+            run(arguments),
+            Err(CommandError::WitnessTooLarge {
+                maximum: MAX_DEPLOYMENT_WIT3_BYTES,
+                ..
+            })
+        ));
         assert!(!directory.join("proof.out").exists());
         fs::remove_dir_all(directory).expect("remove prover CLI test directory");
     }

@@ -125,6 +125,11 @@ private:
  */
 class NonceHostBoundSigningRoster {
 public:
+    /** Public pre-formation roster used to derive deterministic shares. */
+    [[nodiscard]] const SigningRoster& signing_roster() const noexcept {
+        return roster_;
+    }
+
     [[nodiscard]] std::span<const SigningRosterMember> members() const {
         return roster_.members();
     }

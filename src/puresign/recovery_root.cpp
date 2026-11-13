@@ -502,6 +502,56 @@ Result<RecoveryRootShare> RecoveryRootShare::deserialize(
     return RecoveryRootShare(std::move(first), std::move(second));
 }
 
+Result<RecoveryRootShare> derive_recovery_root_share(
+    const SigningRoster& roster, std::size_t member_index,
+    const FieldElement& member_secret,
+    purify_secp_context* secp_context) {
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(
+            secp_context, "recovery_contribution:derive_share"),
+        "recovery_contribution:derive_share");
+    if (member_secret.is_zero()) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "recovery_contribution:zero_member_secret");
+    }
+    if (member_index >= roster.members().size()) {
+        return unexpected_error(
+            ErrorCode::IndexOutOfRange,
+            "recovery_contribution:member_index");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto member_point,
+        secp_point(member_secret, secp_context),
+        "recovery_contribution:member_point");
+    if (member_point != roster.members()[member_index].public_key) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "recovery_contribution:member_secret");
+    }
+    auto effective_scalar =
+        roster.members()[member_index].coefficient * member_secret;
+    WipeOnDestruction effective_scalar_guard(effective_scalar);
+    if (effective_scalar.is_zero()) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "recovery_contribution:zero_effective_scalar");
+    }
+    auto centered = canonical_scalar(effective_scalar);
+    WipeOnDestruction centered_guard(centered);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto first,
+        curve1().mul_secret_affine(generator1(), centered.magnitude),
+        "recovery_contribution:first_share");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto second,
+        curve2().mul_secret_affine(generator2(), centered.magnitude),
+        "recovery_contribution:second_share");
+    first.y.conditional_assign(first.y.negate(), centered.negated);
+    second.y.conditional_assign(second.y.negate(), centered.negated);
+    return RecoveryRootShare(std::move(first), std::move(second));
+}
+
 Result<RecoveryRootShareAggregate> aggregate_recovery_root_shares(
     std::span<const RecoveryRootShare> ordered_shares) {
     PURIFY_RETURN_IF_ERROR(
@@ -777,42 +827,16 @@ Result<RecoveryRootContribution> prove_recovery_root_contribution(
         require_recovery_contribution_hash_suite(
             "recovery_contribution:prove_hash_suite"),
         "recovery_contribution:prove_hash_suite");
-    if (member_secret.is_zero()) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "recovery_contribution:zero_member_secret");
-    }
-    if (member_index >= roster.members().size()) {
-        return unexpected_error(ErrorCode::IndexOutOfRange,
-                                "recovery_contribution:member_index");
-    }
     PURIFY_ASSIGN_OR_RETURN(
-        const auto member_point, secp_point(member_secret, secp_context),
-        "recovery_contribution:member_point");
-    if (member_point != roster.members()[member_index].public_key) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "recovery_contribution:member_secret");
-    }
+        auto share,
+        derive_recovery_root_share(
+            roster.signing_roster(), member_index, member_secret,
+            secp_context),
+        "recovery_contribution:derive_share");
+    RecoveryRootContribution contribution(std::move(share));
     auto effective_scalar =
         roster.members()[member_index].coefficient * member_secret;
     WipeOnDestruction effective_scalar_guard(effective_scalar);
-    if (effective_scalar.is_zero()) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "recovery_contribution:zero_effective_scalar");
-    }
-    auto centered = canonical_scalar(effective_scalar);
-    WipeOnDestruction centered_guard(centered);
-    PURIFY_ASSIGN_OR_RETURN(
-        auto first,
-        curve1().mul_secret_affine(generator1(), centered.magnitude),
-        "recovery_contribution:first_share");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto second,
-        curve2().mul_secret_affine(generator2(), centered.magnitude),
-        "recovery_contribution:second_share");
-    first.y.conditional_assign(first.y.negate(), centered.negated);
-    second.y.conditional_assign(second.y.negate(), centered.negated);
-    RecoveryRootContribution contribution(
-        RecoveryRootShare(std::move(first), std::move(second)));
     PURIFY_ASSIGN_OR_RETURN(
         const auto circuit, contribution_circuit(contribution.share_),
         "recovery_contribution:circuit");

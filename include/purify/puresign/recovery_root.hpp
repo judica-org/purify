@@ -48,7 +48,24 @@ private:
         const NonceHostBoundSigningRoster&, const CoalitionFormation&,
         std::size_t, const FieldElement&, purify_secp_context*,
         bppp::ExperimentalCircuitBackend*);
+    friend Result<RecoveryRootShare> derive_recovery_root_share(
+        const SigningRoster&, std::size_t, const FieldElement&,
+        purify_secp_context*);
 };
+
+/**
+ * Derive one deterministic public recovery share before formation.
+ *
+ * This operation needs only the ordered MuSig roster and the member's own
+ * secret. Members may publish these shares, aggregate the recovery root, and
+ * commit that root in a formation manifest. The later formation-bound proof
+ * recomputes this exact share; this operation neither proves authorization nor
+ * reveals or aggregates member secrets.
+ */
+[[nodiscard]] Result<RecoveryRootShare> derive_recovery_root_share(
+    const SigningRoster& roster, std::size_t member_index,
+    const FieldElement& member_secret,
+    purify_secp_context* secp_context);
 
 /** Validated full-point sum of one ordered roster's recovery shares. */
 class RecoveryRootShareAggregate {

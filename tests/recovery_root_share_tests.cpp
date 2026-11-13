@@ -67,6 +67,7 @@ Result<PointBytes> secp_point(const FieldElement& scalar,
 struct RosterFixture {
     purify::accountable::NonceHostBoundSigningRoster roster;
     FieldElement aggregate_scalar;
+    std::vector<FieldElement> member_secrets;
     std::vector<FieldElement> effective_scalars;
 };
 
@@ -125,7 +126,8 @@ Result<RosterFixture> make_roster_fixture(
             std::move(roster), core, hosts, secp_context),
         "recovery_share_test:bound_roster");
     return RosterFixture{
-        std::move(bound), aggregate_scalar, std::move(effective_scalars)};
+        std::move(bound), aggregate_scalar, std::move(secrets),
+        std::move(effective_scalars)};
 }
 
 Result<std::vector<RecoveryRootShare>> split_signed_total(
@@ -333,18 +335,59 @@ void test_signed_carry_recovery(TestContext& ctx) {
     ctx.expect(exposed_point && (*exposed_point)[0] == 0x02,
                "exposed scalar is the exact normalized aggregate key");
 
+    expect_error(
+        ctx,
+        purify::accountable::derive_recovery_root_share(
+            fixture->roster.signing_roster(), 0, FieldElement::zero(),
+            secp.get()),
+        purify::ErrorCode::RangeViolation,
+        "pre-formation share derivation rejects a zero secret");
+    expect_error(
+        ctx,
+        purify::accountable::derive_recovery_root_share(
+            fixture->roster.signing_roster(),
+            fixture->member_secrets.size(), fixture->member_secrets[0],
+            secp.get()),
+        purify::ErrorCode::IndexOutOfRange,
+        "pre-formation share derivation rejects an absent member");
+    expect_error(
+        ctx,
+        purify::accountable::derive_recovery_root_share(
+            fixture->roster.signing_roster(), 0,
+            fixture->member_secrets[1], secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "pre-formation share derivation rejects another member secret");
+
     std::vector<RecoveryRootShare> actual_shares;
     actual_shares.reserve(fixture->effective_scalars.size());
     const auto half_secp_order = purify::prime_p().shifted_right(1);
-    for (const auto& effective : fixture->effective_scalars) {
+    bool saw_positive = false;
+    bool saw_negative = false;
+    for (std::size_t index = 0;
+         index < fixture->effective_scalars.size(); ++index) {
+        const auto& effective = fixture->effective_scalars[index];
         const bool negative = half_secp_order < effective.to_uint256();
+        saw_negative = saw_negative || negative;
+        saw_positive = saw_positive || !negative;
         const auto magnitude = negative
             ? effective.negate().to_uint256()
             : effective.to_uint256();
-        auto share = share_from_signed_magnitude(magnitude, negative);
-        if (!share) return;
-        actual_shares.push_back(std::move(*share));
+        auto expected = share_from_signed_magnitude(magnitude, negative);
+        auto derived = purify::accountable::derive_recovery_root_share(
+            fixture->roster.signing_roster(), index,
+            fixture->member_secrets[index], secp.get());
+        expect_ok(ctx, expected,
+                  "reference pre-formation recovery share derives");
+        expect_ok(ctx, derived,
+                  "member derives its pre-formation recovery share");
+        if (!expected || !derived) return;
+        ctx.expect(
+            derived->serialize() == expected->serialize(),
+            "pre-formation share preserves the exact centered sign");
+        actual_shares.push_back(std::move(*derived));
     }
+    ctx.expect(saw_positive && saw_negative,
+               "pre-formation derivation covers both centered signs");
     auto actual_aggregate =
         purify::accountable::aggregate_recovery_root_shares(actual_shares);
     expect_ok(ctx, actual_aggregate,

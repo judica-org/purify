@@ -412,19 +412,70 @@ if(PURIFY_BUILD_TESTS)
     )
 endif()
 
-if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER OR
-   PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
     if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
         message(FATAL_ERROR
-            "Construction-parent Rust targets are supported only on 64-bit "
+            "The construction-parent backend is supported only on 64-bit "
             "macOS and Linux."
         )
     endif()
     if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR
-            "Construction-parent Rust targets require a 64-bit target."
+            "The construction-parent backend requires a 64-bit target."
         )
     endif()
+    if(CMAKE_CROSSCOMPILING AND
+       NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
+        message(FATAL_ERROR
+            "Cross-compiling the construction-parent backend requires "
+            "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
+        )
+    endif()
+endif()
+
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND
+       NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR
+            "PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER supports only Darwin "
+            "and Linux targets."
+        )
+    endif()
+    if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+        message(FATAL_ERROR
+            "The construction-parent prover requires a 64-bit target."
+        )
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        list(LENGTH CMAKE_OSX_ARCHITECTURES
+            PURIFY_CONSTRUCTION_PARENT_OSX_ARCH_COUNT)
+        if(PURIFY_CONSTRUCTION_PARENT_OSX_ARCH_COUNT GREATER 1)
+            message(FATAL_ERROR
+                "The construction-parent prover does not support a "
+                "multi-architecture CMAKE_OSX_ARCHITECTURES."
+            )
+        endif()
+        unset(PURIFY_CONSTRUCTION_PARENT_OSX_ARCH_COUNT)
+        if(CMAKE_OSX_ARCHITECTURES AND
+           NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
+            message(FATAL_ERROR
+                "An explicit CMAKE_OSX_ARCHITECTURES requires "
+                "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET for the "
+                "construction-parent prover."
+            )
+        endif()
+    endif()
+    if(CMAKE_CROSSCOMPILING AND
+       NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
+        message(FATAL_ERROR
+            "Cross-compiling the construction-parent prover requires "
+            "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
+        )
+    endif()
+endif()
+
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER OR
+   PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
     find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
     set(PURIFY_CONSTRUCTION_PARENT_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/rust/construction-parent"
@@ -433,13 +484,6 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER OR
         CONFIGURE_DEPENDS
         "${PURIFY_CONSTRUCTION_PARENT_DIR}/src/*.rs"
     )
-    if(CMAKE_CROSSCOMPILING AND
-       NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
-        message(FATAL_ERROR
-            "Cross-compiling construction-parent Rust targets requires "
-            "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
-        )
-    endif()
 endif()
 
 if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)

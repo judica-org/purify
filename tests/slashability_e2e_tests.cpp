@@ -28,6 +28,34 @@ using purify_test::slashability::
     serialize_nondeciding_parent_prover_fixture;
 using purify_test::slashability::serialize_parent_prover_fixture;
 
+#if !defined(PURIFY_TEST_CONSTRUCTION_PARENT_WIT3_PATH)
+#error "construction-parent tests require the accepted Wit3 path"
+#endif
+#if !defined(PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_WIT3_PATH)
+#error "construction-parent tests require the nondeciding Wit3 path"
+#endif
+
+std::optional<purify::Bytes> load_checked_wit3(
+    TestContext& ctx, const char* path) {
+    constexpr std::size_t kFixtureSize = 17'977;
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    ctx.expect(input.is_open(), "checked construction Wit3 opens");
+    if (!input.is_open()) return std::nullopt;
+    const auto size = input.tellg();
+    ctx.expect(size == static_cast<std::streamoff>(kFixtureSize),
+               "checked construction Wit3 has exact size");
+    if (size != static_cast<std::streamoff>(kFixtureSize)) {
+        return std::nullopt;
+    }
+    input.seekg(0, std::ios::beg);
+    purify::Bytes fixture(kFixtureSize);
+    input.read(reinterpret_cast<char*>(fixture.data()),
+               static_cast<std::streamsize>(fixture.size()));
+    ctx.expect(input.good(), "checked construction Wit3 reads completely");
+    if (!input.good()) return std::nullopt;
+    return fixture;
+}
+
 #if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
 #if !defined(PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER)
 #error "artifact-backed tests require the construction-parent verifier"
@@ -409,6 +437,12 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
     write_parent_prover_fixture_if_requested(
         ctx, *prover_fixture,
         "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE_OUT");
+    auto checked_prover_fixture = load_checked_wit3(
+        ctx, PURIFY_TEST_CONSTRUCTION_PARENT_WIT3_PATH);
+    if (!checked_prover_fixture) return;
+    ctx.expect(
+        *checked_prover_fixture == *prover_fixture,
+        "accepted construction Wit3 matches the qualified vector");
 
     auto nondeciding_fixture =
         serialize_nondeciding_parent_prover_fixture(
@@ -466,6 +500,12 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
     write_parent_prover_fixture_if_requested(
         ctx, *nondeciding_fixture,
         "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE_OUT");
+    auto checked_nondeciding_fixture = load_checked_wit3(
+        ctx, PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_WIT3_PATH);
+    if (!checked_nondeciding_fixture) return;
+    ctx.expect(
+        *checked_nondeciding_fixture == *nondeciding_fixture,
+        "nondeciding construction Wit3 matches the qualified vector");
 
     auto accepted_statement = construction->statement;
 #if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)

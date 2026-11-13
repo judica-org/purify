@@ -782,6 +782,10 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_warnings(purify_tests)
     purify_enable_sanitizers(purify_tests)
     purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
+    target_compile_definitions(purify_tests PRIVATE
+        "PURIFY_TEST_CONSTRUCTION_PARENT_WIT3_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_accepted.wit3\""
+        "PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_WIT3_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_nondeciding.wit3\""
+    )
 
     if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
         if(NOT CMAKE_CROSSCOMPILING)

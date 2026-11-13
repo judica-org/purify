@@ -637,16 +637,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires unqualified deterministic C++ Wit3 fixtures"]
-    fn exported_fixtures_parse_without_private_openings() {
-        let parse = |environment| {
-            let path = std::env::var_os(environment).unwrap_or_else(|| panic!("set {environment}"));
-            let bytes = std::fs::read(path).expect("read construction prover fixture");
-            ConstructionParentProverFixture::parse(&bytes)
-                .expect("parse deterministic construction prover fixture")
-        };
-        let accepted = parse("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
-        let nondeciding = parse("PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE");
+    fn checked_fixtures_parse_without_private_openings() {
+        let accepted = ConstructionParentProverFixture::parse(include_bytes!(
+            "../../../tests/vectors/construction_parent_sha256_accepted.wit3"
+        ))
+        .expect("parse accepted construction prover fixture");
+        let nondeciding = ConstructionParentProverFixture::parse(include_bytes!(
+            "../../../tests/vectors/construction_parent_sha256_nondeciding.wit3"
+        ))
+        .expect("parse nondeciding construction prover fixture");
         assert_ne!(accepted.setup_leaf_count, 0);
         assert_ne!(accepted.anchor_leaf_count, 0);
         assert_eq!(accepted.setup_leaf_count, nondeciding.setup_leaf_count);

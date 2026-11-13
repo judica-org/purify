@@ -144,28 +144,6 @@ Result<AffinePoint> decode_companion_point(
     return affine;
 }
 
-Status validate_companion_point(const AffinePoint& point,
-                                const EllipticCurve& curve,
-                                const char* label) {
-    if (point.infinity) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, label);
-    }
-    const auto lifted = curve.lift_x(point.x);
-    if (!lifted || lifted->infinity) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, label);
-    }
-    const auto affine = curve.affine(*lifted);
-    if (point.y != affine.y && point.y != affine.y.negate()) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, label);
-    }
-    const JacobianPoint exact{
-        point.x, point.y, FieldElement::one(), false};
-    if (!curve.mul(exact, curve.order()).infinity) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, label);
-    }
-    return {};
-}
-
 Status validate_recovery_root_share_count(std::size_t member_count) {
     if (member_count == 0) {
         return unexpected_error(ErrorCode::EmptyInput,
@@ -522,16 +500,6 @@ Result<RecoveryRootShareAggregate> aggregate_recovery_root_shares(
     auto first_sum = JacobianPoint::infinity_point();
     auto second_sum = JacobianPoint::infinity_point();
     for (const auto& share : ordered_shares) {
-        PURIFY_RETURN_IF_ERROR(
-            validate_companion_point(
-                share.first(), curve1(),
-                "recovery_share_aggregate:first_share"),
-            "recovery_share_aggregate:first_share");
-        PURIFY_RETURN_IF_ERROR(
-            validate_companion_point(
-                share.second(), curve2(),
-                "recovery_share_aggregate:second_share"),
-            "recovery_share_aggregate:second_share");
         first_sum = curve1().add_mixed(first_sum, share.first());
         second_sum = curve2().add_mixed(second_sum, share.second());
     }
@@ -541,16 +509,6 @@ Result<RecoveryRootShareAggregate> aggregate_recovery_root_shares(
     }
     auto first_affine = curve1().affine(first_sum);
     auto second_affine = curve2().affine(second_sum);
-    PURIFY_RETURN_IF_ERROR(
-        validate_companion_point(
-            first_affine, curve1(),
-            "recovery_share_aggregate:first_sum"),
-        "recovery_share_aggregate:first_sum");
-    PURIFY_RETURN_IF_ERROR(
-        validate_companion_point(
-            second_affine, curve2(),
-            "recovery_share_aggregate:second_sum"),
-        "recovery_share_aggregate:second_sum");
     const auto root = pack_public(first_affine.x.to_uint256(),
                                   second_affine.x.to_uint256());
     return RecoveryRootShareAggregate(
@@ -594,7 +552,9 @@ Result<GeneratedKey> recover_aggregated_recovery_root(
     auto first_candidate = curve1().mul(generator1(), scalar);
     auto second_candidate = curve2().mul(generator2(), scalar);
     auto first_residue = reduce_mod(scalar, order_n1());
+    WipeOnDestruction first_residue_guard(first_residue);
     auto second_residue = reduce_mod(scalar, order_n2());
+    WipeOnDestruction second_residue_guard(second_residue);
     const auto first_step_residue = reduce_mod(prime_p(), order_n1());
     const auto second_step_residue = reduce_mod(prime_p(), order_n2());
 

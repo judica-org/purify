@@ -14,6 +14,7 @@
 
 #include "purify.hpp"
 #include "purify/accumulation.hpp"
+#include "../src/protocol/accumulation_test_support.hpp"
 #include "../src/puresign/anchor_escrow_internal.hpp"
 
 namespace purify_test::slashability {
@@ -74,6 +75,30 @@ Result<Point> public_point(FieldElement scalar,
     point[0] = normalized == original ? 0x02 : 0x03;
     std::copy(xonly.begin(), xonly.end(), point.begin() + 1);
     return point;
+}
+
+/** Build a short-verifier-valid step with no fixed-basis opening. */
+Result<purify::bppp::accumulation::AlgebraicStepProof>
+synthesize_adversarial_step(
+    const purify::bppp::accumulation::Basis& basis,
+    std::span<const purify::bppp::accumulation::PendingClaim> claims,
+    purify_secp_context* secp_context) {
+    std::size_t rounds = 0;
+    for (auto dimension = basis.dimension(); dimension > 1;
+         dimension /= 2) {
+        ++rounds;
+    }
+    purify::bppp::accumulation::AlgebraicStepProof proof;
+    proof.left.resize(rounds);
+    proof.right.resize(rounds);
+    proof.terminal_scalar = FieldElement::one().to_bytes_be();
+    PURIFY_ASSIGN_OR_RETURN(
+        proof.folded_generator,
+        purify::bppp::accumulation::test_support::
+            algebraic_step_equation_residual(
+                basis, claims, proof, secp_context),
+        "slashability_fixture:adversarial_step_residual");
+    return proof;
 }
 
 Result<std::pair<FieldElement, Point>> even_member(
@@ -532,8 +557,15 @@ make_native_accumulation_reference(
 
 namespace {
 
+struct ParentProverAnchorWitness {
+    const purify::accountable::AnchorEscrowRecord* record;
+    std::span<const unsigned char> reduction_proof;
+    std::span<const unsigned char> parent_step_proof;
+};
+
 Result<purify::Bytes> serialize_parent_prover_fixture_impl(
     const NativeAccumulationReferenceFixture& fixture,
+    std::span<const ParentProverAnchorWitness> anchor_witnesses,
     std::span<const unsigned char> final_root,
     purify_secp_context* secp_context) {
     constexpr std::size_t kHeaderSize =
@@ -557,6 +589,7 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
     if (fixture.payload.setup_entries().size() != setup_count ||
         fixture.payload.anchor_entries().size() != anchor_count ||
         fixture.resolved_entries.size() != anchor_count ||
+        anchor_witnesses.size() != anchor_count ||
         final_root.size() != kFinalRootSize) {
         return purify::unexpected_error(
             purify::ErrorCode::SizeMismatch,
@@ -626,12 +659,14 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
 
     for (std::size_t index = 0; index < anchor_count; ++index) {
         const auto& anchor = fixture.anchors[index];
+        const auto& witness = anchor_witnesses[index];
         if (anchor.parent_constants.raw_generator_digest !=
                 raw_generator_digest ||
-            anchor.reduction_proof.size() != kReductionProofSize ||
-            anchor.parent_step_proof.size() != kParentStepProofSize ||
-            anchor.reduction_proof.front() != 2 ||
-            anchor.parent_step_proof.front() != 2) {
+            witness.record == nullptr ||
+            witness.reduction_proof.size() != kReductionProofSize ||
+            witness.parent_step_proof.size() != kParentStepProofSize ||
+            witness.reduction_proof.front() != 2 ||
+            witness.parent_step_proof.front() != 2) {
             return purify::unexpected_error(
                 purify::ErrorCode::BindingMismatch,
                 "slashability_fixture:prover_witness_shape");
@@ -651,7 +686,7 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
         append(encoded, punishment_point);
 
         PURIFY_ASSIGN_OR_RETURN(
-            auto record, anchor.record.serialize(secp_context),
+            auto record, witness.record->serialize(secp_context),
             "slashability_fixture:serialize_prover_record");
         if (record.size() !=
             purify::accountable::AnchorEscrowRecord::kSerializedSize) {
@@ -660,8 +695,8 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
                 "slashability_fixture:prover_record_size");
         }
         append(encoded, record);
-        append(encoded, anchor.reduction_proof);
-        append(encoded, anchor.parent_step_proof);
+        append(encoded, witness.reduction_proof);
+        append(encoded, witness.parent_step_proof);
     }
     append(encoded, final_root);
     if (encoded.size() != expected_size) {
@@ -677,8 +712,248 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
 Result<purify::Bytes> serialize_parent_prover_fixture(
     const NativeAccumulationReferenceFixture& fixture,
     purify_secp_context* secp_context) {
+    std::vector<ParentProverAnchorWitness> witnesses;
+    witnesses.reserve(fixture.anchors.size());
+    for (const auto& anchor : fixture.anchors) {
+        witnesses.push_back(
+            {&anchor.record, anchor.reduction_proof,
+             anchor.parent_step_proof});
+    }
     return serialize_parent_prover_fixture_impl(
-        fixture, fixture.decided_reference_root, secp_context);
+        fixture, witnesses, fixture.decided_reference_root,
+        secp_context);
+}
+
+Result<purify::Bytes> serialize_nondeciding_parent_prover_fixture(
+    const CoalitionFixture& coalition,
+    const NativeAccumulationReferenceFixture& fixture,
+    purify_secp_context* secp_context) {
+    if (fixture.setup_leaves.empty() || fixture.anchors.empty()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::EmptyInput,
+            "slashability_fixture:nondeciding_leaves");
+    }
+    const auto& basis = fixture.accumulator.leaves().basis();
+    std::array<unsigned char,
+               purify::accountable::ConstructionReceiptAccumulator::
+                   kRootClaimSerializedSize>
+        empty_root{};
+    PURIFY_ASSIGN_OR_RETURN(
+        auto current,
+        purify::bppp::accumulation::parse_root_claim(
+            basis, empty_root, secp_context),
+        "slashability_fixture:nondeciding_empty_root");
+    purify::bppp::ExperimentalCircuitCache shared_cache;
+
+    for (std::size_t index = 0;
+         index < fixture.setup_leaves.size(); ++index) {
+        const auto& setup_leaf = fixture.setup_leaves[index];
+        PURIFY_ASSIGN_OR_RETURN(
+            auto prepared,
+            fixture.accumulator.leaves().prepare(
+                fixture.setup.roster(), fixture.setup.formation(), index,
+                setup_leaf.contribution, secp_context, &shared_cache),
+            "slashability_fixture:nondeciding_prepare_setup");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto reduction,
+            purify::bppp::accumulation::
+                parse_algebraic_norm_reduction(
+                    basis, setup_leaf.reduction_proof,
+                    secp_context),
+            "slashability_fixture:nondeciding_parse_setup_reduction");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto leaf,
+            purify::bppp::accumulation::
+                verify_algebraic_norm_reduction(
+                    basis, prepared.norm(), reduction,
+                    secp_context),
+            "slashability_fixture:nondeciding_verify_setup_reduction");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto step,
+            purify::bppp::accumulation::parse_algebraic_step(
+                basis, setup_leaf.parent_step_proof,
+                secp_context),
+            "slashability_fixture:nondeciding_parse_setup_step");
+        const std::array claims{current, leaf};
+        PURIFY_ASSIGN_OR_RETURN(
+            current,
+            purify::bppp::accumulation::verify_algebraic_step(
+                basis, claims, step, secp_context),
+            "slashability_fixture:nondeciding_verify_setup_step");
+    }
+
+    std::vector<ParentProverAnchorWitness> witnesses;
+    witnesses.reserve(fixture.anchors.size());
+    for (std::size_t index = 0;
+         index + 1 < fixture.anchors.size(); ++index) {
+        const auto& anchor = fixture.anchors[index];
+        PURIFY_ASSIGN_OR_RETURN(
+            auto prepared,
+            fixture.accumulator.leaves().prepare(
+                coalition.distributed_setup.roster(),
+                anchor.recovery_key.public_key,
+                anchor.punishment_key.public_key(), anchor.context,
+                anchor.record, secp_context, &shared_cache),
+            "slashability_fixture:nondeciding_prepare_prefix");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto reduction,
+            purify::bppp::accumulation::
+                parse_algebraic_norm_reduction(
+                    basis, anchor.reduction_proof, secp_context),
+            "slashability_fixture:nondeciding_parse_reduction");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto leaf,
+            purify::bppp::accumulation::
+                verify_algebraic_norm_reduction(
+                    basis, prepared.norm(), reduction,
+                    secp_context),
+            "slashability_fixture:nondeciding_verify_reduction");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto step,
+            purify::bppp::accumulation::parse_algebraic_step(
+                basis, anchor.parent_step_proof, secp_context),
+            "slashability_fixture:nondeciding_parse_step");
+        const std::array claims{current, leaf};
+        PURIFY_ASSIGN_OR_RETURN(
+            current,
+            purify::bppp::accumulation::verify_algebraic_step(
+                basis, claims, step, secp_context),
+            "slashability_fixture:nondeciding_verify_step");
+        witnesses.push_back(
+            {&anchor.record, anchor.reduction_proof,
+             anchor.parent_step_proof});
+    }
+
+    const auto& anchor = fixture.anchors.back();
+    PURIFY_ASSIGN_OR_RETURN(
+        auto changed_record_bytes,
+        anchor.record.serialize(secp_context),
+        "slashability_fixture:nondeciding_record_bytes");
+    if (changed_record_bytes.size() < 64) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InternalMismatch,
+            "slashability_fixture:nondeciding_record_size");
+    }
+    std::array<unsigned char, 32> terminal_n_bytes{};
+    std::copy_n(changed_record_bytes.end() - 64,
+                terminal_n_bytes.size(), terminal_n_bytes.begin());
+    PURIFY_ASSIGN_OR_RETURN(
+        auto terminal_n,
+        FieldElement::try_from_bytes32(terminal_n_bytes),
+        "slashability_fixture:nondeciding_terminal");
+    terminal_n_bytes =
+        (terminal_n + FieldElement::one()).to_bytes_be();
+    std::copy(terminal_n_bytes.begin(), terminal_n_bytes.end(),
+              changed_record_bytes.end() - 64);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto changed_record,
+        purify::accountable::AnchorEscrowRecord::deserialize(
+            changed_record_bytes, secp_context),
+        "slashability_fixture:nondeciding_record");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto complete,
+        purify::accountable::verify_anchor_escrow(
+            coalition.distributed_setup.roster(),
+            anchor.recovery_key.public_key,
+            anchor.punishment_key.public_key(), anchor.context,
+            changed_record, secp_context, &shared_cache),
+        "slashability_fixture:nondeciding_verify_changed");
+    if (complete) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InternalMismatch,
+            "slashability_fixture:nondeciding_record_decides");
+    }
+
+    PURIFY_ASSIGN_OR_RETURN(
+        auto prepared,
+        fixture.accumulator.leaves().prepare(
+            coalition.distributed_setup.roster(),
+            anchor.recovery_key.public_key,
+            anchor.punishment_key.public_key(), anchor.context,
+            changed_record, secp_context, &shared_cache),
+        "slashability_fixture:nondeciding_prepare");
+    if (prepared.circuit_precommitment() !=
+        anchor.circuit_precommitment) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BindingMismatch,
+            "slashability_fixture:nondeciding_precommitment");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto parent_constants,
+        fixture.accumulator.leaves().derive_parent_constants(
+            coalition.distributed_setup.roster(),
+            anchor.recovery_key.public_key,
+            anchor.punishment_key.public_key(), anchor.context,
+            changed_record.ciphertext(),
+            anchor.circuit_precommitment, secp_context),
+        "slashability_fixture:nondeciding_parent_constants");
+    if (parent_constants.circuit_binding_digest !=
+            anchor.parent_constants.circuit_binding_digest ||
+        parent_constants.raw_generator_digest !=
+            anchor.parent_constants.raw_generator_digest ||
+        parent_constants.coefficient_commitment !=
+            anchor.parent_constants.coefficient_commitment ||
+        parent_constants.anchored_offset !=
+            anchor.parent_constants.anchored_offset) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BindingMismatch,
+            "slashability_fixture:nondeciding_descriptors");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto reduction,
+        purify::bppp::accumulation::
+            prove_algebraic_norm_reduction(
+                basis, prepared.norm(), secp_context),
+        "slashability_fixture:nondeciding_reduction");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto leaf,
+        purify::bppp::accumulation::
+            verify_algebraic_norm_reduction(
+                basis, prepared.norm(), reduction, secp_context),
+        "slashability_fixture:nondeciding_verify_terminal_reduction");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto reduction_proof,
+        purify::bppp::accumulation::
+            serialize_algebraic_norm_reduction(
+                basis, reduction, secp_context),
+        "slashability_fixture:nondeciding_serialize_reduction");
+    const std::array claims{current, leaf};
+    PURIFY_ASSIGN_OR_RETURN(
+        auto step,
+        synthesize_adversarial_step(basis, claims, secp_context),
+        "slashability_fixture:nondeciding_step");
+    PURIFY_ASSIGN_OR_RETURN(
+        current,
+        purify::bppp::accumulation::verify_algebraic_step(
+            basis, claims, step, secp_context),
+        "slashability_fixture:nondeciding_verify_terminal_step");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto parent_step_proof,
+        purify::bppp::accumulation::serialize_algebraic_step(
+            basis, step, secp_context),
+        "slashability_fixture:nondeciding_serialize_step");
+    const auto decision = purify::bppp::accumulation::decide(
+        basis, current, secp_context);
+    if (decision) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InternalMismatch,
+            "slashability_fixture:nondeciding_root_decides");
+    }
+    if (decision.error().code !=
+        purify::ErrorCode::EquationMismatch) {
+        return purify::unexpected_error(
+            decision.error(),
+            "slashability_fixture:nondeciding_decision_error");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto final_root,
+        purify::bppp::accumulation::serialize_root_claim(
+            basis, current, secp_context),
+        "slashability_fixture:nondeciding_root");
+    witnesses.push_back(
+        {&changed_record, reduction_proof, parent_step_proof});
+    return serialize_parent_prover_fixture_impl(
+        fixture, witnesses, final_root, secp_context);
 }
 
 Result<purify::accountable::ExposedCoalitionKey>

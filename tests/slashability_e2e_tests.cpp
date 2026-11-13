@@ -24,6 +24,8 @@ using purify_test::expect_ok;
 using purify_test::slashability::make_all_evil_coalition;
 using purify_test::slashability::make_native_accumulation_reference;
 using purify_test::slashability::expose_conflicting_coalition_key;
+using purify_test::slashability::
+    serialize_nondeciding_parent_prover_fixture;
 using purify_test::slashability::serialize_parent_prover_fixture;
 
 #if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
@@ -407,6 +409,63 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
     write_parent_prover_fixture_if_requested(
         ctx, *prover_fixture,
         "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE_OUT");
+
+    auto nondeciding_fixture =
+        serialize_nondeciding_parent_prover_fixture(
+            *coalition, *construction, secp.get());
+    expect_ok(ctx, nondeciding_fixture,
+              "nondeciding parent prover fixture constructs");
+    if (!nondeciding_fixture) return;
+    constexpr std::size_t kProverHeaderSize =
+        16 + 32 + 32 + 64 + 4 + 4;
+    constexpr std::size_t kProverDescriptorSize = 130;
+    constexpr std::size_t kProverSetupSize =
+        kProverDescriptorSize + 33 +
+        purify::accountable::RecoveryRootContribution::kSerializedSize +
+        1'022 + 1'056;
+    constexpr std::size_t kProverAnchorSize =
+        kProverDescriptorSize + 33 +
+        purify::accountable::AnchorEscrowRecord::kSerializedSize +
+        1'022 + 1'056;
+    constexpr std::size_t kAnchorPublicPrefixSize =
+        kProverDescriptorSize + 33 + 1 +
+        purify::accountable::AnchorEscrowCiphertext::kSerializedSize;
+    constexpr std::size_t kFinalRootSize =
+        purify::accountable::ConstructionReceiptAccumulator::
+            kRootClaimSerializedSize;
+    const auto setup_bytes =
+        construction->setup_leaves.size() * kProverSetupSize;
+    bool same_public_inputs =
+        nondeciding_fixture->size() == prover_fixture->size() &&
+        std::equal(
+            prover_fixture->begin(),
+            prover_fixture->begin() + kProverHeaderSize + setup_bytes,
+            nondeciding_fixture->begin());
+    for (std::size_t index = 0;
+         same_public_inputs &&
+         index < construction->anchors.size(); ++index) {
+        const auto anchor_offset =
+            kProverHeaderSize + setup_bytes +
+            index * kProverAnchorSize;
+        same_public_inputs = std::equal(
+            prover_fixture->begin() + anchor_offset,
+            prover_fixture->begin() + anchor_offset +
+                kAnchorPublicPrefixSize,
+            nondeciding_fixture->begin() + anchor_offset);
+    }
+    ctx.expect(
+        same_public_inputs,
+        "nondeciding witness preserves every public construction input");
+    ctx.expect(
+        *nondeciding_fixture != *prover_fixture &&
+            !std::equal(
+                prover_fixture->end() - kFinalRootSize,
+                prover_fixture->end(),
+                nondeciding_fixture->end() - kFinalRootSize),
+        "nondeciding witness authenticates a distinct false root");
+    write_parent_prover_fixture_if_requested(
+        ctx, *nondeciding_fixture,
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE_OUT");
 
     auto accepted_statement = construction->statement;
 #if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)

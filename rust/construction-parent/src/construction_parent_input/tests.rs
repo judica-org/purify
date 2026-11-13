@@ -21,8 +21,8 @@ fn seed_root() -> [u8; CONSTRUCTION_ROOT_BYTES] {
     encoded
 }
 
-fn descriptor(binding: u8) -> [u8; CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES] {
-    let mut descriptor = [0; CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES];
+fn descriptor(binding: u8) -> [u8; CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES] {
+    let mut descriptor = [0; CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES];
     descriptor[..32].fill(binding);
     descriptor[63] = 3;
     descriptor
@@ -53,7 +53,7 @@ fn parse(
 fn exact_native_inputs_construct_typed_manifest_values() {
     let encoded = descriptors(2);
     let inputs = parse(2, &encoded).expect("canonical construction parent inputs");
-    assert_eq!(inputs.anchors().len(), 2);
+    assert_eq!(inputs.leaves().len(), 2);
     assert_eq!(inputs.step_count(), 2);
     assert_eq!(
         inputs.initial_state(),
@@ -64,12 +64,12 @@ fn exact_native_inputs_construct_typed_manifest_values() {
     );
     let expected_suffix = inputs
         .seed()
-        .derive_expected_final(inputs.anchors())
+        .derive_expected_final(inputs.leaves())
         .expect("expected final manifest")
         .state_suffix_fields()
         .expect("expected final suffix");
     assert_eq!(inputs.expected_suffix(), expected_suffix);
-    assert_eq!(CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES, 130);
+    assert_eq!(CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES, 130);
 }
 
 #[test]

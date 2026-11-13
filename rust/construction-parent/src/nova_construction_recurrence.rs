@@ -9,22 +9,24 @@ use nova_snark::{
 };
 
 use crate::candidate::CandidateStepProofWitness;
-use crate::circuit_norm::{CandidateNormReductionProofWitness, ManifestBoundAnchorLeafStatementV4};
+use crate::circuit_norm::{
+    CandidateNormReductionProofWitness, ManifestBoundConstructionLeafStatementV4,
+};
 use crate::circuit_transcript::{CircuitCommitmentModeV4, CircuitProofTranscriptWitnessV4};
 use crate::construction_manifest::CONSTRUCTION_STEP_MANIFEST_DOMAIN;
 use crate::construction_profile::{
-    ANCHOR_RECURRENCE_STATE_ARITY, CONSTRUCTION_PARENT_BASIS_DIGEST,
-    CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST, CONSTRUCTION_ROOT_ROUNDS,
+    CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_ROUNDS,
 };
 use crate::construction_recurrence::{
-    validate_production_shape, AnchorRecurrenceStateWitness, MANIFEST_INDEX, ROOT_FACTORS_START,
-    ROOT_PREFIX_INDEX, ROOT_SCALE_INDEX, ROOT_X_INDEX, STEP_INDEX,
+    validate_production_shape, ConstructionRecurrenceStateWitness, MANIFEST_INDEX,
+    ROOT_FACTORS_START, ROOT_PREFIX_INDEX, ROOT_SCALE_INDEX, ROOT_X_INDEX, STEP_INDEX,
 };
 use crate::nova_candidate::{
     install_constrained_candidate_step, DirectCandidateRoot, DirectPendingClaim,
     DirectPolynomialTerm,
 };
-use crate::nova_circuit_norm_leaf::constrain_manifest_bound_anchor_leaf;
+use crate::nova_circuit_norm_leaf::constrain_manifest_bound_construction_leaf;
 use crate::nova_protocol_transcript::{
     append_bytes, append_constant_bytes, append_point, append_scalar, challenge,
 };
@@ -54,12 +56,12 @@ pub(crate) struct DirectPriorState {
 
 #[derive(Clone)]
 pub(crate) struct ConstructionParentStep {
-    state: AnchorRecurrenceStateWitness,
-    statement: ManifestBoundAnchorLeafStatementV4,
+    state: ConstructionRecurrenceStateWitness,
+    statement: ManifestBoundConstructionLeafStatementV4,
     transcript: CircuitProofTranscriptWitnessV4,
     reduction: CandidateNormReductionProofWitness,
     proof: CandidateStepProofWitness,
-    input_state: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    input_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
 }
 
 /// Reduced-shape test circuit, intentionally ineligible for Nova sessions.
@@ -69,8 +71,8 @@ pub(crate) struct TestConstructionParentStep(ConstructionParentStep);
 
 impl ConstructionParentStep {
     pub(crate) fn new(
-        state: AnchorRecurrenceStateWitness,
-        statement: ManifestBoundAnchorLeafStatementV4,
+        state: ConstructionRecurrenceStateWitness,
+        statement: ManifestBoundConstructionLeafStatementV4,
         transcript: CircuitProofTranscriptWitnessV4,
         reduction: CandidateNormReductionProofWitness,
         proof: CandidateStepProofWitness,
@@ -87,8 +89,8 @@ impl ConstructionParentStep {
     }
 
     fn new_inner(
-        state: AnchorRecurrenceStateWitness,
-        statement: ManifestBoundAnchorLeafStatementV4,
+        state: ConstructionRecurrenceStateWitness,
+        statement: ManifestBoundConstructionLeafStatementV4,
         transcript: CircuitProofTranscriptWitnessV4,
         reduction: CandidateNormReductionProofWitness,
         proof: CandidateStepProofWitness,
@@ -111,7 +113,7 @@ impl ConstructionParentStep {
         })
     }
 
-    pub(crate) const fn input_state(&self) -> &[Scalar; ANCHOR_RECURRENCE_STATE_ARITY] {
+    pub(crate) const fn input_state(&self) -> &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {
         &self.input_state
     }
 
@@ -120,12 +122,12 @@ impl ConstructionParentStep {
         mut cs: CS,
         z: &[AllocatedNum<Scalar>],
     ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
-        if z.len() != ANCHOR_RECURRENCE_STATE_ARITY {
+        if z.len() != CONSTRUCTION_RECURRENCE_STATE_ARITY {
             return Err(synthesis_error("construction recurrence state arity"));
         }
         let prior = bind_prior_state(cs.namespace(|| "prior state"), z, &self.state)?;
-        let leaf = constrain_manifest_bound_anchor_leaf(
-            cs.namespace(|| "anchor leaf"),
+        let leaf = constrain_manifest_bound_construction_leaf(
+            cs.namespace(|| "construction leaf"),
             self.statement,
             &self.transcript,
             &self.reduction,
@@ -154,8 +156,8 @@ impl ConstructionParentStep {
 #[cfg(test)]
 impl TestConstructionParentStep {
     pub(crate) fn new(
-        state: AnchorRecurrenceStateWitness,
-        statement: ManifestBoundAnchorLeafStatementV4,
+        state: ConstructionRecurrenceStateWitness,
+        statement: ManifestBoundConstructionLeafStatementV4,
         transcript: CircuitProofTranscriptWitnessV4,
         reduction: CandidateNormReductionProofWitness,
         proof: CandidateStepProofWitness,
@@ -177,7 +179,7 @@ impl TestConstructionParentStep {
 
 impl StepCircuit<Scalar> for ConstructionParentStep {
     fn arity(&self) -> usize {
-        ANCHOR_RECURRENCE_STATE_ARITY
+        CONSTRUCTION_RECURRENCE_STATE_ARITY
     }
 
     fn synthesize<CS: ConstraintSystem<Scalar>>(
@@ -189,12 +191,12 @@ impl StepCircuit<Scalar> for ConstructionParentStep {
     }
 }
 
-impl NovaSessionStep<ANCHOR_RECURRENCE_STATE_ARITY> for ConstructionParentStep {
+impl NovaSessionStep<CONSTRUCTION_RECURRENCE_STATE_ARITY> for ConstructionParentStep {
     fn relation_id(&self) -> DirectRelationId {
         CONSTRUCTION_PARENT_DIRECT_RELATION_ID
     }
 
-    fn input_state(&self) -> &[Scalar; ANCHOR_RECURRENCE_STATE_ARITY] {
+    fn input_state(&self) -> &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {
         ConstructionParentStep::input_state(self)
     }
 }
@@ -291,9 +293,9 @@ fn bind_scalar<CS: ConstraintSystem<Scalar>>(
 pub(crate) fn bind_prior_state<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     state: &[AllocatedNum<Scalar>],
-    witness: &AnchorRecurrenceStateWitness,
+    witness: &ConstructionRecurrenceStateWitness,
 ) -> Result<DirectPriorState, SynthesisError> {
-    if state.len() != ANCHOR_RECURRENCE_STATE_ARITY
+    if state.len() != CONSTRUCTION_RECURRENCE_STATE_ARITY
         || witness.root.factors.len() != CONSTRUCTION_ROOT_ROUNDS
     {
         return Err(synthesis_error("construction recurrence state shape"));
@@ -416,7 +418,7 @@ pub(crate) fn expose_output_state<CS: ConstraintSystem<Scalar>>(
     if root.factors.len() != CONSTRUCTION_ROOT_ROUNDS {
         return Err(synthesis_error("construction output root shape"));
     }
-    let mut output = Vec::with_capacity(ANCHOR_RECURRENCE_STATE_ARITY);
+    let mut output = Vec::with_capacity(CONSTRUCTION_RECURRENCE_STATE_ARITY);
     output.push(root.point.prefix().clone());
     output.push(root.point.point().x().clone());
     output.push(materialize_scalar(
@@ -434,7 +436,7 @@ pub(crate) fn expose_output_state<CS: ConstraintSystem<Scalar>>(
         cs.namespace(|| "step index"),
         prior.index(),
     )?);
-    debug_assert_eq!(output.len(), ANCHOR_RECURRENCE_STATE_ARITY);
+    debug_assert_eq!(output.len(), CONSTRUCTION_RECURRENCE_STATE_ARITY);
     Ok(output)
 }
 
@@ -447,7 +449,7 @@ mod tests {
     use super::*;
     use crate::candidate::CandidateRootClaim;
     use crate::construction_manifest::{
-        derive_step_manifest, ConstructionManifestAnchor, ConstructionManifestStepInput,
+        derive_step_manifest, ConstructionManifestLeaf, ConstructionManifestStepInput,
     };
     use crate::nova_secp::allocate_encoded_point;
     use crate::nova_secp_scalar::allocate_canonical_scalar;
@@ -467,8 +469,8 @@ mod tests {
         SecpEncodedPointWitness::parse(encoded).expect("generator")
     }
 
-    fn state(marker: u8, point: SecpEncodedPointWitness) -> AnchorRecurrenceStateWitness {
-        AnchorRecurrenceStateWitness {
+    fn state(marker: u8, point: SecpEncodedPointWitness) -> ConstructionRecurrenceStateWitness {
+        ConstructionRecurrenceStateWitness {
             root: CandidateRootClaim {
                 point,
                 scale: SecpScalarWitness::from_u64(u64::from(marker) + 1),
@@ -483,7 +485,7 @@ mod tests {
 
     fn allocate_state<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
-        witness: &AnchorRecurrenceStateWitness,
+        witness: &ConstructionRecurrenceStateWitness,
     ) -> Vec<AllocatedNum<Scalar>> {
         witness
             .state_fields()
@@ -512,7 +514,7 @@ mod tests {
     }
 
     fn synthesize(
-        state_witness: &AnchorRecurrenceStateWitness,
+        state_witness: &ConstructionRecurrenceStateWitness,
         binding: [u8; 32],
         precommitment: SecpScalarWitness,
         coefficient: SecpEncodedPointWitness,
@@ -602,15 +604,15 @@ mod tests {
         )
         .expect("direct manifest");
 
-        let anchor = ConstructionManifestAnchor::new(
+        let leaf = ConstructionManifestLeaf::new(
             binding,
             precommitment.bytes,
             coefficient.encoded,
             offset.encoded,
         )
-        .expect("manifest anchor");
+        .expect("manifest leaf");
         let expected = derive_step_manifest(
-            &ConstructionManifestStepInput::new(state_witness.manifest, 7, anchor)
+            &ConstructionManifestStepInput::new(state_witness.manifest, 7, leaf)
                 .expect("manifest input"),
         )
         .expect("native manifest");
@@ -625,14 +627,14 @@ mod tests {
         };
         let output = expose_output_state(cs.namespace(|| "output state"), &state, &root, &actual)
             .expect("output state");
-        let expected_state = AnchorRecurrenceStateWitness {
+        let expected_state = ConstructionRecurrenceStateWitness {
             root: state_witness.root.clone(),
             manifest: expected,
             index: state_witness.index + 1,
         }
         .state_fields()
         .expect("expected output state");
-        assert_eq!(output.len(), ANCHOR_RECURRENCE_STATE_ARITY);
+        assert_eq!(output.len(), CONSTRUCTION_RECURRENCE_STATE_ARITY);
         assert_eq!(
             output
                 .iter()
@@ -660,7 +662,7 @@ mod tests {
             SecpEncodedPointWitness::identity(),
             generator(2),
         );
-        assert_eq!(first.num_inputs(), ANCHOR_RECURRENCE_STATE_ARITY + 1);
+        assert_eq!(first.num_inputs(), CONSTRUCTION_RECURRENCE_STATE_ARITY + 1);
         assert_eq!(first.num_inputs(), second.num_inputs());
         assert_eq!(first.num_aux(), second.num_aux());
         assert_eq!(first.constraints, second.constraints);

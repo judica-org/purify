@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::construction_manifest::ConstructionRoot;
 use crate::construction_parent_input::ConstructionParentInputs;
 use crate::construction_profile::{
-    ANCHOR_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
+    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
 };
 use crate::nova_session::verifier_artifact::DirectNovaVerifierArtifactError;
 use crate::nova_session::{
@@ -26,7 +26,7 @@ use crate::{RelationError, Scalar};
 pub(crate) fn load_qualified_construction_parent_verifier<R>(
     _artifact: &mut R,
 ) -> Result<
-    SelectedDirectNovaVerifier<ANCHOR_RECURRENCE_STATE_ARITY>,
+    SelectedDirectNovaVerifier<CONSTRUCTION_RECURRENCE_STATE_ARITY>,
     DirectNovaVerifierArtifactError,
 >
 where
@@ -69,7 +69,7 @@ impl AuthenticatedConstructionParentOutput {
 /// The typed input is the only path into this boundary, so proof verification
 /// cannot bypass the native basis and raw-generator identity checks.
 pub(crate) fn verify_construction_parent(
-    verifier: &SelectedDirectNovaVerifier<ANCHOR_RECURRENCE_STATE_ARITY>,
+    verifier: &SelectedDirectNovaVerifier<CONSTRUCTION_RECURRENCE_STATE_ARITY>,
     inputs: &ConstructionParentInputs,
     proof: &[u8],
 ) -> Result<AuthenticatedConstructionParentOutput, ConstructionParentVerifierError> {
@@ -83,7 +83,7 @@ pub(crate) fn verify_construction_parent(
 }
 
 fn validated_output_from_authenticated_state(
-    authenticated_final: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    authenticated_final: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
     expected_suffix: [Scalar; 2],
 ) -> Result<AuthenticatedConstructionParentOutput, ConstructionParentVerifierError> {
     if authenticated_final[CONSTRUCTION_ROOT_STATE_ARITY] != expected_suffix[0] {

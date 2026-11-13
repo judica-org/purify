@@ -15,7 +15,7 @@ use crate::construction_profile::{
     CONSTRUCTION_STATE_ARITY,
 };
 #[cfg(test)]
-use crate::construction_recurrence::AnchorRecurrenceStateWitness;
+use crate::construction_recurrence::ConstructionRecurrenceStateWitness;
 #[cfg(test)]
 use crate::secp_native::SecpEncodedPointWitness;
 use crate::secp_native::{
@@ -143,7 +143,7 @@ pub(crate) struct ConstructionManifestSeed {
     construction_statement_digest: [u8; 32],
     resolved_setup_record_digest: [u8; 32],
     root: ConstructionRoot,
-    payload_anchor_count: u32,
+    payload_leaf_count: u32,
 }
 
 impl ConstructionManifestSeed {
@@ -151,21 +151,21 @@ impl ConstructionManifestSeed {
         construction_statement_digest: [u8; 32],
         resolved_setup_record_digest: [u8; 32],
         root: ConstructionRoot,
-        payload_anchor_count: u32,
+        payload_leaf_count: u32,
     ) -> Result<Self, RelationError> {
         if resolved_setup_record_digest == [0; 32] {
             return Err(RelationError::Malformed(
                 "unresolved construction setup record",
             ));
         }
-        if payload_anchor_count == 0 {
+        if payload_leaf_count == 0 {
             return Err(RelationError::Malformed("empty construction payload"));
         }
         Ok(Self {
             construction_statement_digest,
             resolved_setup_record_digest,
             root,
-            payload_anchor_count,
+            payload_leaf_count,
         })
     }
 
@@ -184,7 +184,7 @@ impl ConstructionManifestSeed {
         transcript
             .append_bytes(self.root.canonical_bytes())
             .expect("fixed root length fits u64");
-        transcript.append_u64(u64::from(self.payload_anchor_count));
+        transcript.append_u64(u64::from(self.payload_leaf_count));
         Ok(field_to_be(transcript.challenge(0)?.scalar))
     }
 
@@ -211,8 +211,8 @@ impl ConstructionManifestSeed {
     #[cfg(test)]
     pub(crate) fn initial_recurrence_witness(
         &self,
-    ) -> Result<AnchorRecurrenceStateWitness, RelationError> {
-        Ok(AnchorRecurrenceStateWitness {
+    ) -> Result<ConstructionRecurrenceStateWitness, RelationError> {
+        Ok(ConstructionRecurrenceStateWitness {
             root: self.root.claim(),
             manifest: self.initial_manifest()?,
             index: 0,
@@ -231,33 +231,31 @@ impl ConstructionManifestSeed {
     #[cfg(test)]
     pub(crate) fn derive_expected_final(
         &self,
-        anchors: &[ConstructionManifestAnchor],
+        leaves: &[ConstructionManifestLeaf],
     ) -> Result<ConstructionManifestState, RelationError> {
-        let count = u32::try_from(anchors.len())
-            .map_err(|_| RelationError::Malformed("construction anchor count"))?;
-        if count != self.payload_anchor_count {
-            return Err(RelationError::Malformed(
-                "construction manifest anchor count",
-            ));
+        let count = u32::try_from(leaves.len())
+            .map_err(|_| RelationError::Malformed("construction leaf count"))?;
+        if count != self.payload_leaf_count {
+            return Err(RelationError::Malformed("construction manifest leaf count"));
         }
         let (_, mut state) = self.initial_state_and_manifest()?;
-        for anchor in anchors {
-            state = state.advance(*anchor)?;
+        for leaf in leaves {
+            state = state.advance(*leaf)?;
         }
         Ok(state)
     }
 }
 
-/// Verifier-resolved public values bound by one homogeneous anchor step.
+/// Verifier-resolved public values bound by one homogeneous construction leaf.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ConstructionManifestAnchor {
+pub(crate) struct ConstructionManifestLeaf {
     binding_digest: [u8; 32],
     precommitment: [u8; 32],
     coefficient_commitment: [u8; 33],
     anchored_offset: [u8; 33],
 }
 
-impl ConstructionManifestAnchor {
+impl ConstructionManifestLeaf {
     pub(crate) fn new(
         binding_digest: [u8; 32],
         precommitment: [u8; 32],
@@ -294,16 +292,16 @@ impl ConstructionManifestStepInput {
     pub(crate) fn new(
         prior_manifest: [u8; 32],
         zero_based_index: u32,
-        anchor: ConstructionManifestAnchor,
+        leaf: ConstructionManifestLeaf,
     ) -> Result<Self, RelationError> {
         coordinate_field_value(prior_manifest)?;
         Ok(Self {
             prior_manifest,
             zero_based_index,
-            binding_digest: anchor.binding_digest,
-            precommitment: anchor.precommitment,
-            coefficient_commitment: anchor.coefficient_commitment,
-            anchored_offset: anchor.anchored_offset,
+            binding_digest: leaf.binding_digest,
+            precommitment: leaf.precommitment,
+            coefficient_commitment: leaf.coefficient_commitment,
+            anchored_offset: leaf.anchored_offset,
         })
     }
 }
@@ -334,12 +332,12 @@ impl ConstructionManifestState {
         ])
     }
 
-    pub(crate) fn advance(self, anchor: ConstructionManifestAnchor) -> Result<Self, RelationError> {
+    pub(crate) fn advance(self, leaf: ConstructionManifestLeaf) -> Result<Self, RelationError> {
         let next_index = self
             .index
             .checked_add(1)
             .ok_or(RelationError::Malformed("construction manifest index"))?;
-        let input = ConstructionManifestStepInput::new(self.manifest, self.index, anchor)?;
+        let input = ConstructionManifestStepInput::new(self.manifest, self.index, leaf)?;
         Ok(Self {
             manifest: derive_step_manifest(&input)?,
             index: next_index,

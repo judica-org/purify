@@ -1,17 +1,17 @@
 //! Frozen dimensions and digests for the construction-parent profile.
 
 #[cfg(test)]
-pub(crate) const ANCHOR_GATE_COUNT: usize = 8_192;
+pub(crate) const CONSTRUCTION_LEAF_GATE_COUNT: usize = 8_192;
 #[cfg(test)]
-pub(crate) const ANCHOR_NORM_LENGTH: usize = 16_384;
+pub(crate) const CONSTRUCTION_LEAF_NORM_LENGTH: usize = 16_384;
 #[cfg(test)]
-pub(crate) const ANCHOR_LEAF_ROUNDS: usize = 14;
+pub(crate) const CONSTRUCTION_LEAF_ROUNDS: usize = 14;
 
 pub(crate) const CONSTRUCTION_ROOT_ROUNDS: usize = 15;
 pub(crate) const CONSTRUCTION_ROOT_STATE_ARITY: usize = 3 + CONSTRUCTION_ROOT_ROUNDS;
 pub(crate) const CONSTRUCTION_STATE_ARITY: usize = CONSTRUCTION_ROOT_STATE_ARITY + 2;
 pub(crate) const CONSTRUCTION_ROOT_BYTES: usize = 33 + 32 + 32 * CONSTRUCTION_ROOT_ROUNDS;
-pub(crate) const ANCHOR_RECURRENCE_STATE_ARITY: usize = CONSTRUCTION_STATE_ARITY;
+pub(crate) const CONSTRUCTION_RECURRENCE_STATE_ARITY: usize = CONSTRUCTION_STATE_ARITY;
 
 /// SHA256 of the exact 32,768 raw V4 generator encodings selected by the
 /// production anchor-escrow circuit.

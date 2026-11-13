@@ -9,19 +9,22 @@ use num_bigint::BigUint;
 use thiserror::Error;
 
 use crate::candidate::CandidateStepProofWitness;
-use crate::circuit_norm::{CandidateNormReductionProofWitness, ManifestBoundAnchorLeafStatementV4};
+use crate::circuit_norm::{
+    CandidateNormReductionProofWitness, ManifestBoundConstructionLeafStatementV4,
+};
 use crate::circuit_transcript::{
     replay_circuit_transcript_v4, CircuitCommitmentModeV4, CircuitPointPairWitnessV4,
     CircuitProofTranscriptWitnessV4, CircuitTranscriptShapeV4,
 };
-use crate::construction_manifest::{ConstructionManifestAnchor, ConstructionRoot};
+use crate::construction_manifest::{ConstructionManifestLeaf, ConstructionRoot};
 use crate::construction_parent_input::{
     ConstructionParentInputError, ConstructionParentInputs,
-    CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES,
+    CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES,
 };
 use crate::construction_profile::{
-    ANCHOR_GATE_COUNT, ANCHOR_LEAF_ROUNDS, ANCHOR_NORM_LENGTH, CONSTRUCTION_PARENT_BASIS_DIGEST,
-    CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_ROUNDS,
+    CONSTRUCTION_LEAF_GATE_COUNT, CONSTRUCTION_LEAF_NORM_LENGTH, CONSTRUCTION_LEAF_ROUNDS,
+    CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+    CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_ROUNDS,
 };
 use crate::secp_constants::SECP256K1_SCALAR_ORDER_BE as SECP_ORDER;
 use crate::secp_native::{
@@ -36,7 +39,7 @@ const PUNISHMENT_POINT_BYTES: usize = 33;
 const ANCHOR_RECORD_BYTES: usize = 1_233;
 const REDUCTION_PROOF_BYTES: usize = 1_022;
 const STEP_PROOF_BYTES: usize = 1_056;
-const ANCHOR_BYTES: usize = CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES
+const ANCHOR_BYTES: usize = CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES
     + PUNISHMENT_POINT_BYTES
     + ANCHOR_RECORD_BYTES
     + REDUCTION_PROOF_BYTES
@@ -51,7 +54,7 @@ const RECORD_T2_OFFSET: usize = RECORD_MASK_OFFSET + 33;
 const RECORD_NONCE_OFFSET: usize = RECORD_T2_OFFSET + 32;
 const RECORD_RESPONSE_OFFSET: usize = RECORD_NONCE_OFFSET + 32;
 const RECORD_ROUNDS_OFFSET: usize = RECORD_RESPONSE_OFFSET + 32;
-const RECORD_TERMINAL_N_OFFSET: usize = RECORD_ROUNDS_OFFSET + 65 * ANCHOR_LEAF_ROUNDS;
+const RECORD_TERMINAL_N_OFFSET: usize = RECORD_ROUNDS_OFFSET + 65 * CONSTRUCTION_LEAF_ROUNDS;
 const RECORD_TERMINAL_L_OFFSET: usize = RECORD_TERMINAL_N_OFFSET + 32;
 
 pub(crate) const QUALIFIED_PROVER_FIXTURE_SHA256: [u8; 32] = [
@@ -72,11 +75,11 @@ pub(crate) enum ConstructionParentProverFixtureError {
 }
 
 pub(crate) struct ConstructionParentProverAnchor {
-    pub(crate) statement: ManifestBoundAnchorLeafStatementV4,
+    pub(crate) statement: ManifestBoundConstructionLeafStatementV4,
     pub(crate) transcript: CircuitProofTranscriptWitnessV4,
     pub(crate) reduction: CandidateNormReductionProofWitness,
     pub(crate) step: CandidateStepProofWitness,
-    manifest_anchor: ConstructionManifestAnchor,
+    manifest_leaf: ConstructionManifestLeaf,
 }
 
 pub(crate) struct ConstructionParentProverFixture {
@@ -112,10 +115,10 @@ impl ConstructionParentProverFixture {
         }
 
         let mut descriptor_bytes =
-            Vec::with_capacity(anchor_count_usize * CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES);
+            Vec::with_capacity(anchor_count_usize * CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES);
         let mut anchors = Vec::with_capacity(anchor_count_usize);
         for _ in 0..anchor_count_usize {
-            let descriptor = cursor.array::<CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES>()?;
+            let descriptor = cursor.array::<CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES>()?;
             descriptor_bytes.extend_from_slice(&descriptor);
             let punishment = parse_even_finite_point(cursor.array::<PUNISHMENT_POINT_BYTES>()?)?;
             let record = cursor.array::<ANCHOR_RECORD_BYTES>()?;
@@ -139,8 +142,8 @@ impl ConstructionParentProverFixture {
         )?;
         if anchors
             .iter()
-            .map(|anchor| anchor.manifest_anchor)
-            .ne(inputs.anchors().iter().copied())
+            .map(|anchor| anchor.manifest_leaf)
+            .ne(inputs.leaves().iter().copied())
         {
             return Err(RelationError::Malformed("construction prover fixture descriptors").into());
         }
@@ -155,15 +158,15 @@ impl ConstructionParentProverFixture {
 fn production_shape() -> CircuitTranscriptShapeV4 {
     CircuitTranscriptShapeV4 {
         mode: CircuitCommitmentModeV4::Public,
-        gate_count: ANCHOR_GATE_COUNT,
+        gate_count: CONSTRUCTION_LEAF_GATE_COUNT,
         commitment_count: 1,
-        n_vec_len: ANCHOR_NORM_LENGTH,
-        l_vec_len: ANCHOR_NORM_LENGTH,
+        n_vec_len: CONSTRUCTION_LEAF_NORM_LENGTH,
+        l_vec_len: CONSTRUCTION_LEAF_NORM_LENGTH,
     }
 }
 
 fn parse_anchor(
-    descriptor: [u8; CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES],
+    descriptor: [u8; CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES],
     punishment: SecpEncodedPointWitness,
     record: [u8; ANCHOR_RECORD_BYTES],
     reduction: CandidateNormReductionProofWitness,
@@ -181,13 +184,13 @@ fn parse_anchor(
             .try_into()
             .expect("fixed anchored offset"),
     )?;
-    let manifest_anchor = ConstructionManifestAnchor::new(
+    let manifest_leaf = ConstructionManifestLeaf::new(
         binding_digest,
         precommitment.bytes,
         coefficient_commitment.encoded,
         anchored_offset.encoded,
     )?;
-    let statement = ManifestBoundAnchorLeafStatementV4 {
+    let statement = ManifestBoundConstructionLeafStatementV4 {
         shape: production_shape(),
         circuit_binding_digest: binding_digest,
         raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
@@ -206,7 +209,7 @@ fn parse_anchor(
         transcript,
         reduction,
         step,
-        manifest_anchor,
+        manifest_leaf,
     })
 }
 
@@ -216,7 +219,7 @@ fn parse_record(
     coefficient_commitment: SecpEncodedPointWitness,
     anchored_offset: SecpEncodedPointWitness,
     expected_precommitment: SecpScalarWitness,
-    statement: ManifestBoundAnchorLeafStatementV4,
+    statement: ManifestBoundConstructionLeafStatementV4,
 ) -> Result<CircuitProofTranscriptWitnessV4, RelationError> {
     if record[0] != RECORD_VERSION {
         return Err(RelationError::Malformed("anchor escrow record version"));
@@ -245,8 +248,8 @@ fn parse_record(
             .try_into()
             .expect("fixed DLog response"),
     )?;
-    let mut rounds = Vec::with_capacity(ANCHOR_LEAF_ROUNDS);
-    for index in 0..ANCHOR_LEAF_ROUNDS {
+    let mut rounds = Vec::with_capacity(CONSTRUCTION_LEAF_ROUNDS);
+    for index in 0..CONSTRUCTION_LEAF_ROUNDS {
         let offset = RECORD_ROUNDS_OFFSET + index * 65;
         rounds.push(parse_pair(
             record[offset..offset + 65]
@@ -327,10 +330,10 @@ fn parse_reduction(
             .try_into()
             .expect("fixed reduction evaluation"),
     )?;
-    let mut left = Vec::with_capacity(ANCHOR_LEAF_ROUNDS);
-    let mut right = Vec::with_capacity(ANCHOR_LEAF_ROUNDS);
+    let mut left = Vec::with_capacity(CONSTRUCTION_LEAF_ROUNDS);
+    let mut right = Vec::with_capacity(CONSTRUCTION_LEAF_ROUNDS);
     let mut offset = 33;
-    for _ in 0..ANCHOR_LEAF_ROUNDS {
+    for _ in 0..CONSTRUCTION_LEAF_ROUNDS {
         left.push(SecpEncodedPointWitness::parse(
             encoded[offset..offset + 33]
                 .try_into()
@@ -556,7 +559,7 @@ mod tests {
         );
         assert_eq!(accepted.anchors.len(), 2);
         assert_eq!(nondeciding.anchors.len(), accepted.anchors.len());
-        assert_eq!(accepted.inputs.anchors(), nondeciding.inputs.anchors());
+        assert_eq!(accepted.inputs.leaves(), nondeciding.inputs.leaves());
         assert_eq!(
             accepted.expected_root.canonical_bytes().len(),
             CONSTRUCTION_ROOT_BYTES

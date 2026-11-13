@@ -45,18 +45,18 @@ fn manifest_seed(count: u32) -> ConstructionManifestSeed {
         .expect("construction manifest seed")
 }
 
-fn anchor(
+fn leaf(
     marker: u8,
     coefficient_commitment: SecpEncodedPointWitness,
     anchored_offset: SecpEncodedPointWitness,
-) -> ConstructionManifestAnchor {
-    ConstructionManifestAnchor::new(
+) -> ConstructionManifestLeaf {
+    ConstructionManifestLeaf::new(
         [marker; 32],
         SecpScalarWitness::from_u64(u64::from(marker) + 1).bytes,
         coefficient_commitment.encoded,
         anchored_offset.encoded,
     )
-    .expect("construction manifest anchor")
+    .expect("construction manifest leaf")
 }
 
 #[test]
@@ -242,8 +242,8 @@ fn initial_seed_rejects_unresolved_and_empty_inputs() {
 
 #[test]
 fn ordered_iteration_binds_count_order_and_substitution() {
-    let first = anchor(0x11, generator(), SecpEncodedPointWitness::identity());
-    let second = anchor(0x22, SecpEncodedPointWitness::identity(), generator());
+    let first = leaf(0x11, generator(), SecpEncodedPointWitness::identity());
+    let second = leaf(0x22, SecpEncodedPointWitness::identity(), generator());
     let seed = manifest_seed(2);
     let expected = seed
         .derive_expected_final(&[first, second])
@@ -264,7 +264,7 @@ fn ordered_iteration_binds_count_order_and_substitution() {
         .expect("reversed manifest");
     assert_ne!(reversed.manifest(), expected.manifest());
 
-    let substituted = anchor(0x12, generator(), SecpEncodedPointWitness::identity());
+    let substituted = leaf(0x12, generator(), SecpEncodedPointWitness::identity());
     let substituted = seed
         .derive_expected_final(&[substituted, second])
         .expect("substituted manifest");
@@ -283,38 +283,38 @@ fn step_manifest_binds_every_constrained_public_input() {
     let prior = manifest_seed(1)
         .initial_manifest()
         .expect("nonzero prior manifest");
-    let baseline_anchor = anchor(0x11, generator(), SecpEncodedPointWitness::identity());
+    let baseline_leaf = leaf(0x11, generator(), SecpEncodedPointWitness::identity());
     let baseline = derive_step_manifest(
-        &ConstructionManifestStepInput::new(prior, 0, baseline_anchor).expect("baseline input"),
+        &ConstructionManifestStepInput::new(prior, 0, baseline_leaf).expect("baseline input"),
     )
     .expect("baseline manifest");
 
     let changed_prior =
-        ConstructionManifestStepInput::new([0; 32], 0, baseline_anchor).expect("changed prior");
+        ConstructionManifestStepInput::new([0; 32], 0, baseline_leaf).expect("changed prior");
     let changed_index =
-        ConstructionManifestStepInput::new(prior, 1, baseline_anchor).expect("changed index");
+        ConstructionManifestStepInput::new(prior, 1, baseline_leaf).expect("changed index");
     let changed_binding = ConstructionManifestStepInput::new(
         prior,
         0,
-        anchor(0x12, generator(), SecpEncodedPointWitness::identity()),
+        leaf(0x12, generator(), SecpEncodedPointWitness::identity()),
     )
     .expect("changed binding");
     let changed_precommitment = ConstructionManifestStepInput::new(
         prior,
         0,
-        ConstructionManifestAnchor::new(
+        ConstructionManifestLeaf::new(
             [0x11; 32],
             SecpScalarWitness::from_u64(0x99).bytes,
             generator().encoded,
             SecpEncodedPointWitness::identity().encoded,
         )
-        .expect("changed precommitment anchor"),
+        .expect("changed precommitment leaf"),
     )
     .expect("changed precommitment");
     let changed_commitment = ConstructionManifestStepInput::new(
         prior,
         0,
-        anchor(
+        leaf(
             0x11,
             SecpEncodedPointWitness::identity(),
             SecpEncodedPointWitness::identity(),
@@ -322,7 +322,7 @@ fn step_manifest_binds_every_constrained_public_input() {
     )
     .expect("changed coefficient commitment");
     let changed_offset =
-        ConstructionManifestStepInput::new(prior, 0, anchor(0x11, generator(), generator()))
+        ConstructionManifestStepInput::new(prior, 0, leaf(0x11, generator(), generator()))
             .expect("changed anchored offset");
 
     for changed in [
@@ -342,16 +342,16 @@ fn step_manifest_binds_every_constrained_public_input() {
 
 #[test]
 fn step_input_rejects_noncanonical_fields_points_and_precommitments() {
-    let valid = anchor(0x11, generator(), SecpEncodedPointWitness::identity());
+    let valid = leaf(0x11, generator(), SecpEncodedPointWitness::identity());
     assert!(ConstructionManifestStepInput::new(SECP_FIELD, 0, valid).is_err());
-    assert!(ConstructionManifestAnchor::new(
+    assert!(ConstructionManifestLeaf::new(
         [0x11; 32],
         SecpScalarWitness::from_u64(0).bytes,
         generator().encoded,
         SecpEncodedPointWitness::identity().encoded,
     )
     .is_err());
-    assert!(ConstructionManifestAnchor::new(
+    assert!(ConstructionManifestLeaf::new(
         [0x11; 32],
         SECP_ORDER,
         generator().encoded,
@@ -361,7 +361,7 @@ fn step_input_rejects_noncanonical_fields_points_and_precommitments() {
 
     let mut bad_point = generator();
     bad_point.encoded[0] = 4;
-    assert!(ConstructionManifestAnchor::new(
+    assert!(ConstructionManifestLeaf::new(
         [0x11; 32],
         SecpScalarWitness::from_u64(1).bytes,
         bad_point.encoded,
@@ -371,34 +371,34 @@ fn step_input_rejects_noncanonical_fields_points_and_precommitments() {
 }
 
 #[test]
-fn manifest_anchor_validates_public_point_encodings() {
+fn manifest_leaf_validates_public_point_encodings() {
     let coefficient = generator().encoded;
     let mut odd_encoding = generator().encoded;
     odd_encoding[0] = 3;
 
-    ConstructionManifestAnchor::new(
+    ConstructionManifestLeaf::new(
         [0x41; 32],
         SecpScalarWitness::from_u64(7).bytes,
         coefficient,
         odd_encoding,
     )
-    .expect("manifest anchor from canonical public points");
+    .expect("manifest leaf from canonical public points");
 }
 
 #[test]
 fn step_index_is_zero_based_and_overflow_checked() {
     let seed = manifest_seed(1);
-    let anchor = anchor(0x11, generator(), SecpEncodedPointWitness::identity());
+    let leaf = leaf(0x11, generator(), SecpEncodedPointWitness::identity());
     let initial = seed.initial_manifest().expect("nonzero initial manifest");
-    let zero = ConstructionManifestStepInput::new(initial, 0, anchor).expect("zero-based step");
-    let one = ConstructionManifestStepInput::new(initial, 1, anchor).expect("next-index step");
+    let zero = ConstructionManifestStepInput::new(initial, 0, leaf).expect("zero-based step");
+    let one = ConstructionManifestStepInput::new(initial, 1, leaf).expect("next-index step");
     assert_ne!(
         derive_step_manifest(&zero).expect("zero manifest"),
         derive_step_manifest(&one).expect("one manifest")
     );
     assert_eq!(
         derive_step_manifest(&zero).expect("first step"),
-        seed.derive_expected_final(&[anchor])
+        seed.derive_expected_final(&[leaf])
             .expect("one-step manifest")
             .manifest()
     );
@@ -415,7 +415,7 @@ fn step_index_is_zero_based_and_overflow_checked() {
         manifest: seed.initial_manifest().expect("nonzero initial manifest"),
         index: u32::MAX,
     };
-    assert!(exhausted.advance(anchor).is_err());
+    assert!(exhausted.advance(leaf).is_err());
 }
 
 #[test]

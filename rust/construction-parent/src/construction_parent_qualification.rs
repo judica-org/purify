@@ -10,7 +10,9 @@ use nova_snark::{
 use sha2::{Digest, Sha256};
 
 use crate::candidate::{CandidateRootClaim, CandidateStepProofWitness};
-use crate::circuit_norm::{CandidateNormReductionProofWitness, ManifestBoundAnchorLeafStatementV4};
+use crate::circuit_norm::{
+    CandidateNormReductionProofWitness, ManifestBoundConstructionLeafStatementV4,
+};
 use crate::circuit_transcript::{
     CircuitCommitmentModeV4, CircuitPointPairWitnessV4, CircuitProofTranscriptWitnessV4,
     CircuitTranscriptShapeV4,
@@ -21,11 +23,14 @@ use crate::construction_parent_prover_fixture::{
     QUALIFIED_PROVER_FIXTURE_SHA256,
 };
 use crate::construction_profile::{
-    ANCHOR_GATE_COUNT, ANCHOR_LEAF_ROUNDS, ANCHOR_NORM_LENGTH, ANCHOR_RECURRENCE_STATE_ARITY,
+    CONSTRUCTION_LEAF_GATE_COUNT, CONSTRUCTION_LEAF_NORM_LENGTH, CONSTRUCTION_LEAF_ROUNDS,
     CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-    CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_ROUNDS, CONSTRUCTION_ROOT_STATE_ARITY,
+    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_ROUNDS,
+    CONSTRUCTION_ROOT_STATE_ARITY,
 };
-use crate::construction_recurrence::{validate_production_shape, AnchorRecurrenceStateWitness};
+use crate::construction_recurrence::{
+    validate_production_shape, ConstructionRecurrenceStateWitness,
+};
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
 use crate::nova_construction_recurrence::{
     ConstructionParentStep, TestConstructionParentStep, CONSTRUCTION_PARENT_DIRECT_RELATION_ID,
@@ -45,11 +50,11 @@ const DIRECT_PARENT_AUXILIARY: usize = 7_609_070;
 const DIRECT_PARENT_CONSTRAINTS: usize = 7_653_610;
 
 type ConstructionParentNovaSuite =
-    SelectedNovaSessionSuite<ANCHOR_RECURRENCE_STATE_ARITY, ConstructionParentStep>;
+    SelectedNovaSessionSuite<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>;
 
 struct BoundQualificationFixture {
-    initial_state: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
-    final_state: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    initial_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+    final_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
     steps: Vec<ConstructionParentStep>,
 }
 
@@ -185,7 +190,7 @@ fn fixed_bincode_verifier_payload_length(metrics: PublicParamsShapeMetrics) -> u
         + 352
 }
 
-fn small_anchor_shape() -> CircuitTranscriptShapeV4 {
+fn small_leaf_shape() -> CircuitTranscriptShapeV4 {
     CircuitTranscriptShapeV4 {
         mode: CircuitCommitmentModeV4::Public,
         gate_count: 2,
@@ -195,13 +200,13 @@ fn small_anchor_shape() -> CircuitTranscriptShapeV4 {
     }
 }
 
-fn production_anchor_shape() -> CircuitTranscriptShapeV4 {
+fn production_leaf_shape() -> CircuitTranscriptShapeV4 {
     CircuitTranscriptShapeV4 {
         mode: CircuitCommitmentModeV4::Public,
-        gate_count: ANCHOR_GATE_COUNT,
+        gate_count: CONSTRUCTION_LEAF_GATE_COUNT,
         commitment_count: 1,
-        n_vec_len: ANCHOR_NORM_LENGTH,
-        l_vec_len: ANCHOR_NORM_LENGTH,
+        n_vec_len: CONSTRUCTION_LEAF_NORM_LENGTH,
+        l_vec_len: CONSTRUCTION_LEAF_NORM_LENGTH,
     }
 }
 
@@ -251,8 +256,8 @@ fn zero_candidate_step() -> CandidateStepProofWitness {
     }
 }
 
-fn prior_state(manifest_byte: u8) -> AnchorRecurrenceStateWitness {
-    AnchorRecurrenceStateWitness {
+fn prior_state(manifest_byte: u8) -> ConstructionRecurrenceStateWitness {
+    ConstructionRecurrenceStateWitness {
         root: CandidateRootClaim {
             point: SecpEncodedPointWitness::from_point_value(standard_generator()),
             scale: SecpScalarWitness::from_u64(0),
@@ -276,9 +281,9 @@ fn registry_seed_root(root: &CandidateRootClaim) -> ConstructionRoot {
 }
 
 fn recurrence_state_from_fields(
-    fields: [Scalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    fields: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
     expected_index: u32,
-) -> AnchorRecurrenceStateWitness {
+) -> ConstructionRecurrenceStateWitness {
     let root_fields = fields[..CONSTRUCTION_ROOT_STATE_ARITY]
         .try_into()
         .expect("fixed construction root state");
@@ -291,7 +296,7 @@ fn recurrence_state_from_fields(
         fields[CONSTRUCTION_ROOT_STATE_ARITY + 1],
         Scalar::from(u64::from(expected_index))
     );
-    AnchorRecurrenceStateWitness {
+    ConstructionRecurrenceStateWitness {
         root: root.claim(),
         manifest,
         index: expected_index,
@@ -299,10 +304,10 @@ fn recurrence_state_from_fields(
 }
 
 fn production_direct_step(binding_byte: u8, manifest_byte: u8) -> ConstructionParentStep {
-    let shape = production_anchor_shape();
+    let shape = production_leaf_shape();
     ConstructionParentStep::new(
         prior_state(manifest_byte),
-        ManifestBoundAnchorLeafStatementV4 {
+        ManifestBoundConstructionLeafStatementV4 {
             shape,
             circuit_binding_digest: [binding_byte; 32],
             raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
@@ -315,7 +320,9 @@ fn production_direct_step(binding_byte: u8, manifest_byte: u8) -> ConstructionPa
     .expect("production direct step")
 }
 
-fn synthesize_output(step: &ConstructionParentStep) -> [Scalar; ANCHOR_RECURRENCE_STATE_ARITY] {
+fn synthesize_output(
+    step: &ConstructionParentStep,
+) -> [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {
     let mut cs = CheckingWitnessCS::with_auxiliary_capacity(DIRECT_PARENT_AUXILIARY);
     let inputs = step
         .input_state()
@@ -329,7 +336,7 @@ fn synthesize_output(step: &ConstructionParentStep) -> [Scalar; ANCHOR_RECURRENC
     let outputs = step
         .synthesize(&mut cs, &inputs)
         .expect("construction recurrence");
-    assert_eq!(outputs.len(), ANCHOR_RECURRENCE_STATE_ARITY);
+    assert_eq!(outputs.len(), CONSTRUCTION_RECURRENCE_STATE_ARITY);
     let values =
         std::array::from_fn(|index| outputs[index].get_value().expect("recurrence output"));
     cs.assert_satisfied();
@@ -340,10 +347,10 @@ fn synthesize_output(step: &ConstructionParentStep) -> [Scalar; ANCHOR_RECURRENC
 
 #[test]
 fn production_shape_is_exact() {
-    assert_eq!(ANCHOR_RECURRENCE_STATE_ARITY, 20);
-    assert_eq!(ANCHOR_LEAF_ROUNDS, 14);
-    let shape = production_anchor_shape();
-    let statement = ManifestBoundAnchorLeafStatementV4 {
+    assert_eq!(CONSTRUCTION_RECURRENCE_STATE_ARITY, 20);
+    assert_eq!(CONSTRUCTION_LEAF_ROUNDS, 14);
+    let shape = production_leaf_shape();
+    let statement = ManifestBoundConstructionLeafStatementV4 {
         shape,
         circuit_binding_digest: [0x31; 32],
         raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
@@ -373,10 +380,10 @@ fn checking_witness_cs_rejects_a_false_equation() {
 
 #[test]
 fn direct_construction_step_fixes_profile_and_input_state() {
-    let shape = production_anchor_shape();
+    let shape = production_leaf_shape();
     let state = prior_state(1);
     let expected_input = state.state_fields().expect("input state");
-    let statement = ManifestBoundAnchorLeafStatementV4 {
+    let statement = ManifestBoundConstructionLeafStatementV4 {
         shape,
         circuit_binding_digest: [0x31; 32],
         raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
@@ -409,17 +416,17 @@ fn direct_construction_step_fixes_profile_and_input_state() {
 
     let step = ConstructionParentStep::new(state, statement, transcript, reduction, proof)
         .expect("production direct step");
-    assert_eq!(step.arity(), ANCHOR_RECURRENCE_STATE_ARITY);
+    assert_eq!(step.arity(), CONSTRUCTION_RECURRENCE_STATE_ARITY);
     assert_eq!(step.input_state(), &expected_input);
     assert_eq!(
         NovaSessionStep::relation_id(&step),
         CONSTRUCTION_PARENT_DIRECT_RELATION_ID
     );
 
-    let shape = small_anchor_shape();
+    let shape = small_leaf_shape();
     let test_step = TestConstructionParentStep::new(
         prior_state(1),
-        ManifestBoundAnchorLeafStatementV4 {
+        ManifestBoundConstructionLeafStatementV4 {
             shape,
             circuit_binding_digest: [0x31; 32],
             raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
@@ -430,16 +437,16 @@ fn direct_construction_step_fixes_profile_and_input_state() {
         zero_candidate_step(),
     )
     .expect("small direct step");
-    assert_eq!(test_step.arity(), ANCHOR_RECURRENCE_STATE_ARITY);
+    assert_eq!(test_step.arity(), CONSTRUCTION_RECURRENCE_STATE_ARITY);
 }
 
 #[test]
 #[ignore = "run explicitly in release mode; streams the production relation"]
 fn direct_construction_step_relation_shape_is_pinned() {
     let first_step = production_direct_step(0x31, 1);
-    let first = direct_step_relation_shape::<ANCHOR_RECURRENCE_STATE_ARITY, _>(&first_step)
+    let first = direct_step_relation_shape::<CONSTRUCTION_RECURRENCE_STATE_ARITY, _>(&first_step)
         .expect("first production relation");
-    let second = direct_step_relation_shape::<ANCHOR_RECURRENCE_STATE_ARITY, _>(
+    let second = direct_step_relation_shape::<CONSTRUCTION_RECURRENCE_STATE_ARITY, _>(
         &production_direct_step(0x32, 2),
     )
     .expect("second production relation");
@@ -469,7 +476,7 @@ fn direct_construction_step_augmented_shape_is_pinned() {
             augmented.secondary.constraints,
             augmented.secondary.variables,
         ),
-        ANCHOR_RECURRENCE_STATE_ARITY,
+        CONSTRUCTION_RECURRENCE_STATE_ARITY,
     )
     .expect("direct construction proof shape");
 
@@ -540,7 +547,7 @@ fn assert_matching_public_fixtures(
 ) {
     assert_eq!(accepted.anchors.len(), 2);
     assert_eq!(nondeciding.anchors.len(), accepted.anchors.len());
-    assert_eq!(accepted.inputs.anchors(), nondeciding.inputs.anchors());
+    assert_eq!(accepted.inputs.leaves(), nondeciding.inputs.leaves());
     assert_eq!(
         accepted
             .inputs
@@ -577,7 +584,7 @@ fn bind_qualification_fixture(
     let expected_suffix = fixture
         .inputs
         .seed()
-        .derive_expected_final(fixture.inputs.anchors())
+        .derive_expected_final(fixture.inputs.leaves())
         .expect("independent final construction manifest")
         .state_suffix_fields()
         .expect("final construction manifest fields");
@@ -660,7 +667,7 @@ fn bind_both_qualification_fixtures(
 
 fn produce_qualification_proof(
     suite: &ConstructionParentNovaSuite,
-    initial_state: [DirectNovaScalar; ANCHOR_RECURRENCE_STATE_ARITY],
+    initial_state: [DirectNovaScalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
     steps: Vec<ConstructionParentStep>,
 ) -> Vec<u8> {
     let step_count = steps.len();
@@ -793,7 +800,7 @@ fn qualified_sha_parent_artifact_verifies_both_outputs() {
     .expect("open qualified verifier artifact");
     let load_started = std::time::Instant::now();
     let verifier =
-        SelectedDirectNovaVerifier::<ANCHOR_RECURRENCE_STATE_ARITY>::from_artifact_reader(
+        SelectedDirectNovaVerifier::<CONSTRUCTION_RECURRENCE_STATE_ARITY>::from_artifact_reader(
             &mut artifact,
             &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
             &QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
@@ -857,7 +864,7 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let setup_started = std::time::Instant::now();
     eprintln!("sha_parent_qualification: constructing transparent parameters");
     let selected =
-        NovaSessionSuite::<ANCHOR_RECURRENCE_STATE_ARITY, ConstructionParentStep>::setup_exact(
+        NovaSessionSuite::<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>::setup_exact(
             trusted_step,
             &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
         )
@@ -927,7 +934,7 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let mut artifact = std::fs::File::open(&artifact_path)
         .expect("open qualification verifier artifact for reload");
     let loaded = crate::nova_session::SelectedNovaVerifier::<
-        ANCHOR_RECURRENCE_STATE_ARITY,
+        CONSTRUCTION_RECURRENCE_STATE_ARITY,
         ConstructionParentStep,
     >::from_artifact_reader(
         &mut artifact,

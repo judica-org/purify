@@ -6,7 +6,9 @@
 
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
-use crate::circuit_norm::{CandidateNormReductionProofWitness, ManifestBoundAnchorLeafStatementV4};
+use crate::circuit_norm::{
+    CandidateNormReductionProofWitness, ManifestBoundConstructionLeafStatementV4,
+};
 use crate::circuit_transcript::{
     CircuitCommitmentModeV4, CircuitProofTranscriptWitnessV4, CircuitTranscriptShapeV4,
 };
@@ -40,7 +42,7 @@ pub(crate) struct DirectPreparedNorm {
     pub(crate) polynomial: Vec<DirectPolynomialTerm>,
 }
 
-pub(crate) struct DirectManifestBoundAnchorLeaf {
+pub(crate) struct DirectManifestBoundConstructionLeaf {
     pub(crate) claim: DirectPendingClaim,
     pub(crate) circuit_binding_digest: [NovaByte; 32],
     pub(crate) precommitment: CanonicalSecpScalar,
@@ -186,7 +188,9 @@ pub(crate) fn constrain_manifest_bound_public_dlog<CS: ConstraintSystem<Scalar>>
     generator: &DirectSecpPoint,
 ) -> Result<(), SynthesisError> {
     if transcript.public_commitments.len() != 1 {
-        return Err(synthesis_error("manifest-bound V4 anchor commitment count"));
+        return Err(synthesis_error(
+            "manifest-bound V4 construction leaf commitment count",
+        ));
     }
     constrain_public_commitment_batch(cs.namespace(|| "public commitment batch"), transcript)?;
     let scaled = scale(
@@ -341,17 +345,17 @@ pub(crate) fn allocate_standard_generator<CS: ConstraintSystem<Scalar>>(
     allocate_constant_point(cs, standard_generator())
 }
 
-/// Constrain one public anchor leaf and reduce it to a pending claim.
-pub(crate) fn constrain_manifest_bound_anchor_leaf<CS: ConstraintSystem<Scalar>>(
+/// Constrain one public construction leaf and reduce it to a pending claim.
+pub(crate) fn constrain_manifest_bound_construction_leaf<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    statement: ManifestBoundAnchorLeafStatementV4,
+    statement: ManifestBoundConstructionLeafStatementV4,
     transcript_witness: &CircuitProofTranscriptWitnessV4,
     reduction_proof: &CandidateNormReductionProofWitness,
-) -> Result<DirectManifestBoundAnchorLeaf, SynthesisError> {
+) -> Result<DirectManifestBoundConstructionLeaf, SynthesisError> {
     if statement.shape.mode != CircuitCommitmentModeV4::Public
         || statement.shape.commitment_count != 1
     {
-        return Err(synthesis_error("manifest-bound V4 anchor mode"));
+        return Err(synthesis_error("manifest-bound V4 construction leaf mode"));
     }
     let circuit_binding_digest = statement
         .circuit_binding_digest
@@ -389,7 +393,7 @@ pub(crate) fn constrain_manifest_bound_anchor_leaf<CS: ConstraintSystem<Scalar>>
         reduction_proof,
         &generator,
     )?;
-    Ok(DirectManifestBoundAnchorLeaf {
+    Ok(DirectManifestBoundConstructionLeaf {
         claim,
         circuit_binding_digest,
         precommitment: transcript.precommitment,
@@ -588,8 +592,8 @@ mod tests {
         }
     }
 
-    fn leaf_statement(binding: [u8; 32]) -> ManifestBoundAnchorLeafStatementV4 {
-        ManifestBoundAnchorLeafStatementV4 {
+    fn leaf_statement(binding: [u8; 32]) -> ManifestBoundConstructionLeafStatementV4 {
+        ManifestBoundConstructionLeafStatementV4 {
             shape: leaf_shape(),
             circuit_binding_digest: binding,
             raw_generator_digest: TEST_GENERATORS,
@@ -661,7 +665,7 @@ mod tests {
     }
 
     fn assert_leaf_matches_reference(
-        direct: &DirectManifestBoundAnchorLeaf,
+        direct: &DirectManifestBoundConstructionLeaf,
         witness: &CircuitProofTranscriptWitnessV4,
     ) {
         assert_eq!(
@@ -812,15 +816,19 @@ mod tests {
         let witness = leaf_witness(TEST_BINDING, 1);
         let reduction = zero_reduction();
         let mut direct_cs = WitnessCS::<Scalar>::with_capacity(0, 0);
-        let direct =
-            constrain_manifest_bound_anchor_leaf(&mut direct_cs, statement, &witness, &reduction)
-                .expect("direct manifest leaf");
+        let direct = constrain_manifest_bound_construction_leaf(
+            &mut direct_cs,
+            statement,
+            &witness,
+            &reduction,
+        )
+        .expect("direct manifest leaf");
 
         assert_leaf_matches_reference(&direct, &witness);
 
         let mut hidden = statement;
         hidden.shape.mode = CircuitCommitmentModeV4::Hidden;
-        assert!(constrain_manifest_bound_anchor_leaf(
+        assert!(constrain_manifest_bound_construction_leaf(
             WitnessCS::<Scalar>::with_capacity(0, 0),
             hidden,
             &witness,
@@ -833,7 +841,7 @@ mod tests {
     #[ignore = "run explicitly in release mode; composed leaf shape is large"]
     fn direct_manifest_leaf_shape_is_witness_independent() {
         let mut first = ShapeCS::<DirectNovaPrimaryEngine>::new();
-        constrain_manifest_bound_anchor_leaf(
+        constrain_manifest_bound_construction_leaf(
             &mut first,
             leaf_statement(TEST_BINDING),
             &leaf_witness(TEST_BINDING, 1),
@@ -846,7 +854,7 @@ mod tests {
 
         let second_binding = [0x32; 32];
         let mut second = ShapeCS::<DirectNovaPrimaryEngine>::new();
-        constrain_manifest_bound_anchor_leaf(
+        constrain_manifest_bound_construction_leaf(
             &mut second,
             leaf_statement(second_binding),
             &leaf_witness(second_binding, 2),

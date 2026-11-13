@@ -9,13 +9,13 @@ use core::ptr;
 use std::slice;
 
 use crate::construction_parent_input::{
-    ConstructionParentInputs, CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES,
+    ConstructionParentInputs, CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES,
 };
 use crate::construction_parent_verifier::{
     load_qualified_construction_parent_verifier, verify_construction_parent,
     ConstructionParentVerifierError,
 };
-use crate::construction_profile::{ANCHOR_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES};
+use crate::construction_profile::{CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES};
 use crate::nova_session::{SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH};
 
 /// Stable values mirrored by the private construction-parent bridge header.
@@ -34,7 +34,7 @@ pub(crate) enum PurifyConstructionParentStatus {
 /// Opaque owner of the one locally qualified construction verifier.
 #[repr(C)]
 pub(crate) struct PurifyConstructionParentVerifier {
-    verifier: SelectedDirectNovaVerifier<ANCHOR_RECURRENCE_STATE_ARITY>,
+    verifier: SelectedDirectNovaVerifier<CONSTRUCTION_RECURRENCE_STATE_ARITY>,
 }
 
 struct RootOutput {
@@ -160,24 +160,24 @@ unsafe fn verify_inner(
     canonical_seed_root_length: usize,
     native_basis_digest: *const u8,
     native_raw_generator_digest: *const u8,
-    anchor_count: u32,
-    anchor_descriptors: *const u8,
-    anchor_descriptors_length: usize,
+    leaf_count: u32,
+    leaf_descriptors: *const u8,
+    leaf_descriptors_length: usize,
     proof: *const u8,
     proof_length: usize,
     output: RootOutput,
 ) -> PurifyConstructionParentStatus {
-    let anchor_count_usize = match usize::try_from(anchor_count) {
+    let leaf_count_usize = match usize::try_from(leaf_count) {
         Ok(0) | Err(_) => return PurifyConstructionParentStatus::Malformed,
         Ok(value) => value,
     };
     let expected_descriptors =
-        match anchor_count_usize.checked_mul(CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES) {
+        match leaf_count_usize.checked_mul(CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES) {
             Some(value) => value,
             None => return PurifyConstructionParentStatus::Malformed,
         };
     if canonical_seed_root_length != CONSTRUCTION_ROOT_BYTES
-        || anchor_descriptors_length != expected_descriptors
+        || leaf_descriptors_length != expected_descriptors
         || proof_length != QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
     {
         return PurifyConstructionParentStatus::Malformed;
@@ -207,11 +207,11 @@ unsafe fn verify_inner(
         Ok(value) => value,
         Err(error) => return error,
     };
-    let anchor_descriptors =
-        match unsafe { borrow_input(anchor_descriptors, anchor_descriptors_length) } {
-            Ok(value) => value,
-            Err(error) => return error,
-        };
+    let leaf_descriptors = match unsafe { borrow_input(leaf_descriptors, leaf_descriptors_length) }
+    {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
     let proof = match unsafe { borrow_input(proof, proof_length) } {
         Ok(value) => value,
         Err(error) => return error,
@@ -223,8 +223,8 @@ unsafe fn verify_inner(
         canonical_seed_root,
         native_basis_digest,
         native_raw_generator_digest,
-        anchor_count,
-        anchor_descriptors,
+        leaf_count,
+        leaf_descriptors,
     ) {
         Ok(value) => value,
         Err(_) => return PurifyConstructionParentStatus::Malformed,
@@ -253,9 +253,9 @@ pub(crate) unsafe extern "C" fn purify_construction_parent_verify(
     canonical_seed_root_length: usize,
     native_basis_digest: *const u8,
     native_raw_generator_digest: *const u8,
-    anchor_count: u32,
-    anchor_descriptors: *const u8,
-    anchor_descriptors_length: usize,
+    leaf_count: u32,
+    leaf_descriptors: *const u8,
+    leaf_descriptors_length: usize,
     proof: *const u8,
     proof_length: usize,
     pending_root_output: *mut u8,
@@ -279,9 +279,9 @@ pub(crate) unsafe extern "C" fn purify_construction_parent_verify(
             canonical_seed_root_length,
             native_basis_digest,
             native_raw_generator_digest,
-            anchor_count,
-            anchor_descriptors,
-            anchor_descriptors_length,
+            leaf_count,
+            leaf_descriptors,
+            leaf_descriptors_length,
             proof,
             proof_length,
             output,

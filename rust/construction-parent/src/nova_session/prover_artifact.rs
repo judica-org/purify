@@ -48,9 +48,8 @@ struct NovaProverArtifactPayload<C: NovaSessionStep<ARITY>, const ARITY: usize> 
 
 /// One reviewed byte identity for a selected local prover artifact.
 ///
-/// This identity is deliberately distinct from the semantic suite ID. The
-/// production descriptor will be pinned only after setup-only qualification;
-/// no file-derived or placeholder production identity exists here.
+/// This identity is deliberately distinct from the semantic suite ID. No
+/// file-derived or caller-selected identity can reach production loading.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ExpectedDirectNovaProverArtifact {
     identity: ArtifactIdentity,
@@ -94,6 +93,21 @@ impl ExpectedDirectNovaProverArtifact {
         self.identity
     }
 }
+
+/// Exact prover state emitted by setup-only qualification.
+///
+/// The ordinary artifact SHA-256 is
+/// `cd4bece27897e8634e837a4acb85ed091f2175df62d8c38e65497ef07066f816`.
+pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT: ExpectedDirectNovaProverArtifact =
+    ExpectedDirectNovaProverArtifact::new(
+        693_582_375,
+        3_022_457_782,
+        [
+            0x37, 0xb3, 0x1a, 0x1c, 0xea, 0x00, 0x12, 0xca, 0xd3, 0xb5, 0x34, 0x2d, 0xeb, 0x2c,
+            0x2d, 0xf8, 0x5d, 0x6b, 0x0e, 0x43, 0xce, 0x91, 0x3e, 0xb8, 0x0e, 0x4d, 0xff, 0x6a,
+            0xf3, 0x59, 0x22, 0x3b,
+        ],
+    );
 
 /// Failure while writing or loading a selected prover artifact.
 #[derive(Debug, Error)]
@@ -258,6 +272,26 @@ mod tests {
         ConstructionStatementVersion, DirectNovaConstructionVersions, NovaSessionSuite,
     };
     use crate::Scalar;
+
+    #[test]
+    fn qualified_pk1_identity_is_frozen() {
+        assert_eq!(
+            QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT.encoded_length(),
+            693_582_375
+        );
+        assert_eq!(
+            QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT.decoded_payload_length(),
+            3_022_457_782
+        );
+        assert_eq!(
+            QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT.digest(),
+            [
+                0x37, 0xb3, 0x1a, 0x1c, 0xea, 0x00, 0x12, 0xca, 0xd3, 0xb5, 0x34, 0x2d, 0xeb, 0x2c,
+                0x2d, 0xf8, 0x5d, 0x6b, 0x0e, 0x43, 0xce, 0x91, 0x3e, 0xb8, 0x0e, 0x4d, 0xff, 0x6a,
+                0xf3, 0x59, 0x22, 0x3b,
+            ]
+        );
+    }
 
     #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
     struct SmallPayload {

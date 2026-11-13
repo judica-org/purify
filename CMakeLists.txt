@@ -846,6 +846,30 @@ if(PURIFY_BUILD_VALGRIND_TESTS)
 endif()
 
 if(PURIFY_BUILD_TESTS)
+    if((APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND
+       CMAKE_SIZEOF_VOID_P EQUAL 8 AND
+       NOT CMAKE_CROSSCOMPILING)
+        add_test(NAME purify.tests.construction_parent_prover_package
+            COMMAND "${CMAKE_COMMAND}"
+                "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+                "-DTEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+                "-DTEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+                "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                "-DTEST_C_COMPILER=${CMAKE_C_COMPILER}"
+                "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                "-DTEST_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}"
+                "-DTEST_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/construction_parent_prover_package/run.cmake"
+        )
+        set_tests_properties(
+            purify.tests.construction_parent_prover_package
+            PROPERTIES RUN_SERIAL TRUE TIMEOUT 120
+        )
+    endif()
+
     add_executable(purify_opening_base_vector_tests
         tests/opening_base_vector_tests.cpp
     )

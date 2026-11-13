@@ -5,20 +5,25 @@
 //! executes every production constraint, derives the complete state chain,
 //! and returns an opaque input that later prover APIs can consume.
 
-use std::fs::File;
-use std::io;
-use std::path::Path;
+#[cfg(feature = "prover")]
+use std::{fs::File, io, path::Path};
 
 use thiserror::Error;
 
 pub use crate::construction_parent_prover_binding::ConstructionParentWitnessBindingError;
 
+#[cfg(feature = "prover")]
+use crate::artifact_snapshot::PrivateArtifactSnapshot;
 use crate::construction_parent_prover_binding::BoundConstructionParentWitness;
 use crate::construction_parent_prover_fixture::ConstructionParentProverFixture;
+#[cfg(feature = "prover")]
 use crate::construction_parent_verifier::load_qualified_construction_parent_verifier;
 use crate::construction_profile::CONSTRUCTION_RECURRENCE_STATE_ARITY;
 use crate::nova_construction_recurrence::ConstructionParentStep;
+#[cfg(feature = "prover")]
 use crate::nova_session::prover_artifact::QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT;
+#[cfg(feature = "prover")]
+use crate::nova_session::verifier_artifact::QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT;
 use crate::nova_session::{
     DirectNovaSessionError, SelectedDirectNovaVerifier, SelectedNovaProver,
     QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
@@ -183,11 +188,18 @@ impl VerifiedConstructionParentProof {
 }
 
 /// Failure in the purpose-specific qualified construction-parent prover.
+#[cfg(feature = "prover")]
 #[derive(Debug, Error)]
 pub enum QualifiedConstructionParentProvingError {
     /// The locally selected PK1 file could not be opened read-only.
     #[error("cannot open the qualified construction-parent prover artifact: {source}")]
     OpenProverArtifact {
+        #[source]
+        source: io::Error,
+    },
+    /// The PK1 source could not be copied into a private exact-length file.
+    #[error("cannot snapshot the qualified construction-parent prover artifact: {source}")]
+    SnapshotProverArtifact {
         #[source]
         source: io::Error,
     },
@@ -203,6 +215,12 @@ pub enum QualifiedConstructionParentProvingError {
         #[source]
         source: io::Error,
     },
+    /// The VK2 source could not be copied into a private exact-length file.
+    #[error("cannot snapshot the qualified construction-parent verifier artifact: {source}")]
+    SnapshotVerifierArtifact {
+        #[source]
+        source: io::Error,
+    },
     /// The VK2 file did not match the compiled qualified identity.
     #[error("the qualified construction-parent verifier artifact was rejected: {detail}")]
     LoadVerifierArtifact { detail: String },
@@ -215,23 +233,32 @@ pub enum QualifiedConstructionParentProvingError {
 ///
 /// `witness` has already executed every production constraint through
 /// [`ConstructionParentWitness::bind`]. The PK1 source is opened read-only,
-/// authenticated against the compiled setup-only qualification identity, and
-/// consumed for folding. Its public parameters and prover key are dropped
-/// before the VK2 source is opened. The returned bytes are exactly the frozen
-/// 15,076-byte recursive proof with no wrapper or caller-selected metadata.
+/// copied exactly into an unlinked private snapshot, authenticated against the
+/// compiled setup-only qualification identity, and consumed for folding. Its
+/// snapshot, public parameters, and prover key are dropped before the VK2
+/// source is opened. VK2 receives the same snapshot treatment. The returned
+/// bytes are exactly the frozen 15,076-byte recursive proof with no wrapper or
+/// caller-selected metadata.
 ///
 /// This operation does not accept a construction receipt. C++ must still bind
 /// the proof to its typed receipt inputs and complete the native final
 /// accumulation decision.
+#[cfg(feature = "prover")]
 pub fn prove_qualified_construction_parent(
     witness: CheckedConstructionParentWitness,
     prover_artifact_path: &Path,
     verifier_artifact_path: &Path,
 ) -> Result<Vec<u8>, QualifiedConstructionParentProvingError> {
-    let mut prover_artifact = File::open(prover_artifact_path)
+    let mut prover_source = File::open(prover_artifact_path)
         .map_err(|source| QualifiedConstructionParentProvingError::OpenProverArtifact { source })?;
+    let mut prover_artifact = PrivateArtifactSnapshot::copy_from(
+        &mut prover_source,
+        QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT.encoded_length(),
+    )
+    .map_err(|source| QualifiedConstructionParentProvingError::SnapshotProverArtifact { source })?;
+    drop(prover_source);
     let prover = SelectedConstructionParentProver::from_artifact_reader(
-        &mut prover_artifact,
+        prover_artifact.reader(),
         &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
         &QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT,
     )
@@ -250,15 +277,23 @@ pub fn prove_qualified_construction_parent(
 
     // `prove_with` consumes and drops the complete PK1 state before this
     // independently selected verifier artifact is opened.
-    let mut verifier_artifact = File::open(verifier_artifact_path).map_err(|source| {
+    let mut verifier_source = File::open(verifier_artifact_path).map_err(|source| {
         QualifiedConstructionParentProvingError::OpenVerifierArtifact { source }
     })?;
-    let verifier =
-        load_qualified_construction_parent_verifier(&mut verifier_artifact).map_err(|error| {
-            QualifiedConstructionParentProvingError::LoadVerifierArtifact {
+    let mut verifier_artifact = PrivateArtifactSnapshot::copy_from(
+        &mut verifier_source,
+        QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT.encoded_length(),
+    )
+    .map_err(
+        |source| QualifiedConstructionParentProvingError::SnapshotVerifierArtifact { source },
+    )?;
+    drop(verifier_source);
+    let verifier = load_qualified_construction_parent_verifier(verifier_artifact.reader())
+        .map_err(
+            |error| QualifiedConstructionParentProvingError::LoadVerifierArtifact {
                 detail: error.to_string(),
-            }
-        })?;
+            },
+        )?;
     drop(verifier_artifact);
 
     unverified

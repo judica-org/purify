@@ -904,6 +904,8 @@ if(PURIFY_BUILD_TESTS)
                 "-DTEST_CONFIG=$<CONFIG>"
                 "-DTEST_C_COMPILER=${CMAKE_C_COMPILER}"
                 "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                "-DTEST_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}"
+                "-DTEST_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}"
                 "-DTEST_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}"
                 "-DTEST_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/construction_parent_prover_package/run.cmake"

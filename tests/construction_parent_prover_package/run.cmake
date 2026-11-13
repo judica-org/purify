@@ -4,6 +4,8 @@ foreach(required IN ITEMS
         TEST_GENERATOR
         TEST_C_COMPILER
         TEST_CXX_COMPILER
+        TEST_SYSTEM_NAME
+        TEST_SYSTEM_PROCESSOR
         TEST_INSTALL_BINDIR
         TEST_EXECUTABLE_SUFFIX)
     if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
@@ -19,6 +21,9 @@ set(test_root "${TEST_BINARY_DIR}/construction-parent-prover-package")
 set(off_binary "${test_root}/off")
 set(on_binary "${test_root}/on")
 set(verifier_binary "${test_root}/verifier")
+set(both_binary "${test_root}/both")
+set(cross_binary "${test_root}/cross")
+set(unsupported_binary "${test_root}/unsupported")
 set(prefix "${test_root}/prefix")
 file(REMOVE_RECURSE "${test_root}")
 
@@ -45,7 +50,8 @@ file(CHMOD "${fake_cargo}"
         WORLD_READ WORLD_EXECUTE
 )
 
-function(configure_case binary_dir build_prover build_verifier)
+function(run_configure binary_dir build_prover build_verifier
+         result_variable output_variable)
     set(configure_command
         "${CMAKE_COMMAND}"
         -S "${TEST_SOURCE_DIR}"
@@ -68,6 +74,7 @@ function(configure_case binary_dir build_prover build_verifier)
             "-DPURIFY_BUILD_CONSTRUCTION_PARENT_PROVER=${build_prover}"
         )
     endif()
+    list(APPEND configure_command ${ARGN})
     if(DEFINED TEST_GENERATOR_PLATFORM AND
        NOT "${TEST_GENERATOR_PLATFORM}" STREQUAL "")
         list(APPEND configure_command -A "${TEST_GENERATOR_PLATFORM}")
@@ -79,11 +86,39 @@ function(configure_case binary_dir build_prover build_verifier)
     execute_process(
         COMMAND ${configure_command}
         RESULT_VARIABLE configure_result
+        OUTPUT_VARIABLE configure_stdout
+        ERROR_VARIABLE configure_stderr
     )
+    set(${result_variable} "${configure_result}" PARENT_SCOPE)
+    set(${output_variable}
+        "${configure_stdout}${configure_stderr}" PARENT_SCOPE)
+endfunction()
+
+function(configure_case binary_dir build_prover build_verifier)
+    run_configure("${binary_dir}" "${build_prover}" "${build_verifier}"
+        configure_result configure_output ${ARGN})
     if(NOT configure_result EQUAL 0)
         message(FATAL_ERROR
             "construction-parent prover ${build_prover}, verifier "
-            "${build_verifier} configure failed"
+            "${build_verifier} configure failed:\n${configure_output}"
+        )
+    endif()
+endfunction()
+
+function(require_configure_failure binary_dir build_prover build_verifier
+         expected_error)
+    run_configure("${binary_dir}" "${build_prover}" "${build_verifier}"
+        configure_result configure_output ${ARGN})
+    if(configure_result EQUAL 0)
+        message(FATAL_ERROR
+            "configuration unexpectedly accepted: ${expected_error}"
+        )
+    endif()
+    string(FIND "${configure_output}" "${expected_error}" error_position)
+    if(error_position EQUAL -1)
+        message(FATAL_ERROR
+            "configuration did not report '${expected_error}':\n"
+            "${configure_output}"
         )
     endif()
 endfunction()
@@ -122,6 +157,59 @@ require_missing_prover("${off_binary}" "default configuration")
 
 configure_case("${verifier_binary}" OFF ON)
 require_missing_prover("${verifier_binary}" "verifier-only configuration")
+
+require_configure_failure(
+    "${unsupported_binary}" ON OFF
+    "supports only Darwin"
+    "-DCMAKE_SYSTEM_NAME=Generic"
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+)
+require_configure_failure(
+    "${cross_binary}" ON OFF
+    "Cross-compiling the construction-parent prover"
+    "-DCMAKE_SYSTEM_NAME=${TEST_SYSTEM_NAME}"
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+)
+
+if(TEST_SYSTEM_NAME STREQUAL "Darwin")
+    set(single_arch_binary "${test_root}/single-arch")
+    set(multi_arch_binary "${test_root}/multi-arch")
+    set(multi_arch_cache "${test_root}/multi-arch-cache.cmake")
+    if(TEST_SYSTEM_PROCESSOR STREQUAL "arm64")
+        set(other_architecture x86_64)
+    else()
+        set(other_architecture arm64)
+    endif()
+    file(WRITE "${multi_arch_cache}"
+        "set(CMAKE_OSX_ARCHITECTURES "
+        "\"${TEST_SYSTEM_PROCESSOR};${other_architecture}\" "
+        "CACHE STRING \"\")\n"
+    )
+    require_configure_failure(
+        "${single_arch_binary}" ON OFF
+        "An explicit CMAKE_OSX_ARCHITECTURES requires"
+        "-DCMAKE_OSX_ARCHITECTURES=${TEST_SYSTEM_PROCESSOR}"
+    )
+    require_configure_failure(
+        "${multi_arch_binary}" ON OFF
+        "does not support a multi-architecture"
+        -C "${multi_arch_cache}"
+        -DPURIFY_CONSTRUCTION_PARENT_CARGO_TARGET=aarch64-apple-darwin
+    )
+endif()
+
+configure_case("${both_binary}" ON ON)
+file(READ "${both_binary}/cmake_install.cmake" both_install)
+foreach(target_dir IN ITEMS
+        construction-parent-target
+        construction-parent-prover-target)
+    string(FIND "${both_install}" "/${target_dir}/" target_dir_position)
+    if(target_dir_position EQUAL -1)
+        message(FATAL_ERROR
+            "both-enabled install omits ${target_dir}"
+        )
+    endif()
+endforeach()
 
 configure_case("${on_binary}" ON OFF)
 execute_process(

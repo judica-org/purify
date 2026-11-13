@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstddef>
+#include <span>
 #include <utility>
 
 #include "purify/api.hpp"
@@ -47,6 +48,50 @@ private:
         std::size_t, const FieldElement&, purify_secp_context*,
         bppp::ExperimentalCircuitBackend*);
 };
+
+/** Validated full-point sum of one ordered roster's recovery shares. */
+class RecoveryRootShareAggregate {
+public:
+    [[nodiscard]] std::size_t member_count() const noexcept {
+        return member_count_;
+    }
+
+    [[nodiscard]] const AffinePoint& first_sum() const noexcept {
+        return first_sum_;
+    }
+
+    [[nodiscard]] const AffinePoint& second_sum() const noexcept {
+        return second_sum_;
+    }
+
+    [[nodiscard]] const UInt512& recovery_root() const noexcept {
+        return recovery_root_;
+    }
+
+private:
+    RecoveryRootShareAggregate(std::size_t member_count,
+                               AffinePoint first_sum,
+                               AffinePoint second_sum,
+                               UInt512 recovery_root)
+        : member_count_(member_count),
+          first_sum_(std::move(first_sum)),
+          second_sum_(std::move(second_sum)),
+          recovery_root_(recovery_root) {}
+
+    std::size_t member_count_ = 0;
+    AffinePoint first_sum_{};
+    AffinePoint second_sum_{};
+    UInt512 recovery_root_{};
+
+    friend Result<RecoveryRootShareAggregate>
+    aggregate_recovery_root_shares(
+        std::span<const RecoveryRootShare>);
+};
+
+/** Sum the exact signed shares in roster order without authorizing the root. */
+[[nodiscard]] Result<RecoveryRootShareAggregate>
+aggregate_recovery_root_shares(
+    std::span<const RecoveryRootShare> ordered_shares);
 
 /** Transparent mapping proof for one formation-bound effective MuSig share. */
 class RecoveryRootContribution {

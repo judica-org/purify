@@ -25,6 +25,7 @@ void run_slashability_native_tests(TestContext& ctx);
 void run_slashability_e2e_tests(TestContext& ctx);
 #endif
 void run_canonical_recovery_root_tests(TestContext& ctx);
+void run_recovery_root_share_tests(TestContext& ctx);
 void run_recovery_root_contribution_tests(TestContext& ctx);
 void run_anchor_escrow_tests(TestContext& ctx);
 void run_companion_scalar_escrow_tests(TestContext& ctx);
@@ -63,6 +64,7 @@ constexpr SuiteSpec kSuites[]{
     {"slashability_e2e", &run_slashability_e2e_tests},
 #endif
     {"canonical_recovery_root", &run_canonical_recovery_root_tests},
+    {"recovery_root_share", &run_recovery_root_share_tests},
     {"recovery_root_contribution",
      &run_recovery_root_contribution_tests},
     {"anchor_escrow", &run_anchor_escrow_tests},

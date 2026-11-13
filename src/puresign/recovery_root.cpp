@@ -144,6 +144,28 @@ Result<AffinePoint> decode_companion_point(
     return affine;
 }
 
+Status validate_companion_point(const AffinePoint& point,
+                                const EllipticCurve& curve,
+                                const char* label) {
+    if (point.infinity) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, label);
+    }
+    const auto lifted = curve.lift_x(point.x);
+    if (!lifted || lifted->infinity) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, label);
+    }
+    const auto affine = curve.affine(*lifted);
+    if (point.y != affine.y && point.y != affine.y.negate()) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, label);
+    }
+    const JacobianPoint exact{
+        point.x, point.y, FieldElement::one(), false};
+    if (!curve.mul(exact, curve.order()).infinity) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, label);
+    }
+    return {};
+}
+
 void append_companion_point(Bytes& out, const AffinePoint& point) {
     assert(!point.infinity && "serialized companion point must be finite");
     out.push_back(static_cast<unsigned char>(point.y.is_odd() ? 0x03 : 0x02));
@@ -426,6 +448,51 @@ Result<RecoveryRootShare> RecoveryRootShare::deserialize(
                                "recovery_contribution:second_share"),
         "recovery_contribution:second_share");
     return RecoveryRootShare(std::move(first), std::move(second));
+}
+
+Result<RecoveryRootShareAggregate> aggregate_recovery_root_shares(
+    std::span<const RecoveryRootShare> ordered_shares) {
+    if (ordered_shares.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput,
+                                "recovery_share_aggregate:empty");
+    }
+    auto first_sum = JacobianPoint::infinity_point();
+    auto second_sum = JacobianPoint::infinity_point();
+    for (const auto& share : ordered_shares) {
+        PURIFY_RETURN_IF_ERROR(
+            validate_companion_point(
+                share.first(), curve1(),
+                "recovery_share_aggregate:first_share"),
+            "recovery_share_aggregate:first_share");
+        PURIFY_RETURN_IF_ERROR(
+            validate_companion_point(
+                share.second(), curve2(),
+                "recovery_share_aggregate:second_share"),
+            "recovery_share_aggregate:second_share");
+        first_sum = curve1().add_mixed(first_sum, share.first());
+        second_sum = curve2().add_mixed(second_sum, share.second());
+    }
+    if (first_sum.infinity || second_sum.infinity) {
+        return unexpected_error(ErrorCode::EquationMismatch,
+                                "recovery_share_aggregate:infinite_sum");
+    }
+    auto first_affine = curve1().affine(first_sum);
+    auto second_affine = curve2().affine(second_sum);
+    PURIFY_RETURN_IF_ERROR(
+        validate_companion_point(
+            first_affine, curve1(),
+            "recovery_share_aggregate:first_sum"),
+        "recovery_share_aggregate:first_sum");
+    PURIFY_RETURN_IF_ERROR(
+        validate_companion_point(
+            second_affine, curve2(),
+            "recovery_share_aggregate:second_sum"),
+        "recovery_share_aggregate:second_sum");
+    const auto root = pack_public(first_affine.x.to_uint256(),
+                                  second_affine.x.to_uint256());
+    return RecoveryRootShareAggregate(
+        ordered_shares.size(), std::move(first_affine),
+        std::move(second_affine), root);
 }
 
 Status RecoveryRootContribution::validate_encoding(

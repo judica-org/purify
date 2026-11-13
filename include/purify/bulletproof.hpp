@@ -459,6 +459,16 @@ public:
     /** @brief Imports a symbolic transcript and pads it to a power-of-two multiplication count. */
     Status from_transcript(const Transcript& transcript, std::size_t n_bits);
 
+    /**
+     * @brief Binds a scalar expression to public commitment slot zero.
+     *
+     * The expression may contain transcript witnesses already assigned to
+     * Bulletproof wires by `from_transcript`. Unmapped witnesses, public
+     * commitment symbols, and wire indices outside the lowered circuit are
+     * rejected.
+     */
+    Status bind_output_to_commitment(Expr output);
+
     /** @brief Binds packed public-key coordinates and the output commitment into explicit constraints. */
     Status add_pubkey_and_out(const UInt512& pubkey, Expr p1x, Expr p2x, Expr out);
 

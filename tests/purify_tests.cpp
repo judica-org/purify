@@ -702,6 +702,86 @@ void test_equal_lowering(TestContext& ctx) {
     }
 }
 
+void test_output_commitment_lowering(TestContext& ctx) {
+    Transcript transcript;
+    Expr x = transcript.secret(FieldElement::from_int(3));
+    Expr y = transcript.secret(FieldElement::from_int(5));
+    Expr output = transcript.mul(x, y) + x;
+
+    BulletproofTranscript bp;
+    Status lower_status = bp.from_transcript(transcript, 0);
+    expect_ok(ctx, lower_status,
+              "from_transcript lowers the output relation");
+    if (!lower_status.has_value()) {
+        return;
+    }
+    Status bind_status = bp.bind_output_to_commitment(output);
+    expect_ok(ctx, bind_status,
+              "output expression binds without public-key coordinates");
+    if (!bind_status.has_value()) {
+        return;
+    }
+
+    const NativeBulletproofCircuit circuit = bp.native_circuit();
+    const auto vars = transcript.varmap();
+    for (const auto& [commitment, expected] :
+         std::array<std::pair<FieldElement, bool>, 2>{
+             std::pair{FieldElement::from_int(18), true},
+             std::pair{FieldElement::from_int(19), false}}) {
+        const bool lowered_result = bp.evaluate(vars, commitment);
+        Result<BulletproofAssignmentData> assignment =
+            bp.assignment_data(vars, commitment);
+        expect_ok(ctx, assignment,
+                  "output relation materializes a native assignment");
+        if (!assignment.has_value()) {
+            continue;
+        }
+        const bool native_result = circuit.evaluate(*assignment);
+        ctx.expect(lowered_result == native_result,
+                   "symbolic and native output relations agree");
+        ctx.expect(native_result == expected,
+                   "output relation enforces the public commitment value");
+    }
+
+    BulletproofTranscript uninitialized;
+    expect_error(ctx, uninitialized.bind_output_to_commitment(Expr(0)),
+                 ErrorCode::UninitializedState,
+                 "output binding requires a lowered transcript");
+
+    Transcript malformed_transcript;
+    Expr unmapped =
+        malformed_transcript.secret(FieldElement::from_int(7));
+    BulletproofTranscript malformed;
+    Status malformed_lower = malformed.from_transcript(
+        malformed_transcript, 0);
+    expect_ok(ctx, malformed_lower,
+              "empty relation lowers before malformed output checks");
+    if (!malformed_lower.has_value()) {
+        return;
+    }
+    expect_error(ctx, malformed.bind_output_to_commitment(unmapped),
+                 ErrorCode::UnsupportedSymbol,
+                 "output binding rejects an unmapped transcript witness");
+    expect_error(
+        ctx,
+        malformed.bind_output_to_commitment(
+            Expr::variable(purify::Symbol::commitment(0))),
+        ErrorCode::UnsupportedSymbol,
+        "output binding rejects a self-referential commitment");
+    expect_error(
+        ctx,
+        malformed.bind_output_to_commitment(
+            Expr::variable(purify::Symbol::left(1))),
+        ErrorCode::IndexOutOfRange,
+        "output binding rejects a wire outside the lowered circuit");
+    expect_error(
+        ctx,
+        malformed.bind_output_to_commitment(Expr::variable(purify::Symbol{
+            static_cast<purify::SymbolKind>(0xff), 0})),
+        ErrorCode::InvalidSymbol,
+        "output binding rejects an invalid symbol kind");
+}
+
 void test_expr_builder(TestContext& ctx) {
     Transcript transcript;
     Expr x = transcript.secret(FieldElement::from_int(3));
@@ -1228,6 +1308,7 @@ void run_purify_tests(TestContext& ctx) {
     test_secret_key_validation(ctx);
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);
+    test_output_commitment_lowering(ctx);
     test_expr_builder(ctx);
     test_expr_cache_ordering(ctx);
     test_bppp_move_overload(ctx);

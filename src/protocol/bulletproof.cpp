@@ -1904,6 +1904,41 @@ Status BulletproofTranscript::from_transcript(const Transcript& transcript, std:
     return {};
 }
 
+Status BulletproofTranscript::bind_output_to_commitment(Expr output) {
+    if (n_muls_ == 0) {
+        return unexpected_error(
+            ErrorCode::UninitializedState,
+            "BulletproofTranscript::bind_output_to_commitment:transcript");
+    }
+    replace_expr_v_with_bp_var(output);
+    for (const auto& [symbol, scalar] : output.linear()) {
+        (void)scalar;
+        switch (symbol.kind) {
+        case SymbolKind::Left:
+        case SymbolKind::Right:
+        case SymbolKind::Output:
+            if (symbol.index >= n_muls_) {
+                return unexpected_error(
+                    ErrorCode::IndexOutOfRange,
+                    "BulletproofTranscript::bind_output_to_commitment:wire_index");
+            }
+            break;
+        case SymbolKind::Witness:
+        case SymbolKind::Commitment:
+            return unexpected_error(
+                ErrorCode::UnsupportedSymbol,
+                "BulletproofTranscript::bind_output_to_commitment:symbol");
+        default:
+            return unexpected_error(
+                ErrorCode::InvalidSymbol,
+                "BulletproofTranscript::bind_output_to_commitment:symbol_kind");
+        }
+    }
+    constraints_.push_back(
+        {output - Expr::variable(Symbol::commitment(0)), Expr(0)});
+    return {};
+}
+
 Status BulletproofTranscript::add_pubkey_and_out(const UInt512& pubkey, Expr p1x, Expr p2x, Expr out) {
     Result<std::pair<UInt256, UInt256>> unpacked = unpack_public(pubkey);
     if (!unpacked.has_value()) {
@@ -1927,8 +1962,12 @@ Status BulletproofTranscript::add_pubkey_and_out(const UInt512& pubkey, Expr p1x
     if (!p2_status.has_value()) {
         return unexpected_error(p2_status.error(), "BulletproofTranscript::add_pubkey_and_out:p2x");
     }
-    replace_expr_v_with_bp_var(out);
-    constraints_.push_back({out - Expr::variable(Symbol::commitment(0)), Expr(0)});
+    Status output_status = bind_output_to_commitment(std::move(out));
+    if (!output_status.has_value()) {
+        return unexpected_error(
+            output_status.error(),
+            "BulletproofTranscript::add_pubkey_and_out:output");
+    }
     return {};
 }
 

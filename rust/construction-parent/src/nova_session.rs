@@ -35,6 +35,10 @@ use crate::{
 };
 
 mod artifact_codec;
+#[cfg(all(feature = "prover", not(target_pointer_width = "64")))]
+compile_error!("the construction-parent prover supports only 64-bit targets");
+#[cfg(all(any(test, feature = "prover"), target_pointer_width = "64"))]
+pub(crate) mod prover_artifact;
 pub(crate) mod verifier_artifact;
 
 type PrimaryEvaluationEngine = ipa_pc::EvaluationEngine<DirectNovaPrimaryEngine>;
@@ -388,7 +392,7 @@ impl ExpectedDirectNovaSuite {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) const fn suite_id(&self) -> DirectNovaSuiteId {
         self.suite_id
     }

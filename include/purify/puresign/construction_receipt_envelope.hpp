@@ -27,7 +27,7 @@ namespace purify::accountable {
  */
 class ConstructionReceiptEnvelope {
 public:
-    /** Provisional proof slot retained until the mixed profile is qualified. */
+    /** Exact proof size fixed by the mixed SHA-256 qualification. */
     static constexpr std::size_t kParentProofSize = 15'076;
 
     [[nodiscard]] static Result<ConstructionReceiptEnvelope> create(

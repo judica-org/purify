@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <system_error>
 #include <vector>
 
@@ -415,13 +416,63 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
         std::all_of(
             construction->anchors.begin(),
             construction->anchors.end(),
-            [](const auto& anchor) {
-                return anchor.reduction_proof.size() == 1'022 &&
-                       anchor.parent_step_proof.size() == 1'056;
+            [&](const auto& anchor) {
+                const auto reduction =
+                    purify::bppp::accumulation::
+                        serialize_algebraic_norm_reduction(
+                            construction->accumulator.leaves().basis(),
+                            anchor.reduction, secp.get());
+                const auto step =
+                    purify::bppp::accumulation::
+                        serialize_algebraic_step(
+                            construction->accumulator.leaves().basis(),
+                            anchor.parent_step, secp.get());
+                return reduction && reduction->size() == 1'022 &&
+                       step && step->size() == 1'056;
             }),
         "construction retains canonical recursive witness proofs");
+
+    std::vector<purify::accountable::ConstructionParentSetupWitness>
+        setup_witnesses;
+    std::vector<purify::accountable::ConstructionParentAnchorWitness>
+        anchor_witnesses;
+    setup_witnesses.reserve(construction->setup_leaves.size());
+    anchor_witnesses.reserve(construction->anchors.size());
+    for (const auto& leaf : construction->setup_leaves) {
+        setup_witnesses.push_back(
+            {leaf.contribution, leaf.reduction, leaf.parent_step});
+    }
+    for (const auto& anchor : construction->anchors) {
+        anchor_witnesses.push_back(
+            {anchor.record, anchor.reduction, anchor.parent_step});
+    }
+    auto missing_setup =
+        purify::accountable::
+            serialize_accepted_construction_parent_wit3(
+                construction->setup, coalition->distributed_setup,
+                construction->payload,
+                construction->resolved_entries,
+                std::span{setup_witnesses}.first(
+                    setup_witnesses.size() - 1),
+                anchor_witnesses, construction->accumulator,
+                secp.get());
+    expect_error(ctx, missing_setup, purify::ErrorCode::SizeMismatch,
+                 "accepted Wit3 rejects a missing setup witness");
+    auto reordered_setup = setup_witnesses;
+    std::reverse(reordered_setup.begin(), reordered_setup.end());
+    auto reordered =
+        purify::accountable::
+            serialize_accepted_construction_parent_wit3(
+                construction->setup, coalition->distributed_setup,
+                construction->payload,
+                construction->resolved_entries, reordered_setup,
+                anchor_witnesses, construction->accumulator,
+                secp.get());
+    expect_error(ctx, reordered, purify::ErrorCode::BindingMismatch,
+                 "accepted Wit3 rejects reordered setup witnesses");
+
     auto prover_fixture = serialize_parent_prover_fixture(
-        *construction, secp.get());
+        coalition->distributed_setup, *construction, secp.get());
     expect_ok(ctx, prover_fixture,
               "construction prover fixture serializes canonically");
     if (!prover_fixture) return;
@@ -450,6 +501,11 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
     expect_ok(ctx, nondeciding_fixture,
               "nondeciding parent prover fixture constructs");
     if (!nondeciding_fixture) return;
+    ctx.expect(
+        nondeciding_fixture->production_rejection ==
+            purify::ErrorCode::EquationMismatch,
+        "accepted Wit3 formatter rejects a false root at native decide");
+    const auto& nondeciding_bytes = nondeciding_fixture->encoded;
     constexpr std::size_t kProverHeaderSize =
         16 + 32 + 32 + 64 + 4 + 4;
     constexpr std::size_t kProverDescriptorSize = 130;
@@ -470,11 +526,11 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
     const auto setup_bytes =
         construction->setup_leaves.size() * kProverSetupSize;
     bool same_public_inputs =
-        nondeciding_fixture->size() == prover_fixture->size() &&
+        nondeciding_bytes.size() == prover_fixture->size() &&
         std::equal(
             prover_fixture->begin(),
             prover_fixture->begin() + kProverHeaderSize + setup_bytes,
-            nondeciding_fixture->begin());
+            nondeciding_bytes.begin());
     for (std::size_t index = 0;
          same_public_inputs &&
          index < construction->anchors.size(); ++index) {
@@ -485,26 +541,26 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
             prover_fixture->begin() + anchor_offset,
             prover_fixture->begin() + anchor_offset +
                 kAnchorPublicPrefixSize,
-            nondeciding_fixture->begin() + anchor_offset);
+            nondeciding_bytes.begin() + anchor_offset);
     }
     ctx.expect(
         same_public_inputs,
         "nondeciding witness preserves every public construction input");
     ctx.expect(
-        *nondeciding_fixture != *prover_fixture &&
+        nondeciding_bytes != *prover_fixture &&
             !std::equal(
                 prover_fixture->end() - kFinalRootSize,
                 prover_fixture->end(),
-                nondeciding_fixture->end() - kFinalRootSize),
+                nondeciding_bytes.end() - kFinalRootSize),
         "nondeciding witness authenticates a distinct false root");
     write_parent_prover_fixture_if_requested(
-        ctx, *nondeciding_fixture,
+        ctx, nondeciding_bytes,
         "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE_OUT");
     auto checked_nondeciding_fixture = load_checked_wit3(
         ctx, PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_WIT3_PATH);
     if (!checked_nondeciding_fixture) return;
     ctx.expect(
-        *checked_nondeciding_fixture == *nondeciding_fixture,
+        *checked_nondeciding_fixture == nondeciding_bytes,
         "nondeciding construction Wit3 matches the qualified vector");
 
     auto accepted_statement = construction->statement;

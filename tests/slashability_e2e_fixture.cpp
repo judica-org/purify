@@ -354,13 +354,6 @@ make_native_accumulation_reference(
                 accumulator.leaves().basis(), prepared.norm(), reduction,
                 secp_context),
             "slashability_fixture:verify_setup_reduction");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto reduction_proof,
-            purify::bppp::accumulation::
-                serialize_algebraic_norm_reduction(
-                    accumulator.leaves().basis(), reduction,
-                    secp_context),
-            "slashability_fixture:serialize_setup_reduction");
         const std::array claims{current, leaf};
         PURIFY_ASSIGN_OR_RETURN(
             auto step,
@@ -373,11 +366,6 @@ make_native_accumulation_reference(
                 accumulator.leaves().basis(), claims, step,
                 secp_context),
             "slashability_fixture:verify_setup_parent_step");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto parent_step_proof,
-            purify::bppp::accumulation::serialize_algebraic_step(
-                accumulator.leaves().basis(), step, secp_context),
-            "slashability_fixture:serialize_setup_parent_step");
         current = std::move(next);
 
         payload_setup_entries.emplace_back(
@@ -391,9 +379,8 @@ make_native_accumulation_reference(
             "slashability_fixture:weighted_member_key");
         setup_leaves.push_back(
             {contribution, precommitment, std::move(parent_constants),
-             weighted_member_key,
-             std::move(reduction_proof),
-             std::move(parent_step_proof)});
+             weighted_member_key, std::move(reduction),
+             std::move(step)});
     }
 
     for (std::size_t i = 0; i < anchor_count; ++i) {
@@ -467,13 +454,6 @@ make_native_accumulation_reference(
                     accumulator.leaves().basis(), prepared.norm(),
                     reduction, secp_context),
             "slashability_fixture:verify_anchor_reduction");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto reduction_proof,
-            purify::bppp::accumulation::
-                serialize_algebraic_norm_reduction(
-                    accumulator.leaves().basis(), reduction,
-                    secp_context),
-            "slashability_fixture:serialize_anchor_reduction");
         const std::array claims{current, leaf};
         PURIFY_ASSIGN_OR_RETURN(
             auto step,
@@ -486,11 +466,6 @@ make_native_accumulation_reference(
                 accumulator.leaves().basis(), claims, step,
                 secp_context),
             "slashability_fixture:verify_parent_step");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto parent_step_proof,
-            purify::bppp::accumulation::serialize_algebraic_step(
-                accumulator.leaves().basis(), step, secp_context),
-            "slashability_fixture:serialize_parent_step");
         current = std::move(next);
 
         const auto reference = anchor_reference(i);
@@ -502,8 +477,8 @@ make_native_accumulation_reference(
         anchors.push_back(
             {std::move(recovery_key), std::move(punishment_key),
              context, std::move(record), reference, precommitment,
-             std::move(parent_constants), std::move(reduction_proof),
-             std::move(parent_step_proof)});
+             std::move(parent_constants), std::move(reduction),
+             std::move(step)});
     }
 
     PURIFY_ASSIGN_OR_RETURN(
@@ -542,25 +517,20 @@ make_native_accumulation_reference(
         purify::accountable::construction_receipt_statement_digest(
             payload, setup.resolved_digest(), resolved_entries),
         "slashability_fixture:statement");
-    std::array<unsigned char,
-               purify::accountable::ConstructionReceiptAccumulator::
-                   kRootClaimSerializedSize>
-        root_bytes{};
-    std::copy(encoded_root.begin(), encoded_root.end(),
-              root_bytes.begin());
 
     return NativeAccumulationReferenceFixture{
         std::move(accumulator), std::move(setup), std::move(payload),
         std::move(resolved_entries), std::move(setup_leaves),
-        std::move(anchors), statement, root_bytes};
+        std::move(anchors), statement};
 }
 
 namespace {
 
 struct ParentProverAnchorWitness {
     const purify::accountable::AnchorEscrowRecord* record;
-    std::span<const unsigned char> reduction_proof;
-    std::span<const unsigned char> parent_step_proof;
+    const purify::bppp::accumulation::AlgebraicNormReductionProof*
+        reduction;
+    const purify::bppp::accumulation::AlgebraicStepProof* step;
 };
 
 Result<purify::Bytes> serialize_parent_prover_fixture_impl(
@@ -624,15 +594,29 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
                                            .raw_generator_digest;
     for (const auto& setup_leaf : fixture.setup_leaves) {
         if (setup_leaf.parent_constants.raw_generator_digest !=
-                raw_generator_digest ||
-            setup_leaf.reduction_proof.size() != kReductionProofSize ||
-            setup_leaf.parent_step_proof.size() !=
-                kParentStepProofSize ||
-            setup_leaf.reduction_proof.front() != 2 ||
-            setup_leaf.parent_step_proof.front() != 2) {
+            raw_generator_digest) {
             return purify::unexpected_error(
                 purify::ErrorCode::BindingMismatch,
                 "slashability_fixture:prover_setup_witness_shape");
+        }
+        PURIFY_ASSIGN_OR_RETURN(
+            auto reduction_proof,
+            purify::bppp::accumulation::
+                serialize_algebraic_norm_reduction(
+                    fixture.accumulator.leaves().basis(),
+                    setup_leaf.reduction, secp_context),
+            "slashability_fixture:serialize_prover_setup_reduction");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto parent_step_proof,
+            purify::bppp::accumulation::serialize_algebraic_step(
+                fixture.accumulator.leaves().basis(),
+                setup_leaf.parent_step, secp_context),
+            "slashability_fixture:serialize_prover_setup_step");
+        if (reduction_proof.size() != kReductionProofSize ||
+            parent_step_proof.size() != kParentStepProofSize) {
+            return purify::unexpected_error(
+                purify::ErrorCode::InternalMismatch,
+                "slashability_fixture:prover_setup_proof_size");
         }
         append(encoded,
                setup_leaf.parent_constants.circuit_binding_digest);
@@ -653,8 +637,8 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
                 "slashability_fixture:prover_contribution_size");
         }
         append(encoded, contribution);
-        append(encoded, setup_leaf.reduction_proof);
-        append(encoded, setup_leaf.parent_step_proof);
+        append(encoded, reduction_proof);
+        append(encoded, parent_step_proof);
     }
 
     for (std::size_t index = 0; index < anchor_count; ++index) {
@@ -663,13 +647,29 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
         if (anchor.parent_constants.raw_generator_digest !=
                 raw_generator_digest ||
             witness.record == nullptr ||
-            witness.reduction_proof.size() != kReductionProofSize ||
-            witness.parent_step_proof.size() != kParentStepProofSize ||
-            witness.reduction_proof.front() != 2 ||
-            witness.parent_step_proof.front() != 2) {
+            witness.reduction == nullptr || witness.step == nullptr) {
             return purify::unexpected_error(
                 purify::ErrorCode::BindingMismatch,
                 "slashability_fixture:prover_witness_shape");
+        }
+        PURIFY_ASSIGN_OR_RETURN(
+            auto reduction_proof,
+            purify::bppp::accumulation::
+                serialize_algebraic_norm_reduction(
+                    fixture.accumulator.leaves().basis(),
+                    *witness.reduction, secp_context),
+            "slashability_fixture:serialize_prover_anchor_reduction");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto parent_step_proof,
+            purify::bppp::accumulation::serialize_algebraic_step(
+                fixture.accumulator.leaves().basis(), *witness.step,
+                secp_context),
+            "slashability_fixture:serialize_prover_anchor_step");
+        if (reduction_proof.size() != kReductionProofSize ||
+            parent_step_proof.size() != kParentStepProofSize) {
+            return purify::unexpected_error(
+                purify::ErrorCode::InternalMismatch,
+                "slashability_fixture:prover_anchor_proof_size");
         }
         append(encoded,
                anchor.parent_constants.circuit_binding_digest);
@@ -695,8 +695,8 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
                 "slashability_fixture:prover_record_size");
         }
         append(encoded, record);
-        append(encoded, witness.reduction_proof);
-        append(encoded, witness.parent_step_proof);
+        append(encoded, reduction_proof);
+        append(encoded, parent_step_proof);
     }
     append(encoded, final_root);
     if (encoded.size() != expected_size) {
@@ -710,21 +710,34 @@ Result<purify::Bytes> serialize_parent_prover_fixture_impl(
 } // namespace
 
 Result<purify::Bytes> serialize_parent_prover_fixture(
+    const purify::accountable::VerifiedDistributedRecoverySetup&
+        verified_setup,
     const NativeAccumulationReferenceFixture& fixture,
     purify_secp_context* secp_context) {
-    std::vector<ParentProverAnchorWitness> witnesses;
-    witnesses.reserve(fixture.anchors.size());
-    for (const auto& anchor : fixture.anchors) {
-        witnesses.push_back(
-            {&anchor.record, anchor.reduction_proof,
-             anchor.parent_step_proof});
+    std::vector<purify::accountable::ConstructionParentSetupWitness>
+        setup_witnesses;
+    std::vector<purify::accountable::ConstructionParentAnchorWitness>
+        anchor_witnesses;
+    setup_witnesses.reserve(fixture.setup_leaves.size());
+    anchor_witnesses.reserve(fixture.anchors.size());
+    for (const auto& leaf : fixture.setup_leaves) {
+        setup_witnesses.push_back(
+            {leaf.contribution, leaf.reduction, leaf.parent_step});
     }
-    return serialize_parent_prover_fixture_impl(
-        fixture, witnesses, fixture.decided_reference_root,
-        secp_context);
+    for (const auto& anchor : fixture.anchors) {
+        anchor_witnesses.push_back(
+            {anchor.record, anchor.reduction, anchor.parent_step});
+    }
+    return purify::accountable::
+        serialize_accepted_construction_parent_wit3(
+            fixture.setup, verified_setup,
+            fixture.payload, fixture.resolved_entries,
+            setup_witnesses, anchor_witnesses,
+            fixture.accumulator, secp_context);
 }
 
-Result<purify::Bytes> serialize_nondeciding_parent_prover_fixture(
+Result<NondecidingParentProverFixture>
+serialize_nondeciding_parent_prover_fixture(
     const CoalitionFixture& coalition,
     const NativeAccumulationReferenceFixture& fixture,
     purify_secp_context* secp_context) {
@@ -755,30 +768,17 @@ Result<purify::Bytes> serialize_nondeciding_parent_prover_fixture(
                 setup_leaf.contribution, secp_context, &shared_cache),
             "slashability_fixture:nondeciding_prepare_setup");
         PURIFY_ASSIGN_OR_RETURN(
-            auto reduction,
-            purify::bppp::accumulation::
-                parse_algebraic_norm_reduction(
-                    basis, setup_leaf.reduction_proof,
-                    secp_context),
-            "slashability_fixture:nondeciding_parse_setup_reduction");
-        PURIFY_ASSIGN_OR_RETURN(
             auto leaf,
             purify::bppp::accumulation::
                 verify_algebraic_norm_reduction(
-                    basis, prepared.norm(), reduction,
+                    basis, prepared.norm(), setup_leaf.reduction,
                     secp_context),
             "slashability_fixture:nondeciding_verify_setup_reduction");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto step,
-            purify::bppp::accumulation::parse_algebraic_step(
-                basis, setup_leaf.parent_step_proof,
-                secp_context),
-            "slashability_fixture:nondeciding_parse_setup_step");
         const std::array claims{current, leaf};
         PURIFY_ASSIGN_OR_RETURN(
             current,
             purify::bppp::accumulation::verify_algebraic_step(
-                basis, claims, step, secp_context),
+                basis, claims, setup_leaf.parent_step, secp_context),
             "slashability_fixture:nondeciding_verify_setup_step");
     }
 
@@ -796,32 +796,21 @@ Result<purify::Bytes> serialize_nondeciding_parent_prover_fixture(
                 anchor.record, secp_context, &shared_cache),
             "slashability_fixture:nondeciding_prepare_prefix");
         PURIFY_ASSIGN_OR_RETURN(
-            auto reduction,
-            purify::bppp::accumulation::
-                parse_algebraic_norm_reduction(
-                    basis, anchor.reduction_proof, secp_context),
-            "slashability_fixture:nondeciding_parse_reduction");
-        PURIFY_ASSIGN_OR_RETURN(
             auto leaf,
             purify::bppp::accumulation::
                 verify_algebraic_norm_reduction(
-                    basis, prepared.norm(), reduction,
+                    basis, prepared.norm(), anchor.reduction,
                     secp_context),
             "slashability_fixture:nondeciding_verify_reduction");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto step,
-            purify::bppp::accumulation::parse_algebraic_step(
-                basis, anchor.parent_step_proof, secp_context),
-            "slashability_fixture:nondeciding_parse_step");
         const std::array claims{current, leaf};
         PURIFY_ASSIGN_OR_RETURN(
             current,
             purify::bppp::accumulation::verify_algebraic_step(
-                basis, claims, step, secp_context),
+                basis, claims, anchor.parent_step, secp_context),
             "slashability_fixture:nondeciding_verify_step");
         witnesses.push_back(
-            {&anchor.record, anchor.reduction_proof,
-             anchor.parent_step_proof});
+            {&anchor.record, &anchor.reduction,
+             &anchor.parent_step});
     }
 
     const auto& anchor = fixture.anchors.back();
@@ -911,12 +900,6 @@ Result<purify::Bytes> serialize_nondeciding_parent_prover_fixture(
             verify_algebraic_norm_reduction(
                 basis, prepared.norm(), reduction, secp_context),
         "slashability_fixture:nondeciding_verify_terminal_reduction");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto reduction_proof,
-        purify::bppp::accumulation::
-            serialize_algebraic_norm_reduction(
-                basis, reduction, secp_context),
-        "slashability_fixture:nondeciding_serialize_reduction");
     const std::array claims{current, leaf};
     PURIFY_ASSIGN_OR_RETURN(
         auto step,
@@ -927,11 +910,6 @@ Result<purify::Bytes> serialize_nondeciding_parent_prover_fixture(
         purify::bppp::accumulation::verify_algebraic_step(
             basis, claims, step, secp_context),
         "slashability_fixture:nondeciding_verify_terminal_step");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto parent_step_proof,
-        purify::bppp::accumulation::serialize_algebraic_step(
-            basis, step, secp_context),
-        "slashability_fixture:nondeciding_serialize_step");
     const auto decision = purify::bppp::accumulation::decide(
         basis, current, secp_context);
     if (decision) {
@@ -951,9 +929,47 @@ Result<purify::Bytes> serialize_nondeciding_parent_prover_fixture(
             basis, current, secp_context),
         "slashability_fixture:nondeciding_root");
     witnesses.push_back(
-        {&changed_record, reduction_proof, parent_step_proof});
-    return serialize_parent_prover_fixture_impl(
-        fixture, witnesses, final_root, secp_context);
+        {&changed_record, &reduction, &step});
+
+    std::vector<purify::accountable::ConstructionParentSetupWitness>
+        setup_witnesses;
+    std::vector<purify::accountable::ConstructionParentAnchorWitness>
+        anchor_witnesses;
+    setup_witnesses.reserve(fixture.setup_leaves.size());
+    anchor_witnesses.reserve(witnesses.size());
+    for (const auto& setup : fixture.setup_leaves) {
+        setup_witnesses.push_back(
+            {setup.contribution, setup.reduction, setup.parent_step});
+    }
+    for (const auto& witness : witnesses) {
+        anchor_witnesses.push_back(
+            {*witness.record, *witness.reduction, *witness.step});
+    }
+    auto production = purify::accountable::
+        serialize_accepted_construction_parent_wit3(
+            fixture.setup, coalition.distributed_setup,
+            fixture.payload, fixture.resolved_entries,
+            setup_witnesses, anchor_witnesses,
+            fixture.accumulator, secp_context, &shared_cache);
+    if (production) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InternalMismatch,
+            "slashability_fixture:nondeciding_accepted");
+    }
+    if (production.error().code !=
+        purify::ErrorCode::EquationMismatch) {
+        return purify::unexpected_error(
+            production.error(),
+            "slashability_fixture:nondeciding_rejection");
+    }
+
+    PURIFY_ASSIGN_OR_RETURN(
+        auto encoded,
+        serialize_parent_prover_fixture_impl(
+            fixture, witnesses, final_root, secp_context),
+        "slashability_fixture:serialize_nondeciding");
+    return NondecidingParentProverFixture{
+        std::move(encoded), production.error().code};
 }
 
 Result<purify::accountable::ExposedCoalitionKey>

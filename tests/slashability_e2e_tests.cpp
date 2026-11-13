@@ -360,6 +360,12 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
     if (!secp) return;
 
     auto coalition = make_all_evil_coalition(secp.get());
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+    expect_error(
+        ctx, coalition, purify::ErrorCode::UnsupportedSymbol,
+        "distributed coalition setup rejects legacy field hashes");
+    return;
+#endif
     expect_ok(ctx, coalition,
               "three-member all-evil coalition setup verifies");
     if (!coalition) return;
@@ -371,12 +377,6 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
 
     auto construction = make_native_accumulation_reference(
         *coalition, 2, secp.get());
-#if PURIFY_USE_LEGACY_FIELD_HASHES
-    expect_error(
-        ctx, construction, purify::ErrorCode::UnsupportedSymbol,
-        "SHA construction rejects the legacy field-hash suite");
-    return;
-#endif
     expect_ok(ctx, construction,
               "two-anchor native accumulation reference decides");
     if (!construction) return;

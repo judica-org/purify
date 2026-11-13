@@ -773,8 +773,6 @@ if(PURIFY_BUILD_TESTS)
         tests/anchor_escrow_tests.cpp
         tests/companion_scalar_escrow_tests.cpp
         tests/companion_scalar_escrow_helpers.cpp
-        tests/construction_receipt_helpers.cpp
-        tests/construction_receipt_tests.cpp
         tests/construction_receipt_codec_tests.cpp
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp

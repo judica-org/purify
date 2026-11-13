@@ -39,6 +39,10 @@ use crate::prover::ConstructionParentWitness;
 use crate::secp_native::{standard_generator, SecpEncodedPointWitness, SecpScalarWitness};
 type ConstructionParentNovaSuite =
     SelectedNovaSessionSuite<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>;
+const QUALIFIED_ACCEPTED_WIT3_SHA256: [u8; 32] = [
+    0xb3, 0x91, 0x68, 0xa9, 0xe4, 0xfb, 0x6a, 0x5a, 0x89, 0x3a, 0x9a, 0x4a, 0x94, 0x79, 0xff, 0x55,
+    0xab, 0xe4, 0xfa, 0x3b, 0x50, 0x70, 0x8a, 0x8c, 0x87, 0x4a, 0x08, 0xbc, 0xd0, 0xbb, 0xe9, 0xf5,
+];
 
 fn fixed_bincode_shape_length(metrics: R1CSShapeMetrics) -> u64 {
     let padded_dimension = metrics
@@ -355,6 +359,10 @@ fn read_qualification_fixture(environment: &str) -> ConstructionParentProverFixt
         .expect("parse construction parent prover fixture")
 }
 
+fn is_qualified_accepted_wit3(bytes: &[u8]) -> bool {
+    <[u8; 32]>::from(Sha256::digest(bytes)) == QUALIFIED_ACCEPTED_WIT3_SHA256
+}
+
 fn assert_matching_public_fixtures(
     accepted: &ConstructionParentProverFixture,
     nondeciding: &ConstructionParentProverFixture,
@@ -529,6 +537,20 @@ fn exported_sha_parent_fixtures_reconstruct_one_shape() {
 }
 
 #[test]
+fn setup_only_qualification_selects_the_accepted_wit3() {
+    let accepted =
+        include_bytes!("../../../tests/vectors/construction_parent_sha256_accepted.wit3");
+    let nondeciding =
+        include_bytes!("../../../tests/vectors/construction_parent_sha256_nondeciding.wit3");
+    assert!(is_qualified_accepted_wit3(accepted));
+    assert!(!is_qualified_accepted_wit3(nondeciding));
+
+    let mut changed = accepted.to_vec();
+    changed[0] ^= 1;
+    assert!(!is_qualified_accepted_wit3(&changed));
+}
+
+#[test]
 #[ignore = "run explicitly under the native resource gate"]
 fn native_profile_sha_parent_qualification_is_exact() {
     let total_started = std::time::Instant::now();
@@ -682,12 +704,15 @@ fn setup_only_qualification_persists_a_usable_prover() {
     let verifier_artifact_path =
         qualification_input_path("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT");
 
-    let witness = ConstructionParentWitness::decode(&read_qualification_wit3(
-        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
-    ))
-    .expect("decode accepted construction parent Wit3")
-    .bind()
-    .expect("bind accepted construction parent witness");
+    let wit3 = read_qualification_wit3("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
+    assert!(
+        is_qualified_accepted_wit3(&wit3),
+        "setup-only qualification requires the frozen accepted Wit3"
+    );
+    let witness = ConstructionParentWitness::decode(&wit3)
+        .expect("decode accepted construction parent Wit3")
+        .bind()
+        .expect("bind accepted construction parent witness");
     let trusted_step = witness
         .trusted_setup_step()
         .expect("accepted construction parent has a setup step");

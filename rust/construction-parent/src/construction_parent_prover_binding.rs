@@ -30,19 +30,29 @@ use crate::{scalar_to_canonical, RelationError, Scalar};
 
 /// Failure while binding canonical Wit3 data to the qualified relation.
 #[derive(Debug, Eq, Error, PartialEq)]
-pub(crate) enum ConstructionParentWitnessBindingError {
-    #[error(transparent)]
-    State(#[from] RelationError),
+pub enum ConstructionParentWitnessBindingError {
+    /// A state or relation encoding was malformed.
+    #[error("malformed construction parent witness state: {0}")]
+    State(&'static str),
+    /// One step contains malformed relation witness data.
+    #[error("malformed construction parent witness step {step}: {detail}")]
+    StepEncoding { step: usize, detail: &'static str },
+    /// The decoded leaf count differs from the authenticated public count.
     #[error("construction parent witness count mismatch: expected {expected}, actual {actual}")]
     StepCount { expected: usize, actual: usize },
+    /// One step does not consume the state produced by its predecessor.
     #[error("construction parent witness state chain mismatch at step {step}")]
     StateChain { step: usize },
+    /// One step selects a relation other than the qualified relation.
     #[error("construction parent witness relation mismatch at step {step}")]
     Relation { step: usize },
+    /// Constraint synthesis failed before producing a complete assignment.
     #[error("construction parent witness synthesis failed at step {step}: {stage}")]
     Synthesis { step: usize, stage: &'static str },
+    /// A supplied witness violates a production constraint.
     #[error("construction parent witness constraint {constraint} is unsatisfied at step {step}")]
     Unsatisfied { step: usize, constraint: usize },
+    /// The synthesized relation has an unexpected auxiliary-variable count.
     #[error(
         "construction parent witness auxiliary mismatch at step {step}: expected {expected}, actual {actual}"
     )]
@@ -51,6 +61,7 @@ pub(crate) enum ConstructionParentWitnessBindingError {
         expected: usize,
         actual: usize,
     },
+    /// The synthesized relation has an unexpected constraint count.
     #[error(
         "construction parent witness constraint mismatch at step {step}: expected {expected}, actual {actual}"
     )]
@@ -59,12 +70,22 @@ pub(crate) enum ConstructionParentWitnessBindingError {
         expected: usize,
         actual: usize,
     },
+    /// A recurrence output carries an unexpected step index.
     #[error("construction parent witness recurrence index mismatch: expected {expected}")]
     RecurrenceIndex { expected: u32 },
+    /// The final state does not contain the independently derived manifest.
     #[error("construction parent witness final manifest mismatch")]
     FinalManifest,
+    /// The final state does not encode the root appended to the Wit3 input.
     #[error("construction parent witness final root mismatch")]
     FinalRoot,
+}
+
+impl From<RelationError> for ConstructionParentWitnessBindingError {
+    fn from(error: RelationError) -> Self {
+        let RelationError::Malformed(detail) = error;
+        Self::State(detail)
+    }
 }
 
 /// Exact prover input after all ordered witness equations have been checked.
@@ -129,7 +150,14 @@ impl ConstructionParentProverFixture {
                 leaf.transcript,
                 leaf.reduction,
                 leaf.step,
-            )?;
+            )
+            .map_err(|error| {
+                let RelationError::Malformed(detail) = error;
+                ConstructionParentWitnessBindingError::StepEncoding {
+                    step: step_number,
+                    detail,
+                }
+            })?;
             if step.input_state() != &expected_input {
                 return Err(ConstructionParentWitnessBindingError::StateChain {
                     step: step_number,

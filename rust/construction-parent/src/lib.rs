@@ -1,8 +1,9 @@
 //! Transparent recursive proofs for Purify construction receipts.
 //!
-//! The crate exports only the purpose-specific construction-parent verifier
-//! through its private C ABI. C++ reconstructs and decides the authenticated
-//! pending root before receipt acceptance.
+//! By default the crate exports only the purpose-specific construction-parent
+//! verifier through its private C ABI. C++ reconstructs and decides the
+//! authenticated pending root before receipt acceptance. The opt-in `prover`
+//! feature additionally exposes checked prover inputs through [`prover`].
 
 use ff::PrimeField;
 use nova_snark::{provider::Secq256k1Sha256Engine, traits::Engine};
@@ -71,6 +72,8 @@ mod nova_sha256_transcript;
 mod nova_secp;
 #[cfg(any(test, feature = "prover"))]
 mod opening_generators;
+#[cfg(any(test, feature = "prover"))]
+pub mod prover;
 mod secp_constants;
 mod secp_native;
 mod sha256_transcript;

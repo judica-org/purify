@@ -12,7 +12,9 @@ use crate::candidate::CandidateStepProofWitness;
 use crate::circuit_norm::{
     CandidateNormReductionProofWitness, ManifestBoundConstructionLeafStatementV4,
 };
-use crate::circuit_transcript::{CircuitCommitmentModeV4, CircuitProofTranscriptWitnessV4};
+#[cfg(test)]
+use crate::circuit_transcript::CircuitCommitmentModeV4;
+use crate::circuit_transcript::CircuitProofTranscriptWitnessV4;
 use crate::construction_manifest::CONSTRUCTION_STEP_MANIFEST_DOMAIN;
 use crate::construction_profile::{
     CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,

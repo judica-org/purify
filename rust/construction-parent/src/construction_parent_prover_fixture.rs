@@ -1,4 +1,4 @@
-//! Strict test-tool decoder for the native construction prover fixture.
+//! Strict decoder for the native construction prover witness.
 //!
 //! The C++ slashability fixture exports only public proof data. This decoder
 //! fixes the production suite locally, derives every affine point opening,

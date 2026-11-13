@@ -416,12 +416,22 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
     set(PURIFY_CONSTRUCTION_PARENT_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/rust/construction-parent"
     )
-    set(PURIFY_CONSTRUCTION_PARENT_TARGET_DIR
-        "${CMAKE_CURRENT_BINARY_DIR}/construction-parent-target"
-    )
     file(GLOB_RECURSE PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES
         CONFIGURE_DEPENDS
         "${PURIFY_CONSTRUCTION_PARENT_DIR}/src/*.rs"
+    )
+    if(CMAKE_CROSSCOMPILING AND
+       NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
+        message(FATAL_ERROR
+            "Cross-compiling the construction-parent backend requires "
+            "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
+        )
+    endif()
+endif()
+
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
+    set(PURIFY_CONSTRUCTION_PARENT_TARGET_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/construction-parent-target"
     )
     set(PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS build --locked --release)
     set(PURIFY_CONSTRUCTION_PARENT_LIBRARY_DIR
@@ -433,11 +443,6 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
         )
         set(PURIFY_CONSTRUCTION_PARENT_LIBRARY_DIR
             "${PURIFY_CONSTRUCTION_PARENT_TARGET_DIR}/${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}/release"
-        )
-    elseif(CMAKE_CROSSCOMPILING)
-        message(FATAL_ERROR
-            "Cross-compiling the construction-parent backend requires "
-            "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
         )
     endif()
     set(PURIFY_CONSTRUCTION_PARENT_LIBRARY

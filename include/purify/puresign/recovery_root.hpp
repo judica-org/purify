@@ -52,6 +52,8 @@ private:
 /** Validated full-point sum of one ordered roster's recovery shares. */
 class RecoveryRootShareAggregate {
 public:
+    static constexpr std::size_t kMaxMembers = SigningRoster::kMaxMembers;
+
     [[nodiscard]] std::size_t member_count() const noexcept {
         return member_count_;
     }
@@ -88,7 +90,13 @@ private:
         std::span<const RecoveryRootShare>);
 };
 
-/** Sum the exact signed shares in roster order without authorizing the root. */
+/**
+ * Sum exact signed shares after their proofs were checked in roster order.
+ *
+ * Point addition cannot detect a duplicate, omission, or reordering. The
+ * accepting parent must verify every contribution at its exact roster index
+ * before using this nonauthorizing aggregate.
+ */
 [[nodiscard]] Result<RecoveryRootShareAggregate>
 aggregate_recovery_root_shares(
     std::span<const RecoveryRootShare> ordered_shares);

@@ -8,6 +8,9 @@
 
 namespace purify::accountable::testing {
 
+[[nodiscard]] Status recovery_root_share_count_valid_for_testing(
+    std::size_t member_count);
+
 [[nodiscard]] Result<bool>
 recovery_root_contribution_assignment_satisfies_for_testing(
     const RecoveryRootShare& share,

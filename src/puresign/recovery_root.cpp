@@ -166,6 +166,18 @@ Status validate_companion_point(const AffinePoint& point,
     return {};
 }
 
+Status validate_recovery_root_share_count(std::size_t member_count) {
+    if (member_count == 0) {
+        return unexpected_error(ErrorCode::EmptyInput,
+                                "recovery_share_aggregate:empty");
+    }
+    if (member_count > RecoveryRootShareAggregate::kMaxMembers) {
+        return unexpected_error(ErrorCode::RangeViolation,
+                                "recovery_share_aggregate:member_count");
+    }
+    return {};
+}
+
 void append_companion_point(Bytes& out, const AffinePoint& point) {
     assert(!point.infinity && "serialized companion point must be finite");
     out.push_back(static_cast<unsigned char>(point.y.is_odd() ? 0x03 : 0x02));
@@ -452,10 +464,9 @@ Result<RecoveryRootShare> RecoveryRootShare::deserialize(
 
 Result<RecoveryRootShareAggregate> aggregate_recovery_root_shares(
     std::span<const RecoveryRootShare> ordered_shares) {
-    if (ordered_shares.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput,
-                                "recovery_share_aggregate:empty");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        validate_recovery_root_share_count(ordered_shares.size()),
+        "recovery_share_aggregate:member_count");
     auto first_sum = JacobianPoint::infinity_point();
     auto second_sum = JacobianPoint::infinity_point();
     for (const auto& share : ordered_shares) {
@@ -592,6 +603,11 @@ recovery_root_contribution_circuit_shape_for_testing(
 }
 
 namespace testing {
+
+Status recovery_root_share_count_valid_for_testing(
+    std::size_t member_count) {
+    return validate_recovery_root_share_count(member_count);
+}
 
 Result<bool> recovery_root_contribution_assignment_satisfies_for_testing(
     const RecoveryRootShare& share,

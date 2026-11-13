@@ -3,11 +3,13 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include <array>
+#include <limits>
 #include <span>
 #include <vector>
 
 #include "purify/curve.hpp"
 #include "purify/puresign/recovery_root.hpp"
+#include "../src/puresign/recovery_root_internal.hpp"
 #include "test_harness.hpp"
 
 namespace {
@@ -51,6 +53,23 @@ void test_recovery_share_aggregation(TestContext& ctx) {
         purify::accountable::aggregate_recovery_root_shares({}),
         purify::ErrorCode::EmptyInput,
         "an empty recovery-share roster is rejected");
+    expect_ok(
+        ctx,
+        purify::accountable::testing::
+            recovery_root_share_count_valid_for_testing(100),
+        "ordinary recovery-share counts are accepted");
+    if constexpr (std::numeric_limits<std::size_t>::max() >
+                  purify::accountable::RecoveryRootShareAggregate::
+                      kMaxMembers) {
+        expect_error(
+            ctx,
+            purify::accountable::testing::
+                recovery_root_share_count_valid_for_testing(
+                    purify::accountable::RecoveryRootShareAggregate::
+                        kMaxMembers + 1),
+            purify::ErrorCode::RangeViolation,
+            "recovery-share counts above uint32 are rejected");
+    }
 
     std::array<unsigned char, RecoveryRootShare::kSerializedSize> malformed{};
     malformed[0] = 0x04;

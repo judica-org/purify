@@ -5,6 +5,8 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
+#include <limits>
 #include <span>
 #include <utility>
 #include <vector>
@@ -82,6 +84,9 @@ struct SigningRosterMember {
  */
 class SigningRoster {
 public:
+    static constexpr std::size_t kMaxMembers =
+        std::numeric_limits<std::uint32_t>::max();
+
     [[nodiscard]] static Result<SigningRoster> aggregate(
         std::span<const std::array<unsigned char, 33>> ordered_public_keys,
         purify_secp_context* secp_context);

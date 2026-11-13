@@ -71,11 +71,8 @@ struct RosterFixture {
 };
 
 Result<RosterFixture> make_roster_fixture(
+    std::vector<FieldElement> secrets, unsigned char fixture_tag,
     purify_secp_context* secp_context) {
-    std::vector<FieldElement> secrets{
-        FieldElement::from_u64(7), FieldElement::from_u64(11),
-        FieldElement::from_u64(19), FieldElement::from_u64(23),
-        FieldElement::from_u64(29)};
     std::vector<PointBytes> keys;
     keys.reserve(secrets.size());
     for (auto& secret : secrets) {
@@ -106,7 +103,7 @@ Result<RosterFixture> make_roster_fixture(
     hosts.reserve(keys.size());
     for (std::size_t i = 0; i < keys.size(); ++i) {
         std::array<unsigned char, 32> seed{};
-        seed[0] = 0xd1;
+        seed[0] = fixture_tag;
         seed[1] = static_cast<unsigned char>(i + 1);
         PURIFY_ASSIGN_OR_RETURN(
             auto generated, purify::generate_key(seed),
@@ -121,7 +118,7 @@ Result<RosterFixture> make_roster_fixture(
         hosts.push_back(std::move(host));
     }
     purify::accountable::CoalitionCoreDigest core{};
-    core.fill(0x51);
+    core.fill(fixture_tag);
     PURIFY_ASSIGN_OR_RETURN(
         auto bound,
         purify::accountable::bind_nonce_hosts(
@@ -325,7 +322,11 @@ void test_signed_carry_recovery(TestContext& ctx) {
     auto secp = purify::make_secp_context();
     ctx.expect(secp != nullptr, "recovery secp context creates");
     if (!secp) return;
-    auto fixture = make_roster_fixture(secp.get());
+    auto fixture = make_roster_fixture(
+        {FieldElement::from_u64(7), FieldElement::from_u64(11),
+         FieldElement::from_u64(19), FieldElement::from_u64(23),
+         FieldElement::from_u64(29)},
+        0xd1, secp.get());
     expect_ok(ctx, fixture, "recovery roster fixture creates");
     if (!fixture) return;
     auto exposed_point = secp_point(fixture->aggregate_scalar, secp.get());
@@ -467,9 +468,73 @@ void test_signed_carry_recovery(TestContext& ctx) {
         "recovery rejects full points outside every allowed carry");
 }
 
+void test_small_carry_searches(TestContext& ctx) {
+    auto secp = purify::make_secp_context();
+    ctx.expect(secp != nullptr, "small recovery secp context creates");
+    if (!secp) return;
+    const auto half_secp_order = purify::prime_p().shifted_right(1);
+    const auto prime_wide = purify::widen<8>(purify::prime_p());
+
+    auto lower_singleton = make_roster_fixture(
+        {FieldElement::from_u64(2)}, 0xa1, secp.get());
+    expect_ok(ctx, lower_singleton, "lower singleton fixture creates");
+    if (!lower_singleton) return;
+    const auto lower_singleton_scalar =
+        lower_singleton->aggregate_scalar.to_uint256();
+    ctx.expect(lower_singleton->roster.members().size() == 1 &&
+                   !(half_secp_order < lower_singleton_scalar),
+               "lower singleton selects the k=0 endpoint");
+    expect_recovery(
+        ctx, *lower_singleton,
+        purify::widen<8>(lower_singleton_scalar), false, secp.get(),
+        "singleton k=0 endpoint recovers");
+
+    auto upper_singleton = make_roster_fixture(
+        {FieldElement::from_u64(3)}, 0xa2, secp.get());
+    expect_ok(ctx, upper_singleton, "upper singleton fixture creates");
+    if (!upper_singleton) return;
+    const auto upper_singleton_scalar =
+        upper_singleton->aggregate_scalar.to_uint256();
+    ctx.expect(upper_singleton->roster.members().size() == 1 &&
+                   half_secp_order < upper_singleton_scalar,
+               "upper singleton selects the k=-1 endpoint");
+    auto upper_singleton_magnitude = prime_wide;
+    upper_singleton_magnitude.sub_assign(
+        purify::widen<8>(upper_singleton_scalar));
+    expect_recovery(
+        ctx, *upper_singleton, upper_singleton_magnitude, true,
+        secp.get(), "singleton k=-1 endpoint recovers");
+
+    auto even_fixture = make_roster_fixture(
+        {FieldElement::from_u64(2), FieldElement::from_u64(3),
+         FieldElement::from_u64(5), FieldElement::from_u64(7)},
+        0xa3, secp.get());
+    expect_ok(ctx, even_fixture, "even recovery fixture creates");
+    if (!even_fixture) return;
+    ctx.expect(even_fixture->roster.members().size() == 4 &&
+                   even_fixture->roster.aggregate_was_negated(),
+               "even fixture pins aggregate parity normalization");
+    const auto even_scalar =
+        purify::widen<8>(even_fixture->aggregate_scalar.to_uint256());
+
+    auto even_lower_magnitude = prime_wide;
+    even_lower_magnitude.mul_small(2);
+    even_lower_magnitude.sub_assign(even_scalar);
+    expect_recovery(
+        ctx, *even_fixture, even_lower_magnitude, true, secp.get(),
+        "even roster lower k=-2 endpoint recovers");
+
+    auto even_upper_magnitude = prime_wide;
+    even_upper_magnitude.add_assign(even_scalar);
+    expect_recovery(
+        ctx, *even_fixture, even_upper_magnitude, false, secp.get(),
+        "even roster upper k=1 endpoint recovers");
+}
+
 } // namespace
 
 void run_recovery_root_share_tests(TestContext& ctx) {
     test_recovery_share_aggregation(ctx);
     test_signed_carry_recovery(ctx);
+    test_small_carry_searches(ctx);
 }

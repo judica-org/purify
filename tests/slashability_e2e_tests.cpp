@@ -107,8 +107,17 @@ accept_qualified_construction_parent(
         return std::nullopt;
     }
 
+    const char* proof_path = std::getenv(
+        "PURIFY_CONSTRUCTION_PARENT_QUALIFICATION_PROOF");
+    if (proof_path != nullptr) {
+        ctx.expect(proof_path[0] != '\0',
+                   "fresh qualification proof path is nonempty");
+        if (proof_path[0] == '\0') return std::nullopt;
+    } else {
+        proof_path = PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH;
+    }
     auto proof = load_parent_proof(
-        ctx, PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH);
+        ctx, proof_path);
     if (!proof) return std::nullopt;
     auto envelope =
         purify::accountable::ConstructionReceiptEnvelope::create(

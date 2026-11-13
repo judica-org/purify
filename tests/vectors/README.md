@@ -40,3 +40,17 @@ PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT=/new/path/sha256-parent-verifie
 cargo test --manifest-path rust/construction-parent/Cargo.toml --release \
   native_profile_sha_parent_qualification_is_exact -- --ignored --nocapture
 ```
+
+After setup-only qualification emits a fresh accepted proof, pass those exact
+bytes through the same C++ verifier and native accumulation decision used by
+the release gate:
+
+```sh
+PURIFY_CONSTRUCTION_PARENT_QUALIFICATION_PROOF=/path/to/fresh-accepted.proof \
+ctest --test-dir build-parent --output-on-failure \
+  -R '^purify.tests.slashability_e2e$'
+```
+
+The override is test-only, must name an exact 15,076-byte proof for the
+checked accepted Wit3, and does not change the compiled qualified proof used
+by normal tests. A missing override retains the frozen vector path.

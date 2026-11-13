@@ -480,6 +480,83 @@ void test_recovery_root_contribution(TestContext& ctx) {
         }
     }
 
+    std::vector<purify::accountable::RecoveryRootShare>
+        discovery_shares;
+    std::vector<purify::accountable::RecoveryRootContribution>
+        ordered_contributions;
+    discovery_shares.reserve(fixture->member_secrets.size());
+    ordered_contributions.reserve(fixture->member_secrets.size());
+    bool compared_positive = false;
+    bool compared_negative = false;
+    for (std::size_t index = 0;
+         index < fixture->member_secrets.size(); ++index) {
+        auto discovery_share =
+            purify::accountable::derive_recovery_root_share(
+                fixture->roster.signing_roster(), index,
+                fixture->member_secrets[index], secp.get());
+        expect_ok(ctx, discovery_share,
+                  "member recovery share derives before formation");
+        if (!discovery_share) return;
+
+        if (index == member_index) {
+            ordered_contributions.push_back(*contribution);
+        } else {
+            auto ordered =
+                purify::accountable::prove_recovery_root_contribution(
+                    fixture->roster, fixture->formation, index,
+                    fixture->member_secrets[index], secp.get(),
+                    &proof_cache);
+            expect_ok(ctx, ordered,
+                      "ordered formation contribution proves");
+            if (!ordered) return;
+            ordered_contributions.push_back(std::move(*ordered));
+        }
+        ctx.expect(
+            discovery_share->serialize() ==
+                ordered_contributions.back().share().serialize(),
+            "formation proof preserves the published recovery share");
+        const auto effective_share =
+            fixture->roster.members()[index].coefficient *
+            fixture->member_secrets[index];
+        const bool is_negative =
+            purify::prime_p().shifted_right(1) <
+            effective_share.to_uint256();
+        compared_negative = compared_negative || is_negative;
+        compared_positive = compared_positive || !is_negative;
+        discovery_shares.push_back(std::move(*discovery_share));
+    }
+    ctx.expect(
+        compared_positive && compared_negative,
+        "proof equality covers positive and negative centered shares");
+
+    auto discovery_aggregate =
+        purify::accountable::aggregate_recovery_root_shares(
+            discovery_shares);
+    expect_ok(ctx, discovery_aggregate,
+              "published recovery shares aggregate before formation");
+    if (!discovery_aggregate) return;
+    auto finalized =
+        purify::accountable::verify_distributed_recovery_setup(
+            fixture->roster, fixture->formation,
+            ordered_contributions, secp.get(), &proof_cache);
+    expect_ok(ctx, finalized,
+              "formation-bound contributions finalize the setup");
+    if (!finalized) return;
+    ctx.expect(
+        finalized->aggregate().member_count() ==
+                discovery_aggregate->member_count() &&
+            finalized->aggregate().first_sum().x ==
+                discovery_aggregate->first_sum().x &&
+            finalized->aggregate().first_sum().y ==
+                discovery_aggregate->first_sum().y &&
+            finalized->aggregate().second_sum().x ==
+                discovery_aggregate->second_sum().x &&
+            finalized->aggregate().second_sum().y ==
+                discovery_aggregate->second_sum().y &&
+            finalized->roster().recovery_root() ==
+                discovery_aggregate->recovery_root(),
+        "final setup retains the exact pre-formation aggregate");
+
     std::cout
         << "recovery_root_contribution relation_muls="
         << shape->relation_multiplications

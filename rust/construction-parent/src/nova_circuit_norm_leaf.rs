@@ -189,11 +189,6 @@ pub(crate) fn constrain_manifest_bound_public_dlog<CS: ConstraintSystem<Scalar>>
         return Err(synthesis_error("manifest-bound V4 anchor commitment count"));
     }
     constrain_public_commitment_batch(cs.namespace(|| "public commitment batch"), transcript)?;
-    Boolean::enforce_equal(
-        cs.namespace(|| "public commitment is even"),
-        transcript.public_commitments[0].odd(),
-        &Boolean::constant(false),
-    )?;
     let scaled = scale(
         cs.namespace(|| "scaled public commitment"),
         transcript.batched_public_commitment.point(),
@@ -517,6 +512,24 @@ mod tests {
         })
     }
 
+    fn synthetic_odd_public_transcript<CS: ConstraintSystem<Scalar>>(
+        mut cs: CS,
+    ) -> Result<DirectCircuitTranscriptResultV4, SynthesisError> {
+        let mut transcript = synthetic_transcript(cs.namespace(|| "base transcript"), false)?;
+        let order = BigUint::from_bytes_be(&SECP256K1_SCALAR_ORDER_BE);
+        let minus_one = &order - BigUint::from(1u8);
+        let odd_value = scale_point_value(standard_generator(), &minus_one);
+        let odd = point(cs.namespace(|| "odd public commitment"), odd_value)?;
+        transcript.public_commitments = vec![odd.clone()];
+        transcript.batched_public_commitment = odd;
+        transcript.dlog_nonce = point(
+            cs.namespace(|| "odd proof nonce"),
+            add_point_values(standard_generator(), standard_generator()),
+        )?;
+        transcript.dlog_response = scalar(cs.namespace(|| "odd response"), 1)?;
+        Ok(transcript)
+    }
+
     fn synthesize_equations<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
         wrong_combined: bool,
@@ -772,9 +785,25 @@ mod tests {
         synthesize_equations(&mut second, true).expect("second shape");
         assert_eq!(first.num_inputs(), 1);
         assert_eq!(first.num_aux(), 52_370);
-        assert_eq!(first.num_constraints(), 54_112);
+        assert_eq!(first.num_constraints(), 54_111);
         assert_eq!(first.num_aux(), second.num_aux());
         assert_eq!(first.constraints, second.constraints);
+    }
+
+    #[test]
+    fn public_dlog_accepts_an_exact_odd_commitment() {
+        let mut cs = TestConstraintSystem::<Scalar>::new();
+        let transcript = synthetic_odd_public_transcript(cs.namespace(|| "odd transcript"))
+            .expect("odd public transcript");
+        let generator = allocate_standard_generator(cs.namespace(|| "standard generator"))
+            .expect("standard generator");
+        constrain_manifest_bound_public_dlog(
+            cs.namespace(|| "public dlog"),
+            &transcript,
+            &generator,
+        )
+        .expect("odd public DLog relation");
+        assert!(cs.is_satisfied());
     }
 
     #[test]
@@ -812,7 +841,7 @@ mod tests {
         )
         .expect("first manifest leaf shape");
         let metrics = (first.num_inputs(), first.num_aux(), first.num_constraints());
-        assert_eq!(metrics, (1, 1_503_971, 1_508_966));
+        assert_eq!(metrics, (1, 1_503_971, 1_508_965));
         drop(first);
 
         let second_binding = [0x32; 32];

@@ -17,6 +17,7 @@ namespace purify::accountable {
 
 class RecoveryRootSetupAccumulator;
 class RecoveryRootContribution;
+class ConstructionLeafAccumulator;
 
 /** Exact signed companion-curve points for one normalized MuSig share. */
 class RecoveryRootShare {
@@ -171,6 +172,7 @@ private:
         const NonceHostBoundSigningRoster&, const CoalitionFormation&,
         std::size_t, const RecoveryRootContribution&, purify_secp_context*,
         bppp::ExperimentalCircuitBackend*);
+    friend class ConstructionLeafAccumulator;
 };
 
 static_assert(RecoveryRootContribution::kProofSerializedSize == 1136);

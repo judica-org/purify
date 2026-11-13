@@ -28,6 +28,17 @@ using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
 
+std::array<unsigned char, 32> raw_generator_digest(
+    std::span<const PointBytes> generators) {
+    std::array<unsigned char, 32> digest{};
+    const auto bytes = std::as_bytes(generators);
+    purify_sha256(
+        digest.data(),
+        reinterpret_cast<const unsigned char*>(bytes.data()),
+        bytes.size());
+    return digest;
+}
+
 struct ContributionFixture {
     purify::accountable::NonceHostBoundSigningRoster roster;
     purify::accountable::CoalitionFormation formation;
@@ -221,6 +232,10 @@ void test_recovery_root_contribution(TestContext& ctx) {
     const auto& member = fixture->roster.members()[member_index];
     const auto effective =
         member.coefficient * fixture->member_secrets[member_index];
+    const auto weighted = secp_point(effective, secp.get());
+    expect_ok(ctx, weighted, "weighted member point derives");
+    ctx.expect(weighted && weighted->front() == 0x03,
+               "fixture keeps the exact odd weighted member output");
     const auto half = purify::prime_p().shifted_right(1);
     const bool negative = half < effective.to_uint256();
     const auto magnitude = negative
@@ -303,6 +318,58 @@ void test_recovery_root_contribution(TestContext& ctx) {
     const auto reencoded = parsed->serialize(secp.get());
     ctx.expect(reencoded && *reencoded == *encoded,
                "contribution encoding round trips exactly");
+
+    auto accumulator = purify::accountable::
+        ConstructionLeafAccumulator::create(secp.get());
+    expect_ok(ctx, accumulator,
+              "shared construction leaf accumulator creates");
+    if (!accumulator) return;
+    ctx.expect(
+        accumulator->basis().n_vec_len() ==
+                purify::accountable::ConstructionLeafAccumulator::
+                    kNormVectorLength &&
+            accumulator->basis().l_vec_len() ==
+                purify::accountable::ConstructionLeafAccumulator::
+                    kNormVectorLength,
+        "contribution uses the 16384-element construction basis");
+    auto prepared = accumulator->prepare(
+        fixture->roster, fixture->formation, member_index, *parsed,
+        secp.get(), &proof_cache);
+    expect_ok(ctx, prepared,
+              "contribution prepares as a construction leaf");
+    if (!prepared) return;
+    auto parent_constants = accumulator->derive_parent_constants(
+        fixture->roster, fixture->formation, member_index,
+        parsed->share(), prepared->circuit_precommitment(), secp.get());
+    expect_ok(ctx, parent_constants,
+              "contribution parent constants derive from public inputs");
+    if (!parent_constants) return;
+    ctx.expect(
+        parent_constants->raw_generator_digest ==
+                raw_generator_digest(
+                    accumulator->basis().norm_generators()) &&
+            parent_constants->coefficient_commitment ==
+                prepared->norm().coefficient_commitment(),
+        "contribution constants match the shared prepared proof family");
+
+    purify::Bytes descriptor;
+    descriptor.reserve(130);
+    const auto append_descriptor = [&descriptor](const auto& value) {
+        descriptor.insert(descriptor.end(), value.begin(), value.end());
+    };
+    append_descriptor(parent_constants->circuit_binding_digest);
+    append_descriptor(prepared->circuit_precommitment());
+    append_descriptor(parent_constants->coefficient_commitment);
+    append_descriptor(parent_constants->anchored_offset);
+    ctx.expect(descriptor.size() == 130,
+               "public contribution inputs derive one 130-byte descriptor");
+    expect_error(
+        ctx,
+        accumulator->derive_parent_constants(
+            fixture->roster, fixture->formation, member_index,
+            parsed->share(), purify::bppp::ScalarBytes{}, secp.get()),
+        purify::ErrorCode::RangeViolation,
+        "contribution parent constants reject a zero precommitment");
 
     const auto other_index = (member_index + 1) %
                              fixture->member_secrets.size();

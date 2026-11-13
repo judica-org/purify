@@ -638,6 +638,8 @@ Result<bool> verify_anchor_escrow(
 Result<ConstructionLeafAccumulator> ConstructionLeafAccumulator::create(
     purify_secp_context* secp_context) {
     static_assert(AnchorEscrowRecord::kNormProofSize == 65 * 14 + 64);
+    static_assert(RecoveryRootContribution::kNormProofSize ==
+                  AnchorEscrowRecord::kNormProofSize);
     PURIFY_ASSIGN_OR_RETURN(
         auto basis,
         bppp::accumulation::Basis::create(

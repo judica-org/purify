@@ -13,6 +13,9 @@
 
 namespace purify::accountable {
 
+class RecoveryRootContribution;
+class RecoveryRootShare;
+
 /** Verifier-derived public constants consumed by one recursive parent leaf. */
 struct ConstructionLeafParentConstants {
     std::array<unsigned char, 32> circuit_binding_digest{};
@@ -21,7 +24,7 @@ struct ConstructionLeafParentConstants {
     bppp::PointBytes anchored_offset{};
 };
 
-/** V4 anchor proof prepared for reduction with its exact public digest. */
+/** Selected V4 construction leaf prepared with its exact public digest. */
 class PreparedConstructionLeaf {
 public:
     PreparedConstructionLeaf(const PreparedConstructionLeaf&) = delete;
@@ -56,13 +59,13 @@ private:
 };
 
 /**
- * Fixed-basis adapter for accumulating selected V4 anchor-escrow proofs.
+ * Fixed-basis adapter for accumulating selected V4 construction proofs.
  *
  * The private constructor prevents callers from substituting another circuit
- * family or semantic basis. prepare() reconstructs the exact escrow circuit
- * and transcript binding from the typed public statement. Its result remains
- * a pending norm obligation: the reduction, every accumulation transition,
- * and the final decide() call are all mandatory for proof acceptance.
+ * family or semantic basis. Each prepare() overload reconstructs one exact
+ * circuit and transcript binding from its typed public statement. Its result
+ * remains a pending norm obligation: the reduction, every accumulation
+ * transition, and the final decide() call are all mandatory for acceptance.
  */
 class ConstructionLeafAccumulator {
 public:
@@ -101,12 +104,30 @@ public:
         const bppp::ScalarBytes& circuit_precommitment,
         purify_secp_context* secp_context) const;
 
+    /** Derive one formation-bound recovery-contribution leaf descriptor. */
+    [[nodiscard]] Result<ConstructionLeafParentConstants>
+    derive_parent_constants(
+        const NonceHostBoundSigningRoster& roster,
+        const CoalitionFormation& formation,
+        std::size_t member_index,
+        const RecoveryRootShare& share,
+        const bppp::ScalarBytes& circuit_precommitment,
+        purify_secp_context* secp_context) const;
+
     [[nodiscard]] Result<PreparedConstructionLeaf> prepare(
         const RecoveryBoundSigningRoster& roster,
         const UInt512& advertised_anchor_root,
         const AnchorPunishmentPublicKey& punishment_key,
         const AnchorEscrowContextDigest& context_digest,
         const AnchorEscrowRecord& record,
+        purify_secp_context* secp_context,
+        bppp::ExperimentalCircuitBackend* cache = nullptr) const;
+
+    [[nodiscard]] Result<PreparedConstructionLeaf> prepare(
+        const NonceHostBoundSigningRoster& roster,
+        const CoalitionFormation& formation,
+        std::size_t member_index,
+        const RecoveryRootContribution& contribution,
         purify_secp_context* secp_context,
         bppp::ExperimentalCircuitBackend* cache = nullptr) const;
 

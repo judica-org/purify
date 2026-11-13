@@ -3,6 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include "purify/puresign/recovery_root.hpp"
+#include "purify/puresign/construction_leaf_accumulation.hpp"
 #include "purify/puresign/recovery_root_accumulation.hpp"
 #include "recovery_root_internal.hpp"
 #include "../protocol/algebraic_circuit_accumulation.hpp"
@@ -900,6 +901,116 @@ Result<bool> verify_recovery_root_contribution(
     return bppp::candidate::
         verify_circuit_zk_norm_arg_v4_with_public_commitments(
             circuit, publication, outputs, secp_context, binding, cache);
+}
+
+Result<ConstructionLeafParentConstants>
+ConstructionLeafAccumulator::derive_parent_constants(
+    const NonceHostBoundSigningRoster& roster,
+    const CoalitionFormation& formation, std::size_t member_index,
+    const RecoveryRootShare& share,
+    const bppp::ScalarBytes& circuit_precommitment,
+    purify_secp_context* secp_context) const {
+    PURIFY_RETURN_IF_ERROR(
+        require_recovery_contribution_hash_suite(
+            "recovery_contribution_parent:hash_suite"),
+        "recovery_contribution_parent:hash_suite");
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(
+            secp_context, "recovery_contribution_parent:context"),
+        "recovery_contribution_parent:context");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto precommitment,
+        bppp::candidate::CircuitPrecommitmentDigestV4::parse(
+            circuit_precommitment),
+        "recovery_contribution_parent:precommitment");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto circuit, contribution_circuit(share),
+        "recovery_contribution_parent:circuit");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto binding,
+        contribution_binding(roster, formation, member_index, share),
+        "recovery_contribution_parent:binding");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto weighted,
+        weighted_member_point(roster, member_index, secp_context),
+        "recovery_contribution_parent:weighted_key");
+    const std::array<PointBytes, 1> outputs{weighted};
+    PURIFY_ASSIGN_OR_RETURN(
+        auto constants,
+        bppp::candidate::
+            derive_circuit_norm_parent_constants_v4_with_public_commitments(
+                circuit, precommitment, outputs, secp_context, binding),
+        "recovery_contribution_parent:derive");
+    return ConstructionLeafParentConstants{
+        std::move(constants.circuit_binding_digest),
+        std::move(constants.raw_generator_digest),
+        std::move(constants.coefficient_commitment),
+        std::move(constants.anchored_offset)};
+}
+
+Result<PreparedConstructionLeaf>
+ConstructionLeafAccumulator::prepare(
+    const NonceHostBoundSigningRoster& roster,
+    const CoalitionFormation& formation, std::size_t member_index,
+    const RecoveryRootContribution& contribution,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) const {
+    PURIFY_RETURN_IF_ERROR(
+        require_recovery_contribution_hash_suite(
+            "recovery_contribution_accumulation:hash_suite"),
+        "recovery_contribution_accumulation:hash_suite");
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(
+            secp_context, "recovery_contribution_accumulation:context"),
+        "recovery_contribution_accumulation:context");
+    PURIFY_RETURN_IF_ERROR(
+        contribution.validate_encoding(secp_context),
+        "recovery_contribution_accumulation:record");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto circuit, contribution_circuit(contribution.share_),
+        "recovery_contribution_accumulation:circuit");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto binding,
+        contribution_binding(roster, formation, member_index,
+                             contribution.share_),
+        "recovery_contribution_accumulation:binding");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto weighted,
+        weighted_member_point(roster, member_index, secp_context),
+        "recovery_contribution_accumulation:weighted_key");
+    const std::array<PointBytes, 1> outputs{weighted};
+    bppp::candidate::CircuitZkNormArgProofV4 proof{
+        contribution.raw_commitment_, contribution.mask_commitment_,
+        contribution.t2_, contribution.public_commitment_dlog_nonce_,
+        contribution.public_commitment_dlog_response_,
+        contribution.norm_proof_};
+    PURIFY_ASSIGN_OR_RETURN(
+        auto publication,
+        bppp::candidate::
+            reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+                circuit, std::move(proof), outputs, secp_context, binding),
+        "recovery_contribution_accumulation:publication");
+    const auto circuit_precommitment = publication.precommitment.bytes();
+    PURIFY_ASSIGN_OR_RETURN(
+        auto prepared,
+        bppp::candidate::
+            prepare_circuit_zk_norm_arg_v4_with_public_commitments(
+                circuit, publication, outputs, secp_context, binding,
+                cache),
+        "recovery_contribution_accumulation:outer");
+    if (!prepared.has_value()) {
+        return unexpected_error(
+            ErrorCode::EquationMismatch,
+            "recovery_contribution_accumulation:outer");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto norm,
+        bppp::accumulation::
+            prepare_v4_circuit_norm_for_algebraic_reduction(
+                basis_, std::move(*prepared), secp_context),
+        "recovery_contribution_accumulation:norm");
+    return PreparedConstructionLeaf(circuit_precommitment,
+                                    std::move(norm));
 }
 
 Status RecoveryRootSetupProof::validate_encoding(

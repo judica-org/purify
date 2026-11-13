@@ -574,6 +574,24 @@ Result<AnchorPunishmentPublicKey> AnchorPunishmentPublicKey::create(
     return AnchorPunishmentPublicKey(xonly);
 }
 
+Result<AnchorPunishmentKey> AnchorPunishmentKey::from_secret(
+    std::array<unsigned char, 32> secret,
+    purify_secp_context* secp_context) {
+    WipeOnDestruction secret_guard(secret);
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(secp_context,
+                             "anchor_escrow:punishment_secret"),
+        "anchor_escrow:punishment_secret");
+    Bip340Key key;
+    key.seckey = secret;
+    if (purify_bip340_key_from_seckey(
+            secp_context, key.seckey.data(), key.xonly_pubkey.data()) == 0) {
+        return unexpected_error(ErrorCode::RangeViolation,
+                                "anchor_escrow:punishment_secret");
+    }
+    return AnchorPunishmentKey(std::move(key));
+}
+
 Result<AnchorPunishmentKey> derive_anchor_punishment_key(
     const GeneratedKey& anchor_recovery_key,
     purify_secp_context* secp_context) {

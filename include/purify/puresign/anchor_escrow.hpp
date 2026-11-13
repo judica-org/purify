@@ -65,6 +65,11 @@ public:
     AnchorPunishmentKey(AnchorPunishmentKey&&) noexcept = default;
     AnchorPunishmentKey& operator=(AnchorPunishmentKey&&) noexcept = default;
 
+    /** Parse and normalize one secret to its even-Y BIP340 representative. */
+    [[nodiscard]] static Result<AnchorPunishmentKey> from_secret(
+        std::array<unsigned char, 32> secret,
+        purify_secp_context* secp_context);
+
     [[nodiscard]] const Bip340Key& bip340_key() const noexcept {
         return key_;
     }

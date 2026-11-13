@@ -126,6 +126,36 @@ void test_anchor_punishment_derivation(TestContext& ctx) {
     ctx.expect(secp != nullptr,
                "anchor punishment secp context creates");
     if (!secp) return;
+    std::array<unsigned char, 32> zero_secret{};
+    expect_error(
+        ctx,
+        purify::accountable::AnchorPunishmentKey::from_secret(
+            zero_secret, secp.get()),
+        purify::ErrorCode::RangeViolation,
+        "zero punishment secret rejects");
+    auto raw_secret = FieldElement::from_u64(8).to_bytes_be();
+    expect_error(
+        ctx,
+        purify::accountable::AnchorPunishmentKey::from_secret(
+            raw_secret, nullptr),
+        purify::ErrorCode::MissingValue,
+        "punishment secret parsing requires a secp context");
+    auto expected_secret = raw_secret;
+    std::array<unsigned char, 32> expected_xonly{};
+    ctx.expect(purify_bip340_key_from_seckey(
+                   secp.get(), expected_secret.data(),
+                   expected_xonly.data()) != 0,
+               "punishment secret test vector normalizes");
+    auto parsed_secret =
+        purify::accountable::AnchorPunishmentKey::from_secret(
+            raw_secret, secp.get());
+    expect_ok(ctx, parsed_secret,
+              "punishment secret parses to a typed key");
+    if (!parsed_secret) return;
+    ctx.expect(parsed_secret->bip340_key().seckey == expected_secret &&
+                   parsed_secret->public_key().xonly() == expected_xonly,
+               "typed punishment key uses the even-Y representative");
+
     std::array<unsigned char, 32> invalid_punishment_xonly{};
     invalid_punishment_xonly.fill(0xff);
     expect_error(

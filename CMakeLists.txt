@@ -362,6 +362,12 @@ add_library(purify::purify ALIAS purify)
 
 purify_configure_library_target(purify)
 
+if(PURIFY_BUILD_TESTS)
+    target_compile_definitions(purify PRIVATE
+        PURIFY_INTERNAL_TEST_SUPPORT=1
+    )
+endif()
+
 if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
     if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
         message(FATAL_ERROR

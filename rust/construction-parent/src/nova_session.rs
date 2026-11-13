@@ -35,6 +35,7 @@ use crate::{
     },
 };
 
+mod artifact_codec;
 pub(crate) mod verifier_artifact;
 
 type PrimaryEvaluationEngine = ipa_pc::EvaluationEngine<DirectNovaPrimaryEngine>;

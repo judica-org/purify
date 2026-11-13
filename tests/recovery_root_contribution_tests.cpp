@@ -160,6 +160,21 @@ void test_recovery_root_contribution(TestContext& ctx) {
     auto secp = purify::make_secp_context();
     ctx.expect(secp != nullptr, "contribution secp context creates");
     if (!secp) return;
+
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+    auto suite_share = share_from_effective_scalar(FieldElement::one());
+    expect_ok(ctx, suite_share,
+              "legacy suite contribution share derives syntactically");
+    if (!suite_share) return;
+    expect_error(
+        ctx,
+        purify::accountable::testing::
+            recovery_root_contribution_circuit_shape_for_testing(
+                *suite_share),
+        purify::ErrorCode::UnsupportedSymbol,
+        "contribution circuit rejects legacy field hashes");
+#endif
+
     auto fixture = make_fixture(secp.get());
     expect_ok(ctx, fixture, "formation-bound contribution fixture creates");
     if (!fixture) return;
@@ -172,6 +187,17 @@ void test_recovery_root_contribution(TestContext& ctx) {
                "fixture contains a negative centered odd weighted member");
     if (member_index >= fixture->member_secrets.size()) return;
 
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+    expect_error(
+        ctx,
+        purify::accountable::prove_recovery_root_contribution(
+            fixture->roster, fixture->formation, member_index,
+            fixture->member_secrets[member_index], secp.get()),
+        purify::ErrorCode::UnsupportedSymbol,
+        "contribution proving rejects the legacy field-hash suite");
+    return;
+#endif
+
     purify::bppp::ExperimentalCircuitCache proof_cache;
     const auto started = std::chrono::steady_clock::now();
     auto contribution =
@@ -183,7 +209,7 @@ void test_recovery_root_contribution(TestContext& ctx) {
     expect_ok(ctx, contribution, "centered member contribution proves");
     if (!contribution) return;
 
-    auto shape = purify::accountable::
+    auto shape = purify::accountable::testing::
         recovery_root_contribution_circuit_shape_for_testing(
             contribution->share());
     expect_ok(ctx, shape, "contribution circuit shape derives");
@@ -213,6 +239,44 @@ void test_recovery_root_contribution(TestContext& ctx) {
                    contribution->share().second().x == expected_second.x &&
                    contribution->share().second().y == expected_second.y,
                "one centered scalar fixes both exact signed shares");
+
+    auto opposite_sign_bytes = contribution->share().serialize();
+    opposite_sign_bytes[0] = static_cast<unsigned char>(
+        opposite_sign_bytes[0] == 0x02 ? 0x03 : 0x02);
+    opposite_sign_bytes[33] = static_cast<unsigned char>(
+        opposite_sign_bytes[33] == 0x02 ? 0x03 : 0x02);
+    auto opposite_sign =
+        purify::accountable::RecoveryRootShare::deserialize(
+            opposite_sign_bytes);
+    expect_ok(ctx, opposite_sign,
+              "opposite signed companion share parses");
+    if (opposite_sign) {
+        auto opposite_satisfies = purify::accountable::testing::
+            recovery_root_contribution_assignment_satisfies_for_testing(
+                *opposite_sign, contribution->share(), effective);
+        expect_ok(ctx, opposite_satisfies,
+                  "opposite signed assignment evaluates");
+        ctx.expect(opposite_satisfies && !*opposite_satisfies,
+                   "circuit rejects both opposite companion signs");
+    }
+
+    auto split_sign_bytes = contribution->share().serialize();
+    split_sign_bytes[0] = static_cast<unsigned char>(
+        split_sign_bytes[0] == 0x02 ? 0x03 : 0x02);
+    auto split_sign =
+        purify::accountable::RecoveryRootShare::deserialize(
+            split_sign_bytes);
+    expect_ok(ctx, split_sign,
+              "split signed companion share parses");
+    if (split_sign) {
+        auto split_satisfies = purify::accountable::testing::
+            recovery_root_contribution_assignment_satisfies_for_testing(
+                *split_sign, contribution->share(), effective);
+        expect_ok(ctx, split_satisfies,
+                  "split signed assignment evaluates");
+        ctx.expect(split_satisfies && !*split_satisfies,
+                   "circuit rejects disagreeing companion signs");
+    }
 
     auto accepted =
         purify::accountable::verify_recovery_root_contribution(
@@ -324,7 +388,7 @@ void test_recovery_root_contribution(TestContext& ctx) {
         if (positive_share) {
             auto positive_satisfies = purify::accountable::testing::
                 recovery_root_contribution_assignment_satisfies_for_testing(
-                    *positive_share, positive_effective);
+                    *positive_share, *positive_share, positive_effective);
             expect_ok(ctx, positive_satisfies,
                       "positive centered assignment evaluates");
             ctx.expect(positive_satisfies && *positive_satisfies,

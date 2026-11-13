@@ -114,7 +114,13 @@ aggregate_recovery_root_shares(
     const FieldElement& exposed_signing_scalar,
     purify_secp_context* secp_context);
 
-/** Transparent mapping proof for one formation-bound effective MuSig share. */
+/**
+ * Transparent mapping proof for one formation-bound effective MuSig share.
+ *
+ * Record version 1 fixes the modern tagged field-hash suite. Legacy-hash
+ * builds may parse its fixed transport syntax but reject proving and
+ * verification.
+ */
 class RecoveryRootContribution {
 public:
     static constexpr unsigned char kSerializationVersion = 1;
@@ -169,16 +175,6 @@ private:
 
 static_assert(RecoveryRootContribution::kProofSerializedSize == 1136);
 static_assert(RecoveryRootContribution::kSerializedSize == 1203);
-
-struct RecoveryRootContributionCircuitShape {
-    std::size_t relation_multiplications = 0;
-    std::size_t padded_gates = 0;
-};
-
-/** Return the fixed centered-share circuit shape for qualification tests. */
-[[nodiscard]] Result<RecoveryRootContributionCircuitShape>
-recovery_root_contribution_circuit_shape_for_testing(
-    const RecoveryRootShare& share);
 
 /** Prove one member's exact effective share on secp and both Purify curves. */
 [[nodiscard]] Result<RecoveryRootContribution>

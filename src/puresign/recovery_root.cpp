@@ -29,6 +29,15 @@ using ::purify::detail::WipeOnDestruction;
 
 using SecretScalarBytes = ::purify::detail::Secret<bppp::ScalarBytes>;
 
+Status require_recovery_contribution_hash_suite(const char* label) {
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+    return unexpected_error(ErrorCode::UnsupportedSymbol, label);
+#else
+    (void)label;
+    return {};
+#endif
+}
+
 struct CenteredScalarRelation {
     Expr sign;
     Expr magnitude;
@@ -715,9 +724,15 @@ Result<RecoveryRootContribution> RecoveryRootContribution::deserialize(
     return out;
 }
 
+namespace testing {
+
 Result<RecoveryRootContributionCircuitShape>
 recovery_root_contribution_circuit_shape_for_testing(
     const RecoveryRootShare& share) {
+    PURIFY_RETURN_IF_ERROR(
+        require_recovery_contribution_hash_suite(
+            "recovery_contribution:shape_hash_suite"),
+        "recovery_contribution:shape_hash_suite");
     std::size_t relation_multiplications = 0;
     PURIFY_ASSIGN_OR_RETURN(
         const auto circuit,
@@ -727,22 +742,21 @@ recovery_root_contribution_circuit_shape_for_testing(
         relation_multiplications, circuit.n_gates};
 }
 
-namespace testing {
-
 Status recovery_root_share_count_valid_for_testing(
     std::size_t member_count) {
     return validate_recovery_root_share_count(member_count);
 }
 
 Result<bool> recovery_root_contribution_assignment_satisfies_for_testing(
-    const RecoveryRootShare& share,
+    const RecoveryRootShare& circuit_share,
+    const RecoveryRootShare& assignment_share,
     const FieldElement& effective_scalar) {
     PURIFY_ASSIGN_OR_RETURN(
-        const auto circuit, contribution_circuit(share),
+        const auto circuit, contribution_circuit(circuit_share),
         "recovery_contribution:test_circuit");
     PURIFY_ASSIGN_OR_RETURN(
         const auto assignment,
-        contribution_assignment(share, effective_scalar),
+        contribution_assignment(assignment_share, effective_scalar),
         "recovery_contribution:test_assignment");
     return circuit.evaluate(assignment);
 }
@@ -758,6 +772,10 @@ Result<RecoveryRootContribution> prove_recovery_root_contribution(
     PURIFY_RETURN_IF_ERROR(
         require_secp_context(secp_context, "recovery_contribution:prove"),
         "recovery_contribution:prove");
+    PURIFY_RETURN_IF_ERROR(
+        require_recovery_contribution_hash_suite(
+            "recovery_contribution:prove_hash_suite"),
+        "recovery_contribution:prove_hash_suite");
     if (member_secret.is_zero()) {
         return unexpected_error(ErrorCode::RangeViolation,
                                 "recovery_contribution:zero_member_secret");
@@ -849,6 +867,10 @@ Result<bool> verify_recovery_root_contribution(
     PURIFY_RETURN_IF_ERROR(
         require_secp_context(secp_context, "recovery_contribution:verify"),
         "recovery_contribution:verify");
+    PURIFY_RETURN_IF_ERROR(
+        require_recovery_contribution_hash_suite(
+            "recovery_contribution:verify_hash_suite"),
+        "recovery_contribution:verify_hash_suite");
     PURIFY_RETURN_IF_ERROR(contribution.validate_encoding(secp_context),
                            "recovery_contribution:proof_encoding");
     PURIFY_ASSIGN_OR_RETURN(

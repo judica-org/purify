@@ -247,7 +247,7 @@ make_native_accumulation_reference(
     PURIFY_ASSIGN_OR_RETURN(
         auto current,
         purify::bppp::accumulation::parse_root_claim(
-            accumulator.anchors().basis(), setup.seed_root(),
+            accumulator.leaves().basis(), setup.seed_root(),
             secp_context),
         "slashability_fixture:parse_seed");
 
@@ -300,7 +300,7 @@ make_native_accumulation_reference(
         }
         PURIFY_ASSIGN_OR_RETURN(
             auto prepared,
-            accumulator.anchors().prepare(
+            accumulator.leaves().prepare(
                 coalition.recovery_roster, recovery_key.public_key,
                 punishment_key.public_key(), context, record,
                 secp_context, &shared_cache),
@@ -308,7 +308,7 @@ make_native_accumulation_reference(
         const auto precommitment = prepared.circuit_precommitment();
         PURIFY_ASSIGN_OR_RETURN(
             auto parent_constants,
-            accumulator.anchors().derive_parent_constants(
+            accumulator.leaves().derive_parent_constants(
                 coalition.recovery_roster, recovery_key.public_key,
                 punishment_key.public_key(), context,
                 record.ciphertext(), precommitment, secp_context),
@@ -317,39 +317,39 @@ make_native_accumulation_reference(
             auto reduction,
             purify::bppp::accumulation::
                 prove_algebraic_norm_reduction(
-                    accumulator.anchors().basis(), prepared.norm(),
+                    accumulator.leaves().basis(), prepared.norm(),
                     secp_context),
             "slashability_fixture:anchor_reduction");
         PURIFY_ASSIGN_OR_RETURN(
             auto leaf,
             purify::bppp::accumulation::
                 verify_algebraic_norm_reduction(
-                    accumulator.anchors().basis(), prepared.norm(),
+                    accumulator.leaves().basis(), prepared.norm(),
                     reduction, secp_context),
             "slashability_fixture:verify_anchor_reduction");
         PURIFY_ASSIGN_OR_RETURN(
             auto reduction_proof,
             purify::bppp::accumulation::
                 serialize_algebraic_norm_reduction(
-                    accumulator.anchors().basis(), reduction,
+                    accumulator.leaves().basis(), reduction,
                     secp_context),
             "slashability_fixture:serialize_anchor_reduction");
         const std::array claims{current, leaf};
         PURIFY_ASSIGN_OR_RETURN(
             auto step,
             purify::bppp::accumulation::prove_algebraic_step(
-                accumulator.anchors().basis(), claims, secp_context),
+                accumulator.leaves().basis(), claims, secp_context),
             "slashability_fixture:parent_step");
         PURIFY_ASSIGN_OR_RETURN(
             auto next,
             purify::bppp::accumulation::verify_algebraic_step(
-                accumulator.anchors().basis(), claims, step,
+                accumulator.leaves().basis(), claims, step,
                 secp_context),
             "slashability_fixture:verify_parent_step");
         PURIFY_ASSIGN_OR_RETURN(
             auto parent_step_proof,
             purify::bppp::accumulation::serialize_algebraic_step(
-                accumulator.anchors().basis(), step, secp_context),
+                accumulator.leaves().basis(), step, secp_context),
             "slashability_fixture:serialize_parent_step");
         current = std::move(next);
 
@@ -369,7 +369,7 @@ make_native_accumulation_reference(
     PURIFY_ASSIGN_OR_RETURN(
         auto encoded_root,
         purify::bppp::accumulation::serialize_root_claim(
-            accumulator.anchors().basis(), current, secp_context),
+            accumulator.leaves().basis(), current, secp_context),
         "slashability_fixture:serialize_root");
     if (encoded_root.size() !=
         purify::accountable::ConstructionReceiptAccumulator::
@@ -381,12 +381,12 @@ make_native_accumulation_reference(
     PURIFY_ASSIGN_OR_RETURN(
         auto parsed_root,
         purify::bppp::accumulation::parse_root_claim(
-            accumulator.anchors().basis(), encoded_root,
+            accumulator.leaves().basis(), encoded_root,
             secp_context),
         "slashability_fixture:reparse_root");
     PURIFY_RETURN_IF_ERROR(
         purify::bppp::accumulation::decide(
-            accumulator.anchors().basis(), parsed_root,
+            accumulator.leaves().basis(), parsed_root,
             secp_context),
         "slashability_fixture:decide_root");
 

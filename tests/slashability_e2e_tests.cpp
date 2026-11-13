@@ -93,7 +93,7 @@ accept_qualified_construction_parent(
     if (!verifier) return std::nullopt;
     auto accepted = verifier->verify(
         construction.setup, *envelope,
-        construction.resolved_entries, construction.accumulator.anchors(),
+        construction.resolved_entries, construction.accumulator.leaves(),
         secp_context);
     expect_ok(ctx, accepted,
               "two-anchor construction parent proof accepts");
@@ -116,7 +116,7 @@ accept_qualified_construction_parent(
         verifier->verify(
             construction.setup, *corrupted_envelope,
             construction.resolved_entries,
-            construction.accumulator.anchors(),
+            construction.accumulator.leaves(),
             secp_context),
         purify::ErrorCode::BackendRejectedInput,
         "changed construction parent proof is rejected");
@@ -127,7 +127,7 @@ accept_qualified_construction_parent(
         ctx,
         verifier->verify(
             construction.setup, *envelope, changed_reference,
-            construction.accumulator.anchors(), secp_context),
+            construction.accumulator.leaves(), secp_context),
         purify::ErrorCode::BackendRejectedInput,
         "construction parent proof cannot rebind an anchor reference");
 
@@ -155,7 +155,7 @@ accept_qualified_construction_parent(
         ctx,
         verifier->verify(
             construction.setup, *reordered_envelope,
-            reordered_resolved, construction.accumulator.anchors(),
+            reordered_resolved, construction.accumulator.leaves(),
             secp_context),
         purify::ErrorCode::BackendRejectedInput,
         "construction parent proof binds ordered anchors");
@@ -175,7 +175,7 @@ accept_qualified_construction_parent(
         verifier->verify(
             construction.setup, *nondeciding_envelope,
             construction.resolved_entries,
-            construction.accumulator.anchors(),
+            construction.accumulator.leaves(),
             secp_context),
         purify::ErrorCode::EquationMismatch,
         "recursive-valid nondeciding parent root is rejected");

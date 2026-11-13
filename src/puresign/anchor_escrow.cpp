@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include "purify/puresign/anchor_escrow.hpp"
-#include "purify/puresign/anchor_escrow_accumulation.hpp"
+#include "purify/puresign/construction_leaf_accumulation.hpp"
 #include "../protocol/algebraic_circuit_accumulation.hpp"
 #include "../protocol/algebraic_circuit_proof.hpp"
 
@@ -635,7 +635,7 @@ Result<bool> verify_anchor_escrow(
             circuit, publication, outputs, secp_context, binding, cache);
 }
 
-Result<AnchorEscrowAccumulator> AnchorEscrowAccumulator::create(
+Result<ConstructionLeafAccumulator> ConstructionLeafAccumulator::create(
     purify_secp_context* secp_context) {
     static_assert(AnchorEscrowRecord::kNormProofSize == 65 * 14 + 64);
     PURIFY_ASSIGN_OR_RETURN(
@@ -645,11 +645,11 @@ Result<AnchorEscrowAccumulator> AnchorEscrowAccumulator::create(
             "Purify/Accountable/AnchorEscrowAccumulation/v4",
             secp_context),
         "anchor_escrow_accumulation:basis");
-    return AnchorEscrowAccumulator(std::move(basis));
+    return ConstructionLeafAccumulator(std::move(basis));
 }
 
-Result<AnchorEscrowParentConstants>
-AnchorEscrowAccumulator::derive_parent_constants(
+Result<ConstructionLeafParentConstants>
+ConstructionLeafAccumulator::derive_parent_constants(
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,
     const AnchorPunishmentPublicKey& punishment_key,
@@ -689,15 +689,15 @@ AnchorEscrowAccumulator::derive_parent_constants(
             derive_circuit_norm_parent_constants_v4_with_public_commitments(
                 circuit, precommitment, outputs, secp_context, binding),
         "anchor_escrow_parent:derive");
-    return AnchorEscrowParentConstants{
+    return ConstructionLeafParentConstants{
         std::move(constants.circuit_binding_digest),
         std::move(constants.raw_generator_digest),
         std::move(constants.coefficient_commitment),
         std::move(constants.anchored_offset)};
 }
 
-Result<PreparedAnchorEscrow>
-AnchorEscrowAccumulator::prepare(
+Result<PreparedConstructionLeaf>
+ConstructionLeafAccumulator::prepare(
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,
     const AnchorPunishmentPublicKey& punishment_key,
@@ -758,7 +758,7 @@ AnchorEscrowAccumulator::prepare(
             prepare_v4_circuit_norm_for_algebraic_reduction(
                 basis_, std::move(*prepared), secp_context),
         "anchor_escrow_accumulation:norm");
-    return PreparedAnchorEscrow(circuit_precommitment, std::move(norm));
+    return PreparedConstructionLeaf(circuit_precommitment, std::move(norm));
 }
 
 Result<AnchorPunishmentKey> recover_escrowed_anchor(

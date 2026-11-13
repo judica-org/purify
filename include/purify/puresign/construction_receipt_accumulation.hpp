@@ -10,7 +10,7 @@
 #include <span>
 #include <utility>
 
-#include "purify/puresign/anchor_escrow_accumulation.hpp"
+#include "purify/puresign/construction_leaf_accumulation.hpp"
 #include "purify/puresign/construction_receipt.hpp"
 #include "purify/puresign/recovery_root_accumulation.hpp"
 
@@ -75,7 +75,7 @@ private:
 class ConstructionReceiptAccumulator {
 public:
     static constexpr std::size_t kRootClaimRounds = std::bit_width(
-        2 * AnchorEscrowAccumulator::kNormVectorLength) - 1;
+        2 * ConstructionLeafAccumulator::kNormVectorLength) - 1;
     static constexpr std::size_t kRootClaimSerializedSize =
         33 + 32 + kRootClaimRounds * 32;
     static_assert(kRootClaimSerializedSize == 545);
@@ -94,8 +94,9 @@ public:
     [[nodiscard]] static Result<ConstructionReceiptAccumulator> create(
         purify_secp_context* secp_context);
 
-    [[nodiscard]] const AnchorEscrowAccumulator& anchors() const noexcept {
-        return anchors_;
+    [[nodiscard]] const ConstructionLeafAccumulator& leaves()
+        const noexcept {
+        return leaves_;
     }
 
     /**
@@ -117,15 +118,15 @@ public:
 private:
     ConstructionReceiptAccumulator(
         RecoveryRootSetupAccumulator setup,
-        AnchorEscrowAccumulator anchors)
-        : setup_(std::move(setup)), anchors_(std::move(anchors)) {}
+        ConstructionLeafAccumulator leaves)
+        : setup_(std::move(setup)), leaves_(std::move(leaves)) {}
 
     [[nodiscard]] Result<bppp::accumulation::PendingClaim>
     promote_setup_claim(
         const bppp::accumulation::PendingClaim& setup_claim) const;
 
     RecoveryRootSetupAccumulator setup_;
-    AnchorEscrowAccumulator anchors_;
+    ConstructionLeafAccumulator leaves_;
 };
 
 } // namespace purify::accountable

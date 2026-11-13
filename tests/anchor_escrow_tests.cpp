@@ -219,7 +219,7 @@ void test_anchor_v4_hash_suite_mode(TestContext& ctx) {
         purify::ErrorCode::UnsupportedSymbol,
         "anchor v4 circuit construction rejects legacy field hashes");
     auto accumulator =
-        purify::accountable::AnchorEscrowAccumulator::create(secp.get());
+        purify::accountable::ConstructionLeafAccumulator::create(secp.get());
     expect_ok(ctx, accumulator,
               "legacy builds retain non-accepting anchor basis syntax");
 #else
@@ -356,13 +356,13 @@ void test_anchor_escrow(TestContext& ctx) {
     expect_ok(ctx, construction_accumulator,
               "construction receipt fixed accumulation bases create");
     if (!construction_accumulator) return;
-    const auto* accumulator = &construction_accumulator->anchors();
+    const auto* accumulator = &construction_accumulator->leaves();
     ctx.expect(
         accumulator->basis().n_vec_len() ==
-                purify::accountable::AnchorEscrowAccumulator::
+                purify::accountable::ConstructionLeafAccumulator::
                     kNormVectorLength &&
             accumulator->basis().l_vec_len() ==
-                purify::accountable::AnchorEscrowAccumulator::
+                purify::accountable::ConstructionLeafAccumulator::
                     kNormVectorLength,
         "anchor escrow accumulation fixes both norm dimensions");
     purify::bppp::ExperimentalCircuitCache parent_cache;

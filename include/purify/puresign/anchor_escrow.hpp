@@ -15,7 +15,7 @@
 
 namespace purify::accountable {
 
-class AnchorEscrowAccumulator;
+class ConstructionLeafAccumulator;
 
 /**
  * Digest of the application statement protected by one anchor escrow.
@@ -154,7 +154,7 @@ private:
         const AnchorPunishmentPublicKey&, const AnchorEscrowContextDigest&,
         const AnchorEscrowRecord&,
         purify_secp_context*, bppp::ExperimentalCircuitBackend*);
-    friend class AnchorEscrowAccumulator;
+    friend class ConstructionLeafAccumulator;
 };
 
 static_assert(AnchorEscrowRecord::kProofPayloadSize ==

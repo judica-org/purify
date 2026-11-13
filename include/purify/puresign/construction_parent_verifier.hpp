@@ -108,7 +108,7 @@ public:
         const ResolvedConstructionSetup& setup,
         const ConstructionReceiptEnvelope& envelope,
         std::span<const ResolvedConstructionReceiptEntry> resolved_entries,
-        const AnchorEscrowAccumulator& anchors,
+        const ConstructionLeafAccumulator& leaves,
         purify_secp_context* secp_context) const;
 
 private:

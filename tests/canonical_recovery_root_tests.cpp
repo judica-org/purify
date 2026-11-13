@@ -320,13 +320,13 @@ void test_setup_and_recovery(TestContext& ctx) {
         "resolved setup owns the exact roster, registry digest, and seed");
     auto parsed_resolved_seed =
         purify::bppp::accumulation::parse_root_claim(
-            construction_accumulator->anchors().basis(),
+            construction_accumulator->leaves().basis(),
             resolved_seed, secp.get());
     expect_ok(ctx, parsed_resolved_seed,
               "resolved setup seed reparses against the anchor basis");
     if (!parsed_resolved_seed) return;
     expect_ok(ctx, purify::bppp::accumulation::decide(
-                       construction_accumulator->anchors().basis(),
+                       construction_accumulator->leaves().basis(),
                        *parsed_resolved_seed, secp.get()),
               "resolved setup seed independently reaches final decision");
 

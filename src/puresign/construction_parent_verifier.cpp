@@ -152,7 +152,7 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     const ResolvedConstructionSetup& setup,
     const ConstructionReceiptEnvelope& envelope,
     std::span<const ResolvedConstructionReceiptEntry> resolved_entries,
-    const AnchorEscrowAccumulator& anchors,
+    const ConstructionLeafAccumulator& leaves,
     purify_secp_context* secp_context) const {
     if (!impl_ || impl_->verifier == nullptr) {
         return unexpected_error(ErrorCode::UninitializedState,
@@ -188,7 +188,7 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
         const auto& entry = entries[index];
         PURIFY_ASSIGN_OR_RETURN(
             auto constants,
-            anchors.derive_parent_constants(
+            leaves.derive_parent_constants(
                 setup.roster(), resolved.anchor_root,
                 resolved.punishment_key, resolved.context_digest,
                 entry.ciphertext, entry.circuit_precommitment,
@@ -209,7 +209,7 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     std::array<unsigned char,
                ConstructionReceiptAccumulator::kRootClaimSerializedSize>
         pending_root{};
-    const auto& basis_digest = anchors.basis().digest();
+    const auto& basis_digest = leaves.basis().digest();
     const Bytes& proof = envelope.parent_proof();
     const auto status = purify_construction_parent_verify(
         impl_->verifier, statement_digest.data(),
@@ -225,11 +225,11 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     PURIFY_ASSIGN_OR_RETURN(
         auto final_claim,
         bppp::accumulation::parse_root_claim(
-            anchors.basis(), pending_root, secp_context),
+            leaves.basis(), pending_root, secp_context),
         "construction_parent:parse_root");
     PURIFY_RETURN_IF_ERROR(
         bppp::accumulation::decide(
-            anchors.basis(), final_claim, secp_context),
+            leaves.basis(), final_claim, secp_context),
         "construction_parent:decide");
     return VerifiedConstructionReceipt(
         statement_digest, setup.roster(),

@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "purify/puresign/accountable_responses.hpp"
-#include "purify/puresign/anchor_escrow_accumulation.hpp"
+#include "purify/puresign/construction_leaf_accumulation.hpp"
 #include "purify/puresign/construction_receipt_accumulation.hpp"
 #include "purify/puresign/recovery_root.hpp"
 
@@ -32,7 +32,7 @@ struct EscrowedAnchorFixture {
     purify::accountable::AnchorEscrowRecord record;
     purify::accountable::AnchorReference reference;
     purify::bppp::ScalarBytes circuit_precommitment;
-    purify::accountable::AnchorEscrowParentConstants parent_constants;
+    purify::accountable::ConstructionLeafParentConstants parent_constants;
     purify::Bytes reduction_proof;
     purify::Bytes parent_step_proof;
 };

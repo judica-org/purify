@@ -14,7 +14,7 @@
 namespace purify::accountable {
 
 /** Verifier-derived public constants consumed by one recursive parent leaf. */
-struct AnchorEscrowParentConstants {
+struct ConstructionLeafParentConstants {
     std::array<unsigned char, 32> circuit_binding_digest{};
     std::array<unsigned char, 32> raw_generator_digest{};
     bppp::PointBytes coefficient_commitment{};
@@ -22,13 +22,14 @@ struct AnchorEscrowParentConstants {
 };
 
 /** V4 anchor proof prepared for reduction with its exact public digest. */
-class PreparedAnchorEscrow {
+class PreparedConstructionLeaf {
 public:
-    PreparedAnchorEscrow(const PreparedAnchorEscrow&) = delete;
-    PreparedAnchorEscrow& operator=(const PreparedAnchorEscrow&) = delete;
-    PreparedAnchorEscrow(PreparedAnchorEscrow&&) noexcept = default;
-    PreparedAnchorEscrow& operator=(PreparedAnchorEscrow&&) noexcept =
-        default;
+    PreparedConstructionLeaf(const PreparedConstructionLeaf&) = delete;
+    PreparedConstructionLeaf& operator=(
+        const PreparedConstructionLeaf&) = delete;
+    PreparedConstructionLeaf(PreparedConstructionLeaf&&) noexcept = default;
+    PreparedConstructionLeaf& operator=(
+        PreparedConstructionLeaf&&) noexcept = default;
 
     /** The verifier-derived precommitment retained by the final payload. */
     [[nodiscard]] const bppp::ScalarBytes& circuit_precommitment()
@@ -42,7 +43,7 @@ public:
     }
 
 private:
-    PreparedAnchorEscrow(
+    PreparedConstructionLeaf(
         bppp::ScalarBytes circuit_precommitment,
         bppp::accumulation::AlgebraicPreparedNorm norm)
         : circuit_precommitment_(circuit_precommitment),
@@ -51,7 +52,7 @@ private:
     bppp::ScalarBytes circuit_precommitment_{};
     bppp::accumulation::AlgebraicPreparedNorm norm_;
 
-    friend class AnchorEscrowAccumulator;
+    friend class ConstructionLeafAccumulator;
 };
 
 /**
@@ -63,18 +64,20 @@ private:
  * a pending norm obligation: the reduction, every accumulation transition,
  * and the final decide() call are all mandatory for proof acceptance.
  */
-class AnchorEscrowAccumulator {
+class ConstructionLeafAccumulator {
 public:
     static constexpr std::size_t kNormVectorLength = 16384;
 
-    AnchorEscrowAccumulator(const AnchorEscrowAccumulator&) = delete;
-    AnchorEscrowAccumulator& operator=(const AnchorEscrowAccumulator&) =
+    ConstructionLeafAccumulator(const ConstructionLeafAccumulator&) =
         delete;
-    AnchorEscrowAccumulator(AnchorEscrowAccumulator&&) noexcept = default;
-    AnchorEscrowAccumulator& operator=(AnchorEscrowAccumulator&&) noexcept =
+    ConstructionLeafAccumulator& operator=(
+        const ConstructionLeafAccumulator&) = delete;
+    ConstructionLeafAccumulator(ConstructionLeafAccumulator&&) noexcept =
         default;
+    ConstructionLeafAccumulator& operator=(
+        ConstructionLeafAccumulator&&) noexcept = default;
 
-    [[nodiscard]] static Result<AnchorEscrowAccumulator> create(
+    [[nodiscard]] static Result<ConstructionLeafAccumulator> create(
         purify_secp_context* secp_context);
 
     [[nodiscard]] const bppp::accumulation::Basis& basis() const noexcept {
@@ -88,7 +91,7 @@ public:
      * obligation. Receipt acceptance must verify the recursive parent and
      * complete the final native decision.
      */
-    [[nodiscard]] Result<AnchorEscrowParentConstants>
+    [[nodiscard]] Result<ConstructionLeafParentConstants>
     derive_parent_constants(
         const RecoveryBoundSigningRoster& roster,
         const UInt512& advertised_anchor_root,
@@ -98,7 +101,7 @@ public:
         const bppp::ScalarBytes& circuit_precommitment,
         purify_secp_context* secp_context) const;
 
-    [[nodiscard]] Result<PreparedAnchorEscrow> prepare(
+    [[nodiscard]] Result<PreparedConstructionLeaf> prepare(
         const RecoveryBoundSigningRoster& roster,
         const UInt512& advertised_anchor_root,
         const AnchorPunishmentPublicKey& punishment_key,
@@ -108,7 +111,7 @@ public:
         bppp::ExperimentalCircuitBackend* cache = nullptr) const;
 
 private:
-    explicit AnchorEscrowAccumulator(bppp::accumulation::Basis basis)
+    explicit ConstructionLeafAccumulator(bppp::accumulation::Basis basis)
         : basis_(std::move(basis)) {}
 
     bppp::accumulation::Basis basis_;

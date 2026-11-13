@@ -292,10 +292,10 @@ ConstructionReceiptAccumulator::create(
         auto setup, RecoveryRootSetupAccumulator::create(secp_context),
         "construction_accumulation:setup_basis");
     PURIFY_ASSIGN_OR_RETURN(
-        auto anchors, AnchorEscrowAccumulator::create(secp_context),
+        auto leaves, ConstructionLeafAccumulator::create(secp_context),
         "construction_accumulation:anchor_basis");
     return ConstructionReceiptAccumulator(std::move(setup),
-                                          std::move(anchors));
+                                          std::move(leaves));
 }
 
 ResolvedConstructionSetup::ResolvedConstructionSetup(
@@ -343,18 +343,18 @@ ConstructionReceiptAccumulator::resolve_setup_record(
     PURIFY_ASSIGN_OR_RETURN(
         auto seed_proof,
         bppp::accumulation::prove_algebraic_step(
-            anchors_.basis(), promoted_claims, secp_context),
+            leaves_.basis(), promoted_claims, secp_context),
         "construction_accumulation:prove_setup_seed");
     PURIFY_ASSIGN_OR_RETURN(
         auto seed_claim,
         bppp::accumulation::verify_algebraic_step(
-            anchors_.basis(), promoted_claims, seed_proof,
+            leaves_.basis(), promoted_claims, seed_proof,
             secp_context),
         "construction_accumulation:verify_setup_seed");
     PURIFY_ASSIGN_OR_RETURN(
         auto seed_root,
         bppp::accumulation::serialize_root_claim(
-            anchors_.basis(), seed_claim, secp_context),
+            leaves_.basis(), seed_claim, secp_context),
         "construction_accumulation:serialize_setup_seed");
     if (seed_root.size() !=
         ResolvedConstructionSetup::kSeedRootSize) {
@@ -369,7 +369,7 @@ ConstructionReceiptAccumulator::resolve_setup_record(
               canonical_seed_root.begin());
     PURIFY_RETURN_IF_ERROR(
         bppp::accumulation::decide(
-            anchors_.basis(), seed_claim, secp_context),
+            leaves_.basis(), seed_claim, secp_context),
         "construction_accumulation:decide_setup_seed");
     const auto& polynomial = seed_claim.polynomial();
     (void)polynomial;
@@ -385,7 +385,7 @@ Result<bppp::accumulation::PendingClaim>
 ConstructionReceiptAccumulator::promote_setup_claim(
     const bppp::accumulation::PendingClaim& setup_claim) const {
     const auto& source = setup_.basis();
-    const auto& target = anchors_.basis();
+    const auto& target = leaves_.basis();
     if (setup_claim.basis_digest() != source.digest()) {
         return unexpected_error(
             ErrorCode::BindingMismatch,

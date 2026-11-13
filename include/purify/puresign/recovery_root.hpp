@@ -195,6 +195,63 @@ prove_recovery_root_contribution(
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache = nullptr);
 
+/**
+ * An exact ordered contribution set authorized for anchor escrow.
+ *
+ * This capability is move-only so its authorizing result and full-point
+ * aggregate are transferred together. It is created only after every
+ * formation-bound member proof verifies.
+ */
+class VerifiedDistributedRecoverySetup {
+public:
+    VerifiedDistributedRecoverySetup(
+        const VerifiedDistributedRecoverySetup&) = delete;
+    VerifiedDistributedRecoverySetup& operator=(
+        const VerifiedDistributedRecoverySetup&) = delete;
+    VerifiedDistributedRecoverySetup(
+        VerifiedDistributedRecoverySetup&&) noexcept = default;
+    VerifiedDistributedRecoverySetup& operator=(
+        VerifiedDistributedRecoverySetup&&) noexcept = default;
+
+    [[nodiscard]] const RecoveryBoundSigningRoster& roster() const noexcept {
+        return roster_;
+    }
+
+    [[nodiscard]] const RecoveryRootShareAggregate& aggregate() const noexcept {
+        return aggregate_;
+    }
+
+private:
+    VerifiedDistributedRecoverySetup(
+        NonceHostBoundSigningRoster roster,
+        RecoveryRootShareAggregate aggregate)
+        : roster_(std::move(roster), aggregate.recovery_root()),
+          aggregate_(std::move(aggregate)) {}
+
+    RecoveryBoundSigningRoster roster_;
+    RecoveryRootShareAggregate aggregate_;
+
+    friend Result<VerifiedDistributedRecoverySetup>
+    verify_distributed_recovery_setup(
+        NonceHostBoundSigningRoster, const CoalitionFormation&,
+        std::span<const RecoveryRootContribution>, purify_secp_context*,
+        bppp::ExperimentalCircuitBackend*);
+};
+
+/**
+ * Verify one contribution at every roster index and authorize its aggregate.
+ *
+ * Count and formation mismatches are rejected before proof verification.
+ * This is the distributed counterpart to `verify_recovery_root_setup`.
+ */
+[[nodiscard]] Result<VerifiedDistributedRecoverySetup>
+verify_distributed_recovery_setup(
+    NonceHostBoundSigningRoster roster,
+    const CoalitionFormation& formation,
+    std::span<const RecoveryRootContribution> ordered_contributions,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache = nullptr);
+
 /** Transparent proof linking the aggregate signing scalar to a recovery root. */
 class RecoveryRootSetupProof {
 public:

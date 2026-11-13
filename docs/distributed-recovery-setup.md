@@ -104,9 +104,10 @@ M  = (x(T1), x(T2))
 escrow. The implemented aggregate type rejects an empty list, invalid count,
 malformed or wrong-subgroup point, and an infinite aggregate on either
 companion curve. Point addition cannot detect omissions, duplicates, or
-reordering. The accepting parent must verify exactly one contribution at each
-roster index before constructing an authorizing recovery-bound roster; that
-formation-level API is not yet implemented.
+reordering. `verify_distributed_recovery_setup()` first requires the exact
+roster count, verifies one contribution at every roster index, and only then
+returns a move-only result containing both the recovery-bound roster and exact
+full-point aggregate. The public aggregate function remains nonauthorizing.
 
 The aggregate retains the full `T1,T2` points even though the long-lived
 recovery root retains only their x coordinates. Authenticating those points in

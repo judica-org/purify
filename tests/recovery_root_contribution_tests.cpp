@@ -7,6 +7,7 @@
 #include <chrono>
 #include <iostream>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -27,6 +28,15 @@ using purify::bppp::PointBytes;
 using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
+
+static_assert(!std::is_copy_constructible_v<
+              purify::accountable::VerifiedDistributedRecoverySetup>);
+static_assert(!std::is_copy_assignable_v<
+              purify::accountable::VerifiedDistributedRecoverySetup>);
+static_assert(std::is_move_constructible_v<
+              purify::accountable::VerifiedDistributedRecoverySetup>);
+static_assert(std::is_move_assignable_v<
+              purify::accountable::VerifiedDistributedRecoverySetup>);
 
 std::array<unsigned char, 32> raw_generator_digest(
     std::span<const PointBytes> generators) {
@@ -189,6 +199,13 @@ void test_recovery_root_contribution(TestContext& ctx) {
     auto fixture = make_fixture(secp.get());
     expect_ok(ctx, fixture, "formation-bound contribution fixture creates");
     if (!fixture) return;
+
+    expect_error(
+        ctx,
+        purify::accountable::verify_distributed_recovery_setup(
+            fixture->roster, fixture->formation, {}, secp.get()),
+        purify::ErrorCode::SizeMismatch,
+        "distributed setup rejects incomplete coverage before verification");
 
     ctx.expect(fixture->roster.aggregate_was_negated(),
                "fixture exercises aggregate-key parity normalization");

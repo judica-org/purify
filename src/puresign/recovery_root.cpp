@@ -903,6 +903,48 @@ Result<bool> verify_recovery_root_contribution(
             circuit, publication, outputs, secp_context, binding, cache);
 }
 
+Result<VerifiedDistributedRecoverySetup>
+verify_distributed_recovery_setup(
+    NonceHostBoundSigningRoster roster,
+    const CoalitionFormation& formation,
+    std::span<const RecoveryRootContribution> ordered_contributions,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) {
+    if (ordered_contributions.size() != roster.members().size()) {
+        return unexpected_error(
+            ErrorCode::SizeMismatch,
+            "recovery_contribution_set:member_count");
+    }
+    if (formation.core_digest() != roster.coalition_core_digest()) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "recovery_contribution_set:formation_core");
+    }
+
+    std::vector<RecoveryRootShare> ordered_shares;
+    ordered_shares.reserve(ordered_contributions.size());
+    for (std::size_t i = 0; i < ordered_contributions.size(); ++i) {
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto accepted,
+            verify_recovery_root_contribution(
+                roster, formation, i, ordered_contributions[i],
+                secp_context, cache),
+            "recovery_contribution_set:verify");
+        if (!accepted) {
+            return unexpected_error(
+                ErrorCode::EquationMismatch,
+                "recovery_contribution_set:proof");
+        }
+        ordered_shares.push_back(ordered_contributions[i].share());
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto aggregate,
+        aggregate_recovery_root_shares(ordered_shares),
+        "recovery_contribution_set:aggregate");
+    return VerifiedDistributedRecoverySetup(
+        std::move(roster), std::move(aggregate));
+}
+
 Result<ConstructionLeafParentConstants>
 ConstructionLeafAccumulator::derive_parent_constants(
     const NonceHostBoundSigningRoster& roster,

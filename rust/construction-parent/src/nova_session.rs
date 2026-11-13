@@ -800,6 +800,14 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaSessionSuite<ARI
         self.prover.start(initial_state, expected_steps)
     }
 
+    /// Discard the setup verifier and retain only qualification prover state.
+    ///
+    /// The setup-only qualification must persist and reload this state before
+    /// it is used. Production code cannot perform transparent setup.
+    pub(crate) fn into_prover(self) -> SelectedNovaProver<ARITY, C> {
+        self.prover
+    }
+
     /// Permanently releases every proving component while retaining the
     /// exact selected verifier.
     pub(crate) fn into_verifier(self) -> SelectedNovaVerifier<ARITY, C> {

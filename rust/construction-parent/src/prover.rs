@@ -68,6 +68,15 @@ impl CheckedConstructionParentWitness {
         self.inner.steps().len()
     }
 
+    /// Clone one fully checked production step for transparent setup.
+    ///
+    /// Setup qualification is test-only. Production proving can load only a
+    /// pinned artifact and never derives parameters from caller input.
+    #[cfg(test)]
+    pub(crate) fn trusted_setup_step(&self) -> Option<ConstructionParentStep> {
+        self.inner.steps().first().cloned()
+    }
+
     /// Prove this exact checked state chain with the qualified prover.
     ///
     /// The selected prover and this witness are consumed. Public parameters

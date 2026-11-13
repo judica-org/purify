@@ -303,11 +303,9 @@ Result<GeneratedKey> derive_recovery_root(
     WipeOnDestruction reduced_second_guard(reduced_second);
     reduced_second.sub_assign(first);
     second.conditional_assign(reduced_second, half_n2() < second);
-    first.sub_assign(UInt256::one());
-    second.sub_assign(UInt256::one());
-    auto packed = multiply(half_n1(), second);
+    PURIFY_ASSIGN_OR_RETURN(auto packed, pack_secret(first, second),
+                            "recovery_root:pack");
     WipeOnDestruction packed_guard(packed);
-    packed.add_assign(widen<8>(first));
     PURIFY_ASSIGN_OR_RETURN(auto secret, SecretKey::from_packed(packed),
                             "recovery_root:secret");
     return derive_key(std::move(secret));

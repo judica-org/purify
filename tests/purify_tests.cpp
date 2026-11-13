@@ -439,6 +439,30 @@ void test_key_space_derivation(TestContext& ctx) {
                    "the largest valid packed secret decodes to (half_n1, half_n2)");
     }
 
+    const auto first = UInt256::from_u64(17);
+    const auto second = UInt256::from_u64(29);
+    const auto packed_secret = purify::pack_secret(first, second);
+    expect_ok(ctx, packed_secret, "canonical secret scalars pack");
+    if (packed_secret.has_value()) {
+        const auto unpacked = purify::unpack_secret(*packed_secret);
+        expect_ok(ctx, unpacked, "packed canonical secret scalars unpack");
+        ctx.expect(unpacked && unpacked->first == first &&
+                       unpacked->second == second,
+                   "secret scalar packing round trips");
+    }
+    ctx.expect(!purify::pack_secret(UInt256::zero(), second),
+               "zero first secret scalar rejects");
+    ctx.expect(!purify::pack_secret(first, UInt256::zero()),
+               "zero second secret scalar rejects");
+    auto first_too_large = purify::half_n1();
+    first_too_large.add_assign(UInt256::one());
+    auto second_too_large = purify::half_n2();
+    second_too_large.add_assign(UInt256::one());
+    ctx.expect(!purify::pack_secret(first_too_large, second),
+               "oversized first secret scalar rejects");
+    ctx.expect(!purify::pack_secret(first, second_too_large),
+               "oversized second secret scalar rejects");
+
     const UInt512 derived_public_space = purify::multiply(purify::prime_p(), purify::prime_p());
     ctx.expect(derived_public_space == purify::packed_public_key_space_size(),
                "packed public key space size is p^2");

@@ -261,6 +261,9 @@ Status validate_public_key(const UInt512& packed);
 /** @brief Splits a packed private key into its two per-curve secret scalars. */
 Result<std::pair<UInt256, UInt256>> unpack_secret(const UInt512& z);
 
+/** @brief Packs scalars in `[1, half_n1]` and `[1, half_n2]`. */
+Result<UInt512> pack_secret(const UInt256& first, const UInt256& second);
+
 /** @brief Splits a packed public key into its two x-coordinates. */
 Result<std::pair<UInt256, UInt256>> unpack_public(const UInt512& packed);
 

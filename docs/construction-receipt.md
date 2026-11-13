@@ -5,12 +5,11 @@ coalition setup and anchor-escrow proofs into one authenticated parent result.
 Child proofs are distributed out of band. The compact public payload retains
 the data required to recover punishment keys after coalition exposure.
 
-The native scalar-only anchor leaf and C++ two-stage acceptance boundary are
-implemented. The current recurrence still derives its seed from the separate
-centralized setup proof and processes only anchor leaves. Its matching
-scalar-only verifier artifact is not qualified or published, so there is not
-yet a production-accepted recursive receipt. The mixed distributed-setup
-parent described below remains the cutover target.
+The mixed distributed-setup relation, native leaf adapters, recursive verifier
+boundary, and fixture codec are implemented. The matching verifier artifact
+has not been requalified or published, so there is not yet a
+production-accepted recursive receipt. The old centralized, anchor-only
+artifact is deliberately rejected.
 
 Transparent setup is required. The selected parent path uses the accumulated
 BP++ obligations as the authenticated recurrence input and requires a native
@@ -38,13 +37,20 @@ scalar to the assembler. They do not participate in a second proving round.
 
 ## Compact payload
 
-Construction payload version 3 is:
+Construction payload version 4 is:
 
 ```
-version8 || recovery_root64 || count32be || entry[0] || ...
+version8 || recovery_root64 || setup_count32be || anchor_count32be
+|| setup_entry[0] || ... || anchor_entry[0] || ...
 ```
 
-Each 128-byte entry is:
+Each 98-byte setup entry is:
+
+```
+full_signed_recovery_share66 || circuit_precommitment32
+```
+
+Each 128-byte anchor entry is:
 
 ```
 ephemeral_root64 || masked_punishment_scalar32 ||
@@ -54,7 +60,7 @@ circuit_precommitment32
 The total serialized size is:
 
 ```
-69 + 128*N bytes
+73 + 98*N + 128*A bytes
 ```
 
 The payload contains the ciphertexts, not merely their hashes, so Bitcoin-only
@@ -65,7 +71,7 @@ the authenticated registry rather than duplicated in every compact entry.
 ## Authenticated statement
 
 `construction_receipt_statement_digest()` uses
-`Purify/Accountable/ConstructionReceiptStatement/v4` and commits to:
+`Purify/Accountable/ConstructionReceiptStatement/v5` and commits to:
 
 1. the exact serialized payload;
 2. the immutable resolved setup-record digest; and
@@ -84,16 +90,17 @@ root, preventing the detectable recovery-key alias.
 
 ## Parent relation and acceptance
 
-For verified ordered setup and anchor records, native preparation produces one
-pending algebraic obligation per child. Parent constants are derived from the
-same public circuit, ciphertext or full share, public output, context, and
-child precommitment. The planned mixed recurrence starts from the canonical
-empty claim and authenticates every setup leaf, every anchor leaf, the ordered
-manifest, each transition, and the final claim.
+For ordered setup and anchor records, native preparation produces one pending
+algebraic obligation per child. Parent constants are derived from the same
+public circuit, ciphertext or full share, public output, context, and child
+precommitment. The mixed recurrence starts from the canonical all-zero
+545-byte claim, authenticates every setup leaf in roster order, then every
+anchor leaf in registry order, and returns one final pending claim. There is no
+centralized setup proof, caller-provided seed, or proof promotion step.
 
-The current anchor-only recurrence instead consumes a seed produced by the
-independently verified centralized setup record. It does not recursively prove
-that setup record.
+The public manifest binds both phase counts. The recurrence is homogeneous and
+has no phase field; the C++ verifier enforces the boundary by deriving exactly
+`N` typed setup descriptors followed by exactly `A` typed anchor descriptors.
 
 The acceptance boundary is deliberately two-stage:
 
@@ -121,11 +128,13 @@ The recovery path needs the compact payload, registry resolution, and accepted
 parent result. It does not need the original child proof packets.
 
 Char must bind each recovered punishment key to that member's BIP340 coalition
-point. Recovery intentionally does not reveal the anchor's Purify nonce-host
-secret. A public nonce proof is not secret nonce material. An accepted prior
-response can reveal the raw nonce for that exact nonce set; future slots still
-need retained nonce secrets, the nonce-host secret, or an explicit
-exposed-member policy authenticated by the exposure record.
+point. After the conflict has exposed the coalition signing scalar, selected
+receipt recovery reveals only the enrolled punishment/signing scalars. It
+never reveals an anchor's Purify nonce-host secret. A public nonce proof is not
+secret nonce material. An accepted prior response can reveal the raw nonce for
+that exact nonce set; future slots still need retained nonce secrets, the
+nonce-host secret, or an explicit exposed-member policy authenticated by the
+exposure record.
 
 ## Version boundary
 
@@ -134,35 +143,36 @@ The scalar-only protocol is an incompatible cutover:
 | Component | Version/domain |
 | --- | --- |
 | Anchor escrow record | 4 |
-| Construction payload | 3 |
+| Recovery contribution record | 1 |
+| Construction payload | 4 |
 | Anchor binding and randomness | `/v4` |
-| Construction statement | `/v4` |
-| Anchor accumulation basis | `/v4` |
-| Parent-prover witness frame | `Purify/Nova/Wit2` |
+| Construction statement | `/v5` |
+| Construction leaf basis | `Purify/Accountable/ConstructionLeafAccumulation/v1` |
+| Construction manifest | `Purify/Accountable/ConstructionParentManifest/v3/{init,leaf}` |
+| Parent-prover witness frame | `Purify/Nova/Wit3` |
 
-Record v3, payload v2, old statement digests, old accumulation parameters, and
-the `Wit1` parent fixture are not compatibility inputs. The Rust recurrence,
-qualification vectors, relation ID, and verifier artifact must be regenerated
-against this exact version set before release; old artifacts cannot qualify
-the new statement.
+Old payloads, statement digests, accumulation parameters, centralized seeds,
+and `Wit1`/`Wit2` parent fixtures are not compatibility inputs. The verifier
+artifact must be regenerated and qualified against this exact version set
+before release; old artifacts cannot qualify the new statement.
 
 ## Size accounting
 
 The public construction envelope contains:
 
 ```
-69 + 128*N + size(parent_proof)
+73 + 98*N + 128*A + size(parent_proof)
 ```
 
 This excludes registry data already addressed by the statement, Bitcoin
-carrier framing, and out-of-band child records. Each independent child record
-is 1,233 bytes, but its 1,136-byte proof portion is consumed during
-construction rather than repeated in the compact payload.
+carrier framing, and out-of-band child records. Each anchor record is 1,233
+bytes and each setup contribution is 1,203 bytes; their proof bodies are
+consumed during construction rather than repeated in the compact payload.
 
-Parent proof and verifier-artifact sizes belong to the selected recurrence
-profile and must be reported from the matching post-cutover qualification.
-Numbers from the superseded full-root child relation are not estimates for the
-v4 scalar-only profile.
+The envelope currently reserves the prior 15,076-byte proof length, giving the
+provisional total `15,149 + 98*N + 128*A`. This is transport scaffolding, not a
+new qualification result. Parent-proof and verifier-artifact sizes must be
+re-pinned from the matching post-cutover qualification.
 
 ## Integration boundary
 
@@ -170,6 +180,10 @@ Proof verification does not define coalition activation, consent, expiry,
 stake accounting, conflict validity, or Bitcoin punishment spending rules.
 Those remain Char registry and consensus responsibilities. In particular:
 
+- every raw anchor remains an implicit one-member coalition when no explicit
+  coalition covers it;
+- a zero-weight or broken member contributes zero economic weight without
+  being deleted from or reordering the immutable signing roster;
 - the authoritative manifest must come from deterministic registry state;
 - registry resolution must be immutable for the receipt's lifetime;
 - a historical receipt remains usable after a member leaves;

@@ -104,6 +104,24 @@ public:
         const bppp::ScalarBytes& circuit_precommitment,
         purify_secp_context* secp_context) const;
 
+    /**
+     * Derive a pending anchor descriptor from weak resolved context.
+     *
+     * This authenticates no escrow or recovery setup. It exists only for a
+     * parent verifier that separately proves every setup leaf and completes
+     * the final native decision.
+     */
+    [[nodiscard]] Result<ConstructionLeafParentConstants>
+    derive_pending_anchor_parent_constants(
+        const NonceHostBoundSigningRoster& roster,
+        const UInt512& recovery_root,
+        const UInt512& advertised_anchor_root,
+        const AnchorPunishmentPublicKey& punishment_key,
+        const AnchorEscrowContextDigest& context_digest,
+        const AnchorEscrowCiphertext& ciphertext,
+        const bppp::ScalarBytes& circuit_precommitment,
+        purify_secp_context* secp_context) const;
+
     /** Derive one formation-bound recovery-contribution leaf descriptor. */
     [[nodiscard]] Result<ConstructionLeafParentConstants>
     derive_parent_constants(

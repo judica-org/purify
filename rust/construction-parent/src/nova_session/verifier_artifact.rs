@@ -84,21 +84,6 @@ impl ExpectedDirectNovaVerifierArtifact {
     }
 }
 
-/// Last authenticated verifier artifact from the v3 qualification.
-///
-/// The v4 construction-parent loader rejects this stale descriptor before
-/// reading artifact bytes. Resource-gated v4 qualification must replace it.
-pub(crate) const QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT:
-    ExpectedDirectNovaVerifierArtifact = ExpectedDirectNovaVerifierArtifact::new(
-    693_735_316,
-    3_206_748_264,
-    [
-        0x3d, 0x4c, 0x4f, 0xa5, 0xaa, 0x00, 0xe1, 0x70, 0xdd, 0x03, 0x93, 0x60, 0x85, 0xf4, 0x2e,
-        0xcf, 0xc9, 0xa4, 0xdf, 0xd0, 0x89, 0xdb, 0x70, 0xbd, 0xd2, 0x37, 0x2a, 0xd2, 0x09, 0xc8,
-        0x03, 0x7d,
-    ],
-);
-
 #[derive(Debug, Error)]
 pub(crate) enum DirectNovaVerifierArtifactError {
     #[error("construction parent verifier qualification is pending")]

@@ -104,7 +104,7 @@ set(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET "" CACHE STRING
     "Optional Rust target triple for the construction-parent backend."
 )
 set(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT "" CACHE FILEPATH
-    "Qualified construction-parent verifier artifact for opt-in tests."
+    "Reserved for the qualification-pending mixed parent artifact."
 )
 
 if(PURIFY_BUILD_CLI AND NOT PURIFY_HAVE_CLI_SOURCES)
@@ -160,30 +160,9 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER AND
 endif()
 
 if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
-    if(NOT PURIFY_BUILD_TESTS)
-        message(FATAL_ERROR
-            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
-            "PURIFY_BUILD_TESTS=ON."
-        )
-    endif()
-    if(NOT PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
-        message(FATAL_ERROR
-            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT requires "
-            "PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=ON."
-        )
-    endif()
-    get_filename_component(
-        PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT
-        "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
-        ABSOLUTE BASE_DIR "${CMAKE_BINARY_DIR}"
+    message(FATAL_ERROR
+        "The mixed construction-parent artifact is qualification-pending."
     )
-    if(NOT EXISTS "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
-       OR IS_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}")
-        message(FATAL_ERROR
-            "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT must name an "
-            "existing regular file."
-        )
-    endif()
 endif()
 
 if(NOT PURIFY_CXX_STANDARD MATCHES "^(20|23)$")
@@ -799,15 +778,6 @@ if(PURIFY_BUILD_TESTS)
     purify_enable_header_hygiene_warnings(${PURIFY_HEADER_HYGIENE_SOURCES})
 
     if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
-        target_compile_definitions(purify_tests PRIVATE
-            "PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_accepted.proof\""
-            "PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_PROOF_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_nondeciding.proof\""
-        )
-        if(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
-            target_compile_definitions(purify_tests PRIVATE
-                PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT=1
-            )
-        endif()
         if(NOT CMAKE_CROSSCOMPILING)
             add_test(NAME purify.tests.installed_package
                 COMMAND "${CMAKE_COMMAND}"
@@ -910,7 +880,6 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(recovery_root_contribution)
     purify_add_cpp_suite_test(anchor_escrow)
     purify_add_cpp_suite_test(companion_scalar_escrow)
-    purify_add_cpp_suite_test(construction_receipt)
     purify_add_cpp_suite_test(construction_receipt_codec)
     purify_add_cpp_suite_test(sha256_transcript)
     purify_add_cpp_suite_test(sha256_circuit_transcript)
@@ -918,20 +887,9 @@ if(PURIFY_BUILD_TESTS)
     # These proof suites saturate sanitizer runners. Keep their work
     # out of the property suites' bounded execution time.
     set_tests_properties(
-        purify.tests.construction_receipt
         purify.tests.slashability_native
         PROPERTIES RUN_SERIAL TRUE
     )
-    if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER AND
-       PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT)
-        purify_add_cpp_suite_test(slashability_e2e)
-        set_tests_properties(purify.tests.slashability_e2e PROPERTIES
-            ENVIRONMENT
-                "PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=${PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT}"
-            RUN_SERIAL TRUE
-            TIMEOUT 3600
-        )
-    endif()
     purify_add_cpp_suite_test(aggregate_nonce)
     purify_add_cpp_suite_test(aggregate_nonce_100)
     purify_add_cpp_suite_test(nonce_batch)

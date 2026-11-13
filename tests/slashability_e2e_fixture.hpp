@@ -19,10 +19,24 @@ struct CoalitionFixture {
     purify::accountable::NonceHostBoundSigningRoster registry_roster;
     purify::accountable::RecoveryBoundSigningRoster recovery_roster;
     purify::accountable::RecoveryRootSetupProof setup_proof;
+    purify::accountable::CoalitionFormation formation;
+    std::vector<purify::accountable::RecoveryRootContribution>
+        contributions;
+    purify::accountable::VerifiedDistributedRecoverySetup
+        distributed_setup;
     purify::FieldElement signing_scalar;
     std::vector<purify::FieldElement> member_secrets;
     std::vector<purify::puresign_plusplus::KeyPair> nonce_signers;
     std::vector<purify::puresign_plusplus::PublicKey> nonce_hosts;
+};
+
+struct RecoverySetupLeafFixture {
+    purify::accountable::RecoveryRootContribution contribution;
+    purify::bppp::ScalarBytes circuit_precommitment;
+    purify::accountable::ConstructionLeafParentConstants parent_constants;
+    purify::bppp::PointBytes weighted_member_key;
+    purify::Bytes reduction_proof;
+    purify::Bytes parent_step_proof;
 };
 
 struct EscrowedAnchorFixture {
@@ -42,7 +56,8 @@ struct EscrowedAnchorFixture {
  *
  * This is neither a verified construction receipt nor a complete replay
  * of the Nova relation. The decided root checks the native setup
- * seed, anchor reductions, and ordered accumulation steps. Only Nova
+ * claim, setup and anchor reductions, and ordered accumulation steps. Only
+ * Nova
  * binds the statement, manifest, count, and index transitions. A
  * production test must pass this exact setup, payload, and resolved
  * manifest through
@@ -55,6 +70,7 @@ struct NativeAccumulationReferenceFixture {
     purify::accountable::ConstructionReceiptPayload payload;
     std::vector<purify::accountable::ResolvedConstructionReceiptEntry>
         resolved_entries;
+    std::vector<RecoverySetupLeafFixture> setup_leaves;
     std::vector<EscrowedAnchorFixture> anchors;
     purify::accountable::ConstructionReceiptStatementDigest statement;
     std::array<unsigned char,

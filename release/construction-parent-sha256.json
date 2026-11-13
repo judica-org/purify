@@ -1,6 +1,7 @@
 {
   "schema": "purify-construction-parent-release-v1",
   "protocol": "purify-construction-parent-v1",
+  "status": "superseded-not-accepted-by-mixed-loader",
   "transcript_hash": "sha256",
   "artifact": {
     "filename": "sha256-parent-verifier.nvk.zst",
@@ -33,19 +34,6 @@
     "nova_commit": "aa42229024dc141e4edff89fcaa79f345e156d46"
   },
   "qualification_vectors": {
-    "accepted": {
-      "path": "tests/vectors/construction_parent_sha256_accepted.proof",
-      "sha256": "af83a6ee1d982471ba14913de71e67c5f8956e0a2dfcac60d18e0a41f6c528ab",
-      "prover_fixture_path": "tests/vectors/construction_parent_sha256_accepted.fixture",
-      "prover_fixture_bytes": 8314,
-      "prover_fixture_sha256": "7c819222679a52bfa216ed75262b5ca837d7f5032a15a67dea4eb18443032bb5"
-    },
-    "recursive_valid_native_rejected": {
-      "path": "tests/vectors/construction_parent_sha256_nondeciding.proof",
-      "sha256": "d7858448cebeb1c4778932e7f4ef6a36407ce1b1a05c3f0f375db37e6b6e9fbc",
-      "prover_fixture_path": "tests/vectors/construction_parent_sha256_nondeciding.fixture",
-      "prover_fixture_bytes": 8314,
-      "prover_fixture_sha256": "f2299a76e084e66e9185bf47445639f47367c1dc143061c31682dfad83de26ec"
-    }
+    "status": "pending-mixed-wit3-regeneration"
   }
 }

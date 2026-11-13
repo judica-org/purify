@@ -47,11 +47,12 @@ normalizes it to the even-Y BIP340 representative. Proof creation accepts this
 move-only typed key; there is no public API that derives it from an anchor
 root.
 
-Recovery first authenticates the complete escrow statement. Under the current
-centralized setup it derives the coalition recovery key directly from the
-exposed coalition signing scalar. Under the distributed setup it instead
-resolves the bounded centered-share carry against the authenticated full
-companion-point aggregate. It then decrypts `c` and checks both:
+Recovery first authenticates the complete escrow statement. The standalone
+centralized recovery API derives the coalition recovery key directly from the
+exposed coalition signing scalar. The selected construction path uses the
+distributed setup instead and resolves the bounded centered-share carry
+against the authenticated full companion-point aggregate. It then decrypts
+`c` and checks both:
 
 1. the decrypted 32 bytes already equal the normalized even-Y secret bytes;
 2. that secret produces the exact registered x-only punishment key.
@@ -67,11 +68,11 @@ The scalar-only cutover is a new protocol suite. Old records are not accepted.
 | Item | Selected value |
 | --- | --- |
 | Escrow record version | 4 |
-| Construction payload version | 3 |
+| Construction payload version | 4 |
 | Escrow binding domain | `Purify/Accountable/AnchorEscrow/v4` |
-| Construction statement domain | `Purify/Accountable/ConstructionReceiptStatement/v4` |
-| Accumulation domain | `Purify/Accountable/AnchorEscrowAccumulation/v4` |
-| Parent-prover fixture frame | `Purify/Nova/Wit2` |
+| Construction statement domain | `Purify/Accountable/ConstructionReceiptStatement/v5` |
+| Accumulation domain | `Purify/Accountable/ConstructionLeafAccumulation/v1` |
+| Parent-prover fixture frame | `Purify/Nova/Wit3` |
 
 The randomness-statement, randomness-master, ephemeral, and proof-seed tags
 also use their corresponding `/v4` domains. The proof suite requires the
@@ -96,13 +97,14 @@ The ciphertext is one 64-byte ephemeral root followed by one 32-byte masked
 scalar. A construction payload is:
 
 ```
-69 + 128*N bytes
+73 + 98*S + 128*A bytes
 ```
 
-Each 128-byte entry contains the 96-byte ciphertext and the exact 32-byte v4
-circuit precommitment. Anchor references, roots, punishment keys, and context
-digests are resolved from the registry and authenticated by the construction
-statement rather than duplicated in the compact payload.
+Each 98-byte setup entry contains a full signed recovery share and its exact
+precommitment. Each 128-byte anchor entry contains the 96-byte ciphertext and
+exact v4 circuit precommitment. Anchor references, roots, punishment keys, and
+context digests are resolved from the registry and authenticated by the
+construction statement rather than duplicated in the compact payload.
 
 ## Exposure boundary
 
@@ -122,7 +124,7 @@ explicit exposed-member verifier rule. Otherwise the coalition must reform.
 That runtime policy is outside the v4 leaf relation.
 
 The construction parent acceptance API requires both recursive verification
-and the native accumulation decision. The scalar-only parent profile is not
-yet qualified or published, so no production recursive receipt is currently
-accepted. Recursive validity will not substitute for the final native
-decision once the matching profile is available.
+and the native accumulation decision. The mixed parent code is implemented,
+but its verifier artifact is not yet requalified or published, so no
+production recursive receipt is currently accepted. Recursive validity never
+substitutes for the final native decision.

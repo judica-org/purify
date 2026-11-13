@@ -1,11 +1,11 @@
 # SHA-256 circuit transcript V4
 
 Status: native proof production, preparation, and verification are implemented.
-The matching constrained leaf is implemented as qualification-only source for
-the frozen recursive verifier. The production Rust archive contains only that
-verifier. This suite does not accept a construction receipt by itself: the
-leaf's reduced norm equation remains a pending fixed-basis obligation until the
-accumulator's final decision.
+The matching constrained leaf is implemented as an input to the mixed recursive
+parent relation. The production parent loader remains fail-closed until that
+relation and its verifier artifact are requalified together. This suite does
+not accept a construction receipt by itself: the leaf's reduced norm equation
+remains a pending fixed-basis obligation until the accumulator's final decision.
 
 V4 derives every proof-dependent challenge with the chained typed SHA-256
 transcript. It does not change secret padding, mask, or nonce PRFs because a
@@ -104,8 +104,8 @@ authenticated inner norm obligation. Full native verification also
 discharges that norm argument. Preparation is deliberately not
 verification and is never receipt acceptance.
 
-The qualification-only Rust leaf consumes the same allocated transcript
-variables and constrains:
+The Rust parent leaf consumes the same allocated transcript variables and
+constrains:
 
 - the raw-plus-offset anchored commitment;
 - the public-mode batched Schnorr equation and nonzero response;
@@ -141,10 +141,11 @@ public fixture. The constrained implementation consumes both fixtures and
 checks the hidden fixture's zero DLog branch.
 
 Gate counts measured for the removed field-hash relation do not apply to this
-wire format. The selected direct Nova relation has 21 inputs, 7,609,070
-auxiliary variables, and 7,653,610 constraints. Its augmented primary shape
-has 9,418,599 constraints and 9,372,280 variables; the secondary shape has
-728,974 constraints and 728,211 variables. The compressed proof is 15,076
-bytes. See
+wire format. The superseded centralized qualification measured 21 inputs,
+7,609,070 auxiliary variables, and 7,653,610 constraints. Its augmented
+primary shape had 9,418,599 constraints and 9,372,280 variables; the secondary
+shape had 728,974 constraints and 728,211 variables. Its 15,076-byte proof
+length is retained only as the mixed parent's provisional transport slot. It
+is not a qualified mixed proof size or accepted artifact identity. See
 [the anchor punishment-key relation](anchor-punishment-relation.md) for the
-qualified artifact and complete acceptance boundary.
+current acceptance boundary.

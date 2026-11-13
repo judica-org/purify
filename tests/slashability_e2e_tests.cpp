@@ -131,14 +131,18 @@ accept_qualified_construction_parent(
         purify::ErrorCode::BackendRejectedInput,
         "construction parent proof cannot rebind an anchor reference");
 
-    std::vector<purify::accountable::ConstructionReceiptEntry>
+    std::vector<purify::accountable::ConstructionReceiptSetupEntry>
+        setup_entries(construction.payload.setup_entries().begin(),
+                      construction.payload.setup_entries().end());
+    std::vector<purify::accountable::ConstructionReceiptAnchorEntry>
         reordered_entries(
-            construction.payload.entries().begin(),
-            construction.payload.entries().end());
+            construction.payload.anchor_entries().begin(),
+            construction.payload.anchor_entries().end());
     std::swap(reordered_entries[0], reordered_entries[1]);
     auto reordered_payload =
         purify::accountable::ConstructionReceiptPayload::create(
             construction.payload.recovery_root(),
+            std::move(setup_entries),
             std::move(reordered_entries));
     expect_ok(ctx, reordered_payload,
               "reordered construction payload constructs");
@@ -347,17 +351,21 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
               "two-anchor native accumulation reference decides");
     if (!construction) return;
     ctx.expect(
-        construction->anchors.size() == 2 &&
+        construction->setup_leaves.size() == 3 &&
+            construction->anchors.size() == 2 &&
             construction->resolved_entries.size() == 2 &&
-            construction->payload.entries().size() == 2,
-        "construction retains both ordered anchor statements");
+            construction->payload.setup_entries().size() == 3 &&
+            construction->payload.anchor_entries().size() == 2,
+        "construction retains ordered setup and anchor statements");
     ctx.expect(
         construction->payload.serialized_size() ==
             purify::accountable::ConstructionReceiptPayload::
                 kFixedHeaderSize +
+                3 * purify::accountable::ConstructionReceiptPayload::
+                        kSetupEntrySize +
                 2 * purify::accountable::ConstructionReceiptPayload::
-                        kEntrySize,
-        "receipt payload carries two exact public anchor entries");
+                        kAnchorEntrySize,
+        "receipt payload carries exact setup and anchor entries");
     ctx.expect(
         std::any_of(construction->statement.begin(),
                     construction->statement.end(),
@@ -388,14 +396,14 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
               "construction prover fixture serializes canonically");
     if (!prover_fixture) return;
     ctx.expect(
-        prover_fixture->size() == 8'122 &&
+        prover_fixture->size() == 17'977 &&
             std::equal(prover_fixture->begin(),
                        prover_fixture->begin() + 16,
                        std::array<unsigned char, 16>{
                            'P', 'u', 'r', 'i', 'f', 'y', '/', 'N',
-                           'o', 'v', 'a', '/', 'W', 'i', 't', '2'}
+                           'o', 'v', 'a', '/', 'W', 'i', 't', '3'}
                            .begin()),
-        "construction prover fixture has the exact v2 frame");
+        "construction prover fixture has the exact v3 frame");
     write_parent_prover_fixture_if_requested(
         ctx, *prover_fixture,
         "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE_OUT");
@@ -434,8 +442,9 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
     for (std::size_t i = 0;
          i < construction->anchors.size(); ++i) {
         const auto& anchor = construction->anchors[i];
-        auto recovered = purify::accountable::recover_escrowed_anchor(
-            construction->setup.roster(), exposed->scalar(),
+        auto recovered =
+            purify::accountable::recover_distributed_escrowed_anchor(
+            coalition->distributed_setup, exposed->scalar(),
             anchor.recovery_key.public_key,
             anchor.punishment_key.public_key(), anchor.context,
             anchor.record, secp.get());
@@ -452,8 +461,8 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
             ctx, *recovered, i, secp.get());
         expect_error(
             ctx,
-            purify::accountable::recover_escrowed_anchor(
-                construction->setup.roster(),
+            purify::accountable::recover_distributed_escrowed_anchor(
+                coalition->distributed_setup,
                 exposed->scalar().negate(),
                 anchor.recovery_key.public_key,
                 anchor.punishment_key.public_key(), anchor.context,
@@ -464,8 +473,8 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
 
     expect_error(
         ctx,
-        purify::accountable::recover_escrowed_anchor(
-            construction->setup.roster(), exposed->scalar(),
+        purify::accountable::recover_distributed_escrowed_anchor(
+            coalition->distributed_setup, exposed->scalar(),
             construction->anchors[0].recovery_key.public_key,
             construction->anchors[0].punishment_key.public_key(),
             construction->anchors[0].context,

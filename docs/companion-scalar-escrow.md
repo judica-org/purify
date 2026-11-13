@@ -56,9 +56,8 @@ children disappear. Hashes of unavailable ciphertexts would be insufficient.
 
 After a valid same-slot conflict exposes the coalition scalar `q`, recovery:
 
-1. verifies `q` against the registered recovery setup, using direct
-   derivation for the current centralized setup or the authenticated full
-   share aggregate and bounded carry search for distributed setup;
+1. verifies `q` against the authenticated full-share aggregate with the
+   bounded carry search;
 2. verifies the child proof, or consumes a verified construction parent;
 3. derives the coalition recovery key from `q`;
 4. decrypts each punishment scalar; and
@@ -77,22 +76,25 @@ UTXO rules belong to the Char registry and consensus layers.
 
 ## Size
 
-For `N` anchors:
+For `S` setup members and `A` anchors:
 
 | Object | Bytes |
 | --- | ---: |
 | One ciphertext | 96 |
 | One independent child record | 1,233 |
-| One compact payload entry | 128 |
-| Compact payload | `69 + 128*N` |
+| One setup payload entry | 98 |
+| One anchor payload entry | 128 |
+| Compact payload | `73 + 98*S + 128*A` |
 
-The 32 bytes after each payload ciphertext are its exact circuit
-precommitment. The independent 1,136-byte proof payload is an out-of-band
-input to construction and is not repeated in the compact payload.
+Each setup entry contains a full signed 66-byte share and exact 32-byte
+precommitment. The 32 bytes after each anchor ciphertext are likewise its
+exact circuit precommitment. Independent proof bodies remain out-of-band
+inputs to construction and are not repeated in the compact payload.
 
-The final construction proof is additional to `69 + 128*N`. Its qualified
-profile and verifier artifact are properties of the parent backend, not of
-the scalar ciphertext.
+The final construction proof is additional to `73 + 98*S + 128*A`. The mixed
+parent code is implemented, but its proof length and verifier artifact remain
+qualification-pending properties of the parent backend, not of the scalar
+ciphertext.
 
 ## What exposure does and does not provide
 

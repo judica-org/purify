@@ -57,8 +57,8 @@ For multi-config generators such as Xcode, build benchmarks with `--config Relea
 
 ### Construction parent verifier
 
-The optional construction-parent verifier is a purpose-specific C++ API backed
-by the qualified transparent SHA-256 Nova profile. It is supported only in
+The optional construction-parent verifier is a purpose-specific C++ API for
+the transparent SHA-256 Nova profile. It is supported only in
 64-bit macOS and Linux builds. The ordinary Purify library may remain static;
 the verifier is an isolated Rust `cdylib`. Rust 1.98.1 is pinned for that
 backend:
@@ -83,20 +83,21 @@ exact size is platform-dependent. It exports only the three private load,
 verify, and destroy ABI entry points. The private ABI header is not installed;
 applications use `ConstructionParentVerifier` from the C++ library.
 
-The 693,735,316-byte verifier artifact remains an external deployment
-resource. `ConstructionParentVerifier::load()` accepts only its exact compiled
-length, suite, and tagged digest. The installed Rust backend contains only the
-verifier; setup, proving, and artifact writing compile only into its
-qualification tests. Deploy the artifact through an immutable, read-only
-snapshot so concurrent writes cannot waste verifier resources before
-authentication rejects the changed file.
+The mixed distributed-setup profile is implemented but not yet requalified.
+Its loader therefore rejects the stale centralized artifact and no production
+construction receipt can currently be accepted. Once qualification pins a new
+artifact length, suite, and tagged digest, that artifact remains an external
+deployment resource. The installed Rust backend contains only the verifier;
+setup, proving, and artifact writing compile only into qualification tests.
+Setting `PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT` fails configuration
+until that qualification replaces the pending gate.
 
 The ordinary CI job builds and tests the Rust, package, codec, and private
 symbol boundaries without downloading this artifact. It does not claim
 recursive proof acceptance. Artifact-backed acceptance is the explicit release
-gate below.
+gate after a new artifact is qualified.
 
-Run that release gate with the authenticated artifact:
+After qualification, run that release gate with the authenticated artifact:
 
 ```sh
 cmake -S . -B build-parent \

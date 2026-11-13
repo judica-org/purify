@@ -39,8 +39,8 @@ use crate::Scalar;
 
 const FIELD_BITS: usize = 256;
 
-/// Relation identity of the exact production construction-parent profile.
-pub(crate) const CONSTRUCTION_PARENT_DIRECT_RELATION_ID: DirectRelationId =
+/// Stale relation ID retained only while mixed-profile qualification is pending.
+pub(crate) const PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID: DirectRelationId =
     DirectRelationId::from_frozen_bytes([
         0xd5, 0x42, 0xc5, 0xae, 0x37, 0x63, 0xee, 0x86, 0x75, 0xf0, 0x07, 0xeb, 0x16, 0x2c, 0x6f,
         0xce, 0xd4, 0x7b, 0x64, 0x6a, 0xca, 0x26, 0x6e, 0xce, 0x41, 0x6c, 0x23, 0xf5, 0x12, 0x00,
@@ -62,6 +62,8 @@ pub(crate) struct ConstructionParentStep {
     reduction: CandidateNormReductionProofWitness,
     proof: CandidateStepProofWitness,
     input_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+    #[cfg(test)]
+    relation_id: DirectRelationId,
 }
 
 /// Reduced-shape test circuit, intentionally ineligible for Nova sessions.
@@ -110,11 +112,21 @@ impl ConstructionParentStep {
             reduction,
             proof,
             input_state,
+            #[cfg(test)]
+            relation_id: PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID,
         })
     }
 
     pub(crate) const fn input_state(&self) -> &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {
         &self.input_state
+    }
+
+    /// Rebinds only the resource-gated qualification copy to the relation ID
+    /// streamed from its exact matrix. Production construction remains pinned
+    /// to the reviewed constant below.
+    #[cfg(test)]
+    pub(crate) fn set_qualification_relation_id(&mut self, relation_id: DirectRelationId) {
+        self.relation_id = relation_id;
     }
 
     fn synthesize_relation<CS: ConstraintSystem<Scalar>>(
@@ -193,7 +205,14 @@ impl StepCircuit<Scalar> for ConstructionParentStep {
 
 impl NovaSessionStep<CONSTRUCTION_RECURRENCE_STATE_ARITY> for ConstructionParentStep {
     fn relation_id(&self) -> DirectRelationId {
-        CONSTRUCTION_PARENT_DIRECT_RELATION_ID
+        #[cfg(test)]
+        {
+            self.relation_id
+        }
+        #[cfg(not(test))]
+        {
+            PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
+        }
     }
 
     fn input_state(&self) -> &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {

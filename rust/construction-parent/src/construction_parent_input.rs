@@ -7,9 +7,7 @@
 
 use thiserror::Error;
 
-use crate::construction_manifest::{
-    ConstructionManifestLeaf, ConstructionManifestSeed, ConstructionRoot,
-};
+use crate::construction_manifest::{ConstructionManifestLeaf, ConstructionManifestSeed};
 use crate::construction_profile::{
     CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
     CONSTRUCTION_STATE_ARITY,
@@ -48,10 +46,11 @@ impl ConstructionParentInputs {
     pub(crate) fn parse(
         construction_statement_digest: [u8; 32],
         resolved_setup_record_digest: [u8; 32],
-        canonical_seed_root: &[u8],
+        recovery_root: [u8; 64],
         native_basis_digest: [u8; 32],
         native_raw_generator_digest: [u8; 32],
-        leaf_count: u32,
+        setup_leaf_count: u32,
+        anchor_leaf_count: u32,
         leaf_descriptors: &[u8],
     ) -> Result<Self, ConstructionParentInputError> {
         if native_basis_digest != CONSTRUCTION_PARENT_BASIS_DIGEST {
@@ -61,6 +60,16 @@ impl ConstructionParentInputs {
             return Err(ConstructionParentInputError::RawGeneratorDigest);
         }
 
+        let seed = ConstructionManifestSeed::new(
+            construction_statement_digest,
+            resolved_setup_record_digest,
+            recovery_root,
+            setup_leaf_count,
+            anchor_leaf_count,
+        )?;
+        let leaf_count = setup_leaf_count
+            .checked_add(anchor_leaf_count)
+            .ok_or(ConstructionParentInputError::DescriptorCount)?;
         let leaf_count_usize = usize::try_from(leaf_count)
             .map_err(|_| ConstructionParentInputError::DescriptorCount)?;
         let expected_size = leaf_count_usize
@@ -73,13 +82,6 @@ impl ConstructionParentInputs {
             });
         }
 
-        let root = ConstructionRoot::parse(canonical_seed_root)?;
-        let seed = ConstructionManifestSeed::new(
-            construction_statement_digest,
-            resolved_setup_record_digest,
-            root,
-            leaf_count,
-        )?;
         let (initial_state, mut expected_final) = seed.initial_state_and_manifest()?;
         let (descriptors, remainder) =
             leaf_descriptors.as_chunks::<CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES>();

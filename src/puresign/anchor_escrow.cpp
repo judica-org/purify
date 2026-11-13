@@ -58,7 +58,7 @@ PointBytes punishment_point(const AnchorPunishmentPublicKey& key) {
     return out;
 }
 
-Status require_roster(const RecoveryBoundSigningRoster& roster,
+Status require_roster(const NonceHostBoundSigningRoster& roster,
                       const char* label) {
     if (roster.members().empty()) {
         return unexpected_error(ErrorCode::EmptyInput, label);
@@ -67,10 +67,10 @@ Status require_roster(const RecoveryBoundSigningRoster& roster,
 }
 
 Status require_distinct_anchor_root(
-    const RecoveryBoundSigningRoster& roster,
+    const UInt512& recovery_root,
     const UInt512& advertised_anchor_root,
     const char* label) {
-    if (advertised_anchor_root == roster.recovery_root()) {
+    if (advertised_anchor_root == recovery_root) {
         return unexpected_error(ErrorCode::BindingMismatch, label);
     }
     return {};
@@ -231,7 +231,7 @@ Bytes ciphertext_bytes(const AnchorEscrowCiphertext& ciphertext) {
     return out;
 }
 
-PointBytes roster_point(const RecoveryBoundSigningRoster& roster) {
+PointBytes roster_point(const NonceHostBoundSigningRoster& roster) {
     PointBytes out{};
     out[0] = 0x02;
     std::copy(roster.signing_key().begin(), roster.signing_key().end(),
@@ -249,7 +249,7 @@ Result<bppp::ScalarBytes> escrow_randomness_statement(
                            "anchor_escrow:randomness_roster");
     PURIFY_RETURN_IF_ERROR(
         require_distinct_anchor_root(
-            roster, advertised_anchor_root,
+            roster.recovery_root(), advertised_anchor_root,
             "anchor_escrow:recovery_root_alias"),
         "anchor_escrow:randomness_anchor_root");
     PURIFY_RETURN_IF_ERROR(
@@ -267,7 +267,8 @@ Result<bppp::ScalarBytes> escrow_randomness_statement(
 }
 
 Result<Bytes> escrow_binding(
-    const RecoveryBoundSigningRoster& roster,
+    const NonceHostBoundSigningRoster& roster,
+    const UInt512& recovery_root,
     const UInt512& advertised_anchor_root,
     const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
@@ -277,13 +278,13 @@ Result<Bytes> escrow_binding(
                            "anchor_escrow:roster");
     PURIFY_RETURN_IF_ERROR(
         require_distinct_anchor_root(
-            roster, advertised_anchor_root,
+            recovery_root, advertised_anchor_root,
             "anchor_escrow:recovery_root_alias"),
         "anchor_escrow:binding_anchor_root");
     PURIFY_RETURN_IF_ERROR(
         validate_public_points(advertised_anchor_root),
         "anchor_escrow:binding_anchor_root");
-    const auto recovery_root = roster.recovery_root().to_bytes_be();
+    const auto recovery_root_bytes = recovery_root.to_bytes_be();
     const auto anchor_root = advertised_anchor_root.to_bytes_be();
     const auto encrypted = ciphertext_bytes(ciphertext);
     const auto signing_key = roster_point(roster);
@@ -291,10 +292,22 @@ Result<Bytes> escrow_binding(
     static const TaggedHash hash("Purify/Accountable/AnchorEscrow/v4");
     const auto digest = hash.digest_many<9>({
         signing_key, roster.key_list_hash(), roster.coalition_core_digest(),
-        roster.nonce_host_commitment(), recovery_root, anchor_root, encrypted,
+        roster.nonce_host_commitment(), recovery_root_bytes, anchor_root,
+        encrypted,
         punishment, context_digest,
     });
     return Bytes(digest.begin(), digest.end());
+}
+
+Result<Bytes> escrow_binding(
+    const RecoveryBoundSigningRoster& roster,
+    const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
+    const AnchorEscrowContextDigest& context_digest,
+    const AnchorEscrowCiphertext& ciphertext) {
+    return escrow_binding(roster, roster.recovery_root(),
+                          advertised_anchor_root, punishment_key,
+                          context_digest, ciphertext);
 }
 
 Result<AnchorPunishmentKey> decrypt_punishment(
@@ -644,15 +657,31 @@ Result<ConstructionLeafAccumulator> ConstructionLeafAccumulator::create(
         auto basis,
         bppp::accumulation::Basis::create(
             kNormVectorLength, kNormVectorLength,
-            "Purify/Accountable/AnchorEscrowAccumulation/v4",
+            "Purify/Accountable/ConstructionLeafAccumulation/v1",
             secp_context),
-        "anchor_escrow_accumulation:basis");
+        "construction_leaf_accumulation:basis");
     return ConstructionLeafAccumulator(std::move(basis));
 }
 
 Result<ConstructionLeafParentConstants>
 ConstructionLeafAccumulator::derive_parent_constants(
     const RecoveryBoundSigningRoster& roster,
+    const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
+    const AnchorEscrowContextDigest& context_digest,
+    const AnchorEscrowCiphertext& ciphertext,
+    const bppp::ScalarBytes& circuit_precommitment,
+    purify_secp_context* secp_context) const {
+    return derive_pending_anchor_parent_constants(
+        roster, roster.recovery_root(), advertised_anchor_root,
+        punishment_key, context_digest, ciphertext,
+        circuit_precommitment, secp_context);
+}
+
+Result<ConstructionLeafParentConstants>
+ConstructionLeafAccumulator::derive_pending_anchor_parent_constants(
+    const NonceHostBoundSigningRoster& roster,
+    const UInt512& recovery_root,
     const UInt512& advertised_anchor_root,
     const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
@@ -676,12 +705,12 @@ ConstructionLeafAccumulator::derive_parent_constants(
         "anchor_escrow_parent:precommitment");
     PURIFY_ASSIGN_OR_RETURN(
         const auto circuit,
-        public_escrow_circuit(roster.recovery_root(), ciphertext),
+        public_escrow_circuit(recovery_root, ciphertext),
         "anchor_escrow_parent:circuit");
     PURIFY_ASSIGN_OR_RETURN(
         const auto binding,
-        escrow_binding(roster, advertised_anchor_root, punishment_key,
-                       context_digest, ciphertext),
+        escrow_binding(roster, recovery_root, advertised_anchor_root,
+                       punishment_key, context_digest, ciphertext),
         "anchor_escrow_parent:binding");
     const std::array<PointBytes, 1> outputs{
         punishment_point(punishment_key)};
@@ -789,6 +818,40 @@ Result<AnchorPunishmentKey> recover_escrowed_anchor(
     if (!accepted) {
         return unexpected_error(ErrorCode::EquationMismatch,
                                 "anchor_escrow:invalid_proof");
+    }
+    return recover_authenticated_anchor_ciphertext(
+        recipient, punishment_key, record.ciphertext(), secp_context);
+}
+
+Result<AnchorPunishmentKey> recover_distributed_escrowed_anchor(
+    const VerifiedDistributedRecoverySetup& setup,
+    const FieldElement& exposed_signing_scalar,
+    const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
+    const AnchorEscrowContextDigest& context_digest,
+    const AnchorEscrowRecord& record,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) {
+    PURIFY_RETURN_IF_ERROR(
+        require_anchor_v4_hash_suite(
+            "anchor_escrow:recover_distributed_hash_suite"),
+        "anchor_escrow:recover_distributed_hash_suite");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& recipient,
+        recover_aggregated_recovery_root(
+            setup.roster(), setup.aggregate(), exposed_signing_scalar,
+            secp_context),
+        "anchor_escrow:recover_distributed_recipient");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto accepted,
+        verify_anchor_escrow(
+            setup.roster(), advertised_anchor_root, punishment_key,
+            context_digest, record, secp_context, cache),
+        "anchor_escrow:recover_distributed_verify");
+    if (!accepted) {
+        return unexpected_error(
+            ErrorCode::EquationMismatch,
+            "anchor_escrow:recover_distributed_proof");
     }
     return recover_authenticated_anchor_ciphertext(
         recipient, punishment_key, record.ciphertext(), secp_context);

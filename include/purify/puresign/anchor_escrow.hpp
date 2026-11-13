@@ -16,6 +16,7 @@
 namespace purify::accountable {
 
 class ConstructionLeafAccumulator;
+class VerifiedDistributedRecoverySetup;
 
 /**
  * Digest of the application statement protected by one anchor escrow.
@@ -196,13 +197,26 @@ static_assert(AnchorEscrowRecord::kSerializedSize == 1233);
 /**
  * After a coalition scalar is exposed, recover the anchor punishment key.
  *
- * This is intentionally the only public decryption operation: it first checks
- * that the scalar recovers the roster's registered root, then verifies the
- * escrow proof, decrypts the punishment scalar, and checks its normalized
- * even-Y BIP340 key against the exact advertised punishment key.
+ * This centralized path first checks that the scalar recovers the roster's
+ * registered root, then verifies the escrow proof, decrypts the punishment
+ * scalar, and checks its normalized even-Y BIP340 key against the exact
+ * advertised punishment key. Distributed receipts use the separately typed
+ * aggregate-bound recovery operation below.
  */
 [[nodiscard]] Result<AnchorPunishmentKey> recover_escrowed_anchor(
     const RecoveryBoundSigningRoster& roster,
+    const FieldElement& exposed_signing_scalar,
+    const UInt512& advertised_anchor_root,
+    const AnchorPunishmentPublicKey& punishment_key,
+    const AnchorEscrowContextDigest& context_digest,
+    const AnchorEscrowRecord& record,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache = nullptr);
+
+/** Recover an escrow through an authenticated distributed setup aggregate. */
+[[nodiscard]] Result<AnchorPunishmentKey>
+recover_distributed_escrowed_anchor(
+    const VerifiedDistributedRecoverySetup& setup,
     const FieldElement& exposed_signing_scalar,
     const UInt512& advertised_anchor_root,
     const AnchorPunishmentPublicKey& punishment_key,

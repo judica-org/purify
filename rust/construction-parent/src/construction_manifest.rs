@@ -25,16 +25,16 @@ use crate::secp_native::{
 use crate::sha256_transcript::NativeTranscript;
 use crate::{scalar_to_canonical, RelationError, Scalar};
 
-const CONSTRUCTION_RELATION_VERSION: u64 = 2;
+const CONSTRUCTION_RELATION_VERSION: u64 = 3;
 const CONSTRUCTION_INITIAL_MANIFEST_DOMAIN: &[u8] =
-    b"Purify/Accountable/ConstructionParentManifest/v2/init";
+    b"Purify/Accountable/ConstructionParentManifest/v3/init";
 pub(crate) const CONSTRUCTION_STEP_MANIFEST_DOMAIN: &[u8] =
-    b"Purify/Accountable/ConstructionParentManifest/v2/anchor";
+    b"Purify/Accountable/ConstructionParentManifest/v3/leaf";
 
 /// Canonical pending root for the fixed 32,768-point construction basis.
 ///
 /// This type establishes only the exact one-term encoding shared by the
-/// registry seed and proof-authenticated final state. Parsing or constructing
+/// canonical initial claim and proof-authenticated final state. Parsing or constructing
 /// one does not verify or decide the represented accumulation obligation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ConstructionRoot {
@@ -142,30 +142,42 @@ impl ConstructionRoot {
 pub(crate) struct ConstructionManifestSeed {
     construction_statement_digest: [u8; 32],
     resolved_setup_record_digest: [u8; 32],
+    recovery_root: [u8; 64],
     root: ConstructionRoot,
-    payload_leaf_count: u32,
+    setup_leaf_count: u32,
+    anchor_leaf_count: u32,
 }
 
 impl ConstructionManifestSeed {
     pub(crate) fn new(
         construction_statement_digest: [u8; 32],
         resolved_setup_record_digest: [u8; 32],
-        root: ConstructionRoot,
-        payload_leaf_count: u32,
+        recovery_root: [u8; 64],
+        setup_leaf_count: u32,
+        anchor_leaf_count: u32,
     ) -> Result<Self, RelationError> {
         if resolved_setup_record_digest == [0; 32] {
             return Err(RelationError::Malformed(
                 "unresolved construction setup record",
             ));
         }
-        if payload_leaf_count == 0 {
-            return Err(RelationError::Malformed("empty construction payload"));
+        if recovery_root == [0; 64] {
+            return Err(RelationError::Malformed("empty recovery root"));
         }
+        if setup_leaf_count == 0 || anchor_leaf_count == 0 {
+            return Err(RelationError::Malformed("empty construction phase"));
+        }
+        setup_leaf_count
+            .checked_add(anchor_leaf_count)
+            .ok_or(RelationError::Malformed("construction leaf count"))?;
+        let root = ConstructionRoot::parse(&[0; CONSTRUCTION_ROOT_BYTES])?;
         Ok(Self {
             construction_statement_digest,
             resolved_setup_record_digest,
+            recovery_root,
             root,
-            payload_leaf_count,
+            setup_leaf_count,
+            anchor_leaf_count,
         })
     }
 
@@ -182,9 +194,10 @@ impl ConstructionManifestSeed {
             .append_bytes(&self.resolved_setup_record_digest)
             .expect("fixed setup digest length fits u64");
         transcript
-            .append_bytes(self.root.canonical_bytes())
-            .expect("fixed root length fits u64");
-        transcript.append_u64(u64::from(self.payload_leaf_count));
+            .append_bytes(&self.recovery_root)
+            .expect("fixed recovery root length fits u64");
+        transcript.append_u64(u64::from(self.setup_leaf_count));
+        transcript.append_u64(u64::from(self.anchor_leaf_count));
         Ok(field_to_be(transcript.challenge(0)?.scalar))
     }
 
@@ -235,7 +248,11 @@ impl ConstructionManifestSeed {
     ) -> Result<ConstructionManifestState, RelationError> {
         let count = u32::try_from(leaves.len())
             .map_err(|_| RelationError::Malformed("construction leaf count"))?;
-        if count != self.payload_leaf_count {
+        let expected_count = self
+            .setup_leaf_count
+            .checked_add(self.anchor_leaf_count)
+            .ok_or(RelationError::Malformed("construction leaf count"))?;
+        if count != expected_count {
             return Err(RelationError::Malformed("construction manifest leaf count"));
         }
         let (_, mut state) = self.initial_state_and_manifest()?;

@@ -40,7 +40,7 @@ fn leaf(binding: u8) -> ConstructionManifestLeaf {
 
 fn authenticated_state() -> ([Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY], [Scalar; 2]) {
     let root = root();
-    let seed = ConstructionManifestSeed::new([0x31; 32], [0x52; 32], root.clone(), 2)
+    let seed = ConstructionManifestSeed::new([0x31; 32], [0x52; 32], [0x71; 64], 1, 1)
         .expect("construction manifest seed");
     let expected_suffix = seed
         .derive_expected_final(&[leaf(0x61), leaf(0x62)])
@@ -112,7 +112,7 @@ fn authenticated_final_state_rejects_malformed_pending_roots() {
 }
 
 #[test]
-fn v4_loader_rejects_the_stale_qualified_artifact() {
+fn mixed_loader_rejects_the_stale_qualified_artifact() {
     let mut artifact = Cursor::new(vec![0xa5; 16]);
     assert!(matches!(
         load_qualified_construction_parent_verifier(&mut artifact),

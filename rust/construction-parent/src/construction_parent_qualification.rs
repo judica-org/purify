@@ -18,10 +18,7 @@ use crate::circuit_transcript::{
     CircuitTranscriptShapeV4,
 };
 use crate::construction_manifest::ConstructionRoot;
-use crate::construction_parent_prover_fixture::{
-    ConstructionParentProverFixture, NONDECIDING_PROVER_FIXTURE_SHA256,
-    QUALIFIED_PROVER_FIXTURE_SHA256,
-};
+use crate::construction_parent_prover_fixture::ConstructionParentProverFixture;
 use crate::construction_profile::{
     CONSTRUCTION_LEAF_GATE_COUNT, CONSTRUCTION_LEAF_NORM_LENGTH, CONSTRUCTION_LEAF_ROUNDS,
     CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
@@ -33,19 +30,17 @@ use crate::construction_recurrence::{
 };
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
 use crate::nova_construction_recurrence::{
-    ConstructionParentStep, TestConstructionParentStep, CONSTRUCTION_PARENT_DIRECT_RELATION_ID,
+    ConstructionParentStep, TestConstructionParentStep, PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID,
 };
 use crate::nova_relation_identity::direct_step_relation_shape;
-use crate::nova_session::verifier_artifact::QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT;
 use crate::nova_session::{
-    NovaSessionStep, NovaSessionSuite, SelectedDirectNovaVerifier, SelectedNovaSessionSuite,
-    QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
+    NovaSessionStep, NovaSessionSuite, SelectedNovaSessionSuite,
+    MIXED_CONSTRUCTION_QUALIFICATION_VERSIONS, PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH,
 };
 use crate::nova_types::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine};
 use crate::secp_native::{standard_generator, SecpEncodedPointWitness, SecpScalarWitness};
 use crate::{scalar_to_canonical, Scalar};
 
-const SHA_VERIFIER_PAYLOAD_LENGTH: u64 = 3_206_748_264;
 const DIRECT_PARENT_AUXILIARY: usize = 7_609_070;
 const DIRECT_PARENT_CONSTRAINTS: usize = 7_653_610;
 
@@ -268,7 +263,7 @@ fn prior_state(manifest_byte: u8) -> ConstructionRecurrenceStateWitness {
     }
 }
 
-fn registry_seed_root(root: &CandidateRootClaim) -> ConstructionRoot {
+fn candidate_root(root: &CandidateRootClaim) -> ConstructionRoot {
     assert_eq!(root.factors.len(), CONSTRUCTION_ROOT_ROUNDS);
     let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
     encoded[..33].copy_from_slice(&root.point.encoded);
@@ -277,7 +272,7 @@ fn registry_seed_root(root: &CandidateRootClaim) -> ConstructionRoot {
         let offset = 65 + 32 * index;
         encoded[offset..offset + 32].copy_from_slice(&factor.bytes);
     }
-    ConstructionRoot::parse(&encoded).expect("construction registry seed root")
+    ConstructionRoot::parse(&encoded).expect("canonical construction root")
 }
 
 fn recurrence_state_from_fields(
@@ -420,7 +415,7 @@ fn direct_construction_step_fixes_profile_and_input_state() {
     assert_eq!(step.input_state(), &expected_input);
     assert_eq!(
         NovaSessionStep::relation_id(&step),
-        CONSTRUCTION_PARENT_DIRECT_RELATION_ID
+        PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
     );
 
     let shape = small_leaf_shape();
@@ -441,8 +436,8 @@ fn direct_construction_step_fixes_profile_and_input_state() {
 }
 
 #[test]
-#[ignore = "run explicitly in release mode; streams the production relation"]
-fn direct_construction_step_relation_shape_is_pinned() {
+#[ignore = "run explicitly in release mode; streams the pending relation"]
+fn direct_construction_step_relation_shape_is_deterministic() {
     let first_step = production_direct_step(0x31, 1);
     let first = direct_step_relation_shape::<CONSTRUCTION_RECURRENCE_STATE_ARITY, _>(&first_step)
         .expect("first production relation");
@@ -455,16 +450,18 @@ fn direct_construction_step_relation_shape_is_pinned() {
     assert_eq!(first.inputs(), 21);
     assert_eq!(first.auxiliary(), DIRECT_PARENT_AUXILIARY);
     assert_eq!(first.constraints(), DIRECT_PARENT_CONSTRAINTS);
-    assert_eq!(first.relation_id(), CONSTRUCTION_PARENT_DIRECT_RELATION_ID);
-    assert_eq!(
-        first.relation_id(),
-        NovaSessionStep::relation_id(&first_step)
+    eprintln!(
+        "pending relation_id={} inputs={} auxiliary={} constraints={}",
+        hex(first.relation_id().bytes()),
+        first.inputs(),
+        first.auxiliary(),
+        first.constraints(),
     );
 }
 
 #[test]
-#[ignore = "run explicitly in release mode; counts augmented Nova shapes"]
-fn direct_construction_step_augmented_shape_is_pinned() {
+#[ignore = "run explicitly in release mode; checks provisional geometry"]
+fn direct_construction_step_augmented_shape_matches_provisional_slot() {
     let step = production_direct_step(0x31, 1);
     let augmented =
         PublicParams::<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, _>::shape_metrics(&step)
@@ -481,7 +478,7 @@ fn direct_construction_step_augmented_shape_is_pinned() {
     .expect("direct construction proof shape");
 
     eprintln!(
-        "direct augmented shape={augmented:#?}\n\
+        "qualification-pending augmented shape={augmented:#?}\n\
          verifier_payload_length={verifier_payload_length}\n\
          proof_length={} proof_sequences={}",
         proof_shape.encoded_len(),
@@ -500,12 +497,15 @@ fn direct_construction_step_augmented_shape_is_pinned() {
     assert_eq!(augmented.secondary.b_terms, 736_338);
     assert_eq!(augmented.secondary.c_terms, 1_568_376);
     assert_eq!(verifier_payload_length, 3_206_748_264);
-    assert_eq!(proof_shape.encoded_len(), 15_076);
+    assert_eq!(
+        proof_shape.encoded_len(),
+        PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH
+    );
     assert_eq!(proof_shape.sequence_count(), 152);
 }
 
 #[test]
-fn production_relation_digests_match_the_native_anchor_profile() {
+fn production_relation_digests_match_the_native_leaf_profile() {
     assert_eq!(
         CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
         [
@@ -517,9 +517,9 @@ fn production_relation_digests_match_the_native_anchor_profile() {
     assert_eq!(
         CONSTRUCTION_PARENT_BASIS_DIGEST,
         [
-            0x3f, 0x0f, 0xc1, 0x07, 0x77, 0x88, 0xb6, 0x88, 0xc2, 0xf0, 0x5d, 0x6f, 0x17, 0xaf,
-            0x1c, 0x53, 0x36, 0x52, 0xbe, 0x4f, 0x94, 0xd7, 0xcb, 0x4f, 0x9a, 0x70, 0x27, 0x0c,
-            0xd2, 0x04, 0xe1, 0x19,
+            0x3e, 0x22, 0x80, 0x71, 0x8c, 0xf5, 0x97, 0x0d, 0xaf, 0x53, 0xb8, 0xec, 0x3f, 0xf1,
+            0x1d, 0x59, 0x2a, 0x71, 0x48, 0x35, 0x14, 0xba, 0x91, 0xa6, 0xf1, 0xb3, 0x72, 0x08,
+            0xad, 0x9e, 0xb5, 0x94,
         ]
     );
     assert_ne!(
@@ -528,15 +528,15 @@ fn production_relation_digests_match_the_native_anchor_profile() {
     );
 }
 
-fn read_qualification_fixture(
-    environment: &str,
-    expected_sha256: [u8; 32],
-) -> ConstructionParentProverFixture {
+fn read_qualification_fixture(environment: &str) -> ConstructionParentProverFixture {
     let path = std::env::var_os(environment)
         .unwrap_or_else(|| panic!("set {environment} before qualification"));
     let bytes = std::fs::read(path).expect("read construction parent prover fixture");
-    assert_eq!(bytes.len(), 8_122);
-    assert_eq!(Sha256::digest(&bytes).as_slice(), expected_sha256);
+    eprintln!(
+        "unqualified_wit3_fixture={environment} bytes={} sha256={}",
+        bytes.len(),
+        hex(&Sha256::digest(&bytes)),
+    );
     ConstructionParentProverFixture::parse(&bytes)
         .expect("parse construction parent prover fixture")
 }
@@ -545,8 +545,11 @@ fn assert_matching_public_fixtures(
     accepted: &ConstructionParentProverFixture,
     nondeciding: &ConstructionParentProverFixture,
 ) {
-    assert_eq!(accepted.anchors.len(), 2);
-    assert_eq!(nondeciding.anchors.len(), accepted.anchors.len());
+    assert_ne!(accepted.setup_leaf_count, 0);
+    assert_ne!(accepted.anchor_leaf_count, 0);
+    assert_eq!(accepted.setup_leaf_count, nondeciding.setup_leaf_count);
+    assert_eq!(accepted.anchor_leaf_count, nondeciding.anchor_leaf_count);
+    assert_eq!(nondeciding.leaves.len(), accepted.leaves.len());
     assert_eq!(accepted.inputs.leaves(), nondeciding.inputs.leaves());
     assert_eq!(
         accepted
@@ -560,11 +563,11 @@ fn assert_matching_public_fixtures(
             .initial_state_fields()
             .expect("nondeciding initial state")
     );
-    for (accepted_anchor, nondeciding_anchor) in accepted.anchors.iter().zip(&nondeciding.anchors) {
-        assert_eq!(accepted_anchor.statement, nondeciding_anchor.statement);
+    for (accepted_leaf, nondeciding_leaf) in accepted.leaves.iter().zip(&nondeciding.leaves) {
+        assert_eq!(accepted_leaf.statement, nondeciding_leaf.statement);
         assert_eq!(
-            accepted_anchor.transcript.public_commitments,
-            nondeciding_anchor.transcript.public_commitments
+            accepted_leaf.transcript.public_commitments,
+            nondeciding_leaf.transcript.public_commitments
         );
     }
     assert_ne!(
@@ -599,25 +602,25 @@ fn bind_qualification_fixture(
     );
 
     let mut expected_input = initial_state;
-    let mut steps = Vec::with_capacity(fixture.anchors.len());
-    for (index, anchor) in fixture.anchors.iter().enumerate() {
+    let mut steps = Vec::with_capacity(fixture.leaves.len());
+    for (index, leaf) in fixture.leaves.iter().enumerate() {
         let step = ConstructionParentStep::new(
             state,
-            anchor.statement,
-            anchor.transcript.clone(),
-            anchor.reduction.clone(),
-            anchor.step.clone(),
+            leaf.statement,
+            leaf.transcript.clone(),
+            leaf.reduction.clone(),
+            leaf.step.clone(),
         )
         .expect("qualification recurrence");
         assert_eq!(*step.input_state(), expected_input);
         assert_eq!(
             NovaSessionStep::relation_id(&step),
-            CONSTRUCTION_PARENT_DIRECT_RELATION_ID
+            PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
         );
         let output = synthesize_output(&step);
         state = recurrence_state_from_fields(
             output,
-            u32::try_from(index + 1).expect("qualification anchor index fits u32"),
+            u32::try_from(index + 1).expect("qualification leaf index fits u32"),
         );
         expected_input = output;
         steps.push(step);
@@ -628,7 +631,7 @@ fn bind_qualification_fixture(
         expected_suffix.as_slice()
     );
     assert_eq!(
-        registry_seed_root(&state.root).canonical_bytes(),
+        candidate_root(&state.root).canonical_bytes(),
         fixture.expected_root.canonical_bytes()
     );
     BoundQualificationFixture {
@@ -660,7 +663,7 @@ fn bind_both_qualification_fixtures(
         .iter()
         .chain(&nondeciding_bound.steps)
         .all(|step| {
-            NovaSessionStep::relation_id(step) == CONSTRUCTION_PARENT_DIRECT_RELATION_ID
+            NovaSessionStep::relation_id(step) == PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
         }));
     (trusted_step, accepted_bound, nondeciding_bound)
 }
@@ -725,108 +728,16 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 #[ignore = "requires both fixtures and synthesizes production recurrences"]
 fn exported_sha_parent_fixtures_reconstruct_one_shape() {
-    let accepted = read_qualification_fixture(
-        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
-        QUALIFIED_PROVER_FIXTURE_SHA256,
-    );
-    let nondeciding = read_qualification_fixture(
-        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
-        NONDECIDING_PROVER_FIXTURE_SHA256,
-    );
+    let accepted = read_qualification_fixture("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
+    let nondeciding =
+        read_qualification_fixture("PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE");
     let (trusted_step, accepted_bound, nondeciding_bound) =
         bind_both_qualification_fixtures(&accepted, &nondeciding);
-    assert_eq!(accepted_bound.steps.len(), accepted.anchors.len());
-    assert_eq!(nondeciding_bound.steps.len(), nondeciding.anchors.len());
+    assert_eq!(accepted_bound.steps.len(), accepted.leaves.len());
+    assert_eq!(nondeciding_bound.steps.len(), nondeciding.leaves.len());
     assert_eq!(
         NovaSessionStep::relation_id(&trusted_step),
-        CONSTRUCTION_PARENT_DIRECT_RELATION_ID
-    );
-}
-
-#[test]
-#[ignore = "requires qualified artifacts and synthesizes production recurrences"]
-fn qualified_sha_parent_artifact_verifies_both_outputs() {
-    let total_started = std::time::Instant::now();
-    let accepted = read_qualification_fixture(
-        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
-        QUALIFIED_PROVER_FIXTURE_SHA256,
-    );
-    let nondeciding = read_qualification_fixture(
-        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
-        NONDECIDING_PROVER_FIXTURE_SHA256,
-    );
-    let relation_started = std::time::Instant::now();
-    let (trusted_step, accepted_bound, nondeciding_bound) =
-        bind_both_qualification_fixtures(&accepted, &nondeciding);
-    eprintln!(
-        "sha_parent_artifact_check: relation_seconds={:.3}",
-        relation_started.elapsed().as_secs_f64()
-    );
-    drop(trusted_step);
-    drop(accepted);
-    drop(nondeciding);
-
-    let z0 = accepted_bound.initial_state;
-    let accepted_final = accepted_bound.final_state;
-    let nondeciding_final = nondeciding_bound.final_state;
-    let step_count = accepted_bound.steps.len();
-    assert_eq!(nondeciding_bound.steps.len(), step_count);
-    drop(accepted_bound.steps);
-    drop(nondeciding_bound.steps);
-
-    let accepted_proof = std::fs::read(
-        std::env::var_os("PURIFY_CONSTRUCTION_PARENT_PROOF")
-            .expect("qualified accepted proof path"),
-    )
-    .expect("read qualified accepted proof");
-    let nondeciding_proof = std::fs::read(
-        std::env::var_os("PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROOF")
-            .expect("qualified nondeciding proof path"),
-    )
-    .expect("read qualified nondeciding proof");
-    assert_eq!(
-        accepted_proof.len(),
-        QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
-    );
-    assert_eq!(
-        nondeciding_proof.len(),
-        QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
-    );
-
-    let mut artifact = std::fs::File::open(
-        std::env::var_os("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT")
-            .expect("qualified verifier artifact path"),
-    )
-    .expect("open qualified verifier artifact");
-    let load_started = std::time::Instant::now();
-    let verifier =
-        SelectedDirectNovaVerifier::<CONSTRUCTION_RECURRENCE_STATE_ARITY>::from_artifact_reader(
-            &mut artifact,
-            &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
-            &QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
-        )
-        .expect("load qualified verifier artifact");
-    eprintln!(
-        "sha_parent_artifact_check: load_seconds={:.3}",
-        load_started.elapsed().as_secs_f64()
-    );
-    let accepted_started = std::time::Instant::now();
-    verifier
-        .verify_exact(&z0, step_count, &accepted_final, &accepted_proof)
-        .expect("qualified verifier accepts accepted proof");
-    eprintln!(
-        "sha_parent_artifact_check: accepted_verify_seconds={:.3}",
-        accepted_started.elapsed().as_secs_f64()
-    );
-    let nondeciding_started = std::time::Instant::now();
-    verifier
-        .verify_exact(&z0, step_count, &nondeciding_final, &nondeciding_proof)
-        .expect("qualified verifier accepts nondeciding proof");
-    eprintln!(
-        "sha_parent_artifact_check: nondeciding_verify_seconds={:.3}\n\
-         total_seconds={:.3}",
-        nondeciding_started.elapsed().as_secs_f64(),
-        total_started.elapsed().as_secs_f64()
+        PROVISIONAL_CONSTRUCTION_PARENT_RELATION_ID
     );
 }
 
@@ -839,45 +750,67 @@ fn native_profile_sha_parent_qualification_is_exact() {
         qualification_output_path("PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROOF_OUT");
     let artifact_path =
         qualification_output_path("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT");
-    let accepted = read_qualification_fixture(
-        "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE",
-        QUALIFIED_PROVER_FIXTURE_SHA256,
-    );
-    let nondeciding = read_qualification_fixture(
-        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE",
-        NONDECIDING_PROVER_FIXTURE_SHA256,
-    );
-    let (trusted_step, accepted_bound, nondeciding_bound) =
+    let accepted = read_qualification_fixture("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
+    let nondeciding =
+        read_qualification_fixture("PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE");
+    let (mut trusted_step, mut accepted_bound, mut nondeciding_bound) =
         bind_both_qualification_fixtures(&accepted, &nondeciding);
     drop(accepted);
     drop(nondeciding);
 
-    let augmented =
-        PublicParams::<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, _>::shape_metrics(
-            &trusted_step,
-        )
-        .expect("preflight qualification verifier shape");
-    let verifier_payload_length = fixed_bincode_verifier_payload_length(augmented);
-    assert_eq!(verifier_payload_length, SHA_VERIFIER_PAYLOAD_LENGTH);
-    eprintln!("sha_parent_qualification: verifier_payload_preflight={verifier_payload_length}");
+    let relation_shape =
+        direct_step_relation_shape::<CONSTRUCTION_RECURRENCE_STATE_ARITY, _>(&trusted_step)
+            .expect("stream exact qualification relation");
+    let relation_id = relation_shape.relation_id();
+    trusted_step.set_qualification_relation_id(relation_id);
+    for step in accepted_bound
+        .steps
+        .iter_mut()
+        .chain(&mut nondeciding_bound.steps)
+    {
+        step.set_qualification_relation_id(relation_id);
+    }
+    assert!(accepted_bound
+        .steps
+        .iter()
+        .chain(&nondeciding_bound.steps)
+        .all(|step| NovaSessionStep::relation_id(step) == relation_id));
+    eprintln!(
+        "sha_parent_qualification: relation_id={} relation_inputs={} \
+         relation_auxiliary={} relation_constraints={}",
+        hex(relation_id.bytes()),
+        relation_shape.inputs(),
+        relation_shape.auxiliary(),
+        relation_shape.constraints(),
+    );
 
     let setup_started = std::time::Instant::now();
     eprintln!("sha_parent_qualification: constructing transparent parameters");
-    let selected =
-        NovaSessionSuite::<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>::setup_exact(
+    let unselected =
+        NovaSessionSuite::<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>::setup(
             trusted_step,
-            &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
         )
-        .expect("exact production qualification suite");
+        .expect("unselected mixed qualification suite");
+    let selected = unselected
+        .select_generated_for_qualification(MIXED_CONSTRUCTION_QUALIFICATION_VERSIONS)
+        .expect("select generated mixed qualification suite");
     let metadata = selected.metadata();
+    let versions = MIXED_CONSTRUCTION_QUALIFICATION_VERSIONS.values();
     eprintln!(
         "sha_parent_qualification: setup_seconds={:.3}\n\
-         relation_id={}\npublic_parameter_digest={}\n\
-         suite_id={}\nmetadata={metadata:#?}",
+         payload_version={} statement_version={} manifest_version={} \
+         native_decision_version={}\nrelation_id={}\n\
+         public_parameter_digest={}\nsuite_id={}\nmetadata={metadata:#?}\n\
+         expected_suite={:#?}",
         setup_started.elapsed().as_secs_f64(),
+        versions.0,
+        versions.1,
+        versions.2,
+        versions.3,
         hex(metadata.relation_id.bytes()),
         hex(&metadata.public_parameter_digest),
         hex(selected.expected().suite_id().bytes()),
+        selected.expected(),
     );
 
     let z0 = accepted_bound.initial_state;
@@ -913,10 +846,6 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let descriptor = verifier
         .write_artifact(&mut artifact)
         .expect("write qualification verifier artifact");
-    assert_eq!(
-        descriptor,
-        QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT
-    );
     artifact
         .sync_all()
         .expect("sync qualification verifier artifact");
@@ -936,11 +865,7 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let loaded = crate::nova_session::SelectedNovaVerifier::<
         CONSTRUCTION_RECURRENCE_STATE_ARITY,
         ConstructionParentStep,
-    >::from_artifact_reader(
-        &mut artifact,
-        expected_suite,
-        &QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
-    )
+    >::from_artifact_reader(&mut artifact, expected_suite, &descriptor)
     .expect("reload qualification verifier artifact");
     loaded
         .verify_exact(&z0, step_count, &accepted_final, &accepted_proof)

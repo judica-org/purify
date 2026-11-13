@@ -100,6 +100,10 @@ T2 = sum_i T_i2
 M  = (x(T1), x(T2))
 ```
 
+The published contribution points and their proofs make this aggregation
+noninteractive. An untrusted assembler can verify and add them without any
+process learning the aggregate signing scalar.
+
 `M` is the existing 64-byte Purify recovery-root encoding used by anchor
 escrow. The implemented aggregate type rejects an empty list, invalid count,
 malformed or wrong-subgroup point, and an infinite aggregate on either
@@ -110,8 +114,8 @@ returns a move-only result containing both the recovery-bound roster and exact
 full-point aggregate. The public aggregate function remains nonauthorizing.
 
 The aggregate retains the full `T1,T2` points even though the long-lived
-recovery root retains only their x coordinates. Authenticating those points in
-the mixed construction parent is still pending.
+recovery root retains only their x coordinates. The mixed construction parent
+authenticates every exact signed share before reconstructing this aggregate.
 
 ## Recovery after a conflict
 
@@ -158,13 +162,13 @@ Pack `(m1,m2)` with the canonical Purify mixed-radix encoding, derive the
 public root, and require an exact match to `M` before decrypting any anchor
 escrow.
 
-## Planned mixed parent receipt
+## Mixed parent receipt
 
-Member contributions will remain out of band. The planned compact construction
-payload retains, for each member, only its 66-byte share and 32-byte circuit
-precommitment. The mixed recurrence will start from the canonical empty claim,
-process every setup leaf in roster order, then process every anchor leaf, and
-authenticate one final pending claim. Acceptance will still require both the
+Member contributions remain out of band. The compact construction payload
+retains, for each member, only its 66-byte share and 32-byte circuit
+precommitment. The mixed recurrence starts from the canonical all-zero
+545-byte claim, processes every setup leaf in roster order, then every anchor
+leaf, and authenticates one final pending claim. Acceptance requires both the
 recursive proof and the native final accumulation decision.
 
 The post-cutover payload shape is:
@@ -174,17 +178,18 @@ version8 || recovery_root64 || setup_count32be || anchor_count32be
 || setup_entry[98 * N] || anchor_entry[128 * A]
 ```
 
-Using the superseded parent's 15,076-byte proof only as a projection, the
-envelope would be:
+The envelope provisionally retains the superseded parent's 15,076-byte proof
+slot:
 
 ```
 15,149 + 98*N + 128*A bytes
 ```
 
 At 100 setup members and 100 anchors this is 37,749 bytes. Payload v4,
-statement v5, manifest v3, the mixed fixture, and the matching verifier
-artifact are not implemented yet. These bytes remain provisional until the
-distributed relation is requalified.
+statement v5, manifest v3, the mixed fixture, and verifier code are
+implemented. The proof length and verifier artifact remain provisional until
+the distributed relation is requalified; the stale centralized artifact is
+not accepted.
 
 ## Security boundary
 
@@ -211,6 +216,11 @@ A fully malicious roster can pool its signing shares and learn the coalition
 key without a conflict; no setup protocol can prevent that. With at least one
 honest high-entropy member, the aggregate remains hidden under the stated
 cross-group assumption.
+
+Economic weight is not part of this cryptographic roster. If a member's anchor
+becomes broken or has zero weight, Char assigns it zero economic weight but
+does not delete or reorder its signed contribution. Historical receipt
+verification and recovery continue to use the exact immutable signing roster.
 
 The recovery root is deterministic for a roster. Binding a contribution to a
 formation permit prevents transplanting it to a different permit. Purify does

@@ -28,6 +28,7 @@ class NonceHostBoundSigningRoster;
 class RecoveryBoundSigningRoster;
 class RecoveryRootSetupProof;
 class VerifiedDistributedRecoverySetup;
+class VerifiedConstructionReceipt;
 
 /**
  * Validate nonce hosts and bind them to a one-shot Bitcoin formation.
@@ -190,6 +191,7 @@ private:
         NonceHostBoundSigningRoster, const UInt512&,
         const RecoveryRootSetupProof&, purify_secp_context*);
     friend class VerifiedDistributedRecoverySetup;
+    friend class VerifiedConstructionReceipt;
 };
 
 } // namespace purify::accountable

@@ -2,7 +2,7 @@
 //!
 //! A successful verification authenticates the final pending accumulation
 //! root. It does not establish receipt acceptance: the native verifier must
-//! parse that root against the anchor basis and complete `decide()`.
+//! parse that root against the construction-leaf basis and complete `decide()`.
 
 use std::io::{Read, Seek};
 
@@ -19,10 +19,16 @@ use crate::nova_session::{
 };
 use crate::{RelationError, Scalar};
 
-/// Rejects verifier loading until the v4 relation has been requalified.
+/// Rejects verifier loading until the mixed relation has been qualified.
 ///
-/// No stale v3 artifact bytes are inspected. The later qualification commit
-/// must replace this gate while pinning the v4 parameters and artifact.
+/// No stale centralized artifact bytes are inspected. The later qualification
+/// commit must replace this gate while pinning the mixed parameters and
+/// artifact.
+pub(crate) fn require_qualified_construction_parent_profile(
+) -> Result<(), DirectNovaVerifierArtifactError> {
+    Err(DirectNovaVerifierArtifactError::QualificationPending)
+}
+
 pub(crate) fn load_qualified_construction_parent_verifier<R>(
     _artifact: &mut R,
 ) -> Result<
@@ -32,7 +38,8 @@ pub(crate) fn load_qualified_construction_parent_verifier<R>(
 where
     R: Read + Seek,
 {
-    Err(DirectNovaVerifierArtifactError::QualificationPending)
+    require_qualified_construction_parent_profile()?;
+    unreachable!("a qualification-pending profile cannot load an artifact")
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -52,8 +59,8 @@ pub(crate) enum ConstructionParentVerifierError {
 /// Proof-authenticated pending accumulation root.
 ///
 /// This capability is deliberately not an accepted construction receipt. Its
-/// bytes must be parsed against the native anchor basis and pass the final
-/// accumulation decision before an acceptance type may be produced.
+/// bytes must be parsed against the native construction-leaf basis and pass
+/// the final accumulation decision before an acceptance type may be produced.
 pub(crate) struct AuthenticatedConstructionParentOutput {
     canonical_root: [u8; CONSTRUCTION_ROOT_BYTES],
 }

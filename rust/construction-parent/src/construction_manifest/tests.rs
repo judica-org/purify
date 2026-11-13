@@ -36,13 +36,23 @@ fn seed_bytes() -> [u8; CONSTRUCTION_ROOT_BYTES] {
     encoded
 }
 
-fn seed_root() -> ConstructionRoot {
-    ConstructionRoot::parse(&seed_bytes()).expect("canonical registry seed")
+fn nonzero_root() -> ConstructionRoot {
+    ConstructionRoot::parse(&seed_bytes()).expect("canonical nonzero root")
 }
 
-fn manifest_seed(count: u32) -> ConstructionManifestSeed {
-    ConstructionManifestSeed::new([0x31; 32], [0x52; 32], seed_root(), count)
-        .expect("construction manifest seed")
+fn recovery_root() -> [u8; 64] {
+    [0x71; 64]
+}
+
+fn manifest_seed(setup_count: u32, anchor_count: u32) -> ConstructionManifestSeed {
+    ConstructionManifestSeed::new(
+        [0x31; 32],
+        [0x52; 32],
+        recovery_root(),
+        setup_count,
+        anchor_count,
+    )
+    .expect("construction manifest seed")
 }
 
 fn leaf(
@@ -60,10 +70,10 @@ fn leaf(
 }
 
 #[test]
-fn registry_seed_is_byte_identical_and_maps_to_18_fields() {
+fn root_claim_is_byte_identical_and_maps_to_18_fields() {
     assert_eq!(CONSTRUCTION_ROOT_BYTES, 545);
     let encoded = seed_bytes();
-    let root = ConstructionRoot::parse(&encoded).expect("registry seed");
+    let root = ConstructionRoot::parse(&encoded).expect("root claim");
     assert_eq!(root.canonical_bytes(), &encoded);
     let claim = root.claim();
     assert_eq!(claim.point, generator());
@@ -101,7 +111,7 @@ fn registry_seed_is_byte_identical_and_maps_to_18_fields() {
 }
 
 #[test]
-fn registry_seed_parser_rejects_noncanonical_root_encodings() {
+fn root_claim_parser_rejects_noncanonical_encodings() {
     assert!(ConstructionRoot::parse(&seed_bytes()[..CONSTRUCTION_ROOT_BYTES - 1]).is_err());
 
     let mut bad_prefix = seed_bytes();
@@ -141,7 +151,7 @@ fn registry_seed_parser_rejects_noncanonical_root_encodings() {
     bad_factor[65..97].copy_from_slice(&SECP_ORDER);
     assert!(ConstructionRoot::parse(&bad_factor).is_err());
 
-    let fields = seed_root().state_fields();
+    let fields = nonzero_root().state_fields();
     let mut invalid_prefix = fields;
     invalid_prefix[0] = Scalar::from(4);
     assert!(ConstructionRoot::from_state_fields(invalid_prefix).is_err());
@@ -166,7 +176,8 @@ fn registry_seed_parser_rejects_noncanonical_root_encodings() {
 
 #[test]
 fn initial_state_is_fully_verifier_derived_and_starts_at_zero() {
-    let seed = manifest_seed(2);
+    let seed = manifest_seed(1, 1);
+    assert_eq!(seed.root.canonical_bytes(), &[0; CONSTRUCTION_ROOT_BYTES]);
     let witness = seed
         .initial_recurrence_witness()
         .expect("nonzero initial manifest");
@@ -196,55 +207,71 @@ fn initial_state_is_fully_verifier_derived_and_starts_at_zero() {
 }
 
 #[test]
-fn initial_manifest_binds_statement_setup_root_and_count() {
-    let baseline = manifest_seed(2)
+fn initial_manifest_binds_statement_setup_root_and_counts() {
+    let baseline = manifest_seed(1, 1)
         .initial_manifest()
         .expect("nonzero baseline manifest");
-    let changed_statement = ConstructionManifestSeed::new([0x32; 32], [0x52; 32], seed_root(), 2)
-        .expect("changed statement")
+    let changed_statement =
+        ConstructionManifestSeed::new([0x32; 32], [0x52; 32], recovery_root(), 1, 1)
+            .expect("changed statement")
+            .initial_manifest()
+            .expect("nonzero changed statement manifest");
+    let changed_setup =
+        ConstructionManifestSeed::new([0x31; 32], [0x53; 32], recovery_root(), 1, 1)
+            .expect("changed setup")
+            .initial_manifest()
+            .expect("nonzero changed setup manifest");
+    let changed_recovery_root =
+        ConstructionManifestSeed::new([0x31; 32], [0x52; 32], [0x72; 64], 1, 1)
+            .expect("changed recovery root seed")
+            .initial_manifest()
+            .expect("nonzero changed recovery root manifest");
+    let changed_setup_count = manifest_seed(2, 1)
         .initial_manifest()
-        .expect("nonzero changed statement manifest");
-    let changed_setup = ConstructionManifestSeed::new([0x31; 32], [0x53; 32], seed_root(), 2)
-        .expect("changed setup")
+        .expect("nonzero changed setup count manifest");
+    let changed_anchor_count = manifest_seed(1, 2)
         .initial_manifest()
-        .expect("nonzero changed setup manifest");
-    let mut changed_root_bytes = seed_bytes();
-    put_u64_scalar(&mut changed_root_bytes, 65, 99);
-    let changed_root = ConstructionManifestSeed::new(
-        [0x31; 32],
-        [0x52; 32],
-        ConstructionRoot::parse(&changed_root_bytes).expect("changed root"),
-        2,
-    )
-    .expect("changed root seed")
-    .initial_manifest()
-    .expect("nonzero changed root manifest");
-    let changed_count = manifest_seed(3)
-        .initial_manifest()
-        .expect("nonzero changed count manifest");
+        .expect("nonzero changed anchor count manifest");
 
     for changed in [
         changed_statement,
         changed_setup,
-        changed_root,
-        changed_count,
+        changed_recovery_root,
+        changed_setup_count,
+        changed_anchor_count,
     ] {
         assert_ne!(changed, baseline);
     }
 }
 
 #[test]
+fn initial_manifest_binds_phase_boundary_with_the_same_total() {
+    let one_setup = manifest_seed(1, 2)
+        .initial_manifest()
+        .expect("one-setup initial manifest");
+    let two_setups = manifest_seed(2, 1)
+        .initial_manifest()
+        .expect("two-setup initial manifest");
+    assert_ne!(one_setup, two_setups);
+}
+
+#[test]
 fn initial_seed_rejects_unresolved_and_empty_inputs() {
-    assert!(ConstructionManifestSeed::new([0x31; 32], [0; 32], seed_root(), 1).is_err());
-    assert!(ConstructionManifestSeed::new([0x31; 32], [0x52; 32], seed_root(), 0).is_err());
-    assert!(ConstructionManifestSeed::new([0x31; 32], [0x52; 32], seed_root(), u32::MAX).is_ok());
+    assert!(ConstructionManifestSeed::new([0x31; 32], [0; 32], recovery_root(), 1, 1).is_err());
+    assert!(ConstructionManifestSeed::new([0x31; 32], [0x52; 32], [0; 64], 1, 1).is_err());
+    assert!(ConstructionManifestSeed::new([0x31; 32], [0x52; 32], recovery_root(), 0, 1).is_err());
+    assert!(ConstructionManifestSeed::new([0x31; 32], [0x52; 32], recovery_root(), 1, 0).is_err());
+    assert!(
+        ConstructionManifestSeed::new([0x31; 32], [0x52; 32], recovery_root(), u32::MAX, 1)
+            .is_err()
+    );
 }
 
 #[test]
 fn ordered_iteration_binds_count_order_and_substitution() {
     let first = leaf(0x11, generator(), SecpEncodedPointWitness::identity());
     let second = leaf(0x22, SecpEncodedPointWitness::identity(), generator());
-    let seed = manifest_seed(2);
+    let seed = manifest_seed(1, 1);
     let expected = seed
         .derive_expected_final(&[first, second])
         .expect("ordered manifest");
@@ -270,17 +297,17 @@ fn ordered_iteration_binds_count_order_and_substitution() {
         .expect("substituted manifest");
     assert_ne!(substituted.manifest(), expected.manifest());
 
-    assert!(manifest_seed(3)
+    assert!(manifest_seed(2, 1)
         .derive_expected_final(&[first, second])
         .is_err());
-    assert!(manifest_seed(1)
+    assert!(manifest_seed(2, 2)
         .derive_expected_final(&[first, second])
         .is_err());
 }
 
 #[test]
 fn step_manifest_binds_every_constrained_public_input() {
-    let prior = manifest_seed(1)
+    let prior = manifest_seed(1, 1)
         .initial_manifest()
         .expect("nonzero prior manifest");
     let baseline_leaf = leaf(0x11, generator(), SecpEncodedPointWitness::identity());
@@ -387,7 +414,7 @@ fn manifest_leaf_validates_public_point_encodings() {
 
 #[test]
 fn step_index_is_zero_based_and_overflow_checked() {
-    let seed = manifest_seed(1);
+    let seed = manifest_seed(1, 1);
     let leaf = leaf(0x11, generator(), SecpEncodedPointWitness::identity());
     let initial = seed.initial_manifest().expect("nonzero initial manifest");
     let zero = ConstructionManifestStepInput::new(initial, 0, leaf).expect("zero-based step");
@@ -398,16 +425,20 @@ fn step_index_is_zero_based_and_overflow_checked() {
     );
     assert_eq!(
         derive_step_manifest(&zero).expect("first step"),
-        seed.derive_expected_final(&[leaf])
-            .expect("one-step manifest")
-            .manifest()
+        ConstructionManifestState {
+            manifest: initial,
+            index: 0
+        }
+        .advance(leaf)
+        .expect("one-step manifest")
+        .manifest()
     );
     assert_eq!(
         derive_step_manifest(&zero).expect("stable first step"),
         [
-            0x60, 0x3e, 0x2b, 0xd4, 0xff, 0xdb, 0xff, 0xa0, 0x9e, 0x44, 0xf5, 0x3e, 0xa5, 0xf9,
-            0x81, 0x50, 0x50, 0xf5, 0x8a, 0xae, 0x96, 0x2c, 0x4c, 0xf6, 0x4c, 0x98, 0xbe, 0xd8,
-            0x83, 0xcf, 0x02, 0x81,
+            0x7b, 0x78, 0xe4, 0xc7, 0x5c, 0x38, 0xf3, 0xa5, 0x69, 0x63, 0x19, 0x9a, 0x99, 0x45,
+            0x60, 0x83, 0x06, 0x01, 0x66, 0x66, 0x3e, 0x2b, 0x37, 0x1e, 0x48, 0x13, 0x43, 0x2a,
+            0xc7, 0xea, 0x46, 0x11,
         ]
     );
 
@@ -421,13 +452,13 @@ fn step_index_is_zero_based_and_overflow_checked() {
 #[test]
 fn initial_manifest_vector_is_stable() {
     assert_eq!(
-        manifest_seed(2)
+        manifest_seed(1, 1)
             .initial_manifest()
             .expect("nonzero initial manifest"),
         [
-            0x50, 0x29, 0x06, 0xb2, 0x8b, 0xfe, 0x18, 0xc8, 0xb3, 0xe5, 0x90, 0x93, 0x4f, 0x94,
-            0x92, 0x0f, 0xcb, 0x97, 0x63, 0xc8, 0xfe, 0xa4, 0x6f, 0x75, 0x3a, 0x12, 0xbf, 0xb0,
-            0x7a, 0x59, 0xfe, 0x4d,
+            0x62, 0xe9, 0xee, 0xef, 0x66, 0x4c, 0x32, 0x24, 0x46, 0x7d, 0xae, 0x69, 0x2b, 0x52,
+            0xef, 0x0a, 0x06, 0x02, 0x07, 0x4f, 0xb9, 0x60, 0xd0, 0x71, 0xce, 0xac, 0xb1, 0xef,
+            0x45, 0x1d, 0xd9, 0x99,
         ]
     );
 }

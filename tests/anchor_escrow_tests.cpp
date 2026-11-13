@@ -450,6 +450,43 @@ void test_anchor_escrow(TestContext& ctx) {
                        accumulator->basis(), *pending, secp.get()),
               "final MSM discharges the honest anchor escrow obligation");
 
+    std::array<unsigned char,
+               purify::accountable::ConstructionReceiptAccumulator::
+                   kRootClaimSerializedSize>
+        empty_root_bytes{};
+    auto empty_root = purify::bppp::accumulation::parse_root_claim(
+        accumulator->basis(), empty_root_bytes, secp.get());
+    expect_ok(ctx, empty_root,
+              "canonical empty construction root parses");
+    if (!empty_root) return;
+    auto encoded_empty_root =
+        purify::bppp::accumulation::serialize_root_claim(
+            accumulator->basis(), *empty_root, secp.get());
+    ctx.expect(
+        encoded_empty_root &&
+            std::equal(encoded_empty_root->begin(),
+                       encoded_empty_root->end(),
+                       empty_root_bytes.begin(), empty_root_bytes.end()),
+        "canonical empty construction root round-trips exactly");
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       accumulator->basis(), *empty_root, secp.get()),
+              "canonical empty construction root decides");
+
+    const std::array first_claims{*empty_root, *pending};
+    auto first_step = purify::bppp::accumulation::prove_algebraic_step(
+        accumulator->basis(), first_claims, secp.get());
+    expect_ok(ctx, first_step,
+              "first construction step folds the empty root and one leaf");
+    if (!first_step) return;
+    auto first_root = purify::bppp::accumulation::verify_algebraic_step(
+        accumulator->basis(), first_claims, *first_step, secp.get());
+    expect_ok(ctx, first_root,
+              "first construction step returns a pending root");
+    if (!first_root) return;
+    expect_ok(ctx, purify::bppp::accumulation::decide(
+                       accumulator->basis(), *first_root, secp.get()),
+              "first construction root reaches final decision");
+
     const auto slot = purify::bytes_from_ascii(
         "anchor-escrow/domain=3/epoch=9/slot=4");
     purify::accountable::ConflictContext conflict{

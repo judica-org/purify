@@ -483,6 +483,18 @@ mod tests {
         }
     }
 
+    fn canonical_empty_state() -> ConstructionRecurrenceStateWitness {
+        ConstructionRecurrenceStateWitness {
+            root: CandidateRootClaim {
+                point: SecpEncodedPointWitness::identity(),
+                scale: SecpScalarWitness::from_u64(0),
+                factors: vec![SecpScalarWitness::from_u64(0); CONSTRUCTION_ROOT_ROUNDS],
+            },
+            manifest: [0; 32],
+            index: 0,
+        }
+    }
+
     fn allocate_state<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
         witness: &ConstructionRecurrenceStateWitness,
@@ -643,6 +655,44 @@ mod tests {
                 .expect("output assignments"),
             expected_state
         );
+        assert!(cs.is_satisfied(), "{:?}", cs.which_is_unsatisfied());
+    }
+
+    #[test]
+    fn canonical_empty_claim_is_a_valid_first_step_state() {
+        let state_witness = canonical_empty_state();
+        let fields = state_witness.state_fields().expect("empty state fields");
+        assert_eq!(fields, [Scalar::ZERO; CONSTRUCTION_RECURRENCE_STATE_ARITY]);
+
+        let mut cs = TestConstraintSystem::<Scalar>::new();
+        let inputs = allocate_state(cs.namespace(|| "empty state inputs"), &state_witness);
+        let state = bind_prior_state(
+            cs.namespace(|| "empty state binding"),
+            &inputs,
+            &state_witness,
+        )
+        .expect("empty state binding");
+
+        assert_eq!(
+            state.root_claim.point.prefix().get_value(),
+            Some(Scalar::ZERO)
+        );
+        assert_eq!(
+            state.root_claim.point.point().x().get_value(),
+            Some(Scalar::ZERO)
+        );
+        assert_eq!(
+            state.root_claim.point.point().identity_num().get_value(),
+            Some(Scalar::ONE)
+        );
+        assert_eq!(state.root_claim.polynomial.len(), 1);
+        let zero = num_bigint::BigInt::from(0u8);
+        assert_eq!(state.root_claim.polynomial[0].scale.integer(), Some(&zero));
+        assert!(state.root_claim.polynomial[0]
+            .factors
+            .iter()
+            .all(|factor| factor.integer() == Some(&zero)));
+        assert_eq!(state.index().get_value(), Some(Scalar::ZERO));
         assert!(cs.is_satisfied(), "{:?}", cs.which_is_unsatisfied());
     }
 

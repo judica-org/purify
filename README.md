@@ -83,21 +83,20 @@ exact size is platform-dependent. It exports only the three private load,
 verify, and destroy ABI entry points. The private ABI header is not installed;
 applications use `ConstructionParentVerifier` from the C++ library.
 
-The mixed distributed-setup profile is implemented but not yet requalified.
-Its loader therefore rejects the stale centralized artifact and no production
-construction receipt can currently be accepted. Once qualification pins a new
-artifact length, suite, and tagged digest, that artifact remains an external
-deployment resource. The installed Rust backend contains only the verifier;
-setup, proving, and artifact writing compile only into qualification tests.
-Setting `PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT` fails configuration
-until that qualification replaces the pending gate.
+The mixed distributed-setup profile is qualified. Its loader accepts only the
+exact external artifact length, suite, and tagged digest recorded in
+`release/construction-parent-sha256.json`; stale centralized artifacts remain
+rejected. The installed Rust backend contains only the verifier. Transparent
+setup, qualification proving, and artifact writing compile only into tests.
+The qualified artifact remains an external deployment resource rather than a
+file embedded in the library or repository.
 
 The ordinary CI job builds and tests the Rust, package, codec, and private
 symbol boundaries without downloading this artifact. It does not claim
-recursive proof acceptance. Artifact-backed acceptance is the explicit release
-gate after a new artifact is qualified.
+recursive proof acceptance. Artifact-backed acceptance remains the explicit
+release gate.
 
-After qualification, run that release gate with the authenticated artifact:
+Run that release gate with the authenticated artifact:
 
 ```sh
 cmake -S . -B build-parent \
@@ -113,6 +112,11 @@ CARGO_BUILD_JOBS=1 cmake --build build-parent --parallel
 ctest --test-dir build-parent --output-on-failure \
   -R '^(purify.tests.slashability_e2e|purify.tests.installed_package|purify.tests.private_construction_parent_symbols)$'
 ```
+
+This release profile does not yet provide a reusable production prover
+artifact or standalone proving CLI. The qualified proving path is a
+resource-gated test operation; packaging authenticated reusable prover state
+is a separate follow-up from deploying the verifier above.
 
 This verifies a construction proof and completes the native accumulation
 decision before returning a verified receipt. Library verification does not

@@ -1,11 +1,10 @@
 # SHA-256 circuit transcript V4
 
 Status: native proof production, preparation, and verification are implemented.
-The matching constrained leaf is implemented as an input to the mixed recursive
-parent relation. The production parent loader remains fail-closed until that
-relation and its verifier artifact are requalified together. This suite does
-not accept a construction receipt by itself: the leaf's reduced norm equation
-remains a pending fixed-basis obligation until the accumulator's final decision.
+The matching constrained leaf and mixed recursive parent are qualified with
+one exact external verifier identity. This suite still does not accept a
+construction receipt by itself: the leaf's reduced norm equation remains a
+pending fixed-basis obligation until the accumulator's final decision.
 
 V4 derives every proof-dependent challenge with the chained typed SHA-256
 transcript. It does not change secret padding, mask, or nonce PRFs because a
@@ -141,11 +140,11 @@ public fixture. The constrained implementation consumes both fixtures and
 checks the hidden fixture's zero DLog branch.
 
 Gate counts measured for the removed field-hash relation do not apply to this
-wire format. The superseded centralized qualification measured 21 inputs,
-7,609,070 auxiliary variables, and 7,653,610 constraints. Its augmented
-primary shape had 9,418,599 constraints and 9,372,280 variables; the secondary
-shape had 728,974 constraints and 728,211 variables. Its 15,076-byte proof
-length is retained only as the mixed parent's provisional transport slot. It
-is not a qualified mixed proof size or accepted artifact identity. See
+wire format. The qualified mixed relation has 21 inputs, 7,609,014 auxiliary
+variables, and 7,653,553 constraints. Its augmented primary shape has
+9,418,542 constraints and 9,372,224 variables; the secondary shape has
+728,974 constraints and 728,211 variables. The resulting proof is 15,076
+bytes. Its suite, public parameters, checked vectors, and external verifier
+identity are frozen together. See
 [the anchor punishment-key relation](anchor-punishment-relation.md) for the
-current acceptance boundary.
+acceptance boundary.

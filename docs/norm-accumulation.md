@@ -349,12 +349,13 @@ must still call `decide` for the mandatory final basis MSM.
 These openings are additional public transition data. Native verification
 retains them alongside the original child proofs; a final 1,122-byte step
 does not replace that history. The selected recurrence implements recursive
-authentication so this history can become a parent witness. The mixed parent
-implementation compresses that witness history, but its relation, proof
-profile, vectors, and verifier artifact remain qualification-pending. The
-purpose-specific C++ acceptance layer must complete the native decision after
-recursive verification. Neither the native helper nor recursive verification
-alone establishes acceptance.
+authentication so this history can become a parent witness. The qualified
+mixed parent compresses that witness history into a 15,076-byte proof. Its
+accepted and recursive-valid/nondeciding vectors pin the recursive boundary,
+and the external verifier artifact is authenticated separately. The
+purpose-specific C++ acceptance layer must still complete the native decision
+after recursive verification. Neither the native helper nor recursive
+verification alone establishes acceptance.
 
 ## Historical generic varying-coefficient measurements
 
@@ -461,14 +462,12 @@ the final step SHA256 is
 
 The selected parent authenticates the purpose-owned semantic digest and
 frontend constants, constrains V4 preparation, reduction, and every ordered
-accumulation transition, and binds exact registry coverage. The mixed
-distributed lifecycle and private backend ABI are implemented, but no frozen
-external verifier identity or proof vector is accepted yet. The inherited
-15,076-byte proof slot and historical verifier sizes are provisional transport
-data only. The relation, suite, public parameters, proof shape, vectors, and
-artifact must be requalified as one profile before the public C++
-recursive-plus-native path can accept a receipt. The native V4 adapter remains
-a component of that path, not receipt acceptance by itself.
+accumulation transition, and binds exact registry coverage. The relation,
+suite, public parameters, 15,076-byte proof shape, checked vectors, and
+external verifier identity are frozen as one qualified profile. The public
+C++ path accepts a receipt only after both recursive verification and the
+native V4 decision; the adapter remains a component of that path, not receipt
+acceptance by itself.
 
 The construction-specific V3 adapter previously demonstrated setup-proof
 preparation and safe zero-extension into the anchor basis. That

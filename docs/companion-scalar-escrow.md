@@ -91,10 +91,9 @@ precommitment. The 32 bytes after each anchor ciphertext are likewise its
 exact circuit precommitment. Independent proof bodies remain out-of-band
 inputs to construction and are not repeated in the compact payload.
 
-The final construction proof is additional to `73 + 98*S + 128*A`. The mixed
-parent code is implemented, but its proof length and verifier artifact remain
-qualification-pending properties of the parent backend, not of the scalar
-ciphertext.
+The final construction proof is additional to `73 + 98*S + 128*A`. The
+qualified mixed parent proof is 15,076 bytes. Its external verifier artifact
+is authenticated independently of the scalar ciphertext relation.
 
 ## What exposure does and does not provide
 

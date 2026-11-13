@@ -204,18 +204,16 @@ version8 || recovery_root64 || setup_count32be || anchor_count32be
 || setup_entry[98 * N] || anchor_entry[128 * A]
 ```
 
-The envelope provisionally retains the superseded parent's 15,076-byte proof
-slot:
+The qualified mixed parent proof is 15,076 bytes:
 
 ```
 15,149 + 98*N + 128*A bytes
 ```
 
 At 100 setup members and 100 anchors this is 37,749 bytes. Payload v4,
-statement v5, manifest v3, the mixed fixture, and verifier code are
-implemented. The proof length and verifier artifact remain provisional until
-the distributed relation is requalified; the stale centralized artifact is
-not accepted.
+statement v5, manifest v3, the checked mixed fixtures, proof length, suite,
+and external verifier identity are qualified together. The stale centralized
+artifact is not accepted.
 
 ## Security boundary
 

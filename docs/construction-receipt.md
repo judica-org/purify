@@ -6,10 +6,10 @@ Child proofs are distributed out of band. The compact public payload retains
 the data required to recover punishment keys after coalition exposure.
 
 The mixed distributed-setup relation, native leaf adapters, recursive verifier
-boundary, and fixture codec are implemented. The matching verifier artifact
-has not been requalified or published, so there is not yet a
-production-accepted recursive receipt. The old centralized, anchor-only
-artifact is deliberately rejected.
+boundary, and fixture codec are implemented and qualified. The matching
+verifier artifact is external and authenticated by its compiled length and
+tagged digest. The old centralized, anchor-only artifact is deliberately
+rejected.
 
 Transparent setup is required. The selected parent path uses the accumulated
 BP++ obligations as the authenticated recurrence input and requires a native
@@ -152,9 +152,9 @@ The scalar-only protocol is an incompatible cutover:
 | Parent-prover witness frame | `Purify/Nova/Wit3` |
 
 Old payloads, statement digests, accumulation parameters, centralized seeds,
-and `Wit1`/`Wit2` parent fixtures are not compatibility inputs. The verifier
-artifact must be regenerated and qualified against this exact version set
-before release; old artifacts cannot qualify the new statement.
+and `Wit1`/`Wit2` parent fixtures are not compatibility inputs. The qualified
+artifact and checked `Wit3` vectors bind this exact version set; old artifacts
+cannot qualify the new statement.
 
 ## Size accounting
 
@@ -169,10 +169,9 @@ carrier framing, and out-of-band child records. Each anchor record is 1,233
 bytes and each setup contribution is 1,203 bytes; their proof bodies are
 consumed during construction rather than repeated in the compact payload.
 
-The envelope currently reserves the prior 15,076-byte proof length, giving the
-provisional total `15,149 + 98*N + 128*A`. This is transport scaffolding, not a
-new qualification result. Parent-proof and verifier-artifact sizes must be
-re-pinned from the matching post-cutover qualification.
+The qualified parent proof is 15,076 bytes, giving the exact total
+`15,149 + 98*N + 128*A`. The external verifier artifact is 693,708,278 encoded
+bytes and authenticates a 3,206,736,424-byte decoded payload.
 
 ## Integration boundary
 

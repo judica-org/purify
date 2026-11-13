@@ -124,7 +124,6 @@ explicit exposed-member verifier rule. Otherwise the coalition must reform.
 That runtime policy is outside the v4 leaf relation.
 
 The construction parent acceptance API requires both recursive verification
-and the native accumulation decision. The mixed parent code is implemented,
-but its verifier artifact is not yet requalified or published, so no
-production recursive receipt is currently accepted. Recursive validity never
-substitutes for the final native decision.
+and the native accumulation decision. The mixed profile and external verifier
+identity are qualified, and artifact-backed acceptance exercises both stages.
+Recursive validity never substitutes for the final native decision.

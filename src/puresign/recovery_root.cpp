@@ -178,6 +178,58 @@ Status validate_recovery_root_share_count(std::size_t member_count) {
     return {};
 }
 
+UInt256 reduce_mod(const UInt256& value, const UInt256& modulus) {
+    return divmod_same(value, modulus).second;
+}
+
+UInt256 add_mod(UInt256 lhs, const UInt256& rhs,
+                const UInt256& modulus) {
+    assert(lhs < modulus && rhs < modulus);
+    auto distance = modulus;
+    distance.sub_assign(rhs);
+    if (lhs < distance) {
+        lhs.add_assign(rhs);
+    } else {
+        lhs.sub_assign(distance);
+    }
+    return lhs;
+}
+
+UInt256 subtract_mod(UInt256 lhs, const UInt256& rhs,
+                     const UInt256& modulus) {
+    assert(lhs < modulus && rhs < modulus);
+    if (!(lhs < rhs)) {
+        lhs.sub_assign(rhs);
+        return lhs;
+    }
+    auto difference = rhs;
+    difference.sub_assign(lhs);
+    auto out = modulus;
+    out.sub_assign(difference);
+    return out;
+}
+
+Result<UInt256> centered_residue(UInt256 residue,
+                                 const UInt256& modulus,
+                                 const UInt256& half_modulus,
+                                 const char* label) {
+    if (residue.is_zero()) {
+        return unexpected_error(ErrorCode::EquationMismatch, label);
+    }
+    auto negative = modulus;
+    negative.sub_assign(residue);
+    residue.conditional_assign(negative, half_modulus < residue);
+    return residue;
+}
+
+bool same_point(const JacobianPoint& candidate,
+                const AffinePoint& expected,
+                const EllipticCurve& curve) {
+    if (candidate.infinity) return false;
+    const auto affine = curve.affine(candidate);
+    return affine.x == expected.x && affine.y == expected.y;
+}
+
 void append_companion_point(Bytes& out, const AffinePoint& point) {
     assert(!point.infinity && "serialized companion point must be finite");
     out.push_back(static_cast<unsigned char>(point.y.is_odd() ? 0x03 : 0x02));
@@ -504,6 +556,119 @@ Result<RecoveryRootShareAggregate> aggregate_recovery_root_shares(
     return RecoveryRootShareAggregate(
         ordered_shares.size(), std::move(first_affine),
         std::move(second_affine), root);
+}
+
+Result<GeneratedKey> recover_aggregated_recovery_root(
+    const NonceHostBoundSigningRoster& roster,
+    const RecoveryRootShareAggregate& aggregate,
+    const FieldElement& exposed_signing_scalar,
+    purify_secp_context* secp_context) {
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(
+            secp_context, "recovery_share_aggregate:recover"),
+        "recovery_share_aggregate:recover");
+    if (aggregate.member_count() != roster.members().size()) {
+        return unexpected_error(ErrorCode::SizeMismatch,
+                                "recovery_share_aggregate:member_count");
+    }
+    if (exposed_signing_scalar.is_zero()) {
+        return unexpected_error(ErrorCode::RangeViolation,
+                                "recovery_share_aggregate:zero_scalar");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto exposed_point,
+        secp_point(exposed_signing_scalar, secp_context),
+        "recovery_share_aggregate:signing_point");
+    if (exposed_point != roster_point(roster)) {
+        return unexpected_error(ErrorCode::BindingMismatch,
+                                "recovery_share_aggregate:signing_scalar");
+    }
+
+    const auto scalar = exposed_signing_scalar.to_uint256();
+    const auto first_step = curve1().mul(generator1(), prime_p());
+    const auto second_step = curve2().mul(generator2(), prime_p());
+    if (first_step.infinity || second_step.infinity) {
+        return unexpected_error(ErrorCode::InternalMismatch,
+                                "recovery_share_aggregate:carry_step");
+    }
+    auto first_candidate = curve1().mul(generator1(), scalar);
+    auto second_candidate = curve2().mul(generator2(), scalar);
+    auto first_residue = reduce_mod(scalar, order_n1());
+    auto second_residue = reduce_mod(scalar, order_n2());
+    const auto first_step_residue = reduce_mod(prime_p(), order_n1());
+    const auto second_step_residue = reduce_mod(prime_p(), order_n2());
+
+    // These roster-only bounds contain N candidates for even N and N + 1
+    // for odd N. Start at -ceil(N / 2), then advance through
+    // floor((N - 1) / 2).
+    const auto negative_steps =
+        aggregate.member_count() / 2 + aggregate.member_count() % 2;
+    const auto negative_first_step = curve1().negate(first_step);
+    const auto negative_second_step = curve2().negate(second_step);
+    for (std::size_t i = 0; i < negative_steps; ++i) {
+        first_candidate = curve1().add(first_candidate,
+                                       negative_first_step);
+        second_candidate = curve2().add(second_candidate,
+                                        negative_second_step);
+        first_residue = subtract_mod(
+            std::move(first_residue), first_step_residue, order_n1());
+        second_residue = subtract_mod(
+            std::move(second_residue), second_step_residue, order_n2());
+    }
+
+    std::optional<std::pair<UInt256, UInt256>> match;
+    WipeOnDestruction match_guard(match);
+    std::size_t match_count = 0;
+    const auto candidate_advances = aggregate.member_count() -
+        (aggregate.member_count() % 2 == 0 ? 1 : 0);
+    for (std::size_t candidate_index = 0;; ++candidate_index) {
+        if (same_point(first_candidate, aggregate.first_sum(), curve1()) &&
+            same_point(second_candidate, aggregate.second_sum(), curve2())) {
+            ++match_count;
+            match = std::pair{first_residue, second_residue};
+        }
+        if (candidate_index == candidate_advances) break;
+        first_candidate = curve1().add(first_candidate, first_step);
+        second_candidate = curve2().add(second_candidate, second_step);
+        first_residue = add_mod(
+            std::move(first_residue), first_step_residue, order_n1());
+        second_residue = add_mod(
+            std::move(second_residue), second_step_residue, order_n2());
+    }
+    if (match_count != 1 || !match) {
+        return unexpected_error(
+            ErrorCode::EquationMismatch,
+            match_count == 0
+                ? "recovery_share_aggregate:missing_carry"
+                : "recovery_share_aggregate:ambiguous_carry");
+    }
+
+    PURIFY_ASSIGN_OR_RETURN(
+        auto first_secret,
+        centered_residue(std::move(match->first), order_n1(), half_n1(),
+                         "recovery_share_aggregate:first_zero"),
+        "recovery_share_aggregate:first_secret");
+    WipeOnDestruction first_secret_guard(first_secret);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto second_secret,
+        centered_residue(std::move(match->second), order_n2(), half_n2(),
+                         "recovery_share_aggregate:second_zero"),
+        "recovery_share_aggregate:second_secret");
+    WipeOnDestruction second_secret_guard(second_secret);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto packed, pack_secret(first_secret, second_secret),
+        "recovery_share_aggregate:pack");
+    WipeOnDestruction packed_guard(packed);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto secret, SecretKey::from_packed(packed),
+        "recovery_share_aggregate:secret");
+    PURIFY_ASSIGN_OR_RETURN(auto recovered, derive_key(std::move(secret)),
+                            "recovery_share_aggregate:derive");
+    if (recovered.public_key != aggregate.recovery_root()) {
+        return unexpected_error(ErrorCode::EquationMismatch,
+                                "recovery_share_aggregate:exact_root");
+    }
+    return recovered;
 }
 
 Status RecoveryRootContribution::validate_encoding(

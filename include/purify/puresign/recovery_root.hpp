@@ -101,6 +101,19 @@ private:
 aggregate_recovery_root_shares(
     std::span<const RecoveryRootShare> ordered_shares);
 
+/**
+ * Recover the aggregate's exact companion secret from an exposed signing key.
+ *
+ * This verifies that the exposed scalar is the roster's normalized aggregate
+ * key, then resolves the unique centered-share carry against both companion
+ * sums. It does not authorize the public aggregate as a registered root.
+ */
+[[nodiscard]] Result<GeneratedKey> recover_aggregated_recovery_root(
+    const NonceHostBoundSigningRoster& roster,
+    const RecoveryRootShareAggregate& aggregate,
+    const FieldElement& exposed_signing_scalar,
+    purify_secp_context* secp_context);
+
 /** Transparent mapping proof for one formation-bound effective MuSig share. */
 class RecoveryRootContribution {
 public:

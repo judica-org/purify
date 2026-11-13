@@ -2,21 +2,30 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+#include <algorithm>
 #include <array>
+#include <cstdint>
 #include <limits>
 #include <span>
+#include <utility>
 #include <vector>
 
+#include "purify.hpp"
+#include "purify/bppp.hpp"
 #include "purify/curve.hpp"
+#include "purify/puresign/bppp.hpp"
 #include "purify/puresign/recovery_root.hpp"
 #include "../src/puresign/recovery_root_internal.hpp"
 #include "test_harness.hpp"
 
 namespace {
 
+using purify::FieldElement;
 using purify::Result;
 using purify::UInt256;
+using purify::UInt512;
 using purify::accountable::RecoveryRootShare;
+using purify::bppp::PointBytes;
 using purify_test::TestContext;
 using purify_test::expect_error;
 using purify_test::expect_ok;
@@ -45,6 +54,172 @@ Result<RecoveryRootShare> share_from_signed_magnitude(
         encoded.insert(encoded.end(), x.begin(), x.end());
     }
     return RecoveryRootShare::deserialize(encoded);
+}
+
+Result<PointBytes> secp_point(const FieldElement& scalar,
+                              purify_secp_context* secp_context) {
+    const purify::bppp::ScalarBytes zero{};
+    const auto generator = purify::bppp::base_generator(secp_context);
+    return purify::bppp::pedersen_commit_char(
+        zero, scalar.to_bytes_be(), secp_context, generator, generator);
+}
+
+struct RosterFixture {
+    purify::accountable::NonceHostBoundSigningRoster roster;
+    FieldElement aggregate_scalar;
+    std::vector<FieldElement> effective_scalars;
+};
+
+Result<RosterFixture> make_roster_fixture(
+    purify_secp_context* secp_context) {
+    std::vector<FieldElement> secrets{
+        FieldElement::from_u64(7), FieldElement::from_u64(11),
+        FieldElement::from_u64(19), FieldElement::from_u64(23),
+        FieldElement::from_u64(29)};
+    std::vector<PointBytes> keys;
+    keys.reserve(secrets.size());
+    for (auto& secret : secrets) {
+        PURIFY_ASSIGN_OR_RETURN(
+            auto key, secp_point(secret, secp_context),
+            "recovery_share_test:member_key");
+        if (key[0] == 0x03) {
+            secret = secret.negate();
+            key[0] = 0x02;
+        }
+        keys.push_back(std::move(key));
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto roster,
+        purify::accountable::SigningRoster::aggregate(keys, secp_context),
+        "recovery_share_test:roster");
+    auto aggregate_scalar = FieldElement::zero();
+    std::vector<FieldElement> effective_scalars;
+    effective_scalars.reserve(secrets.size());
+    for (std::size_t i = 0; i < secrets.size(); ++i) {
+        const auto effective =
+            roster.members()[i].coefficient * secrets[i];
+        aggregate_scalar = aggregate_scalar + effective;
+        effective_scalars.push_back(effective);
+    }
+
+    std::vector<purify::puresign_plusplus::PublicKey> hosts;
+    hosts.reserve(keys.size());
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        std::array<unsigned char, 32> seed{};
+        seed[0] = 0xd1;
+        seed[1] = static_cast<unsigned char>(i + 1);
+        PURIFY_ASSIGN_OR_RETURN(
+            auto generated, purify::generate_key(seed),
+            "recovery_share_test:host_secret");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto host,
+            purify::puresign_plusplus::PublicKey::from_secret(
+                generated.secret, secp_context),
+            "recovery_share_test:host");
+        std::copy(keys[i].begin() + 1, keys[i].end(),
+                  host.bip340_pubkey.begin());
+        hosts.push_back(std::move(host));
+    }
+    purify::accountable::CoalitionCoreDigest core{};
+    core.fill(0x51);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto bound,
+        purify::accountable::bind_nonce_hosts(
+            std::move(roster), core, hosts, secp_context),
+        "recovery_share_test:bound_roster");
+    return RosterFixture{
+        std::move(bound), aggregate_scalar, std::move(effective_scalars)};
+}
+
+Result<std::vector<RecoveryRootShare>> split_signed_total(
+    UInt512 magnitude, std::size_t member_count, bool negative) {
+    if (member_count == 0 ||
+        member_count > std::numeric_limits<std::uint32_t>::max()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::RangeViolation,
+            "recovery_share_test:split_count");
+    }
+    const auto remainder = magnitude.divmod_small(
+        static_cast<std::uint32_t>(member_count));
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto base, purify::try_narrow<4>(magnitude),
+        "recovery_share_test:split_magnitude");
+    std::vector<RecoveryRootShare> shares;
+    shares.reserve(member_count);
+    for (std::size_t i = 0; i < member_count; ++i) {
+        auto part = base;
+        if (i < remainder) part.add_small(1);
+        if (part.is_zero() ||
+            purify::prime_p().shifted_right(1) < part) {
+            return purify::unexpected_error(
+                purify::ErrorCode::RangeViolation,
+                "recovery_share_test:split_centered");
+        }
+        PURIFY_ASSIGN_OR_RETURN(
+            auto share, share_from_signed_magnitude(part, negative),
+            "recovery_share_test:split_share");
+        shares.push_back(std::move(share));
+    }
+    return shares;
+}
+
+Result<UInt256> expected_centered_component(
+    const UInt512& magnitude, bool negative, const UInt256& order,
+    const UInt256& half_order) {
+    auto remainder = purify::divmod_same(
+        magnitude, purify::widen<8>(order)).second;
+    PURIFY_ASSIGN_OR_RETURN(
+        auto residue, purify::try_narrow<4>(remainder),
+        "recovery_share_test:component_narrow");
+    if (negative && !residue.is_zero()) {
+        auto negated = order;
+        negated.sub_assign(residue);
+        residue = negated;
+    }
+    if (residue.is_zero()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::EquationMismatch,
+            "recovery_share_test:zero_component");
+    }
+    if (half_order < residue) {
+        auto centered = order;
+        centered.sub_assign(residue);
+        residue = centered;
+    }
+    return residue;
+}
+
+void expect_recovery(
+    TestContext& ctx, const RosterFixture& fixture,
+    const UInt512& magnitude, bool negative,
+    purify_secp_context* secp_context, const char* label) {
+    auto shares = split_signed_total(
+        magnitude, fixture.roster.members().size(), negative);
+    expect_ok(ctx, shares, label);
+    if (!shares) return;
+    auto aggregate =
+        purify::accountable::aggregate_recovery_root_shares(*shares);
+    expect_ok(ctx, aggregate, label);
+    if (!aggregate) return;
+    auto recovered = purify::accountable::recover_aggregated_recovery_root(
+        fixture.roster, *aggregate, fixture.aggregate_scalar,
+        secp_context);
+    expect_ok(ctx, recovered, label);
+    if (!recovered) return;
+    ctx.expect(recovered->public_key == aggregate->recovery_root(), label);
+
+    auto unpacked = purify::unpack_secret(recovered->secret.packed());
+    auto expected_first = expected_centered_component(
+        magnitude, negative, purify::order_n1(), purify::half_n1());
+    auto expected_second = expected_centered_component(
+        magnitude, negative, purify::order_n2(), purify::half_n2());
+    expect_ok(ctx, unpacked, label);
+    expect_ok(ctx, expected_first, label);
+    expect_ok(ctx, expected_second, label);
+    ctx.expect(unpacked && expected_first && expected_second &&
+                   unpacked->first == *expected_first &&
+                   unpacked->second == *expected_second,
+               label);
 }
 
 void test_recovery_share_aggregation(TestContext& ctx) {
@@ -146,8 +321,155 @@ void test_recovery_share_aggregation(TestContext& ctx) {
         "infinity on either companion curve rejects the aggregate");
 }
 
+void test_signed_carry_recovery(TestContext& ctx) {
+    auto secp = purify::make_secp_context();
+    ctx.expect(secp != nullptr, "recovery secp context creates");
+    if (!secp) return;
+    auto fixture = make_roster_fixture(secp.get());
+    expect_ok(ctx, fixture, "recovery roster fixture creates");
+    if (!fixture) return;
+    auto exposed_point = secp_point(fixture->aggregate_scalar, secp.get());
+    ctx.expect(exposed_point && (*exposed_point)[0] == 0x02,
+               "exposed scalar is the exact normalized aggregate key");
+
+    std::vector<RecoveryRootShare> actual_shares;
+    actual_shares.reserve(fixture->effective_scalars.size());
+    const auto half_secp_order = purify::prime_p().shifted_right(1);
+    for (const auto& effective : fixture->effective_scalars) {
+        const bool negative = half_secp_order < effective.to_uint256();
+        const auto magnitude = negative
+            ? effective.negate().to_uint256()
+            : effective.to_uint256();
+        auto share = share_from_signed_magnitude(magnitude, negative);
+        if (!share) return;
+        actual_shares.push_back(std::move(*share));
+    }
+    auto actual_aggregate =
+        purify::accountable::aggregate_recovery_root_shares(actual_shares);
+    expect_ok(ctx, actual_aggregate,
+              "actual weighted member shares aggregate");
+    if (!actual_aggregate) return;
+    auto actual_recovered =
+        purify::accountable::recover_aggregated_recovery_root(
+            fixture->roster, *actual_aggregate,
+            fixture->aggregate_scalar, secp.get());
+    expect_ok(ctx, actual_recovered,
+              "actual weighted member shares recover");
+    ctx.expect(actual_recovered &&
+                   actual_recovered->public_key ==
+                       actual_aggregate->recovery_root(),
+               "roster coefficients and aggregate parity recover exactly");
+
+    const auto scalar = fixture->aggregate_scalar.to_uint256();
+    const auto scalar_wide = purify::widen<8>(scalar);
+    const auto prime_wide = purify::widen<8>(purify::prime_p());
+    const bool scalar_is_upper =
+        purify::prime_p().shifted_right(1) < scalar;
+
+    auto endpoint_magnitude = prime_wide;
+    endpoint_magnitude.mul_small(scalar_is_upper ? 3 : 2);
+    if (scalar_is_upper) {
+        endpoint_magnitude.sub_assign(scalar_wide);
+    } else {
+        endpoint_magnitude.add_assign(scalar_wide);
+    }
+    expect_recovery(
+        ctx, *fixture, endpoint_magnitude, scalar_is_upper, secp.get(),
+        scalar_is_upper
+            ? "lower carry endpoint recovers the exact root"
+            : "upper carry endpoint recovers the exact root");
+
+    auto opposite_magnitude = prime_wide;
+    if (scalar_is_upper) {
+        opposite_magnitude.add_assign(scalar_wide);
+    } else {
+        opposite_magnitude.mul_small(2);
+        opposite_magnitude.sub_assign(scalar_wide);
+    }
+    expect_recovery(
+        ctx, *fixture, opposite_magnitude, !scalar_is_upper, secp.get(),
+        "the opposite carry sign recovers the exact root");
+
+    auto endpoint_shares = split_signed_total(
+        endpoint_magnitude, fixture->roster.members().size(),
+        scalar_is_upper);
+    if (!endpoint_shares) return;
+    auto endpoint_aggregate =
+        purify::accountable::aggregate_recovery_root_shares(
+            *endpoint_shares);
+    if (!endpoint_aggregate) return;
+
+    auto sign_flipped_shares = split_signed_total(
+        endpoint_magnitude, fixture->roster.members().size(),
+        !scalar_is_upper);
+    if (!sign_flipped_shares) return;
+    auto sign_flipped_aggregate =
+        purify::accountable::aggregate_recovery_root_shares(
+            *sign_flipped_shares);
+    if (!sign_flipped_aggregate) return;
+    ctx.expect(sign_flipped_aggregate->recovery_root() ==
+                   endpoint_aggregate->recovery_root(),
+               "opposite full sums retain the same x-only root");
+    expect_error(
+        ctx,
+        purify::accountable::recover_aggregated_recovery_root(
+            fixture->roster, *sign_flipped_aggregate,
+            fixture->aggregate_scalar, secp.get()),
+        purify::ErrorCode::EquationMismatch,
+        "recovery authenticates both exact full-point signs");
+
+    auto wrong_scalar = fixture->aggregate_scalar + FieldElement::one();
+    if (wrong_scalar.is_zero()) {
+        wrong_scalar = wrong_scalar + FieldElement::one();
+    }
+    expect_error(
+        ctx,
+        purify::accountable::recover_aggregated_recovery_root(
+            fixture->roster, *endpoint_aggregate, wrong_scalar,
+            secp.get()),
+        purify::ErrorCode::BindingMismatch,
+        "recovery rejects a scalar other than the normalized aggregate key");
+
+    std::vector<RecoveryRootShare> short_shares;
+    for (std::uint64_t value : {2U, 3U, 5U}) {
+        auto share = share_from_signed_magnitude(
+            UInt256::from_u64(value), false);
+        if (!share) return;
+        short_shares.push_back(std::move(*share));
+    }
+    auto short_aggregate =
+        purify::accountable::aggregate_recovery_root_shares(short_shares);
+    if (!short_aggregate) return;
+    expect_error(
+        ctx,
+        purify::accountable::recover_aggregated_recovery_root(
+            fixture->roster, *short_aggregate,
+            fixture->aggregate_scalar, secp.get()),
+        purify::ErrorCode::SizeMismatch,
+        "recovery rejects a root built for another member count");
+
+    auto unmatched_magnitude = endpoint_magnitude;
+    unmatched_magnitude.add_small(1);
+    auto unmatched_shares = split_signed_total(
+        unmatched_magnitude, fixture->roster.members().size(),
+        scalar_is_upper);
+    if (!unmatched_shares) return;
+    auto unmatched_aggregate =
+        purify::accountable::aggregate_recovery_root_shares(
+            *unmatched_shares);
+    if (!unmatched_aggregate) return;
+    expect_error(
+        ctx,
+        purify::accountable::recover_aggregated_recovery_root(
+            fixture->roster, *unmatched_aggregate,
+            fixture->aggregate_scalar, secp.get()),
+        purify::ErrorCode::EquationMismatch,
+        "recovery rejects full points outside every allowed carry");
+}
+
 } // namespace
 
 void run_recovery_root_share_tests(TestContext& ctx) {
     test_recovery_share_aggregation(ctx);
+    test_signed_carry_recovery(ctx);
 }

@@ -100,8 +100,12 @@ option(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER
     "Build the transparent construction-parent verifier backend."
     OFF
 )
+option(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER
+    "Build the purpose-specific construction-parent prover executable."
+    OFF
+)
 set(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET "" CACHE STRING
-    "Optional Rust target triple for the construction-parent backend."
+    "Optional Rust target triple for construction-parent Rust targets."
 )
 set(PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT "" CACHE FILEPATH
     "Qualified construction-parent verifier artifact for opt-in tests."
@@ -155,6 +159,14 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER AND
    PURIFY_USE_LEGACY_FIELD_HASHES)
     message(FATAL_ERROR
         "PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER requires the modern "
+        "tagged field-hash suite."
+    )
+endif()
+
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER AND
+   PURIFY_USE_LEGACY_FIELD_HASHES)
+    message(FATAL_ERROR
+        "PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER requires the modern "
         "tagged field-hash suite."
     )
 endif()
@@ -400,16 +412,17 @@ if(PURIFY_BUILD_TESTS)
     )
 endif()
 
-if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER OR
+   PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
     if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
         message(FATAL_ERROR
-            "The construction-parent backend is supported only on 64-bit "
+            "Construction-parent Rust targets are supported only on 64-bit "
             "macOS and Linux."
         )
     endif()
     if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR
-            "The construction-parent backend requires a 64-bit target."
+            "Construction-parent Rust targets require a 64-bit target."
         )
     endif()
     find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
@@ -423,7 +436,7 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
     if(CMAKE_CROSSCOMPILING AND
        NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
         message(FATAL_ERROR
-            "Cross-compiling the construction-parent backend requires "
+            "Cross-compiling construction-parent Rust targets requires "
             "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
         )
     endif()
@@ -578,6 +591,79 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
     install(FILES "${PURIFY_CONSTRUCTION_PARENT_LIBRARY}"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     )
+endif()
+
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
+    set(PURIFY_CONSTRUCTION_PARENT_PROVER_SOURCE
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/src/bin/purify-construction-parent-prover.rs"
+    )
+    if(NOT EXISTS "${PURIFY_CONSTRUCTION_PARENT_PROVER_SOURCE}")
+        message(FATAL_ERROR
+            "PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER requires "
+            "${PURIFY_CONSTRUCTION_PARENT_PROVER_SOURCE}."
+        )
+    endif()
+    set(PURIFY_CONSTRUCTION_PARENT_PROVER_TARGET_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/construction-parent-prover-target"
+    )
+    set(PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ARGS
+        build
+        --locked
+        --release
+        --no-default-features
+        --features prover
+        --bin purify-construction-parent-prover
+    )
+    set(PURIFY_CONSTRUCTION_PARENT_PROVER_DIR
+        "${PURIFY_CONSTRUCTION_PARENT_PROVER_TARGET_DIR}/release"
+    )
+    if(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
+        list(APPEND PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ARGS
+            --target "${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}"
+        )
+        set(PURIFY_CONSTRUCTION_PARENT_PROVER_DIR
+            "${PURIFY_CONSTRUCTION_PARENT_PROVER_TARGET_DIR}/${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}/release"
+        )
+    endif()
+    set(PURIFY_CONSTRUCTION_PARENT_PROVER
+        "${PURIFY_CONSTRUCTION_PARENT_PROVER_DIR}/purify-construction-parent-prover${CMAKE_EXECUTABLE_SUFFIX}"
+    )
+    set(PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ENV
+        --unset=MAKEFLAGS
+        --unset=MFLAGS
+        --unset=CARGO_MAKEFLAGS
+        "CARGO_INCREMENTAL=0"
+        "CARGO_TARGET_DIR=${PURIFY_CONSTRUCTION_PARENT_PROVER_TARGET_DIR}"
+    )
+    if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
+        list(APPEND PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ENV
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        )
+    endif()
+    add_custom_command(
+        OUTPUT "${PURIFY_CONSTRUCTION_PARENT_PROVER}"
+        COMMAND "${CMAKE_COMMAND}" -E env
+            ${PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ENV}
+            "${PURIFY_CARGO_EXECUTABLE}"
+            ${PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ARGS}
+        DEPENDS
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.lock"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.toml"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/build.rs"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/rust-toolchain.toml"
+            ${PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES}
+        WORKING_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_DIR}"
+        COMMENT "Building purpose-specific construction-parent prover"
+        VERBATIM
+    )
+    add_custom_target(purify_construction_parent_prover ALL
+        DEPENDS "${PURIFY_CONSTRUCTION_PARENT_PROVER}"
+    )
+    install(PROGRAMS "${PURIFY_CONSTRUCTION_PARENT_PROVER}"
+        DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        COMPONENT construction_parent_prover
+    )
+    unset(PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ENV)
 endif()
 
 if(WIN32)

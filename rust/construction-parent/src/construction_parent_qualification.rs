@@ -41,8 +41,8 @@ use crate::nova_types::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSec
 use crate::secp_native::{standard_generator, SecpEncodedPointWitness, SecpScalarWitness};
 use crate::{scalar_to_canonical, Scalar};
 
-const DIRECT_PARENT_AUXILIARY: usize = 7_609_070;
-const DIRECT_PARENT_CONSTRAINTS: usize = 7_653_610;
+const DIRECT_PARENT_AUXILIARY: usize = 7_609_014;
+const DIRECT_PARENT_CONSTRAINTS: usize = 7_653_553;
 
 type ConstructionParentNovaSuite =
     SelectedNovaSessionSuite<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>;
@@ -484,19 +484,19 @@ fn direct_construction_step_augmented_shape_matches_provisional_slot() {
         proof_shape.encoded_len(),
         proof_shape.sequence_count(),
     );
-    assert_eq!(augmented.primary.constraints, 9_418_599);
-    assert_eq!(augmented.primary.variables, 9_372_280);
+    assert_eq!(augmented.primary.constraints, 9_418_542);
+    assert_eq!(augmented.primary.variables, 9_372_224);
     assert_eq!(augmented.primary.public_inputs, 2);
-    assert_eq!(augmented.primary.a_terms, 21_463_305);
-    assert_eq!(augmented.primary.b_terms, 10_222_989);
-    assert_eq!(augmented.primary.c_terms, 19_099_894);
+    assert_eq!(augmented.primary.a_terms, 21_463_229);
+    assert_eq!(augmented.primary.b_terms, 10_222_938);
+    assert_eq!(augmented.primary.c_terms, 19_099_725);
     assert_eq!(augmented.secondary.constraints, 728_974);
     assert_eq!(augmented.secondary.variables, 728_211);
     assert_eq!(augmented.secondary.public_inputs, 2);
     assert_eq!(augmented.secondary.a_terms, 1_676_035);
     assert_eq!(augmented.secondary.b_terms, 736_338);
     assert_eq!(augmented.secondary.c_terms, 1_568_376);
-    assert_eq!(verifier_payload_length, 3_206_748_264);
+    assert_eq!(verifier_payload_length, 3_206_736_424);
     assert_eq!(
         proof_shape.encoded_len(),
         PROVISIONAL_CONSTRUCTION_PARENT_PROOF_LENGTH

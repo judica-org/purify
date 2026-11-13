@@ -472,15 +472,18 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "performs transparent Nova setup and serializes prover state"]
+    #[ignore = "performs transparent setup, proving, and compression"]
     fn real_selected_prover_roundtrips_through_pk1() {
+        let initial_state = [Scalar::from(7u64)];
+        let expected_final_state = [Scalar::from(8u64)];
         let suite = NovaSessionSuite::<TINY_ARITY, TinyStep>::setup(TinyStep {
-            input: [Scalar::from(7u64)],
+            input: initial_state,
         })
         .expect("setup tiny prover")
         .select_generated_for_qualification(TINY_VERSIONS)
         .expect("select tiny prover");
         let expected = suite.expected();
+        let verifier = suite.verifier;
         let mut encoded = Cursor::new(Vec::new());
         let descriptor = suite
             .prover
@@ -494,5 +497,17 @@ mod tests {
         )
         .expect("reload tiny prover artifact");
         assert_eq!(loaded.expected(), expected);
+        let proof = loaded
+            .start(initial_state, 1)
+            .expect("start reloaded tiny prover")
+            .add_step(TinyStep {
+                input: initial_state,
+            })
+            .expect("fold with reloaded public parameters")
+            .finish()
+            .expect("compress with deserialized prover key");
+        verifier
+            .verify_exact(&initial_state, 1, &expected_final_state, &proof)
+            .expect("verify proof from reloaded prover state");
     }
 }

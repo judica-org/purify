@@ -5,14 +5,20 @@
 //! executes every production constraint, derives the complete state chain,
 //! and returns an opaque input that later prover APIs can consume.
 
+use std::fs::File;
+use std::io;
+use std::path::Path;
+
 use thiserror::Error;
 
 pub use crate::construction_parent_prover_binding::ConstructionParentWitnessBindingError;
 
 use crate::construction_parent_prover_binding::BoundConstructionParentWitness;
 use crate::construction_parent_prover_fixture::ConstructionParentProverFixture;
+use crate::construction_parent_verifier::load_qualified_construction_parent_verifier;
 use crate::construction_profile::CONSTRUCTION_RECURRENCE_STATE_ARITY;
 use crate::nova_construction_recurrence::ConstructionParentStep;
+use crate::nova_session::prover_artifact::QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT;
 use crate::nova_session::{
     DirectNovaSessionError, SelectedDirectNovaVerifier, SelectedNovaProver,
     QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
@@ -174,6 +180,93 @@ impl VerifiedConstructionParentProof {
     pub(crate) fn into_bytes(self) -> Vec<u8> {
         self.proof
     }
+}
+
+/// Failure in the purpose-specific qualified construction-parent prover.
+#[derive(Debug, Error)]
+pub enum QualifiedConstructionParentProvingError {
+    /// The locally selected PK1 file could not be opened read-only.
+    #[error("cannot open the qualified construction-parent prover artifact: {source}")]
+    OpenProverArtifact {
+        #[source]
+        source: io::Error,
+    },
+    /// The PK1 file did not match the compiled qualified identity.
+    #[error("the qualified construction-parent prover artifact was rejected: {detail}")]
+    LoadProverArtifact { detail: String },
+    /// Folding or compression failed for the checked witness.
+    #[error("qualified construction-parent proving failed: {detail}")]
+    Prove { detail: String },
+    /// The separately qualified VK2 file could not be opened read-only.
+    #[error("cannot open the qualified construction-parent verifier artifact: {source}")]
+    OpenVerifierArtifact {
+        #[source]
+        source: io::Error,
+    },
+    /// The VK2 file did not match the compiled qualified identity.
+    #[error("the qualified construction-parent verifier artifact was rejected: {detail}")]
+    LoadVerifierArtifact { detail: String },
+    /// The independent verifier did not authenticate the exact proven state.
+    #[error("qualified construction-parent proof re-verification failed: {detail}")]
+    Reverify { detail: String },
+}
+
+/// Produce and independently reverify one qualified raw parent proof.
+///
+/// `witness` has already executed every production constraint through
+/// [`ConstructionParentWitness::bind`]. The PK1 source is opened read-only,
+/// authenticated against the compiled setup-only qualification identity, and
+/// consumed for folding. Its public parameters and prover key are dropped
+/// before the VK2 source is opened. The returned bytes are exactly the frozen
+/// 15,076-byte recursive proof with no wrapper or caller-selected metadata.
+///
+/// This operation does not accept a construction receipt. C++ must still bind
+/// the proof to its typed receipt inputs and complete the native final
+/// accumulation decision.
+pub fn prove_qualified_construction_parent(
+    witness: CheckedConstructionParentWitness,
+    prover_artifact_path: &Path,
+    verifier_artifact_path: &Path,
+) -> Result<Vec<u8>, QualifiedConstructionParentProvingError> {
+    let mut prover_artifact = File::open(prover_artifact_path)
+        .map_err(|source| QualifiedConstructionParentProvingError::OpenProverArtifact { source })?;
+    let prover = SelectedConstructionParentProver::from_artifact_reader(
+        &mut prover_artifact,
+        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+        &QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT,
+    )
+    .map_err(
+        |error| QualifiedConstructionParentProvingError::LoadProverArtifact {
+            detail: error.to_string(),
+        },
+    )?;
+    drop(prover_artifact);
+
+    let unverified = witness.prove_with(prover).map_err(|error| {
+        QualifiedConstructionParentProvingError::Prove {
+            detail: error.to_string(),
+        }
+    })?;
+
+    // `prove_with` consumes and drops the complete PK1 state before this
+    // independently selected verifier artifact is opened.
+    let mut verifier_artifact = File::open(verifier_artifact_path).map_err(|source| {
+        QualifiedConstructionParentProvingError::OpenVerifierArtifact { source }
+    })?;
+    let verifier =
+        load_qualified_construction_parent_verifier(&mut verifier_artifact).map_err(|error| {
+            QualifiedConstructionParentProvingError::LoadVerifierArtifact {
+                detail: error.to_string(),
+            }
+        })?;
+    drop(verifier_artifact);
+
+    unverified
+        .verify_with(verifier)
+        .map(VerifiedConstructionParentProof::into_bytes)
+        .map_err(|error| QualifiedConstructionParentProvingError::Reverify {
+            detail: error.to_string(),
+        })
 }
 
 fn require_frozen_proof_length(proof: &[u8]) -> Result<(), ConstructionParentProvingError> {

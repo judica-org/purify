@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -702,6 +703,62 @@ void test_equal_lowering(TestContext& ctx) {
     }
 }
 
+void test_bulletproof_gate_floor(TestContext& ctx) {
+    Transcript small_transcript;
+    Expr small_left =
+        small_transcript.secret(FieldElement::from_int(3));
+    Expr small_right =
+        small_transcript.secret(FieldElement::from_int(5));
+    small_transcript.mul(small_left, small_right);
+
+    BulletproofTranscript fixed;
+    Status fixed_status =
+        fixed.from_transcript(small_transcript, 0, 8192);
+    expect_ok(ctx, fixed_status,
+              "from_transcript accepts an exact fixed gate floor");
+    if (fixed_status.has_value()) {
+        ctx.expect(fixed.native_circuit().n_gates == 8192,
+                   "fixed gate floor pads the circuit to exactly 8192");
+    }
+
+    BulletproofTranscript invalid;
+    expect_error(ctx, invalid.from_transcript(small_transcript, 0, 0),
+                 ErrorCode::InvalidDimensions,
+                 "zero gate floor is rejected");
+    expect_error(ctx, invalid.from_transcript(small_transcript, 0, 3),
+                 ErrorCode::InvalidDimensions,
+                 "non-power-of-two gate floor is rejected");
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
+        constexpr std::size_t kUnrepresentableGateFloor =
+            static_cast<std::size_t>(
+                std::numeric_limits<std::uint32_t>::max()) +
+            1;
+        expect_error(
+            ctx,
+            invalid.from_transcript(small_transcript, 0,
+                                    kUnrepresentableGateFloor),
+            ErrorCode::InvalidDimensions,
+            "gate floor beyond the wire-index range is rejected");
+    }
+
+    Transcript larger_transcript;
+    Expr accumulator =
+        larger_transcript.secret(FieldElement::from_int(2));
+    Expr factor = larger_transcript.secret(FieldElement::from_int(7));
+    for (std::size_t i = 0; i < 5; ++i) {
+        accumulator = larger_transcript.mul(accumulator, factor);
+    }
+    BulletproofTranscript natural;
+    Status natural_status =
+        natural.from_transcript(larger_transcript, 0, 4);
+    expect_ok(ctx, natural_status,
+              "from_transcript retains a larger natural circuit");
+    if (natural_status.has_value()) {
+        ctx.expect(natural.native_circuit().n_gates == 8,
+                   "natural power-of-two size takes precedence over floor");
+    }
+}
+
 void test_output_commitment_lowering(TestContext& ctx) {
     Transcript transcript;
     Expr x = transcript.secret(FieldElement::from_int(3));
@@ -1308,6 +1365,7 @@ void run_purify_tests(TestContext& ctx) {
     test_secret_key_validation(ctx);
     test_public_key_validation(ctx);
     test_equal_lowering(ctx);
+    test_bulletproof_gate_floor(ctx);
     test_output_commitment_lowering(ctx);
     test_expr_builder(ctx);
     test_expr_cache_ordering(ctx);

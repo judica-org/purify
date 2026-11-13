@@ -8,7 +8,7 @@
 
 use ff::Field;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 use crate::candidate::CandidateRootClaim;
 use crate::construction_profile::{
     CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_ROUNDS, CONSTRUCTION_ROOT_STATE_ARITY,
@@ -16,7 +16,7 @@ use crate::construction_profile::{
 };
 #[cfg(test)]
 use crate::construction_recurrence::ConstructionRecurrenceStateWitness;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 use crate::secp_native::SecpEncodedPointWitness;
 use crate::secp_native::{
     canonical_encoded_point_value, canonical_scalar_value, coordinate_field_value,
@@ -103,7 +103,7 @@ impl ConstructionRoot {
         &self.encoded
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) fn claim(&self) -> CandidateRootClaim {
         let point = SecpEncodedPointWitness::parse(
             self.encoded[..33].try_into().expect("fixed point slice"),

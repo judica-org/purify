@@ -1,7 +1,7 @@
 //! Canonical native secp256k1 values shared by parsing and circuit code.
 
 use ff::Field;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 use num_bigint::BigUint;
 
 use crate::secp_constants::SECP256K1_SCALAR_ORDER_BE;
@@ -22,7 +22,7 @@ impl SecpScalarWitness {
         Self { bytes }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) fn from_u64(value: u64) -> Self {
         let mut bytes = [0u8; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
@@ -61,13 +61,13 @@ pub(crate) fn canonical_scalar_value(witness: SecpScalarWitness) -> Result<Scala
 /// point `02/03 || x` with a big-endian x coordinate. `y` is canonical
 /// little-endian field data and is not part of the public point encoding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) struct SecpEncodedPointWitness {
     pub(crate) encoded: [u8; 33],
     pub(crate) y: [u8; 32],
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 impl SecpEncodedPointWitness {
     pub(crate) const fn identity() -> Self {
         Self {
@@ -144,7 +144,7 @@ pub(crate) struct PointValue {
 }
 
 /// The canonical secp256k1 group generator.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) fn standard_generator() -> PointValue {
     const X: [u8; 32] = [
         0x98, 0x17, 0xf8, 0x16, 0x5b, 0x81, 0xf2, 0x59, 0xd9, 0x28, 0xce, 0x2d, 0xdb, 0xfc, 0x9b,
@@ -163,12 +163,12 @@ pub(crate) fn standard_generator() -> PointValue {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 fn inverse_or_zero(value: Scalar) -> Scalar {
     Option::<Scalar>::from(value.invert()).unwrap_or(Scalar::ZERO)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) fn add_point_values(left: PointValue, right: PointValue) -> PointValue {
     if left.identity {
         return right;
@@ -203,7 +203,7 @@ pub(crate) fn add_point_values(left: PointValue, right: PointValue) -> PointValu
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) fn scale_point_value(point: PointValue, scalar: &BigUint) -> PointValue {
     let mut accumulator = PointValue {
         x: Scalar::ZERO,
@@ -221,13 +221,13 @@ pub(crate) fn scale_point_value(point: PointValue, scalar: &BigUint) -> PointVal
 }
 
 #[derive(Clone, Copy)]
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) struct EncodedPointValue {
     pub(crate) point: PointValue,
     pub(crate) prefix: u8,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) fn parse_encoded_point(
     witness: SecpEncodedPointWitness,
 ) -> Result<EncodedPointValue, RelationError> {
@@ -249,7 +249,7 @@ pub(crate) fn parse_encoded_point(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) fn validate_constant_point(point: PointValue) -> Result<(), RelationError> {
     if point.identity {
         if point.x != Scalar::ZERO || point.y != Scalar::ZERO {
@@ -262,7 +262,7 @@ pub(crate) fn validate_constant_point(point: PointValue) -> Result<(), RelationE
 }
 
 /// Validates an exact encoded point constant and returns its affine value.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) fn encoded_point_value(
     witness: SecpEncodedPointWitness,
 ) -> Result<PointValue, RelationError> {

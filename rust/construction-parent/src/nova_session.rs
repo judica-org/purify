@@ -79,7 +79,7 @@ type VerifierOnlyKey<const ARITY: usize> = VerifierKey<
     SecondarySnark,
 >;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) trait NovaSessionStep<const ARITY: usize>: StepCircuit<DirectNovaScalar> {
     fn relation_id(&self) -> DirectRelationId;
     fn input_state(&self) -> &[DirectNovaScalar; ARITY];

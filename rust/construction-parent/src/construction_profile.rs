@@ -1,10 +1,10 @@
 //! Frozen dimensions and digests for the construction-parent profile.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CONSTRUCTION_LEAF_GATE_COUNT: usize = 8_192;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CONSTRUCTION_LEAF_NORM_LENGTH: usize = 16_384;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CONSTRUCTION_LEAF_ROUNDS: usize = 14;
 
 pub(crate) const CONSTRUCTION_ROOT_ROUNDS: usize = 15;

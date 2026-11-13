@@ -8,20 +8,20 @@ use ff::PrimeField;
 use nova_snark::{provider::Secq256k1Sha256Engine, traits::Engine};
 use thiserror::Error;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod candidate;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod circuit_norm;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod circuit_transcript;
 mod construction_manifest;
 mod construction_parent_input;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod construction_parent_prover_fixture;
 #[cfg(test)]
 mod construction_parent_qualification;
 mod construction_profile;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod construction_recurrence;
 // This private ABI returns only a proof-authenticated pending root. The C++
 // acceptance boundary must parse and decide that root before exposing success.
@@ -35,39 +35,39 @@ mod fixed_serde;
 mod nova_session;
 mod nova_types;
 // Production candidate accumulation constraints for qualification.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_candidate;
 // Production V4 transcript constraints for qualification.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_circuit_transcript;
 // Production circuit-norm equations for qualification.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_circuit_norm_leaf;
 // Production coefficient reduction constraints for qualification.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_norm_reduction;
 // Transcript-derived opening-base constraints for qualification.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_opening_base;
 // Production construction recurrence constraints for qualification.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_construction_recurrence;
 // Shared typed transcript framing for direct Nova relations.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_protocol_transcript;
 // Allocation-bounded identity for direct Nova step relations.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_relation_identity;
 // Canonical secp256k1 scalar arithmetic for the direct Nova relation.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_secp_scalar;
 // SHA-256 transcript constraints for the production relation.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_sha256_transcript;
 // Canonical secp256k1 wrappers for the production relation.
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod nova_secp;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 mod opening_generators;
 mod secp_constants;
 mod secp_native;

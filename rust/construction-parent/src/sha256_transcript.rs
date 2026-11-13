@@ -17,12 +17,12 @@ pub(crate) const SUITE_ID: &[u8] = b"Purify/SHA256Transcript/v1";
 pub(crate) const FIELD_ITEM: u32 = 0x4649_454c; // FIEL
 pub(crate) const SCALAR_ITEM: u32 = 0x5343_414c; // SCAL
 pub(crate) const POINT_ITEM: u32 = 0x504f_494e; // POIN
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const POINT_PAIR_ITEM: u32 = 0x5041_4952; // PAIR
 pub(crate) const BYTES_ITEM: u32 = 0x4259_5445; // BYTE
 pub(crate) const U64_ITEM: u32 = 0x5536_3420; // U64<space>
 pub(crate) const CHALLENGE_ITEM: u32 = 0x4348_414c; // CHAL
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const OPENING_BASE_ITEM: u32 = 0x4f42_4153; // OBAS
 
 pub(crate) const HEADER_SIZE: usize = 12;
@@ -97,7 +97,7 @@ impl NativeTranscript {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) fn append_point_pair(
         &mut self,
         parity: u8,

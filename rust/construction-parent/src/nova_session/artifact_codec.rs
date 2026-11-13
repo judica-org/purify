@@ -4,7 +4,7 @@
 //! is authenticated before header parsing or Serde, and every byte consumed
 //! during decoding is hashed again.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 use std::io::Write;
 use std::io::{self, Read, Seek, SeekFrom};
 
@@ -18,7 +18,7 @@ const SUITE_ID_OFFSET: usize = 20;
 const ARITY_OFFSET: usize = 52;
 const COMPRESSED_LENGTH_OFFSET: usize = 56;
 const DECODED_LENGTH_OFFSET: usize = 64;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 const ZSTD_COMPRESSION_LEVEL: i32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,17 +71,17 @@ impl ArtifactIdentity {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) const fn encoded_length(self) -> u64 {
         self.encoded_length
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) const fn decoded_payload_length(self) -> u64 {
         self.decoded_payload_length
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) const fn digest(self) -> [u8; 32] {
         self.digest
     }
@@ -102,7 +102,7 @@ impl ArtifactIdentity {
 
 #[derive(Debug, Error)]
 pub(crate) enum ArtifactCodecError {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     #[error("direct Nova artifact destination is not empty")]
     DestinationNotEmpty,
     #[error("direct Nova artifact length is invalid")]
@@ -113,7 +113,7 @@ pub(crate) enum ArtifactCodecError {
     Header(&'static str),
     #[error("direct Nova artifact I/O failed: {0}")]
     Io(#[from] io::Error),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     #[error("direct Nova artifact encoding failed: {0}")]
     Encode(#[from] bincode::error::EncodeError),
     #[error("direct Nova artifact decoding failed: {0}")]
@@ -129,7 +129,7 @@ struct ArtifactHeader {
 }
 
 impl ArtifactHeader {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     fn new(
         format: &ArtifactFormat,
         suite_id: [u8; 32],
@@ -151,7 +151,7 @@ impl ArtifactHeader {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     fn encode(self, format: &ArtifactFormat) -> [u8; ARTIFACT_HEADER_LENGTH] {
         let mut encoded = [0u8; ARTIFACT_HEADER_LENGTH];
         encoded[..VERSION_OFFSET].copy_from_slice(&format.magic);
@@ -189,7 +189,7 @@ impl ArtifactHeader {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) fn write_artifact_payload<T, W>(
     destination: &mut W,
     format: &ArtifactFormat,
@@ -405,14 +405,14 @@ fn tagged_artifact_hasher(tag: &[u8]) -> Sha256 {
     digest
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 struct PayloadWriter<'a, W> {
     destination: &'a mut W,
     remaining: usize,
     written: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 impl<'a, W> PayloadWriter<'a, W> {
     fn new(destination: &'a mut W, limit: usize) -> Self {
         Self {
@@ -427,7 +427,7 @@ impl<'a, W> PayloadWriter<'a, W> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 impl<W: Write> Write for PayloadWriter<'_, W> {
     fn write(&mut self, buffer: &[u8]) -> Result<usize, io::Error> {
         if buffer.len() > self.remaining {

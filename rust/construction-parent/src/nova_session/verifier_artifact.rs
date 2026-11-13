@@ -100,7 +100,7 @@ pub(crate) const QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT:
 
 #[derive(Debug, Error)]
 pub(crate) enum DirectNovaVerifierArtifactError {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     #[error("direct Nova verifier artifact destination is not empty")]
     DestinationNotEmpty,
     #[error("direct Nova verifier artifact length is invalid")]
@@ -111,7 +111,7 @@ pub(crate) enum DirectNovaVerifierArtifactError {
     Header(&'static str),
     #[error("direct Nova verifier artifact I/O failed: {0}")]
     Io(#[from] io::Error),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     #[error("direct Nova verifier artifact encoding failed: {0}")]
     Encode(#[from] bincode::error::EncodeError),
     #[error("direct Nova verifier artifact decoding failed: {0}")]
@@ -123,13 +123,13 @@ pub(crate) enum DirectNovaVerifierArtifactError {
 impl From<ArtifactCodecError> for DirectNovaVerifierArtifactError {
     fn from(error: ArtifactCodecError) -> Self {
         match error {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "prover"))]
             ArtifactCodecError::DestinationNotEmpty => Self::DestinationNotEmpty,
             ArtifactCodecError::Length => Self::Length,
             ArtifactCodecError::Digest => Self::Digest,
             ArtifactCodecError::Header(context) => Self::Header(context),
             ArtifactCodecError::Io(error) => Self::Io(error),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "prover"))]
             ArtifactCodecError::Encode(error) => Self::Encode(error),
             ArtifactCodecError::Decode(error) => Self::Decode(error),
         }

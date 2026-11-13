@@ -9,6 +9,11 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "purify-construction-parent-prover"
+path = "src/bin/purify-construction-parent-prover.rs"
+required-features = ["prover"]
+
 [features]
 default = []
 prover = ["dep:num-bigint"]

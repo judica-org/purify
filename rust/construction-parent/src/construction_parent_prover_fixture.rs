@@ -30,10 +30,10 @@ use crate::secp_native::{
 };
 use crate::RelationError;
 
-const MAGIC: &[u8; 16] = b"Purify/Nova/Wit1";
+const MAGIC: &[u8; 16] = b"Purify/Nova/Wit2";
 const HEADER_BYTES: usize = MAGIC.len() + 32 + 32 + CONSTRUCTION_ROOT_BYTES + 4;
 const PUNISHMENT_POINT_BYTES: usize = 33;
-const ANCHOR_RECORD_BYTES: usize = 1_329;
+const ANCHOR_RECORD_BYTES: usize = 1_233;
 const REDUCTION_PROOF_BYTES: usize = 1_022;
 const STEP_PROOF_BYTES: usize = 1_056;
 const ANCHOR_BYTES: usize = CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES
@@ -41,11 +41,11 @@ const ANCHOR_BYTES: usize = CONSTRUCTION_PARENT_ANCHOR_DESCRIPTOR_BYTES
     + ANCHOR_RECORD_BYTES
     + REDUCTION_PROOF_BYTES
     + STEP_PROOF_BYTES;
-const RECORD_VERSION: u8 = 3;
+const RECORD_VERSION: u8 = 4;
 const REDUCTION_VERSION: u8 = 2;
 const STEP_VERSION: u8 = 2;
 
-const RECORD_RAW_OFFSET: usize = 193;
+const RECORD_RAW_OFFSET: usize = 97;
 const RECORD_MASK_OFFSET: usize = RECORD_RAW_OFFSET + 33;
 const RECORD_T2_OFFSET: usize = RECORD_MASK_OFFSET + 33;
 const RECORD_NONCE_OFFSET: usize = RECORD_T2_OFFSET + 32;
@@ -525,6 +525,14 @@ mod tests {
                 "construction prover fixture magic"
             ))
         );
+        assert_eq!(
+            ConstructionParentProverFixture::parse(b"Purify/Nova/Wit1")
+                .err()
+                .expect("legacy magic rejects"),
+            ConstructionParentProverFixtureError::State(RelationError::Malformed(
+                "construction prover fixture magic"
+            ))
+        );
     }
 
     #[test]
@@ -533,7 +541,7 @@ mod tests {
         let parse = |environment, expected_sha256| {
             let path = std::env::var_os(environment).unwrap_or_else(|| panic!("set {environment}"));
             let bytes = std::fs::read(path).expect("read construction prover fixture");
-            assert_eq!(bytes.len(), 8_314);
+            assert_eq!(bytes.len(), 8_122);
             assert_eq!(Sha256::digest(&bytes).as_slice(), expected_sha256);
             ConstructionParentProverFixture::parse(&bytes)
                 .expect("parse deterministic construction prover fixture")

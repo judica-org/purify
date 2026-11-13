@@ -84,8 +84,10 @@ impl ExpectedDirectNovaVerifierArtifact {
     }
 }
 
-/// Authenticated local verifier artifact from the resource-gated SHA-256
-/// construction-parent qualification.
+/// Last authenticated verifier artifact from the v3 qualification.
+///
+/// The v4 construction-parent loader rejects this stale descriptor before
+/// reading artifact bytes. Resource-gated v4 qualification must replace it.
 pub(crate) const QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT:
     ExpectedDirectNovaVerifierArtifact = ExpectedDirectNovaVerifierArtifact::new(
     693_735_316,
@@ -99,6 +101,8 @@ pub(crate) const QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT:
 
 #[derive(Debug, Error)]
 pub(crate) enum DirectNovaVerifierArtifactError {
+    #[error("construction parent verifier qualification is pending")]
+    QualificationPending,
     #[cfg(test)]
     #[error("direct Nova verifier artifact destination is not empty")]
     DestinationNotEmpty,

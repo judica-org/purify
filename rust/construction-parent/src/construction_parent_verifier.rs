@@ -13,20 +13,18 @@ use crate::construction_parent_input::ConstructionParentInputs;
 use crate::construction_profile::{
     ANCHOR_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
 };
-use crate::nova_session::verifier_artifact::{
-    DirectNovaVerifierArtifactError, QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
-};
+use crate::nova_session::verifier_artifact::DirectNovaVerifierArtifactError;
 use crate::nova_session::{
     DirectNovaSessionError, SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
 };
 use crate::{RelationError, Scalar};
 
-/// Loads the sole production verifier from one seekable artifact snapshot.
+/// Rejects verifier loading until the v4 relation has been requalified.
 ///
-/// Authentication of the complete encoding precedes all Serde work. A second
-/// digest over the bytes actually consumed rejects a changed snapshot.
+/// No stale v3 artifact bytes are inspected. The later qualification commit
+/// must replace this gate while pinning the v4 parameters and artifact.
 pub(crate) fn load_qualified_construction_parent_verifier<R>(
-    artifact: &mut R,
+    _artifact: &mut R,
 ) -> Result<
     SelectedDirectNovaVerifier<ANCHOR_RECURRENCE_STATE_ARITY>,
     DirectNovaVerifierArtifactError,
@@ -34,11 +32,7 @@ pub(crate) fn load_qualified_construction_parent_verifier<R>(
 where
     R: Read + Seek,
 {
-    SelectedDirectNovaVerifier::from_artifact_reader(
-        artifact,
-        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
-        &QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
-    )
+    Err(DirectNovaVerifierArtifactError::QualificationPending)
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]

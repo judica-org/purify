@@ -1,6 +1,7 @@
 use super::*;
 
 use ff::Field;
+use std::io::Cursor;
 
 use crate::construction_manifest::{
     ConstructionManifestAnchor, ConstructionManifestSeed, ConstructionRoot,
@@ -108,4 +109,14 @@ fn authenticated_final_state_rejects_malformed_pending_roots() {
             RelationError::Malformed("noncanonical secp scalar")
         ))
     ));
+}
+
+#[test]
+fn v4_loader_rejects_the_stale_qualified_artifact() {
+    let mut artifact = Cursor::new(vec![0xa5; 16]);
+    assert!(matches!(
+        load_qualified_construction_parent_verifier(&mut artifact),
+        Err(DirectNovaVerifierArtifactError::QualificationPending)
+    ));
+    assert_eq!(artifact.position(), 0);
 }

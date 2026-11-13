@@ -84,10 +84,20 @@ impl ExpectedDirectNovaVerifierArtifact {
     }
 }
 
+/// Authenticated verifier artifact from the mixed SHA-256 qualification.
+pub(crate) const QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT:
+    ExpectedDirectNovaVerifierArtifact = ExpectedDirectNovaVerifierArtifact::new(
+    693_708_278,
+    3_206_736_424,
+    [
+        0x18, 0x4c, 0x33, 0x40, 0xde, 0x8f, 0x00, 0x5a, 0x6e, 0x3a, 0x83, 0x99, 0x7e, 0x90, 0xff,
+        0x99, 0x3d, 0x24, 0x50, 0x26, 0xd6, 0xae, 0xc0, 0x48, 0x04, 0xdc, 0xb7, 0x36, 0xf2, 0x9c,
+        0xa0, 0xaa,
+    ],
+);
+
 #[derive(Debug, Error)]
 pub(crate) enum DirectNovaVerifierArtifactError {
-    #[error("construction parent verifier qualification is pending")]
-    QualificationPending,
     #[cfg(test)]
     #[error("direct Nova verifier artifact destination is not empty")]
     DestinationNotEmpty,

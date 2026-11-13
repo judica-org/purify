@@ -469,7 +469,7 @@ void test_parent_envelope_layout_and_syntax(TestContext& ctx) {
     expect_ok(ctx, payload, "envelope payload constructs");
     if (!payload) return;
 
-    // Transport-only until mixed-profile qualification replaces this size.
+    // The mixed SHA-256 parent qualification fixes this exact size.
     static_assert(ConstructionReceiptEnvelope::kParentProofSize == 15'076);
     Bytes parent_proof(
         ConstructionReceiptEnvelope::kParentProofSize, 0xa5);
@@ -483,7 +483,7 @@ void test_parent_envelope_layout_and_syntax(TestContext& ctx) {
         128 * fixture->anchor_entries.size() + parent_proof.size();
     ctx.expect(envelope->serialized_size() == expected_size &&
                    encoded.size() == expected_size,
-               "envelope uses the provisional 15,076-byte proof slot");
+               "envelope uses the qualified 15,076-byte parent proof");
     const Bytes payload_bytes = payload->serialize();
     ctx.expect(std::equal(payload_bytes.begin(), payload_bytes.end(),
                           encoded.begin()),

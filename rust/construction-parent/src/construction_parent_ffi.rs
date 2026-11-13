@@ -12,8 +12,8 @@ use crate::construction_parent_input::{
     ConstructionParentInputs, CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES,
 };
 use crate::construction_parent_verifier::{
-    load_qualified_construction_parent_verifier, require_qualified_construction_parent_profile,
-    verify_construction_parent, ConstructionParentVerifierError,
+    load_qualified_construction_parent_verifier, verify_construction_parent,
+    ConstructionParentVerifierError,
 };
 use crate::construction_profile::{CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES};
 use crate::nova_session::{SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH};
@@ -112,8 +112,7 @@ fn verifier_status(error: ConstructionParentVerifierError) -> PurifyConstruction
 ///
 /// `artifact_path` is an explicit UTF-8 path. The output is set to null before
 /// any validation or I/O. The path selects only a storage location; artifact
-/// identity is compiled into the Rust verifier. The mixed profile currently
-/// fails closed until its complete artifact set is requalified.
+/// identity is compiled into the Rust verifier.
 #[no_mangle]
 pub(crate) unsafe extern "C" fn purify_construction_parent_verifier_load(
     artifact_path: *const u8,
@@ -137,9 +136,6 @@ pub(crate) unsafe extern "C" fn purify_construction_parent_verifier_load(
         Ok(value) => value,
         Err(_) => return PurifyConstructionParentStatus::Malformed,
     };
-    if require_qualified_construction_parent_profile().is_err() {
-        return PurifyConstructionParentStatus::ArtifactRejected;
-    }
     let mut artifact = match std::fs::File::open(artifact_path) {
         Ok(value) => value,
         Err(_) => return PurifyConstructionParentStatus::ArtifactOpenFailed,
@@ -343,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_loader_rejects_before_opening_a_missing_artifact() {
+    fn loader_reports_a_missing_artifact() {
         let path = std::env::temp_dir().join(format!(
             "purify-missing-construction-parent-{}",
             std::process::id()
@@ -358,12 +354,12 @@ mod tests {
                 &mut verifier,
             )
         };
-        assert_eq!(status, PurifyConstructionParentStatus::ArtifactRejected);
+        assert_eq!(status, PurifyConstructionParentStatus::ArtifactOpenFailed);
         assert!(verifier.is_null());
     }
 
     #[test]
-    fn pending_loader_rejects_existing_storage_without_an_owner() {
+    fn loader_rejects_an_unauthenticated_artifact() {
         let path = std::env::temp_dir().join(format!(
             "purify-rejected-construction-parent-{}",
             std::process::id()

@@ -23,7 +23,7 @@ extern "C" {
 enum {
     PURIFY_CONSTRUCTION_PARENT_ROOT_SIZE = 545,
     PURIFY_CONSTRUCTION_PARENT_DESCRIPTOR_SIZE = 130,
-    /* Transport-only until mixed-profile qualification replaces it. */
+    /* Fixed by the mixed SHA-256 construction-parent qualification. */
     PURIFY_CONSTRUCTION_PARENT_PROOF_SIZE = 15076,
 };
 
@@ -44,8 +44,7 @@ typedef struct purify_construction_parent_verifier
  * Opens the configured verifier at an explicit UTF-8 storage path.
  *
  * The path cannot select verifier identity. `verifier_output` is cleared
- * before validation and owns one verifier only on success. The mixed profile
- * currently fails closed until its complete artifact set is requalified.
+ * before validation and owns one verifier only on success.
  */
 purify_construction_parent_status purify_construction_parent_verifier_load(
     const uint8_t* artifact_path, size_t artifact_path_length,

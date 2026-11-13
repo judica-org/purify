@@ -112,11 +112,11 @@ fn authenticated_final_state_rejects_malformed_pending_roots() {
 }
 
 #[test]
-fn mixed_loader_rejects_the_stale_qualified_artifact() {
+fn qualified_loader_authenticates_before_decoding() {
     let mut artifact = Cursor::new(vec![0xa5; 16]);
     assert!(matches!(
         load_qualified_construction_parent_verifier(&mut artifact),
-        Err(DirectNovaVerifierArtifactError::QualificationPending)
+        Err(DirectNovaVerifierArtifactError::Length)
     ));
-    assert_eq!(artifact.position(), 0);
+    assert_eq!(artifact.position(), 16);
 }

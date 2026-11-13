@@ -94,8 +94,7 @@ public:
      * The path cannot select artifact identity. A digest or shape mismatch is
      * an internal deployment error, not a peer-retry condition. Deploy the
      * artifact through an immutable, read-only snapshot; concurrent mutation is
-     * also a deployment fault. The mixed profile currently fails closed with
-     * QualificationPending until its complete artifact set is requalified.
+     * also a deployment fault.
      */
     [[nodiscard]] static Result<ConstructionParentVerifier> load(
         std::string_view artifact_path);

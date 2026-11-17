@@ -32,20 +32,20 @@ type NovaPoint = AllocatedPoint<Secp256k1Sha256Engine>;
 const SCALAR_BITS: usize = 256;
 
 #[derive(Clone)]
-pub(crate) struct DirectSecpPoint {
+pub(crate) struct SecpPoint {
     point: NovaPoint,
 }
 
 #[derive(Clone)]
-pub(crate) struct DirectEncodedSecpPoint {
-    point: DirectSecpPoint,
+pub(crate) struct EncodedSecpPoint {
+    point: SecpPoint,
     prefix: AllocatedNum<Scalar>,
     odd: Boolean,
     prefix_byte: NovaByte,
     x_bytes: [NovaByte; 32],
 }
 
-impl DirectSecpPoint {
+impl SecpPoint {
     pub(crate) fn x(&self) -> &AllocatedNum<Scalar> {
         &self.point.x
     }
@@ -73,8 +73,8 @@ impl DirectSecpPoint {
     }
 }
 
-impl DirectEncodedSecpPoint {
-    pub(crate) fn point(&self) -> &DirectSecpPoint {
+impl EncodedSecpPoint {
+    pub(crate) fn point(&self) -> &SecpPoint {
         &self.point
     }
 
@@ -147,25 +147,25 @@ fn canonicalize_computed_identity<CS: ConstraintSystem<Scalar>>(
 pub(crate) fn allocate_point<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     value: PointValue,
-) -> Result<DirectSecpPoint, SynthesisError> {
+) -> Result<SecpPoint, SynthesisError> {
     let point = NovaPoint::alloc(
         cs.namespace(|| "point"),
         Some((value.x, value.y, value.identity)),
     )?;
     point.check_on_curve(cs.namespace(|| "point is on curve"))?;
     enforce_canonical_identity(cs.namespace(|| "canonical identity"), &point);
-    Ok(DirectSecpPoint { point })
+    Ok(SecpPoint { point })
 }
 
 pub(crate) fn allocate_constant_point<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     value: PointValue,
-) -> Result<DirectSecpPoint, SynthesisError> {
+) -> Result<SecpPoint, SynthesisError> {
     if value.identity {
         if value.x != Scalar::ZERO || value.y != Scalar::ZERO {
             return Err(synthesis_error("noncanonical constant identity"));
         }
-        return Ok(DirectSecpPoint {
+        return Ok(SecpPoint {
             point: NovaPoint::default(cs.namespace(|| "identity"))?,
         });
     }
@@ -178,7 +178,7 @@ pub(crate) fn allocate_constant_point<CS: ConstraintSystem<Scalar>>(
         (value.x, value.y),
         is_infinity,
     )?;
-    Ok(DirectSecpPoint { point })
+    Ok(SecpPoint { point })
 }
 
 fn strict_field_bits<CS: ConstraintSystem<Scalar>>(
@@ -204,9 +204,9 @@ fn field_bytes_be(bits: &[Boolean]) -> Result<[NovaByte; 32], SynthesisError> {
 
 fn encode_with_prefix<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    point: DirectSecpPoint,
+    point: SecpPoint,
     prefix_value: Option<u8>,
-) -> Result<DirectEncodedSecpPoint, SynthesisError> {
+) -> Result<EncodedSecpPoint, SynthesisError> {
     let x_bits = strict_field_bits(cs.namespace(|| "x encoding"), &point.point.x)?;
     let x_bytes = field_bytes_be(&x_bits)?;
     let y_bits = strict_field_bits(cs.namespace(|| "y encoding"), &point.point.y)?;
@@ -244,7 +244,7 @@ fn encode_with_prefix<CS: ConstraintSystem<Scalar>>(
         Boolean::constant(false),
         Boolean::constant(false),
     ]);
-    Ok(DirectEncodedSecpPoint {
+    Ok(EncodedSecpPoint {
         point,
         prefix,
         odd,
@@ -256,7 +256,7 @@ fn encode_with_prefix<CS: ConstraintSystem<Scalar>>(
 pub(crate) fn allocate_encoded_point<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     witness: SecpEncodedPointWitness,
-) -> Result<DirectEncodedSecpPoint, SynthesisError> {
+) -> Result<EncodedSecpPoint, SynthesisError> {
     let value = parse_encoded_point(witness)
         .map_err(|_| synthesis_error("malformed encoded secp point"))?;
     let point = allocate_point(cs.namespace(|| "point"), value.point)?;
@@ -265,27 +265,27 @@ pub(crate) fn allocate_encoded_point<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn encode_computed_point<CS: ConstraintSystem<Scalar>>(
     cs: CS,
-    point: DirectSecpPoint,
-) -> Result<DirectEncodedSecpPoint, SynthesisError> {
+    point: SecpPoint,
+) -> Result<EncodedSecpPoint, SynthesisError> {
     encode_with_prefix(cs, point, None)
 }
 
 pub(crate) fn add_points<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    left: &DirectSecpPoint,
-    right: &DirectSecpPoint,
-) -> Result<DirectSecpPoint, SynthesisError> {
+    left: &SecpPoint,
+    right: &SecpPoint,
+) -> Result<SecpPoint, SynthesisError> {
     let point = left
         .point
         .add(cs.namespace(|| "complete addition"), &right.point)?;
-    Ok(DirectSecpPoint { point })
+    Ok(SecpPoint { point })
 }
 
 pub(crate) fn scale_point<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    point: &DirectSecpPoint,
+    point: &SecpPoint,
     scalar_bits: &[AllocatedBit],
-) -> Result<DirectSecpPoint, SynthesisError> {
+) -> Result<SecpPoint, SynthesisError> {
     // Canonicality belongs to the scalar allocator. Reuse its constrained
     // bits here rather than allocating a second, potentially inconsistent
     // scalar witness.
@@ -296,7 +296,7 @@ pub(crate) fn scale_point<CS: ConstraintSystem<Scalar>>(
         .point
         .scalar_mul(cs.namespace(|| "scalar multiplication"), scalar_bits)?;
     let point = canonicalize_computed_identity(cs.namespace(|| "scaled identity"), point)?;
-    Ok(DirectSecpPoint { point })
+    Ok(SecpPoint { point })
 }
 
 #[cfg(test)]
@@ -316,9 +316,9 @@ mod tests {
 
     pub(crate) fn msm_points<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
-        points: &[DirectSecpPoint],
+        points: &[SecpPoint],
         scalars: &[Vec<AllocatedBit>],
-    ) -> Result<DirectSecpPoint, SynthesisError> {
+    ) -> Result<SecpPoint, SynthesisError> {
         if points.is_empty() || points.len() != scalars.len() {
             return Err(synthesis_error("secp MSM shape"));
         }
@@ -524,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_point_shapes_are_pinned() {
+    fn constrained_point_shapes_are_pinned() {
         let generator = generator();
         let double = add_point_values(generator, generator);
         let mut encoding = ShapeCS::<Secq256k1Sha256Engine>::new();

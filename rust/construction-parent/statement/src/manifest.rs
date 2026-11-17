@@ -8,10 +8,7 @@
 
 use ff::Field;
 
-use crate::profile::{
-    CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_ROUNDS, CONSTRUCTION_ROOT_STATE_ARITY,
-    CONSTRUCTION_STATE_ARITY,
-};
+use crate::profile::{ROOT_BYTES, ROOT_ROUNDS, ROOT_STATE_ARITY, STATE_ARITY};
 use crate::secp::{
     canonical_encoded_point_value, canonical_scalar_value, coordinate_field_value,
     SecpScalarWitness,
@@ -19,11 +16,9 @@ use crate::secp::{
 use crate::transcript::NativeTranscript;
 use crate::{scalar_to_canonical, RelationError, Scalar};
 
-const CONSTRUCTION_RELATION_VERSION: u64 = 3;
-const CONSTRUCTION_INITIAL_MANIFEST_DOMAIN: &[u8] =
-    b"Purify/Accountable/ConstructionParentManifest/v3/init";
-pub const CONSTRUCTION_STEP_MANIFEST_DOMAIN: &[u8] =
-    b"Purify/Accountable/ConstructionParentManifest/v3/leaf";
+const RELATION_VERSION: u64 = 3;
+const INITIAL_MANIFEST_DOMAIN: &[u8] = b"Purify/Accountable/ConstructionParentManifest/v3/init";
+pub const STEP_MANIFEST_DOMAIN: &[u8] = b"Purify/Accountable/ConstructionParentManifest/v3/leaf";
 
 /// Canonical pending root for the fixed 32,768-point construction basis.
 ///
@@ -32,23 +27,23 @@ pub const CONSTRUCTION_STEP_MANIFEST_DOMAIN: &[u8] =
 /// one does not verify or decide the represented accumulation obligation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConstructionRoot {
-    encoded: [u8; CONSTRUCTION_ROOT_BYTES],
-    state_fields: [Scalar; CONSTRUCTION_ROOT_STATE_ARITY],
+    encoded: [u8; ROOT_BYTES],
+    state_fields: [Scalar; ROOT_STATE_ARITY],
 }
 
 impl ConstructionRoot {
     pub fn parse(encoded: &[u8]) -> Result<Self, RelationError> {
-        let encoded: [u8; CONSTRUCTION_ROOT_BYTES] = encoded
+        let encoded: [u8; ROOT_BYTES] = encoded
             .try_into()
             .map_err(|_| RelationError::Malformed("construction root size"))?;
         let point_encoding = encoded[..33].try_into().expect("fixed point slice");
         let point = canonical_encoded_point_value(point_encoding)?;
         let scale = parse_root_scalar(encoded[33..65].try_into().expect("fixed root scale slice"))?;
-        let mut state_fields = [Scalar::ZERO; CONSTRUCTION_ROOT_STATE_ARITY];
+        let mut state_fields = [Scalar::ZERO; ROOT_STATE_ARITY];
         state_fields[0] = Scalar::from(u64::from(point_encoding[0]));
         state_fields[1] = point.x;
         state_fields[2] = scale;
-        for index in 0..CONSTRUCTION_ROOT_ROUNDS {
+        for index in 0..ROOT_ROUNDS {
             let offset = 65 + 32 * index;
             state_fields[3 + index] = parse_root_scalar(
                 encoded[offset..offset + 32]
@@ -63,9 +58,7 @@ impl ConstructionRoot {
     }
 
     /// Reconstructs the unique root encoding from authenticated state fields.
-    pub fn from_state_fields(
-        fields: [Scalar; CONSTRUCTION_ROOT_STATE_ARITY],
-    ) -> Result<Self, RelationError> {
+    pub fn from_state_fields(fields: [Scalar; ROOT_STATE_ARITY]) -> Result<Self, RelationError> {
         let prefix = if fields[0] == Scalar::ZERO {
             0
         } else if fields[0] == Scalar::from(2) {
@@ -76,7 +69,7 @@ impl ConstructionRoot {
             return Err(RelationError::Malformed("construction root point prefix"));
         };
 
-        let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
+        let mut encoded = [0; ROOT_BYTES];
         if prefix == 0 {
             if fields[1] != Scalar::ZERO {
                 return Err(RelationError::Malformed("construction root identity point"));
@@ -93,19 +86,19 @@ impl ConstructionRoot {
         Self::parse(&encoded)
     }
 
-    pub fn canonical_bytes(&self) -> &[u8; CONSTRUCTION_ROOT_BYTES] {
+    pub fn canonical_bytes(&self) -> &[u8; ROOT_BYTES] {
         &self.encoded
     }
 
     /// Converts this root into the recurrence's exact public-state prefix.
-    pub fn state_fields(&self) -> [Scalar; CONSTRUCTION_ROOT_STATE_ARITY] {
+    pub fn state_fields(&self) -> [Scalar; ROOT_STATE_ARITY] {
         self.state_fields
     }
 }
 
 /// Immutable public inputs from which the verifier derives recurrence z0.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ConstructionManifestSeed {
+pub struct ManifestSeed {
     construction_statement_digest: [u8; 32],
     resolved_setup_record_digest: [u8; 32],
     recovery_root: [u8; 64],
@@ -114,7 +107,7 @@ pub struct ConstructionManifestSeed {
     anchor_leaf_count: u32,
 }
 
-impl ConstructionManifestSeed {
+impl ManifestSeed {
     pub fn new(
         construction_statement_digest: [u8; 32],
         resolved_setup_record_digest: [u8; 32],
@@ -136,7 +129,7 @@ impl ConstructionManifestSeed {
         setup_leaf_count
             .checked_add(anchor_leaf_count)
             .ok_or(RelationError::Malformed("construction leaf count"))?;
-        let root = ConstructionRoot::parse(&[0; CONSTRUCTION_ROOT_BYTES])?;
+        let root = ConstructionRoot::parse(&[0; ROOT_BYTES])?;
         Ok(Self {
             construction_statement_digest,
             resolved_setup_record_digest,
@@ -150,9 +143,9 @@ impl ConstructionManifestSeed {
     fn initial_manifest(&self) -> Result<[u8; 32], RelationError> {
         let mut transcript = NativeTranscript::new();
         transcript
-            .append_bytes(CONSTRUCTION_INITIAL_MANIFEST_DOMAIN)
+            .append_bytes(INITIAL_MANIFEST_DOMAIN)
             .expect("fixed manifest domain length fits u64");
-        transcript.append_u64(CONSTRUCTION_RELATION_VERSION);
+        transcript.append_u64(RELATION_VERSION);
         transcript
             .append_bytes(&self.construction_statement_digest)
             .expect("fixed statement digest length fits u64");
@@ -170,20 +163,14 @@ impl ConstructionManifestSeed {
     /// Derives the recursive input and matching native manifest state once.
     pub fn initial_state_and_manifest(
         &self,
-    ) -> Result<
-        (
-            [Scalar; CONSTRUCTION_STATE_ARITY],
-            ConstructionManifestState,
-        ),
-        RelationError,
-    > {
+    ) -> Result<([Scalar; STATE_ARITY], ManifestState), RelationError> {
         let manifest = self.initial_manifest()?;
         let root = self.root.state_fields();
-        let mut state = [Scalar::ZERO; CONSTRUCTION_STATE_ARITY];
-        state[..CONSTRUCTION_ROOT_STATE_ARITY].copy_from_slice(&root);
-        state[CONSTRUCTION_ROOT_STATE_ARITY] = coordinate_field_value(manifest)?;
-        state[CONSTRUCTION_ROOT_STATE_ARITY + 1] = Scalar::ZERO;
-        Ok((state, ConstructionManifestState { manifest, index: 0 }))
+        let mut state = [Scalar::ZERO; STATE_ARITY];
+        state[..ROOT_STATE_ARITY].copy_from_slice(&root);
+        state[ROOT_STATE_ARITY] = coordinate_field_value(manifest)?;
+        state[ROOT_STATE_ARITY + 1] = Scalar::ZERO;
+        Ok((state, ManifestState { manifest, index: 0 }))
     }
 
     /// The canonical all-zero root every construction starts from.
@@ -192,17 +179,15 @@ impl ConstructionManifestSeed {
     }
 
     /// Returns the fixed 20-field initial state consumed by recursion.
-    pub fn initial_state_fields(
-        &self,
-    ) -> Result<[Scalar; CONSTRUCTION_STATE_ARITY], RelationError> {
+    pub fn initial_state_fields(&self) -> Result<[Scalar; STATE_ARITY], RelationError> {
         Ok(self.initial_state_and_manifest()?.0)
     }
 
     /// Derives the manifest and index expected after the exact ordered payload.
     pub fn derive_expected_final(
         &self,
-        leaves: &[ConstructionManifestLeaf],
-    ) -> Result<ConstructionManifestState, RelationError> {
+        leaves: &[ManifestLeaf],
+    ) -> Result<ManifestState, RelationError> {
         let count = u32::try_from(leaves.len())
             .map_err(|_| RelationError::Malformed("construction leaf count"))?;
         let expected_count = self
@@ -222,14 +207,14 @@ impl ConstructionManifestSeed {
 
 /// Verifier-resolved public values bound by one homogeneous construction leaf.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ConstructionManifestLeaf {
+pub struct ManifestLeaf {
     binding_digest: [u8; 32],
     precommitment: [u8; 32],
     coefficient_commitment: [u8; 33],
     anchored_offset: [u8; 33],
 }
 
-impl ConstructionManifestLeaf {
+impl ManifestLeaf {
     pub fn new(
         binding_digest: [u8; 32],
         precommitment: [u8; 32],
@@ -253,7 +238,7 @@ impl ConstructionManifestLeaf {
 
 /// Exact native inputs absorbed by one constrained manifest transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ConstructionManifestStepInput {
+pub struct ManifestStepInput {
     prior_manifest: [u8; 32],
     zero_based_index: u32,
     binding_digest: [u8; 32],
@@ -262,11 +247,11 @@ pub struct ConstructionManifestStepInput {
     anchored_offset: [u8; 33],
 }
 
-impl ConstructionManifestStepInput {
+impl ManifestStepInput {
     pub fn new(
         prior_manifest: [u8; 32],
         zero_based_index: u32,
-        leaf: ConstructionManifestLeaf,
+        leaf: ManifestLeaf,
     ) -> Result<Self, RelationError> {
         coordinate_field_value(prior_manifest)?;
         Ok(Self {
@@ -282,12 +267,12 @@ impl ConstructionManifestStepInput {
 
 /// Expected non-root portion of one authenticated recurrence state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ConstructionManifestState {
+pub struct ManifestState {
     manifest: [u8; 32],
     index: u32,
 }
 
-impl ConstructionManifestState {
+impl ManifestState {
     pub fn manifest(&self) -> [u8; 32] {
         self.manifest
     }
@@ -304,12 +289,12 @@ impl ConstructionManifestState {
         ])
     }
 
-    pub fn advance(self, leaf: ConstructionManifestLeaf) -> Result<Self, RelationError> {
+    pub fn advance(self, leaf: ManifestLeaf) -> Result<Self, RelationError> {
         let next_index = self
             .index
             .checked_add(1)
             .ok_or(RelationError::Malformed("construction manifest index"))?;
-        let input = ConstructionManifestStepInput::new(self.manifest, self.index, leaf)?;
+        let input = ManifestStepInput::new(self.manifest, self.index, leaf)?;
         Ok(Self {
             manifest: derive_step_manifest(&input)?,
             index: next_index,
@@ -318,11 +303,9 @@ impl ConstructionManifestState {
 }
 
 /// Replays the native transcript constrained by one recurrence step.
-pub fn derive_step_manifest(
-    input: &ConstructionManifestStepInput,
-) -> Result<[u8; 32], RelationError> {
+pub fn derive_step_manifest(input: &ManifestStepInput) -> Result<[u8; 32], RelationError> {
     let mut transcript = NativeTranscript::new();
-    transcript.append_bytes(CONSTRUCTION_STEP_MANIFEST_DOMAIN)?;
+    transcript.append_bytes(STEP_MANIFEST_DOMAIN)?;
     transcript.append_field(input.prior_manifest);
     transcript.append_field(field_to_be(Scalar::from(u64::from(input.zero_based_index))));
     transcript.append_bytes(&input.binding_digest)?;

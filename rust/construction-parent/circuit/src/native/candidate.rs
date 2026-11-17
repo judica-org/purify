@@ -1,7 +1,7 @@
 //! Backend-independent candidate accumulation witnesses.
 
 use crate::native::secp::{SecpEncodedPointWitness, SecpScalarWitness};
-use crate::profile::CONSTRUCTION_ROOT_ROUNDS;
+use crate::profile::ROOT_ROUNDS;
 use statement::manifest::ConstructionRoot;
 
 pub(crate) const MAX_CANDIDATE_CLAIMS: usize = 1024;
@@ -41,7 +41,7 @@ impl CandidateRootClaim {
         let scale = SecpScalarWitness::from_bytes_be(
             encoded[33..65].try_into().expect("fixed root scale slice"),
         );
-        let factors = (0..CONSTRUCTION_ROOT_ROUNDS)
+        let factors = (0..ROOT_ROUNDS)
             .map(|index| {
                 let offset = 65 + 32 * index;
                 SecpScalarWitness::from_bytes_be(
@@ -63,15 +63,15 @@ impl CandidateRootClaim {
 mod tests {
     use super::*;
     use crate::native::secp::standard_generator;
-    use crate::profile::CONSTRUCTION_ROOT_BYTES;
+    use crate::profile::ROOT_BYTES;
 
-    fn root_bytes(prefix: u8) -> [u8; CONSTRUCTION_ROOT_BYTES] {
+    fn root_bytes(prefix: u8) -> [u8; ROOT_BYTES] {
         let generator = SecpEncodedPointWitness::from_point_value(standard_generator());
-        let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
+        let mut encoded = [0; ROOT_BYTES];
         encoded[..33].copy_from_slice(&generator.encoded);
         encoded[0] = prefix;
         encoded[64] = 1;
-        for index in 0..CONSTRUCTION_ROOT_ROUNDS {
+        for index in 0..ROOT_ROUNDS {
             encoded[65 + 32 * index + 31] = u8::try_from(index + 2).expect("small factor");
         }
         encoded
@@ -85,7 +85,7 @@ mod tests {
         let claim = CandidateRootClaim::from_root(&root);
         assert_eq!(claim.point, generator);
         assert_eq!(claim.scale, SecpScalarWitness::from_u64(1));
-        assert_eq!(claim.factors.len(), CONSTRUCTION_ROOT_ROUNDS);
+        assert_eq!(claim.factors.len(), ROOT_ROUNDS);
         for (index, factor) in claim.factors.iter().enumerate() {
             assert_eq!(*factor, SecpScalarWitness::from_u64(index as u64 + 2));
         }

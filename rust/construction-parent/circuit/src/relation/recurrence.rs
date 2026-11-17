@@ -8,7 +8,7 @@ use nova_snark::{
     traits::circuit::StepCircuit,
 };
 
-use crate::gadgets::point::{allocate_encoded_point, DirectEncodedSecpPoint};
+use crate::gadgets::point::{allocate_encoded_point, EncodedSecpPoint};
 use crate::gadgets::scalar::{allocate_canonical_scalar, CanonicalSecpScalar};
 use crate::gadgets::sha256::{NovaByte, NovaTranscript};
 use crate::gadgets::synthesis_error;
@@ -24,31 +24,25 @@ use crate::native::recurrence::{
     validate_production_shape, ConstructionRecurrenceStateWitness, MANIFEST_INDEX,
     ROOT_FACTORS_START, ROOT_PREFIX_INDEX, ROOT_SCALE_INDEX, ROOT_X_INDEX, STEP_INDEX,
 };
-use crate::profile::{
-    CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_ROUNDS,
-};
+use crate::profile::{BASIS_DIGEST, RAW_GENERATOR_DIGEST, ROOT_ROUNDS, STATE_ARITY};
 use crate::relation::candidate::{
-    install_constrained_candidate_step, DirectCandidateRoot, DirectPendingClaim,
-    DirectPolynomialTerm,
+    install_constrained_candidate_step, CandidateRoot, PendingClaim, PolynomialTerm,
 };
-use crate::relation::identity::DirectRelationId;
+use crate::relation::identity::RelationId;
 use crate::relation::norm_leaf::constrain_manifest_bound_construction_leaf;
-use statement::manifest::CONSTRUCTION_STEP_MANIFEST_DOMAIN;
+use statement::manifest::STEP_MANIFEST_DOMAIN;
 use statement::Scalar;
 
 const FIELD_BITS: usize = 256;
 
 /// Relation ID frozen by the mixed construction-parent qualification.
-pub const QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID: DirectRelationId =
-    DirectRelationId::from_frozen_bytes([
-        0xa6, 0x6c, 0x58, 0xa8, 0x6a, 0xfc, 0xe6, 0x4b, 0x2b, 0x69, 0xd5, 0x3e, 0x83, 0xd3, 0xd5,
-        0x43, 0x0d, 0x08, 0x0f, 0xaf, 0x0b, 0x68, 0x06, 0x4c, 0xad, 0xb3, 0xa6, 0xd8, 0xb4, 0x39,
-        0xee, 0xa9,
-    ]);
+pub const QUALIFIED_RELATION_ID: RelationId = RelationId::from_frozen_bytes([
+    0xa6, 0x6c, 0x58, 0xa8, 0x6a, 0xfc, 0xe6, 0x4b, 0x2b, 0x69, 0xd5, 0x3e, 0x83, 0xd3, 0xd5, 0x43,
+    0x0d, 0x08, 0x0f, 0xaf, 0x0b, 0x68, 0x06, 0x4c, 0xad, 0xb3, 0xa6, 0xd8, 0xb4, 0x39, 0xee, 0xa9,
+]);
 
-pub(crate) struct DirectPriorState {
-    pub(crate) root_claim: DirectPendingClaim,
+pub(crate) struct PriorState {
+    pub(crate) root_claim: PendingClaim,
     manifest: [NovaByte; 32],
     index: AllocatedNum<Scalar>,
     index_bytes: [NovaByte; 32],
@@ -61,8 +55,8 @@ pub struct ConstructionParentStep {
     transcript: CircuitProofTranscriptWitnessV4,
     reduction: CandidateNormReductionProofWitness,
     proof: CandidateStepProofWitness,
-    input_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
-    relation_id: DirectRelationId,
+    input_state: [Scalar; STATE_ARITY],
+    relation_id: RelationId,
 }
 
 impl ConstructionParentStep {
@@ -74,8 +68,8 @@ impl ConstructionParentStep {
         proof: CandidateStepProofWitness,
     ) -> Result<Self, statement::RelationError> {
         validate_production_shape(statement, &reduction, &proof)?;
-        if statement.raw_generator_digest != CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST
-            || statement.basis_digest != CONSTRUCTION_PARENT_BASIS_DIGEST
+        if statement.raw_generator_digest != RAW_GENERATOR_DIGEST
+            || statement.basis_digest != BASIS_DIGEST
         {
             return Err(statement::RelationError::Malformed(
                 "construction recurrence profile digest",
@@ -106,11 +100,11 @@ impl ConstructionParentStep {
             reduction,
             proof,
             input_state,
-            relation_id: QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
+            relation_id: QUALIFIED_RELATION_ID,
         })
     }
 
-    pub const fn input_state(&self) -> &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {
+    pub const fn input_state(&self) -> &[Scalar; STATE_ARITY] {
         &self.input_state
     }
 
@@ -119,14 +113,14 @@ impl ConstructionParentStep {
     /// Every constructor declares the reviewed qualified constant. Only
     /// resource-gated requalification replaces it, with the ID it streamed
     /// from this exact matrix.
-    pub const fn declared_relation_id(&self) -> DirectRelationId {
+    pub const fn declared_relation_id(&self) -> RelationId {
         self.relation_id
     }
 
     /// Rebinds a requalification copy to the relation ID streamed from its
     /// exact matrix. Production proving never calls this; a session only
     /// folds steps whose declared ID equals its pinned suite's.
-    pub fn set_qualification_relation_id(&mut self, relation_id: DirectRelationId) {
+    pub fn set_qualification_relation_id(&mut self, relation_id: RelationId) {
         self.relation_id = relation_id;
     }
 
@@ -135,7 +129,7 @@ impl ConstructionParentStep {
         mut cs: CS,
         z: &[AllocatedNum<Scalar>],
     ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
-        if z.len() != CONSTRUCTION_RECURRENCE_STATE_ARITY {
+        if z.len() != STATE_ARITY {
             return Err(synthesis_error("construction recurrence state arity"));
         }
         let prior = bind_prior_state(cs.namespace(|| "prior state"), z, &self.state)?;
@@ -148,7 +142,7 @@ impl ConstructionParentStep {
         let manifest = install_manifest_transition(
             cs.namespace(|| "manifest transition"),
             &prior,
-            DirectManifestLeaf::new(
+            ConstrainedManifestLeaf::new(
                 &leaf.circuit_binding_digest,
                 &leaf.precommitment,
                 &leaf.coefficient_commitment,
@@ -168,7 +162,7 @@ impl ConstructionParentStep {
 
 impl StepCircuit<Scalar> for ConstructionParentStep {
     fn arity(&self) -> usize {
-        CONSTRUCTION_RECURRENCE_STATE_ARITY
+        STATE_ARITY
     }
 
     fn synthesize<CS: ConstraintSystem<Scalar>>(
@@ -184,19 +178,19 @@ impl StepCircuit<Scalar> for ConstructionParentStep {
 ///
 /// This is the only seam between the direct norm leaf and the recurrence.
 /// It deliberately carries constrained values, not a second witness model.
-pub(crate) struct DirectManifestLeaf<'a> {
+pub(crate) struct ConstrainedManifestLeaf<'a> {
     binding_digest: &'a [NovaByte; 32],
     precommitment: &'a CanonicalSecpScalar,
-    coefficient_commitment: &'a DirectEncodedSecpPoint,
-    anchored_offset: &'a DirectEncodedSecpPoint,
+    coefficient_commitment: &'a EncodedSecpPoint,
+    anchored_offset: &'a EncodedSecpPoint,
 }
 
-impl<'a> DirectManifestLeaf<'a> {
+impl<'a> ConstrainedManifestLeaf<'a> {
     pub(crate) fn new(
         binding_digest: &'a [NovaByte; 32],
         precommitment: &'a CanonicalSecpScalar,
-        coefficient_commitment: &'a DirectEncodedSecpPoint,
-        anchored_offset: &'a DirectEncodedSecpPoint,
+        coefficient_commitment: &'a EncodedSecpPoint,
+        anchored_offset: &'a EncodedSecpPoint,
     ) -> Self {
         Self {
             binding_digest,
@@ -207,7 +201,7 @@ impl<'a> DirectManifestLeaf<'a> {
     }
 }
 
-impl DirectPriorState {
+impl PriorState {
     pub(crate) fn index(&self) -> &AllocatedNum<Scalar> {
         &self.index
     }
@@ -254,10 +248,8 @@ pub(crate) fn bind_prior_state<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     state: &[AllocatedNum<Scalar>],
     witness: &ConstructionRecurrenceStateWitness,
-) -> Result<DirectPriorState, SynthesisError> {
-    if state.len() != CONSTRUCTION_RECURRENCE_STATE_ARITY
-        || witness.root.factors.len() != CONSTRUCTION_ROOT_ROUNDS
-    {
+) -> Result<PriorState, SynthesisError> {
+    if state.len() != STATE_ARITY || witness.root.factors.len() != ROOT_ROUNDS {
         return Err(synthesis_error("construction recurrence state shape"));
     }
 
@@ -294,10 +286,10 @@ pub(crate) fn bind_prior_state<CS: ConstraintSystem<Scalar>>(
 
     let manifest = field_bytes_be(cs.namespace(|| "prior manifest"), &state[MANIFEST_INDEX])?;
     let index_bytes = field_bytes_be(cs.namespace(|| "step index"), &state[STEP_INDEX])?;
-    Ok(DirectPriorState {
-        root_claim: DirectPendingClaim {
+    Ok(PriorState {
+        root_claim: PendingClaim {
             point,
-            polynomial: vec![DirectPolynomialTerm {
+            polynomial: vec![PolynomialTerm {
                 scale,
                 offset: 0,
                 factors,
@@ -311,11 +303,11 @@ pub(crate) fn bind_prior_state<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn install_manifest_transition<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    state: &DirectPriorState,
-    leaf: DirectManifestLeaf<'_>,
+    state: &PriorState,
+    leaf: ConstrainedManifestLeaf<'_>,
 ) -> Result<CanonicalSecpScalar, SynthesisError> {
     let mut transcript = NovaTranscript::new();
-    append_constant_bytes(&mut transcript, CONSTRUCTION_STEP_MANIFEST_DOMAIN)?;
+    append_constant_bytes(&mut transcript, STEP_MANIFEST_DOMAIN)?;
     transcript.append_field(&state.manifest);
     transcript.append_field(&state.index_bytes);
     append_bytes(&mut transcript, leaf.binding_digest)?;
@@ -371,14 +363,14 @@ fn increment_index<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn expose_output_state<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    prior: &DirectPriorState,
-    root: &DirectCandidateRoot,
+    prior: &PriorState,
+    root: &CandidateRoot,
     manifest: &CanonicalSecpScalar,
 ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
-    if root.factors.len() != CONSTRUCTION_ROOT_ROUNDS {
+    if root.factors.len() != ROOT_ROUNDS {
         return Err(synthesis_error("construction output root shape"));
     }
-    let mut output = Vec::with_capacity(CONSTRUCTION_RECURRENCE_STATE_ARITY);
+    let mut output = Vec::with_capacity(STATE_ARITY);
     output.push(root.point.prefix().clone());
     output.push(root.point.point().x().clone());
     output.push(materialize_scalar(
@@ -396,7 +388,7 @@ pub(crate) fn expose_output_state<CS: ConstraintSystem<Scalar>>(
         cs.namespace(|| "step index"),
         prior.index(),
     )?);
-    debug_assert_eq!(output.len(), CONSTRUCTION_RECURRENCE_STATE_ARITY);
+    debug_assert_eq!(output.len(), STATE_ARITY);
     Ok(output)
 }
 
@@ -414,10 +406,8 @@ mod tests {
         CircuitCommitmentModeV4, CircuitPointPairWitnessV4, CircuitTranscriptShapeV4,
     };
     use crate::native::secp::{SecpEncodedPointWitness, SecpScalarWitness};
-    use statement::manifest::{
-        derive_step_manifest, ConstructionManifestLeaf, ConstructionManifestStepInput,
-    };
-    use statement::DirectNovaPrimaryEngine;
+    use statement::manifest::{derive_step_manifest, ManifestLeaf, ManifestStepInput};
+    use statement::PrimaryEngine;
 
     /// Reduced-shape test circuit, intentionally ineligible for Nova sessions.
     #[derive(Clone)]
@@ -435,8 +425,8 @@ mod tests {
                 || statement.shape.commitment_count != 1
                 || reduction.left.len() != statement.shape.round_count()
                 || reduction.right.len() != statement.shape.round_count()
-                || proof.left.len() != CONSTRUCTION_ROOT_ROUNDS
-                || proof.right.len() != CONSTRUCTION_ROOT_ROUNDS
+                || proof.left.len() != ROOT_ROUNDS
+                || proof.right.len() != ROOT_ROUNDS
             {
                 return Err(statement::RelationError::Malformed(
                     "direct construction recurrence shape",
@@ -483,7 +473,7 @@ mod tests {
                         crate::native::secp::standard_generator(),
                     ),
                     scale: zero,
-                    factors: vec![zero; CONSTRUCTION_ROOT_ROUNDS],
+                    factors: vec![zero; ROOT_ROUNDS],
                 },
                 manifest: [1; 32],
                 index: 1,
@@ -491,8 +481,8 @@ mod tests {
             ManifestBoundConstructionLeafStatementV4 {
                 shape,
                 circuit_binding_digest: [0x31; 32],
-                raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-                basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
+                raw_generator_digest: RAW_GENERATOR_DIGEST,
+                basis_digest: BASIS_DIGEST,
             },
             CircuitProofTranscriptWitnessV4 {
                 public_commitments: vec![identity],
@@ -518,8 +508,8 @@ mod tests {
                 folded_generator: identity,
             },
             CandidateStepProofWitness {
-                left: vec![identity; CONSTRUCTION_ROOT_ROUNDS],
-                right: vec![identity; CONSTRUCTION_ROOT_ROUNDS],
+                left: vec![identity; ROOT_ROUNDS],
+                right: vec![identity; ROOT_ROUNDS],
                 terminal_scalar: SecpScalarWitness::from_u64(1),
                 folded_generator: identity,
             },
@@ -529,10 +519,7 @@ mod tests {
 
     #[test]
     fn reduced_shape_test_step_keeps_the_state_arity() {
-        assert_eq!(
-            zero_reduced_shape_step().arity(),
-            CONSTRUCTION_RECURRENCE_STATE_ARITY
-        );
+        assert_eq!(zero_reduced_shape_step().arity(), STATE_ARITY);
     }
 
     const GENERATOR_X: [u8; 32] = [
@@ -553,7 +540,7 @@ mod tests {
             root: CandidateRootClaim {
                 point,
                 scale: SecpScalarWitness::from_u64(u64::from(marker) + 1),
-                factors: (0..CONSTRUCTION_ROOT_ROUNDS)
+                factors: (0..ROOT_ROUNDS)
                     .map(|index| SecpScalarWitness::from_u64(u64::from(marker) + index as u64 + 2))
                     .collect(),
             },
@@ -567,7 +554,7 @@ mod tests {
             root: CandidateRootClaim {
                 point: SecpEncodedPointWitness::identity(),
                 scale: SecpScalarWitness::from_u64(0),
-                factors: vec![SecpScalarWitness::from_u64(0); CONSTRUCTION_ROOT_ROUNDS],
+                factors: vec![SecpScalarWitness::from_u64(0); ROOT_ROUNDS],
             },
             manifest: [0; 32],
             index: 0,
@@ -597,7 +584,7 @@ mod tests {
         })
     }
 
-    fn direct_scalar_bytes(value: &CanonicalSecpScalar) -> [u8; 32] {
+    fn constrained_scalar_bytes(value: &CanonicalSecpScalar) -> [u8; 32] {
         let (_, encoded) = value.integer().expect("scalar witness").to_bytes_be();
         let mut bytes = [0; 32];
         bytes[32 - encoded.len()..].copy_from_slice(&encoded);
@@ -610,8 +597,8 @@ mod tests {
         precommitment: SecpScalarWitness,
         coefficient: SecpEncodedPointWitness,
         offset: SecpEncodedPointWitness,
-    ) -> ShapeCS<DirectNovaPrimaryEngine> {
-        let mut cs = ShapeCS::<DirectNovaPrimaryEngine>::new();
+    ) -> ShapeCS<PrimaryEngine> {
+        let mut cs = ShapeCS::<PrimaryEngine>::new();
         let inputs = allocate_state(cs.namespace(|| "state inputs"), state_witness);
         let state = bind_prior_state(cs.namespace(|| "state binding"), &inputs, state_witness)
             .expect("state binding");
@@ -625,12 +612,12 @@ mod tests {
         let manifest = install_manifest_transition(
             cs.namespace(|| "manifest"),
             &state,
-            DirectManifestLeaf::new(&binding, &precommitment, &coefficient, &offset),
+            ConstrainedManifestLeaf::new(&binding, &precommitment, &coefficient, &offset),
         )
         .expect("manifest transition");
         let root_claim = state.root_claim.clone();
         let root_term = &root_claim.polynomial[0];
-        let root = DirectCandidateRoot {
+        let root = CandidateRoot {
             point: root_claim.point,
             scale: root_term.scale.clone(),
             factors: root_term.factors.clone(),
@@ -641,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_manifest_matches_native_transition() {
+    fn constrained_manifest_matches_native_transition() {
         let state_witness = state(7, generator(2));
         let binding = [0x31; 32];
         let precommitment = SecpScalarWitness::from_u64(19);
@@ -665,12 +652,12 @@ mod tests {
         let root_term = &state.root_claim.polynomial[0];
         assert_eq!(root_term.offset, 0);
         assert_eq!(
-            direct_scalar_bytes(&root_term.scale),
+            constrained_scalar_bytes(&root_term.scale),
             state_witness.root.scale.bytes
         );
-        assert_eq!(root_term.factors.len(), CONSTRUCTION_ROOT_ROUNDS);
+        assert_eq!(root_term.factors.len(), ROOT_ROUNDS);
         for (actual, expected) in root_term.factors.iter().zip(&state_witness.root.factors) {
-            assert_eq!(direct_scalar_bytes(actual), expected.bytes);
+            assert_eq!(constrained_scalar_bytes(actual), expected.bytes);
         }
         assert_eq!(
             state.manifest.each_ref().map(NovaByte::value),
@@ -686,7 +673,7 @@ mod tests {
         let actual = install_manifest_transition(
             cs.namespace(|| "manifest"),
             &state,
-            DirectManifestLeaf::new(
+            ConstrainedManifestLeaf::new(
                 &binding_vars,
                 &precommitment_var,
                 &coefficient_var,
@@ -695,7 +682,7 @@ mod tests {
         )
         .expect("direct manifest");
 
-        let leaf = ConstructionManifestLeaf::new(
+        let leaf = ManifestLeaf::new(
             binding,
             precommitment.bytes,
             coefficient.encoded,
@@ -703,15 +690,14 @@ mod tests {
         )
         .expect("manifest leaf");
         let expected = derive_step_manifest(
-            &ConstructionManifestStepInput::new(state_witness.manifest, 7, leaf)
-                .expect("manifest input"),
+            &ManifestStepInput::new(state_witness.manifest, 7, leaf).expect("manifest input"),
         )
         .expect("native manifest");
-        assert_eq!(direct_scalar_bytes(&actual), expected);
+        assert_eq!(constrained_scalar_bytes(&actual), expected);
 
         let root_claim = state.root_claim.clone();
         let root_term = &root_claim.polynomial[0];
-        let root = DirectCandidateRoot {
+        let root = CandidateRoot {
             point: root_claim.point,
             scale: root_term.scale.clone(),
             factors: root_term.factors.clone(),
@@ -725,7 +711,7 @@ mod tests {
         }
         .state_fields()
         .expect("expected output state");
-        assert_eq!(output.len(), CONSTRUCTION_RECURRENCE_STATE_ARITY);
+        assert_eq!(output.len(), STATE_ARITY);
         assert_eq!(
             output
                 .iter()
@@ -741,7 +727,7 @@ mod tests {
     fn canonical_empty_claim_is_a_valid_first_step_state() {
         let state_witness = canonical_empty_state();
         let fields = state_witness.state_fields().expect("empty state fields");
-        assert_eq!(fields, [Scalar::ZERO; CONSTRUCTION_RECURRENCE_STATE_ARITY]);
+        assert_eq!(fields, [Scalar::ZERO; STATE_ARITY]);
 
         let mut cs = TestConstraintSystem::<Scalar>::new();
         let inputs = allocate_state(cs.namespace(|| "empty state inputs"), &state_witness);
@@ -776,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_state_and_manifest_shape_exclude_witnesses() {
+    fn constrained_state_and_manifest_shape_exclude_witnesses() {
         let first = synthesize(
             &state(7, generator(2)),
             [0x31; 32],
@@ -791,7 +777,7 @@ mod tests {
             SecpEncodedPointWitness::identity(),
             generator(2),
         );
-        assert_eq!(first.num_inputs(), CONSTRUCTION_RECURRENCE_STATE_ARITY + 1);
+        assert_eq!(first.num_inputs(), STATE_ARITY + 1);
         assert_eq!(first.num_inputs(), second.num_inputs());
         assert_eq!(first.num_aux(), second.num_aux());
         assert_eq!(first.constraints, second.constraints);

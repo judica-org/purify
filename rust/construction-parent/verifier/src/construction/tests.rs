@@ -3,8 +3,8 @@ use super::*;
 use ff::Field;
 use std::io::Cursor;
 
-use statement::manifest::{ConstructionManifestLeaf, ConstructionManifestSeed, ConstructionRoot};
-use statement::profile::CONSTRUCTION_ROOT_ROUNDS;
+use statement::manifest::{ConstructionRoot, ManifestLeaf, ManifestSeed};
+use statement::profile::ROOT_ROUNDS;
 use statement::secp::SECP256K1_SCALAR_ORDER_BE as SECP_ORDER;
 use statement::secp::{coordinate_field_value, SecpScalarWitness};
 
@@ -17,17 +17,17 @@ fn generator_encoding() -> [u8; 33] {
 }
 
 fn root() -> ConstructionRoot {
-    let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
+    let mut encoded = [0; ROOT_BYTES];
     encoded[..33].copy_from_slice(&generator_encoding());
     encoded[64] = 1;
-    for index in 0..CONSTRUCTION_ROOT_ROUNDS {
+    for index in 0..ROOT_ROUNDS {
         encoded[65 + 32 * index + 31] = u8::try_from(index + 2).expect("small factor");
     }
     ConstructionRoot::parse(&encoded).expect("canonical construction root")
 }
 
-fn leaf(binding: u8) -> ConstructionManifestLeaf {
-    ConstructionManifestLeaf::new(
+fn leaf(binding: u8) -> ManifestLeaf {
+    ManifestLeaf::new(
         [binding; 32],
         SecpScalarWitness::from_u64(3).bytes,
         [0; 33],
@@ -36,18 +36,18 @@ fn leaf(binding: u8) -> ConstructionManifestLeaf {
     .expect("canonical construction manifest leaf")
 }
 
-fn authenticated_state() -> ([Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY], [Scalar; 2]) {
+fn authenticated_state() -> ([Scalar; STATE_ARITY], [Scalar; 2]) {
     let root = root();
-    let seed = ConstructionManifestSeed::new([0x31; 32], [0x52; 32], [0x71; 64], 1, 1)
+    let seed = ManifestSeed::new([0x31; 32], [0x52; 32], [0x71; 64], 1, 1)
         .expect("construction manifest seed");
     let expected_suffix = seed
         .derive_expected_final(&[leaf(0x61), leaf(0x62)])
         .expect("expected construction final state")
         .state_suffix_fields()
         .expect("expected construction suffix");
-    let mut state = [Scalar::ZERO; CONSTRUCTION_RECURRENCE_STATE_ARITY];
-    state[..CONSTRUCTION_ROOT_STATE_ARITY].copy_from_slice(&root.state_fields());
-    state[CONSTRUCTION_ROOT_STATE_ARITY..].copy_from_slice(&expected_suffix);
+    let mut state = [Scalar::ZERO; STATE_ARITY];
+    state[..ROOT_STATE_ARITY].copy_from_slice(&root.state_fields());
+    state[ROOT_STATE_ARITY..].copy_from_slice(&expected_suffix);
     (state, expected_suffix)
 }
 
@@ -63,14 +63,14 @@ fn authenticated_final_state_yields_only_the_canonical_pending_root() {
 fn authenticated_final_state_binds_manifest_and_index() {
     let (state, expected_suffix) = authenticated_state();
     let mut wrong_manifest = state;
-    wrong_manifest[CONSTRUCTION_ROOT_STATE_ARITY] += Scalar::ONE;
+    wrong_manifest[ROOT_STATE_ARITY] += Scalar::ONE;
     assert!(matches!(
         validated_output_from_authenticated_state(wrong_manifest, expected_suffix),
         Err(ConstructionParentVerifierError::FinalManifest)
     ));
 
     let mut wrong_index = state;
-    wrong_index[CONSTRUCTION_ROOT_STATE_ARITY + 1] += Scalar::ONE;
+    wrong_index[ROOT_STATE_ARITY + 1] += Scalar::ONE;
     assert!(matches!(
         validated_output_from_authenticated_state(wrong_index, expected_suffix),
         Err(ConstructionParentVerifierError::FinalIndex)

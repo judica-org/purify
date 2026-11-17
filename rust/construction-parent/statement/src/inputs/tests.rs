@@ -6,8 +6,8 @@ fn recovery_root() -> [u8; 64] {
     [0x71; 64]
 }
 
-fn descriptor(binding: u8) -> [u8; CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES] {
-    let mut descriptor = [0; CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES];
+fn descriptor(binding: u8) -> [u8; LEAF_DESCRIPTOR_BYTES] {
+    let mut descriptor = [0; LEAF_DESCRIPTOR_BYTES];
     descriptor[..32].fill(binding);
     descriptor[63] = 3;
     descriptor
@@ -19,17 +19,13 @@ fn descriptors(count: usize) -> Vec<u8> {
         .collect()
 }
 
-fn raw(
-    setup_count: u32,
-    anchor_count: u32,
-    descriptor_bytes: &[u8],
-) -> RawConstructionParentInputs<'_> {
-    RawConstructionParentInputs {
+fn raw(setup_count: u32, anchor_count: u32, descriptor_bytes: &[u8]) -> RawPublicInputs<'_> {
+    RawPublicInputs {
         construction_statement_digest: [0x31; 32],
         resolved_setup_record_digest: [0x52; 32],
         recovery_root: recovery_root(),
-        native_basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
-        native_raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+        native_basis_digest: BASIS_DIGEST,
+        native_raw_generator_digest: RAW_GENERATOR_DIGEST,
         setup_leaf_count: setup_count,
         anchor_leaf_count: anchor_count,
         leaf_descriptors: descriptor_bytes,
@@ -40,14 +36,14 @@ fn parse(
     setup_count: u32,
     anchor_count: u32,
     descriptor_bytes: &[u8],
-) -> Result<ConstructionParentInputs, ConstructionParentInputError> {
-    ConstructionParentInputs::parse(raw(setup_count, anchor_count, descriptor_bytes))
+) -> Result<PublicInputs, PublicInputError> {
+    PublicInputs::parse(raw(setup_count, anchor_count, descriptor_bytes))
 }
 
 #[test]
 fn exact_native_inputs_construct_typed_manifest_values() {
     let encoded = descriptors(2);
-    let (inputs, seed, leaves) = ConstructionParentInputs::parse_with_leaves(raw(1, 1, &encoded))
+    let (inputs, seed, leaves) = PublicInputs::parse_with_leaves(raw(1, 1, &encoded))
         .expect("canonical construction parent inputs");
     assert_eq!(leaves.len(), 2);
     assert_eq!(inputs.step_count(), 2);
@@ -68,7 +64,7 @@ fn exact_native_inputs_construct_typed_manifest_values() {
         .state_suffix_fields()
         .expect("expected final suffix");
     assert_eq!(inputs.expected_suffix(), expected_suffix);
-    assert_eq!(CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES, 130);
+    assert_eq!(LEAF_DESCRIPTOR_BYTES, 130);
 }
 
 #[test]
@@ -85,36 +81,36 @@ fn phase_boundary_changes_z0_and_final_manifest_at_fixed_total() {
 #[test]
 fn native_profile_digests_are_not_peer_selected() {
     let encoded = descriptors(2);
-    let mut basis = CONSTRUCTION_PARENT_BASIS_DIGEST;
+    let mut basis = BASIS_DIGEST;
     basis[0] ^= 1;
     assert!(matches!(
-        ConstructionParentInputs::parse(RawConstructionParentInputs {
+        PublicInputs::parse(RawPublicInputs {
             construction_statement_digest: [0x31; 32],
             resolved_setup_record_digest: [0x52; 32],
             recovery_root: recovery_root(),
             native_basis_digest: basis,
-            native_raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+            native_raw_generator_digest: RAW_GENERATOR_DIGEST,
             setup_leaf_count: 1,
             anchor_leaf_count: 1,
             leaf_descriptors: &encoded
         }),
-        Err(ConstructionParentInputError::BasisDigest)
+        Err(PublicInputError::BasisDigest)
     ));
 
-    let mut raw = CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST;
+    let mut raw = RAW_GENERATOR_DIGEST;
     raw[0] ^= 1;
     assert!(matches!(
-        ConstructionParentInputs::parse(RawConstructionParentInputs {
+        PublicInputs::parse(RawPublicInputs {
             construction_statement_digest: [0x31; 32],
             resolved_setup_record_digest: [0x52; 32],
             recovery_root: recovery_root(),
-            native_basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
+            native_basis_digest: BASIS_DIGEST,
             native_raw_generator_digest: raw,
             setup_leaf_count: 1,
             anchor_leaf_count: 1,
             leaf_descriptors: &encoded
         }),
-        Err(ConstructionParentInputError::RawGeneratorDigest)
+        Err(PublicInputError::RawGeneratorDigest)
     ));
 }
 
@@ -125,7 +121,7 @@ fn descriptor_count_fixes_the_complete_byte_string() {
     truncated.pop();
     assert!(matches!(
         parse(1, 1, &truncated),
-        Err(ConstructionParentInputError::DescriptorSize {
+        Err(PublicInputError::DescriptorSize {
             expected: 260,
             actual: 259
         })
@@ -135,14 +131,14 @@ fn descriptor_count_fixes_the_complete_byte_string() {
     trailing.push(0);
     assert!(matches!(
         parse(1, 1, &trailing),
-        Err(ConstructionParentInputError::DescriptorSize {
+        Err(PublicInputError::DescriptorSize {
             expected: 260,
             actual: 261
         })
     ));
     assert!(matches!(
         parse(2, 1, &encoded),
-        Err(ConstructionParentInputError::DescriptorSize {
+        Err(PublicInputError::DescriptorSize {
             expected: 390,
             actual: 260
         })
@@ -153,40 +149,40 @@ fn descriptor_count_fixes_the_complete_byte_string() {
 fn seed_and_descriptor_encodings_are_canonical() {
     let encoded = descriptors(2);
     assert!(matches!(
-        ConstructionParentInputs::parse(RawConstructionParentInputs {
+        PublicInputs::parse(RawPublicInputs {
             construction_statement_digest: [0x31; 32],
             resolved_setup_record_digest: [0; 32],
             recovery_root: recovery_root(),
-            native_basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
-            native_raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+            native_basis_digest: BASIS_DIGEST,
+            native_raw_generator_digest: RAW_GENERATOR_DIGEST,
             setup_leaf_count: 1,
             anchor_leaf_count: 1,
             leaf_descriptors: &encoded
         }),
-        Err(ConstructionParentInputError::State(
-            RelationError::Malformed("unresolved construction setup record")
-        ))
+        Err(PublicInputError::State(RelationError::Malformed(
+            "unresolved construction setup record"
+        )))
     ));
     assert!(matches!(
         parse(0, 1, &encoded),
-        Err(ConstructionParentInputError::State(
-            RelationError::Malformed("empty construction phase")
-        ))
+        Err(PublicInputError::State(RelationError::Malformed(
+            "empty construction phase"
+        )))
     ));
     assert!(matches!(
-        ConstructionParentInputs::parse(RawConstructionParentInputs {
+        PublicInputs::parse(RawPublicInputs {
             construction_statement_digest: [0x31; 32],
             resolved_setup_record_digest: [0x52; 32],
             recovery_root: [0; 64],
-            native_basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
-            native_raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+            native_basis_digest: BASIS_DIGEST,
+            native_raw_generator_digest: RAW_GENERATOR_DIGEST,
             setup_leaf_count: 1,
             anchor_leaf_count: 1,
             leaf_descriptors: &encoded
         }),
-        Err(ConstructionParentInputError::State(
-            RelationError::Malformed("empty recovery root")
-        ))
+        Err(PublicInputError::State(RelationError::Malformed(
+            "empty recovery root"
+        )))
     ));
 }
 
@@ -196,35 +192,35 @@ fn descriptors_reject_invalid_scalars_and_points() {
     zero[32..64].fill(0);
     assert!(matches!(
         parse(1, 1, &zero),
-        Err(ConstructionParentInputError::State(
-            RelationError::Malformed("zero construction precommitment")
-        ))
+        Err(PublicInputError::State(RelationError::Malformed(
+            "zero construction precommitment"
+        )))
     ));
 
     let mut noncanonical = descriptors(2);
     noncanonical[32..64].copy_from_slice(&SECP_ORDER);
     assert!(matches!(
         parse(1, 1, &noncanonical),
-        Err(ConstructionParentInputError::State(
-            RelationError::Malformed("noncanonical secp scalar")
-        ))
+        Err(PublicInputError::State(RelationError::Malformed(
+            "noncanonical secp scalar"
+        )))
     ));
 
     let mut malformed_point = descriptors(2);
     malformed_point[64] = 4;
     assert!(matches!(
         parse(1, 1, &malformed_point),
-        Err(ConstructionParentInputError::State(
-            RelationError::Malformed("encoded secp point prefix")
-        ))
+        Err(PublicInputError::State(RelationError::Malformed(
+            "encoded secp point prefix"
+        )))
     ));
 
     let mut malformed_offset = descriptors(2);
     malformed_offset[97] = 4;
     assert!(matches!(
         parse(1, 1, &malformed_offset),
-        Err(ConstructionParentInputError::State(
-            RelationError::Malformed("encoded secp point prefix")
-        ))
+        Err(PublicInputError::State(RelationError::Malformed(
+            "encoded secp point prefix"
+        )))
     ));
 }

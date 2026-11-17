@@ -12,11 +12,8 @@ use crate::construction::{ConstructionParentVerifier, ConstructionParentVerifier
 use crate::nova::QUALIFIED_VERIFIER_ARTIFACT;
 use crate::snapshot::PrivateArtifactSnapshot;
 use crate::suite::QUALIFIED_PROOF_LENGTH;
-use statement::inputs::{
-    ConstructionParentInputs, RawConstructionParentInputs,
-    CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES,
-};
-use statement::profile::CONSTRUCTION_ROOT_BYTES;
+use statement::inputs::{PublicInputs, RawPublicInputs, LEAF_DESCRIPTOR_BYTES};
+use statement::profile::ROOT_BYTES;
 
 /// Stable values mirrored by the private construction-parent bridge header.
 #[repr(C)]
@@ -50,7 +47,7 @@ impl RootOutput {
         if data.is_null() {
             return Err(PurifyConstructionParentStatus::Malformed);
         }
-        if capacity < CONSTRUCTION_ROOT_BYTES {
+        if capacity < ROOT_BYTES {
             // SAFETY: the ABI requires `data` to identify `capacity` writable
             // bytes. Clearing only that declared allocation cannot overflow it.
             unsafe { ptr::write_bytes(data, 0, capacity) };
@@ -58,11 +55,11 @@ impl RootOutput {
         }
         // SAFETY: the ABI requires a writable allocation of at least the
         // canonical root size. Output must not alias an input allocation.
-        unsafe { ptr::write_bytes(data, 0, CONSTRUCTION_ROOT_BYTES) };
+        unsafe { ptr::write_bytes(data, 0, ROOT_BYTES) };
         Ok(Self { data })
     }
 
-    unsafe fn write(self, root: &[u8; CONSTRUCTION_ROOT_BYTES]) {
+    unsafe fn write(self, root: &[u8; ROOT_BYTES]) {
         // SAFETY: initialization established the fixed writable capacity and
         // the source is a distinct Rust-owned canonical root.
         unsafe { ptr::copy_nonoverlapping(root.as_ptr(), self.data, root.len()) };
@@ -195,11 +192,10 @@ unsafe fn verify_inner(
         Ok(value) => value,
         Err(_) => return PurifyConstructionParentStatus::Malformed,
     };
-    let expected_descriptors =
-        match leaf_count_usize.checked_mul(CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES) {
-            Some(value) => value,
-            None => return PurifyConstructionParentStatus::Malformed,
-        };
+    let expected_descriptors = match leaf_count_usize.checked_mul(LEAF_DESCRIPTOR_BYTES) {
+        Some(value) => value,
+        None => return PurifyConstructionParentStatus::Malformed,
+    };
     if leaf_descriptors_length != expected_descriptors || proof_length != QUALIFIED_PROOF_LENGTH {
         return PurifyConstructionParentStatus::Malformed;
     }
@@ -237,7 +233,7 @@ unsafe fn verify_inner(
         Err(error) => return error,
     };
 
-    let inputs = match ConstructionParentInputs::parse(RawConstructionParentInputs {
+    let inputs = match PublicInputs::parse(RawPublicInputs {
         construction_statement_digest,
         resolved_setup_record_digest,
         recovery_root,
@@ -432,7 +428,7 @@ mod tests {
 
     #[test]
     fn null_verifier_clears_complete_output() {
-        let mut output = [0xa5; CONSTRUCTION_ROOT_BYTES];
+        let mut output = [0xa5; ROOT_BYTES];
         // SAFETY: every pointer is either intentionally null or identifies a
         // live output allocation of the declared size.
         let status = unsafe {
@@ -454,13 +450,13 @@ mod tests {
             )
         };
         assert_eq!(status, PurifyConstructionParentStatus::Malformed);
-        assert_eq!(output, [0; CONSTRUCTION_ROOT_BYTES]);
+        assert_eq!(output, [0; ROOT_BYTES]);
     }
 
     #[test]
     fn short_output_clears_only_declared_capacity() {
-        let mut output = [0xa5; CONSTRUCTION_ROOT_BYTES];
-        let declared = CONSTRUCTION_ROOT_BYTES - 1;
+        let mut output = [0xa5; ROOT_BYTES];
+        let declared = ROOT_BYTES - 1;
         // SAFETY: the output allocation is larger than the deliberately short
         // declared capacity and no input pointer is dereferenced.
         let status = unsafe {

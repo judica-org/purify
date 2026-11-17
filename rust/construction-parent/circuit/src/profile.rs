@@ -5,9 +5,9 @@
 
 pub use statement::profile::*;
 
-pub const CONSTRUCTION_LEAF_GATE_COUNT: usize = 8_192;
-pub const CONSTRUCTION_LEAF_NORM_LENGTH: usize = 16_384;
-pub const CONSTRUCTION_LEAF_ROUNDS: usize = 14;
+pub const LEAF_GATE_COUNT: usize = 8_192;
+pub const LEAF_NORM_LENGTH: usize = 16_384;
+pub const LEAF_ROUNDS: usize = 14;
 
-pub const CONSTRUCTION_PARENT_RELATION_AUXILIARY: usize = 7_609_014;
-pub const CONSTRUCTION_PARENT_RELATION_CONSTRAINTS: usize = 7_653_553;
+pub const RELATION_AUXILIARY: usize = 7_609_014;
+pub const RELATION_CONSTRAINTS: usize = 7_653_553;

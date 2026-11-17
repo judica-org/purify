@@ -3,8 +3,8 @@
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
 use crate::gadgets::point::{
-    add_points, allocate_encoded_point, encode_computed_point, scale_point, DirectEncodedSecpPoint,
-    DirectSecpPoint,
+    add_points, allocate_encoded_point, encode_computed_point, scale_point, EncodedSecpPoint,
+    SecpPoint,
 };
 use crate::gadgets::scalar::{
     add_scalars, allocate_canonical_scalar, constant_scalar, constant_u64, invert_scalar,
@@ -24,20 +24,20 @@ use statement::Scalar;
 const CANDIDATE_STEP_DOMAIN: &[u8] = b"Purify/BPPP/CandidateAccumStep/v1";
 
 #[derive(Clone)]
-pub(crate) struct DirectPolynomialTerm {
+pub(crate) struct PolynomialTerm {
     pub(crate) scale: CanonicalSecpScalar,
     pub(crate) offset: usize,
     pub(crate) factors: Vec<CanonicalSecpScalar>,
 }
 
 #[derive(Clone)]
-pub(crate) struct DirectPendingClaim {
-    pub(crate) point: DirectEncodedSecpPoint,
-    pub(crate) polynomial: Vec<DirectPolynomialTerm>,
+pub(crate) struct PendingClaim {
+    pub(crate) point: EncodedSecpPoint,
+    pub(crate) polynomial: Vec<PolynomialTerm>,
 }
 
-pub(crate) struct DirectCandidateRoot {
-    pub(crate) point: DirectEncodedSecpPoint,
+pub(crate) struct CandidateRoot {
+    pub(crate) point: EncodedSecpPoint,
     pub(crate) scale: CanonicalSecpScalar,
     pub(crate) factors: Vec<CanonicalSecpScalar>,
 }
@@ -92,7 +92,7 @@ fn candidate_offset_power<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn evaluate_candidate_term<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    term: &DirectPolynomialTerm,
+    term: &PolynomialTerm,
     powers: &[CanonicalSecpScalar],
 ) -> Result<CanonicalSecpScalar, SynthesisError> {
     if term.factors.len() > powers.len() {
@@ -125,7 +125,7 @@ pub(crate) fn evaluate_candidate_term<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn append_polynomial(
     transcript: &mut NovaTranscript,
-    polynomial: &[DirectPolynomialTerm],
+    polynomial: &[PolynomialTerm],
 ) -> Result<(), SynthesisError> {
     transcript.append_u64(polynomial.len() as u64);
     for term in polynomial {
@@ -141,7 +141,7 @@ pub(crate) fn append_polynomial(
 
 fn append_claims(
     transcript: &mut NovaTranscript,
-    claims: &[DirectPendingClaim],
+    claims: &[PendingClaim],
 ) -> Result<(), SynthesisError> {
     transcript.append_u64(claims.len() as u64);
     for claim in claims {
@@ -154,8 +154,8 @@ fn append_claims(
 fn append_computed_point<CS: ConstraintSystem<Scalar>>(
     cs: CS,
     transcript: &mut NovaTranscript,
-    point: DirectSecpPoint,
-) -> Result<DirectEncodedSecpPoint, SynthesisError> {
+    point: SecpPoint,
+) -> Result<EncodedSecpPoint, SynthesisError> {
     let encoded = encode_computed_point(cs, point)?;
     append_point(transcript, &encoded);
     Ok(encoded)
@@ -163,17 +163,17 @@ fn append_computed_point<CS: ConstraintSystem<Scalar>>(
 
 fn add_scaled<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    accumulator: &DirectSecpPoint,
-    point: &DirectSecpPoint,
+    accumulator: &SecpPoint,
+    point: &SecpPoint,
     scalar: &CanonicalSecpScalar,
-) -> Result<DirectSecpPoint, SynthesisError> {
+) -> Result<SecpPoint, SynthesisError> {
     let bits = scalar.allocated_bits_le(cs.namespace(|| "scalar bits"))?;
     let term = scale_point(cs.namespace(|| "scaled point"), point, &bits)?;
     add_points(cs.namespace(|| "point sum"), accumulator, &term)
 }
 
 fn validate_constrained_shape(
-    claims: &[DirectPendingClaim],
+    claims: &[PendingClaim],
     proof: &CandidateStepProofWitness,
 ) -> Result<usize, SynthesisError> {
     let rounds = proof.left.len();
@@ -210,9 +210,9 @@ fn validate_constrained_shape(
 pub(crate) fn install_constrained_candidate_step<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     basis_digest: [u8; 32],
-    claims: &[DirectPendingClaim],
+    claims: &[PendingClaim],
     proof: &CandidateStepProofWitness,
-) -> Result<DirectCandidateRoot, SynthesisError> {
+) -> Result<CandidateRoot, SynthesisError> {
     let rounds = validate_constrained_shape(claims, proof)?;
     let mut transcript = NovaTranscript::new();
     append_constant_bytes(&mut transcript, CANDIDATE_STEP_DOMAIN)?;
@@ -409,7 +409,7 @@ pub(crate) fn install_constrained_candidate_step<CS: ConstraintSystem<Scalar>>(
         &Boolean::constant(true),
     )?;
 
-    Ok(DirectCandidateRoot {
+    Ok(CandidateRoot {
         point: folded_generator,
         scale: folded_scale,
         factors: folded_factors,
@@ -497,7 +497,7 @@ mod tests {
     pub(crate) fn allocate_candidate_claims<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
         claims: &[CandidatePendingClaimWitness],
-    ) -> Result<Vec<DirectPendingClaim>, SynthesisError> {
+    ) -> Result<Vec<PendingClaim>, SynthesisError> {
         let mut allocated = Vec::with_capacity(claims.len());
         for (claim_index, claim) in claims.iter().enumerate() {
             let mut claim_cs = cs.namespace(|| format!("claim {claim_index}"));
@@ -517,13 +517,13 @@ mod tests {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                polynomial.push(DirectPolynomialTerm {
+                polynomial.push(PolynomialTerm {
                     scale,
                     offset: term.offset,
                     factors,
                 });
             }
-            allocated.push(DirectPendingClaim { point, polynomial });
+            allocated.push(PendingClaim { point, polynomial });
         }
         Ok(allocated)
     }
@@ -533,7 +533,7 @@ mod tests {
         basis_digest: [u8; 32],
         claims: &[CandidatePendingClaimWitness],
         proof: &CandidateStepProofWitness,
-    ) -> Result<DirectCandidateRoot, SynthesisError> {
+    ) -> Result<CandidateRoot, SynthesisError> {
         validate_candidate_step_shape(claims, proof, None)
             .map_err(|_| synthesis_error("candidate witness shape"))?;
         let claims = allocate_candidate_claims(cs.namespace(|| "claims"), claims)?;
@@ -594,13 +594,13 @@ mod tests {
     }
 
     #[test]
-    fn direct_candidate_term_matches_reference() {
+    fn constrained_candidate_term_matches_reference() {
         let mut cs = TestConstraintSystem::<Scalar>::new();
         let x = allocate_canonical_scalar(cs.namespace(|| "x"), SecpScalarWitness::from_u64(11))
             .expect("x");
         let powers =
             candidate_power_ladder(cs.namespace(|| "powers"), &x, 3).expect("power ladder");
-        let term = DirectPolynomialTerm {
+        let term = PolynomialTerm {
             scale: allocate_canonical_scalar(
                 cs.namespace(|| "scale"),
                 SecpScalarWitness::from_u64(7),
@@ -634,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_candidate_step_matches_reference_vector_and_rejects_wrong_root() {
+    fn constrained_candidate_step_matches_reference_vector_and_rejects_wrong_root() {
         let mut maximum = SECP256K1_SCALAR_ORDER_BE;
         for byte in maximum.iter_mut().rev() {
             if *byte != 0 {
@@ -683,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_candidate_step_has_fixed_shape() {
+    fn constrained_candidate_step_has_fixed_shape() {
         let first = fixture(SecpScalarWitness::from_u64(3));
         let second = fixture(SecpScalarWitness::from_u64(7));
         let mut first_shape = ShapeCS::<Secq256k1Sha256Engine>::new();
@@ -702,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_candidate_step_rejects_bad_shapes() {
+    fn constrained_candidate_step_rejects_bad_shapes() {
         let (basis, claims, mut proof, _) = fixture(SecpScalarWitness::from_u64(3));
         let mut cs = TestConstraintSystem::<Scalar>::new();
         assert!(

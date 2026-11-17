@@ -7,8 +7,8 @@
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
 use crate::gadgets::point::{
-    add_points, allocate_constant_point, encode_computed_point, scale_point,
-    DirectEncodedSecpPoint, DirectSecpPoint,
+    add_points, allocate_constant_point, encode_computed_point, scale_point, EncodedSecpPoint,
+    SecpPoint,
 };
 use crate::gadgets::scalar::{
     constant_scalar, constant_u64, invert_scalar, multiply_scalars, subtract_scalars,
@@ -23,10 +23,10 @@ use crate::native::circuit_transcript::{
     CircuitCommitmentModeV4, CircuitProofTranscriptWitnessV4, CircuitTranscriptShapeV4,
 };
 use crate::native::secp::{standard_generator, SecpScalarWitness};
-use crate::relation::candidate::{DirectPendingClaim, DirectPolynomialTerm};
+use crate::relation::candidate::{PendingClaim, PolynomialTerm};
 use crate::relation::norm_reduction::constrain_candidate_norm_reduction;
 use crate::relation::transcript::{
-    install_transcript_with_constrained_binding, DirectCircuitTranscriptResultV4,
+    install_transcript_with_constrained_binding, CircuitTranscriptResultV4,
 };
 use statement::Scalar;
 
@@ -37,33 +37,33 @@ const SQRT_MINUS_ONE_INVERSE: SecpScalarWitness = SecpScalarWitness::from_bytes_
     0xe4, 0x77, 0x9c, 0xc3, 0x1a, 0xfb, 0xd9, 0xd6, 0x19, 0x15, 0xaf, 0xdb, 0xdc, 0xba, 0x81, 0xc9,
 ]);
 
-pub(crate) struct DirectPreparedNorm {
+pub(crate) struct PreparedNorm {
     pub(crate) prepared_binding: CanonicalSecpScalar,
-    pub(crate) coefficient_commitment: DirectEncodedSecpPoint,
-    pub(crate) residual: DirectEncodedSecpPoint,
-    pub(crate) polynomial: Vec<DirectPolynomialTerm>,
+    pub(crate) coefficient_commitment: EncodedSecpPoint,
+    pub(crate) residual: EncodedSecpPoint,
+    pub(crate) polynomial: Vec<PolynomialTerm>,
 }
 
-pub(crate) struct DirectManifestBoundConstructionLeaf {
-    pub(crate) claim: DirectPendingClaim,
+pub(crate) struct ManifestBoundConstructionLeaf {
+    pub(crate) claim: PendingClaim,
     pub(crate) circuit_binding_digest: [NovaByte; 32],
     pub(crate) precommitment: CanonicalSecpScalar,
-    pub(crate) coefficient_commitment: DirectEncodedSecpPoint,
-    pub(crate) anchored_offset: DirectEncodedSecpPoint,
+    pub(crate) coefficient_commitment: EncodedSecpPoint,
+    pub(crate) anchored_offset: EncodedSecpPoint,
 }
 
 fn require_finite<CS: ConstraintSystem<Scalar>>(
     cs: CS,
-    point: &DirectSecpPoint,
+    point: &SecpPoint,
 ) -> Result<(), SynthesisError> {
     Boolean::enforce_equal(cs, &point.is_identity(), &Boolean::constant(false))
 }
 
 fn scale<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    point: &DirectSecpPoint,
+    point: &SecpPoint,
     scalar: &CanonicalSecpScalar,
-) -> Result<DirectSecpPoint, SynthesisError> {
+) -> Result<SecpPoint, SynthesisError> {
     let bits = scalar.allocated_bits_le(cs.namespace(|| "scalar bits"))?;
     scale_point(cs.namespace(|| "scalar multiplication"), point, &bits)
 }
@@ -82,8 +82,8 @@ fn square_repeatedly<CS: ConstraintSystem<Scalar>>(
 
 fn constrain_anchor_and_mask<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    transcript: &DirectCircuitTranscriptResultV4,
-    generator: &DirectSecpPoint,
+    transcript: &CircuitTranscriptResultV4,
+    generator: &SecpPoint,
 ) -> Result<(), SynthesisError> {
     require_finite(
         cs.namespace(|| "raw commitment is finite"),
@@ -131,7 +131,7 @@ fn constrain_anchor_and_mask<CS: ConstraintSystem<Scalar>>(
 
 fn constrain_public_commitment_batch<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    transcript: &DirectCircuitTranscriptResultV4,
+    transcript: &CircuitTranscriptResultV4,
 ) -> Result<(), SynthesisError> {
     let (first, rest) = transcript
         .public_commitments
@@ -176,8 +176,8 @@ fn constrain_public_commitment_batch<CS: ConstraintSystem<Scalar>>(
 /// Check the public commitment batch and its Schnorr response.
 pub(crate) fn constrain_manifest_bound_public_dlog<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    transcript: &DirectCircuitTranscriptResultV4,
-    generator: &DirectSecpPoint,
+    transcript: &CircuitTranscriptResultV4,
+    generator: &SecpPoint,
 ) -> Result<(), SynthesisError> {
     if transcript.public_commitments.len() != 1 {
         return Err(synthesis_error(
@@ -211,9 +211,9 @@ pub(crate) fn constrain_manifest_bound_public_dlog<CS: ConstraintSystem<Scalar>>
 pub(crate) fn prepare_norm<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     shape: CircuitTranscriptShapeV4,
-    transcript: &DirectCircuitTranscriptResultV4,
-    generator: &DirectSecpPoint,
-) -> Result<DirectPreparedNorm, SynthesisError> {
+    transcript: &CircuitTranscriptResultV4,
+    generator: &SecpPoint,
+) -> Result<PreparedNorm, SynthesisError> {
     if transcript.rounds.len() != shape.round_count()
         || transcript.gammas.len() != shape.round_count()
         || transcript.gammas.is_empty()
@@ -312,17 +312,17 @@ pub(crate) fn prepare_norm<CS: ConstraintSystem<Scalar>>(
         )?;
     }
 
-    Ok(DirectPreparedNorm {
+    Ok(PreparedNorm {
         prepared_binding: transcript.prepared_binding.clone(),
         coefficient_commitment: transcript.coefficient_commitment.clone(),
         residual,
         polynomial: vec![
-            DirectPolynomialTerm {
+            PolynomialTerm {
                 scale: g_scale,
                 offset: 0,
                 factors: g_factors,
             },
-            DirectPolynomialTerm {
+            PolynomialTerm {
                 scale: transcript.terminal_l.clone(),
                 offset: shape.n_vec_len,
                 factors: transcript.gammas.clone(),
@@ -333,7 +333,7 @@ pub(crate) fn prepare_norm<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn allocate_standard_generator<CS: ConstraintSystem<Scalar>>(
     cs: CS,
-) -> Result<DirectSecpPoint, SynthesisError> {
+) -> Result<SecpPoint, SynthesisError> {
     allocate_constant_point(cs, standard_generator())
 }
 
@@ -343,7 +343,7 @@ pub(crate) fn constrain_manifest_bound_construction_leaf<CS: ConstraintSystem<Sc
     statement: ManifestBoundConstructionLeafStatementV4,
     transcript_witness: &CircuitProofTranscriptWitnessV4,
     reduction_proof: &CandidateNormReductionProofWitness,
-) -> Result<DirectManifestBoundConstructionLeaf, SynthesisError> {
+) -> Result<ManifestBoundConstructionLeaf, SynthesisError> {
     if statement.shape.mode != CircuitCommitmentModeV4::Public
         || statement.shape.commitment_count != 1
     {
@@ -385,7 +385,7 @@ pub(crate) fn constrain_manifest_bound_construction_leaf<CS: ConstraintSystem<Sc
         reduction_proof,
         &generator,
     )?;
-    Ok(DirectManifestBoundConstructionLeaf {
+    Ok(ManifestBoundConstructionLeaf {
         claim,
         circuit_binding_digest,
         precommitment: transcript.precommitment,
@@ -416,8 +416,8 @@ mod tests {
         add_point_values, encoded_point_value, scale_point_value, SecpEncodedPointWitness,
         SecpScalarWitness,
     };
-    use crate::relation::transcript::{DirectCircuitPointPairV4, DirectCircuitTranscriptResultV4};
-    use statement::DirectNovaPrimaryEngine;
+    use crate::relation::transcript::{CircuitPointPairV4, CircuitTranscriptResultV4};
+    use statement::PrimaryEngine;
 
     fn scalar<CS: ConstraintSystem<Scalar>>(
         cs: CS,
@@ -429,7 +429,7 @@ mod tests {
     fn point<CS: ConstraintSystem<Scalar>>(
         cs: CS,
         value: crate::native::secp::PointValue,
-    ) -> Result<DirectEncodedSecpPoint, SynthesisError> {
+    ) -> Result<EncodedSecpPoint, SynthesisError> {
         allocate_encoded_point(cs, SecpEncodedPointWitness::from_point_value(value))
     }
 
@@ -437,10 +437,7 @@ mod tests {
         value.integer().cloned().expect("scalar witness")
     }
 
-    fn assert_point_value(
-        actual: &DirectEncodedSecpPoint,
-        expected: crate::native::secp::PointValue,
-    ) {
+    fn assert_point_value(actual: &EncodedSecpPoint, expected: crate::native::secp::PointValue) {
         assert_eq!(actual.point().x().get_value(), Some(expected.x));
         assert_eq!(actual.point().y().get_value(), Some(expected.y));
         assert_eq!(
@@ -452,7 +449,7 @@ mod tests {
     fn synthetic_transcript<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
         wrong_combined: bool,
-    ) -> Result<DirectCircuitTranscriptResultV4, SynthesisError> {
+    ) -> Result<CircuitTranscriptResultV4, SynthesisError> {
         let generator = standard_generator();
         let twice = add_point_values(generator, generator);
         let thrice = add_point_values(twice, generator);
@@ -474,12 +471,12 @@ mod tests {
         let one = scalar(cs.namespace(|| "one"), 1)?;
         let two = scalar(cs.namespace(|| "two"), 2)?;
         let rounds = (0..2)
-            .map(|_| DirectCircuitPointPairV4 {
+            .map(|_| CircuitPointPairV4 {
                 first: identity.clone(),
                 second: identity.clone(),
             })
             .collect();
-        Ok(DirectCircuitTranscriptResultV4 {
+        Ok(CircuitTranscriptResultV4 {
             public_commitments: vec![g.clone()],
             raw_commitment: g.clone(),
             coefficient_commitment: g.clone(),
@@ -509,7 +506,7 @@ mod tests {
 
     fn synthetic_odd_public_transcript<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
-    ) -> Result<DirectCircuitTranscriptResultV4, SynthesisError> {
+    ) -> Result<CircuitTranscriptResultV4, SynthesisError> {
         let mut transcript = synthetic_transcript(cs.namespace(|| "base transcript"), false)?;
         let order = BigUint::from_bytes_be(&SECP256K1_SCALAR_ORDER_BE);
         let minus_one = &order - BigUint::from(1u8);
@@ -528,7 +525,7 @@ mod tests {
     fn synthesize_equations<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
         wrong_combined: bool,
-    ) -> Result<DirectPreparedNorm, SynthesisError> {
+    ) -> Result<PreparedNorm, SynthesisError> {
         let transcript = synthetic_transcript(cs.namespace(|| "transcript"), wrong_combined)?;
         let generator = allocate_standard_generator(cs.namespace(|| "standard generator"))?;
         constrain_manifest_bound_public_dlog(
@@ -641,12 +638,7 @@ mod tests {
         BigInt::parse_bytes(value.as_bytes(), 10).expect("decimal scalar")
     }
 
-    fn assert_term_value(
-        actual: &DirectPolynomialTerm,
-        offset: usize,
-        scale: &str,
-        factors: &[&str],
-    ) {
+    fn assert_term_value(actual: &PolynomialTerm, offset: usize, scale: &str, factors: &[&str]) {
         assert_eq!(actual.offset, offset);
         assert_eq!(scalar_value(&actual.scale), decimal(scale));
         assert_eq!(actual.factors.len(), factors.len());
@@ -656,7 +648,7 @@ mod tests {
     }
 
     fn assert_leaf_matches_reference(
-        direct: &DirectManifestBoundConstructionLeaf,
+        direct: &ManifestBoundConstructionLeaf,
         witness: &CircuitProofTranscriptWitnessV4,
     ) {
         assert_eq!(
@@ -738,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_leaf_equations_bind_outer_points_and_have_fixed_shape() {
+    fn constrained_leaf_equations_bind_outer_points_and_have_fixed_shape() {
         let mut valid = TestConstraintSystem::<Scalar>::new();
         let prepared = synthesize_equations(&mut valid, false).expect("valid equations");
         assert_eq!(prepared.polynomial.len(), 2);
@@ -774,9 +766,9 @@ mod tests {
         assert!(!invalid.is_satisfied());
         assert_eq!(valid.num_constraints(), invalid.num_constraints());
 
-        let mut first = ShapeCS::<DirectNovaPrimaryEngine>::new();
+        let mut first = ShapeCS::<PrimaryEngine>::new();
         synthesize_equations(&mut first, false).expect("first shape");
-        let mut second = ShapeCS::<DirectNovaPrimaryEngine>::new();
+        let mut second = ShapeCS::<PrimaryEngine>::new();
         synthesize_equations(&mut second, true).expect("second shape");
         assert_eq!(first.num_inputs(), 1);
         assert_eq!(first.num_aux(), 52_370);
@@ -802,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_manifest_leaf_matches_reference_and_rejects_hidden_mode() {
+    fn constrained_manifest_leaf_matches_reference_and_rejects_hidden_mode() {
         let statement = leaf_statement(TEST_BINDING);
         let witness = leaf_witness(TEST_BINDING, 1);
         let reduction = zero_reduction();
@@ -830,8 +822,8 @@ mod tests {
 
     #[test]
     #[ignore = "run explicitly in release mode; composed leaf shape is large"]
-    fn direct_manifest_leaf_shape_is_witness_independent() {
-        let mut first = ShapeCS::<DirectNovaPrimaryEngine>::new();
+    fn constrained_manifest_leaf_shape_is_witness_independent() {
+        let mut first = ShapeCS::<PrimaryEngine>::new();
         constrain_manifest_bound_construction_leaf(
             &mut first,
             leaf_statement(TEST_BINDING),
@@ -844,7 +836,7 @@ mod tests {
         drop(first);
 
         let second_binding = [0x32; 32];
-        let mut second = ShapeCS::<DirectNovaPrimaryEngine>::new();
+        let mut second = ShapeCS::<PrimaryEngine>::new();
         constrain_manifest_bound_construction_leaf(
             &mut second,
             leaf_statement(second_binding),

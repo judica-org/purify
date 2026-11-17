@@ -30,11 +30,11 @@ use thiserror::Error;
 
 pub use crate::binding::ConstructionParentWitnessBindingError;
 
-use crate::binding::BoundConstructionParentWitness;
-use crate::fixture::ConstructionParentProverFixture;
-use crate::session::prover_artifact::QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT;
-use crate::session::{DirectNovaSessionError, SelectedNovaProver};
-use circuit::profile::CONSTRUCTION_RECURRENCE_STATE_ARITY;
+use crate::binding::BoundWitness;
+use crate::fixture::ProverFixture;
+use crate::session::prover_artifact::QUALIFIED_PROVER_ARTIFACT;
+use crate::session::{SelectedProver, SessionError};
+use circuit::profile::STATE_ARITY;
 use circuit::relation::recurrence::ConstructionParentStep;
 use statement::Scalar;
 use verifier::construction::ConstructionParentVerifier;
@@ -52,17 +52,16 @@ pub struct ConstructionParentWitnessDecodeError {
 
 /// Canonically decoded Wit4 data that has not yet executed the Nova relation.
 pub struct ConstructionParentWitness {
-    fixture: ConstructionParentProverFixture,
+    fixture: ProverFixture,
 }
 
 impl ConstructionParentWitness {
     /// Decode and canonically validate one complete Wit4 byte string.
     pub fn decode(bytes: &[u8]) -> Result<Self, ConstructionParentWitnessDecodeError> {
-        let fixture = ConstructionParentProverFixture::parse(bytes).map_err(|error| {
-            ConstructionParentWitnessDecodeError {
+        let fixture =
+            ProverFixture::parse(bytes).map_err(|error| ConstructionParentWitnessDecodeError {
                 detail: error.to_string(),
-            }
-        })?;
+            })?;
         Ok(Self { fixture })
     }
 
@@ -83,7 +82,7 @@ impl ConstructionParentWitness {
 
 /// Opaque construction-parent input after complete relation validation.
 pub struct CheckedConstructionParentWitness {
-    inner: BoundConstructionParentWitness,
+    inner: BoundWitness,
 }
 
 impl CheckedConstructionParentWitness {
@@ -135,8 +134,7 @@ impl CheckedConstructionParentWitness {
     }
 }
 
-type SelectedConstructionParentProver =
-    SelectedNovaProver<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>;
+type SelectedConstructionParentProver = SelectedProver<STATE_ARITY, ConstructionParentStep>;
 
 /// Failure while proving or independently rechecking one checked witness.
 #[derive(Debug, Error)]
@@ -146,7 +144,7 @@ pub(crate) enum ConstructionParentProvingError {
     Suite,
     /// Nova folding or compression failed.
     #[error(transparent)]
-    Nova(#[from] DirectNovaSessionError),
+    Nova(#[from] SessionError),
     /// The separate verifier rejected the compressed proof.
     #[error(transparent)]
     Verify(#[from] VerifyError),
@@ -163,8 +161,8 @@ pub(crate) enum ConstructionParentProvingError {
 /// State fields are private so callers cannot replace the statement that the
 /// prover consumed before re-verification.
 pub(crate) struct UnverifiedConstructionParentProof {
-    initial_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
-    final_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+    initial_state: [Scalar; STATE_ARITY],
+    final_state: [Scalar; STATE_ARITY],
     step_count: usize,
     proof: Vec<u8>,
 }
@@ -265,14 +263,14 @@ pub fn prove_qualified_construction_parent(
         .map_err(|source| QualifiedConstructionParentProvingError::OpenProverArtifact { source })?;
     let mut prover_artifact = PrivateArtifactSnapshot::copy_from(
         &mut prover_source,
-        QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT.encoded_length(),
+        QUALIFIED_PROVER_ARTIFACT.encoded_length(),
     )
     .map_err(|source| QualifiedConstructionParentProvingError::SnapshotProverArtifact { source })?;
     drop(prover_source);
     let prover = SelectedConstructionParentProver::from_artifact_reader(
         prover_artifact.reader(),
         &QUALIFIED,
-        &QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT,
+        &QUALIFIED_PROVER_ARTIFACT,
     )
     .map_err(
         |error| QualifiedConstructionParentProvingError::LoadProverArtifact {
@@ -327,8 +325,8 @@ fn require_frozen_proof_length(proof: &[u8]) -> Result<(), ConstructionParentPro
 }
 
 fn require_exact_final_state(
-    expected: &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
-    authenticated: &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+    expected: &[Scalar; STATE_ARITY],
+    authenticated: &[Scalar; STATE_ARITY],
 ) -> Result<(), ConstructionParentProvingError> {
     if authenticated != expected {
         return Err(ConstructionParentProvingError::FinalState);
@@ -375,11 +373,11 @@ mod tests {
 
     #[test]
     fn one_shot_boundary_requires_the_exact_final_state() {
-        let expected = [Scalar::from(7u64); CONSTRUCTION_RECURRENCE_STATE_ARITY];
+        let expected = [Scalar::from(7u64); STATE_ARITY];
         require_exact_final_state(&expected, &expected).expect("exact final state");
 
         let mut changed = expected;
-        changed[CONSTRUCTION_RECURRENCE_STATE_ARITY - 1] = Scalar::from(8u64);
+        changed[STATE_ARITY - 1] = Scalar::from(8u64);
         assert!(matches!(
             require_exact_final_state(&expected, &changed),
             Err(ConstructionParentProvingError::FinalState)

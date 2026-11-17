@@ -15,11 +15,11 @@ use nova_snark::{
 use rayon::ThreadPool;
 use thiserror::Error;
 
-use circuit::profile::CONSTRUCTION_RECURRENCE_STATE_ARITY;
-use circuit::relation::identity::DirectRelationId;
+use circuit::profile::STATE_ARITY;
+use circuit::relation::identity::RelationId;
 use circuit::relation::recurrence::ConstructionParentStep;
-use statement::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine, Scalar};
-use verifier::codec::{FixedSerdeError, NovaCompressedProofShape};
+use statement::{PrimaryEngine, Scalar, SecondaryEngine};
+use verifier::codec::{FixedSerdeError, ProofShape};
 use verifier::nova::{PrimarySnark, SecondarySnark};
 use verifier::suite::{Suite, SuiteError};
 
@@ -27,37 +27,31 @@ pub(crate) mod prover_artifact;
 #[cfg(test)]
 pub(crate) mod setup;
 
-type NovaPublicParams<C> = PublicParams<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, C>;
-type NovaRecursiveSnark<C> = RecursiveSNARK<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, C>;
-type NovaCompressedSnark<C> = CompressedSNARK<
-    DirectNovaPrimaryEngine,
-    DirectNovaSecondaryEngine,
-    C,
-    PrimarySnark,
-    SecondarySnark,
->;
-type NovaProverKey<C> =
-    ProverKey<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, C, PrimarySnark, SecondarySnark>;
+type NovaPublicParams<C> = PublicParams<PrimaryEngine, SecondaryEngine, C>;
+type NovaRecursiveSnark<C> = RecursiveSNARK<PrimaryEngine, SecondaryEngine, C>;
+type NovaCompressedSnark<C> =
+    CompressedSNARK<PrimaryEngine, SecondaryEngine, C, PrimarySnark, SecondarySnark>;
+type NovaProverKey<C> = ProverKey<PrimaryEngine, SecondaryEngine, C, PrimarySnark, SecondarySnark>;
 
 /// A step circuit that declares which relation it belongs to and which
 /// state it consumes, so a session can refuse foreign or discontinuous steps.
-pub(crate) trait NovaSessionStep<const ARITY: usize>: StepCircuit<DirectNovaScalar> {
-    fn relation_id(&self) -> DirectRelationId;
-    fn input_state(&self) -> &[DirectNovaScalar; ARITY];
+pub(crate) trait SessionStep<const ARITY: usize>: StepCircuit<Scalar> {
+    fn relation_id(&self) -> RelationId;
+    fn input_state(&self) -> &[Scalar; ARITY];
 }
 
-impl NovaSessionStep<CONSTRUCTION_RECURRENCE_STATE_ARITY> for ConstructionParentStep {
-    fn relation_id(&self) -> DirectRelationId {
+impl SessionStep<STATE_ARITY> for ConstructionParentStep {
+    fn relation_id(&self) -> RelationId {
         self.declared_relation_id()
     }
 
-    fn input_state(&self) -> &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {
+    fn input_state(&self) -> &[Scalar; STATE_ARITY] {
         ConstructionParentStep::input_state(self)
     }
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
-pub(crate) enum DirectNovaSessionError {
+pub(crate) enum SessionError {
     #[error(transparent)]
     Nova(#[from] NovaError),
     #[error(transparent)]
@@ -78,8 +72,8 @@ pub(crate) enum DirectNovaSessionError {
 
 /// Suite values measured from one concrete set of public parameters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DirectNovaSuiteMetadata {
-    pub(crate) relation_id: DirectRelationId,
+pub(crate) struct SuiteMetadata {
+    pub(crate) relation_id: RelationId,
     pub(crate) public_parameter_digest: [u8; 32],
     pub(crate) primary_constraints: usize,
     pub(crate) secondary_constraints: usize,
@@ -89,21 +83,21 @@ pub(crate) struct DirectNovaSuiteMetadata {
     pub(crate) codec_sequence_count: usize,
 }
 
-impl DirectNovaSuiteMetadata {
+impl SuiteMetadata {
     /// Measures the parameter digest and augmented dimensions.
     ///
     /// `relation_id` is the step relation the parameters were generated or
     /// selected for; public parameters do not carry it.
-    fn measure<const ARITY: usize, C: NovaSessionStep<ARITY>>(
-        relation_id: DirectRelationId,
+    fn measure<const ARITY: usize, C: SessionStep<ARITY>>(
+        relation_id: RelationId,
         public_params: &NovaPublicParams<C>,
-        proof_shape: &NovaCompressedProofShape,
-    ) -> Result<Self, DirectNovaSessionError> {
+        proof_shape: &ProofShape,
+    ) -> Result<Self, SessionError> {
         let digest_repr = public_params.digest().to_repr();
         let public_parameter_digest = digest_repr
             .as_ref()
             .try_into()
-            .map_err(|_| DirectNovaSessionError::Setup("public-parameter digest width"))?;
+            .map_err(|_| SessionError::Setup("public-parameter digest width"))?;
         let (primary_constraints, secondary_constraints) = public_params.num_constraints();
         let (primary_variables, secondary_variables) = public_params.num_variables();
         Ok(Self {
@@ -127,7 +121,7 @@ impl DirectNovaSuiteMetadata {
     pub(crate) fn validate_parameters<const ARITY: usize>(
         &self,
         expected: &Suite,
-    ) -> Result<NovaCompressedProofShape, DirectNovaSessionError> {
+    ) -> Result<ProofShape, SessionError> {
         let pinned = &expected.parameters;
         if usize::try_from(pinned.state_arity) != Ok(ARITY) {
             return Err(SuiteError::Mismatch("state arity").into());
@@ -170,34 +164,34 @@ impl DirectNovaSuiteMetadata {
 /// This type owns the transparent public parameters and compression prover
 /// key. It deliberately cannot verify receipts and cannot select its own
 /// suite identity.
-pub(crate) struct NovaProver<const ARITY: usize, C: NovaSessionStep<ARITY>> {
+pub(crate) struct Prover<const ARITY: usize, C: SessionStep<ARITY>> {
     public_params: NovaPublicParams<C>,
     prover_key: NovaProverKey<C>,
-    proof_shape: NovaCompressedProofShape,
+    proof_shape: ProofShape,
     pool: ThreadPool,
     operation: Mutex<()>,
 }
 
 /// A proving context promoted through one exact local profile.
-pub(crate) struct SelectedNovaProver<const ARITY: usize, C: NovaSessionStep<ARITY>> {
+pub(crate) struct SelectedProver<const ARITY: usize, C: SessionStep<ARITY>> {
     expected: &'static Suite,
-    inner: NovaProver<ARITY, C>,
+    inner: Prover<ARITY, C>,
 }
 
-impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProver<ARITY, C> {
+impl<const ARITY: usize, C: SessionStep<ARITY>> Prover<ARITY, C> {
     fn start(
         &self,
-        initial_state: [DirectNovaScalar; ARITY],
+        initial_state: [Scalar; ARITY],
         expected_steps: usize,
-        relation_id: DirectRelationId,
-    ) -> Result<NovaProverSession<'_, ARITY, C>, DirectNovaSessionError> {
+        relation_id: RelationId,
+    ) -> Result<ProverSession<'_, ARITY, C>, SessionError> {
         if expected_steps == 0 {
-            return Err(DirectNovaSessionError::StepCount {
+            return Err(SessionError::StepCount {
                 expected: 1,
                 actual: 0,
             });
         }
-        Ok(NovaProverSession {
+        Ok(ProverSession {
             prover: self,
             relation_id,
             initial_state,
@@ -210,8 +204,8 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProver<ARITY, C> {
 
     fn serialized<T: Send>(
         &self,
-        operation: impl FnOnce() -> Result<T, DirectNovaSessionError> + Send,
-    ) -> Result<T, DirectNovaSessionError> {
+        operation: impl FnOnce() -> Result<T, SessionError> + Send,
+    ) -> Result<T, SessionError> {
         let _guard = self
             .operation
             .lock()
@@ -220,57 +214,57 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProver<ARITY, C> {
     }
 }
 
-impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaProver<ARITY, C> {
+impl<const ARITY: usize, C: SessionStep<ARITY>> SelectedProver<ARITY, C> {
     pub(crate) const fn expected(&self) -> &'static Suite {
         self.expected
     }
 
     pub(crate) fn start(
         &self,
-        initial_state: [DirectNovaScalar; ARITY],
+        initial_state: [Scalar; ARITY],
         expected_steps: usize,
-    ) -> Result<NovaProverSession<'_, ARITY, C>, DirectNovaSessionError> {
+    ) -> Result<ProverSession<'_, ARITY, C>, SessionError> {
         self.inner.start(
             initial_state,
             expected_steps,
-            DirectRelationId::from_frozen_bytes(self.expected.parameters.relation_id),
+            RelationId::from_frozen_bytes(self.expected.parameters.relation_id),
         )
     }
 }
 
-pub(crate) struct NovaProverSession<'suite, const ARITY: usize, C: NovaSessionStep<ARITY>> {
-    prover: &'suite NovaProver<ARITY, C>,
-    relation_id: DirectRelationId,
-    initial_state: [DirectNovaScalar; ARITY],
-    current_state: [DirectNovaScalar; ARITY],
+pub(crate) struct ProverSession<'suite, const ARITY: usize, C: SessionStep<ARITY>> {
+    prover: &'suite Prover<ARITY, C>,
+    relation_id: RelationId,
+    initial_state: [Scalar; ARITY],
+    current_state: [Scalar; ARITY],
     expected_steps: usize,
     completed_steps: usize,
     recursive: Option<NovaRecursiveSnark<C>>,
 }
 
-fn validate_step_relation<const ARITY: usize, C: NovaSessionStep<ARITY>>(
-    expected: DirectRelationId,
+fn validate_step_relation<const ARITY: usize, C: SessionStep<ARITY>>(
+    expected: RelationId,
     step: &C,
-) -> Result<(), DirectNovaSessionError> {
+) -> Result<(), SessionError> {
     if step.relation_id() != expected {
-        return Err(DirectNovaSessionError::StepRelation);
+        return Err(SessionError::StepRelation);
     }
     Ok(())
 }
 
-impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProverSession<'_, ARITY, C> {
+impl<const ARITY: usize, C: SessionStep<ARITY>> ProverSession<'_, ARITY, C> {
     /// Consumes the session on both success and failure, so a partially
     /// mutated Nova proof can never be retried as if the fold were atomic.
-    pub(crate) fn add_step(mut self, step: C) -> Result<Self, DirectNovaSessionError> {
+    pub(crate) fn add_step(mut self, step: C) -> Result<Self, SessionError> {
         if self.completed_steps >= self.expected_steps {
-            return Err(DirectNovaSessionError::StepCount {
+            return Err(SessionError::StepCount {
                 expected: self.expected_steps,
                 actual: self.completed_steps + 1,
             });
         }
         validate_step_relation(self.relation_id, &step)?;
         if step.input_state() != &self.current_state {
-            return Err(DirectNovaSessionError::StateContinuity);
+            return Err(SessionError::StateContinuity);
         }
 
         let recursive = &mut self.recursive;
@@ -288,7 +282,7 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProverSession<'_, ARITY,
                 // executing the circuit a second time.
                 first.prove_step(&self.prover.public_params, &step)?;
                 if first.num_steps() != 1 {
-                    return Err(DirectNovaSessionError::StepCount {
+                    return Err(SessionError::StepCount {
                         expected: 1,
                         actual: first.num_steps(),
                     });
@@ -301,22 +295,22 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProverSession<'_, ARITY,
         self.current_state = self
             .recursive
             .as_ref()
-            .ok_or(DirectNovaSessionError::FinalState)?
+            .ok_or(SessionError::FinalState)?
             .outputs()
             .try_into()
-            .map_err(|_| DirectNovaSessionError::FinalState)?;
+            .map_err(|_| SessionError::FinalState)?;
         self.completed_steps += 1;
         Ok(self)
     }
 
-    pub(crate) fn finish(self) -> Result<Vec<u8>, DirectNovaSessionError> {
+    pub(crate) fn finish(self) -> Result<Vec<u8>, SessionError> {
         if self.completed_steps != self.expected_steps {
-            return Err(DirectNovaSessionError::StepCount {
+            return Err(SessionError::StepCount {
                 expected: self.expected_steps,
                 actual: self.completed_steps,
             });
         }
-        let recursive = self.recursive.ok_or(DirectNovaSessionError::StepCount {
+        let recursive = self.recursive.ok_or(SessionError::StepCount {
             expected: self.expected_steps,
             actual: 0,
         })?;
@@ -328,7 +322,7 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProverSession<'_, ARITY,
                 &self.initial_state,
             )?;
             if verified.as_slice() != self.current_state {
-                return Err(DirectNovaSessionError::FinalState);
+                return Err(SessionError::FinalState);
             }
             let compressed = NovaCompressedSnark::<C>::prove_owned(
                 &self.prover.public_params,

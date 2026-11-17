@@ -2,7 +2,7 @@
 
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::{add_points, allocate_constant_point, scale_point, DirectSecpPoint};
+use crate::gadgets::point::{add_points, allocate_constant_point, scale_point, SecpPoint};
 use crate::gadgets::scalar::nonzero_scalar_from_sha255;
 use crate::gadgets::sha256::NovaTranscript;
 use crate::gadgets::synthesis_error;
@@ -19,7 +19,7 @@ pub(crate) fn constrain_transcript_opening_base<CS: ConstraintSystem<Scalar>>(
     transcript: &NovaTranscript,
     basis_digest: [u8; 32],
     role: u64,
-) -> Result<DirectSecpPoint, SynthesisError> {
+) -> Result<SecpPoint, SynthesisError> {
     let challenge = transcript
         .opening_base_scalar(
             cs.namespace(|| "opening-base challenge"),

@@ -6,7 +6,7 @@
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
 use crate::gadgets::point::{
-    add_points, allocate_encoded_point, encode_computed_point, scale_point, DirectSecpPoint,
+    add_points, allocate_encoded_point, encode_computed_point, scale_point, SecpPoint,
 };
 use crate::gadgets::scalar::{
     add_scalars, allocate_canonical_scalar, constant_u64, invert_scalar, multiply_scalars,
@@ -17,8 +17,8 @@ use crate::gadgets::synthesis_error;
 use crate::gadgets::transcript::{append_constant_bytes, append_point, append_scalar, challenge};
 use crate::native::circuit_norm::CandidateNormReductionProofWitness;
 use crate::native::opening_generators::REDUCTION_OPENING_BASE_ROLE;
-use crate::relation::candidate::{append_polynomial, DirectPendingClaim, DirectPolynomialTerm};
-use crate::relation::norm_leaf::DirectPreparedNorm;
+use crate::relation::candidate::{append_polynomial, PendingClaim, PolynomialTerm};
+use crate::relation::norm_leaf::PreparedNorm;
 use crate::relation::opening_base::constrain_transcript_opening_base;
 use statement::Scalar;
 
@@ -27,26 +27,26 @@ const MAX_REDUCTION_ROUNDS: usize = 24;
 
 fn scale<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    point: &DirectSecpPoint,
+    point: &SecpPoint,
     scalar: &CanonicalSecpScalar,
-) -> Result<DirectSecpPoint, SynthesisError> {
+) -> Result<SecpPoint, SynthesisError> {
     let bits = scalar.allocated_bits_le(cs.namespace(|| "scalar bits"))?;
     scale_point(cs.namespace(|| "scalar multiplication"), point, &bits)
 }
 
 fn add_scaled<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    sum: &DirectSecpPoint,
-    point: &DirectSecpPoint,
+    sum: &SecpPoint,
+    point: &SecpPoint,
     scalar: &CanonicalSecpScalar,
-) -> Result<DirectSecpPoint, SynthesisError> {
+) -> Result<SecpPoint, SynthesisError> {
     let term = scale(cs.namespace(|| "scaled term"), point, scalar)?;
     add_points(cs.namespace(|| "term sum"), sum, &term)
 }
 
 fn validate_shape(
     n_vec_len: usize,
-    prepared: &DirectPreparedNorm,
+    prepared: &PreparedNorm,
     proof: &CandidateNormReductionProofWitness,
 ) -> Result<usize, SynthesisError> {
     let rounds = proof.left.len();
@@ -80,10 +80,10 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     basis_digest: [u8; 32],
     n_vec_len: usize,
-    prepared: &DirectPreparedNorm,
+    prepared: &PreparedNorm,
     proof: &CandidateNormReductionProofWitness,
-    generator: &DirectSecpPoint,
-) -> Result<DirectPendingClaim, SynthesisError> {
+    generator: &SecpPoint,
+) -> Result<PendingClaim, SynthesisError> {
     let rounds = validate_shape(n_vec_len, prepared, proof)?;
     let zero = constant_u64::<CS::Root>(0)?;
     let one = constant_u64::<CS::Root>(1)?;
@@ -98,7 +98,7 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
     append_scalar(&mut transcript, &prepared.prepared_binding)?;
     append_point(&mut transcript, &prepared.coefficient_commitment);
 
-    let weights = DirectPolynomialTerm {
+    let weights = PolynomialTerm {
         scale: one.clone(),
         offset: 0,
         factors: prepared.polynomial[1].factors.clone(),
@@ -243,7 +243,7 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
     let encoded_norm_point =
         encode_computed_point(cs.namespace(|| "encoded norm point"), norm_point)?;
 
-    let folded = DirectPolynomialTerm {
+    let folded = PolynomialTerm {
         scale: folded_scale,
         offset: n_vec_len,
         factors: folded_factors,
@@ -270,7 +270,7 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
     )?;
     let point = encode_computed_point(cs.namespace(|| "encoded norm claim"), combined)?;
     let mut polynomial = prepared.polynomial.clone();
-    polynomial.push(DirectPolynomialTerm {
+    polynomial.push(PolynomialTerm {
         scale: multiply_scalars(
             cs.namespace(|| "fused folded scale"),
             &folded.scale,
@@ -279,7 +279,7 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
         offset: folded.offset,
         factors: folded.factors,
     });
-    Ok(DirectPendingClaim { point, polynomial })
+    Ok(PendingClaim { point, polynomial })
 }
 
 #[cfg(test)]
@@ -291,13 +291,13 @@ mod tests {
 
     use super::*;
     use crate::gadgets::point::{
-        allocate_encoded_point as allocate_direct_point, DirectEncodedSecpPoint,
+        allocate_encoded_point as allocate_direct_point, EncodedSecpPoint,
     };
-    use crate::gadgets::scalar::allocate_canonical_scalar as allocate_direct_scalar;
+    use crate::gadgets::scalar::allocate_canonical_scalar as allocate_test_scalar;
     use crate::native::secp::SecpScalarWitness;
     use crate::native::secp::{encoded_point_value, standard_generator, SecpEncodedPointWitness};
     use crate::relation::norm_leaf::allocate_standard_generator;
-    use statement::DirectNovaPrimaryEngine;
+    use statement::PrimaryEngine;
 
     const BASIS: [u8; 32] = [0x42; 32];
     const N_VEC_LEN: usize = 2;
@@ -306,7 +306,7 @@ mod tests {
         cs: CS,
         value: u64,
     ) -> Result<CanonicalSecpScalar, SynthesisError> {
-        allocate_direct_scalar(cs, SecpScalarWitness::from_u64(value))
+        allocate_test_scalar(cs, SecpScalarWitness::from_u64(value))
     }
 
     fn reduction_proof(terminal: u64) -> CandidateNormReductionProofWitness {
@@ -321,7 +321,7 @@ mod tests {
 
     fn allocate_direct_prepared<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
-    ) -> Result<DirectPreparedNorm, SynthesisError> {
+    ) -> Result<PreparedNorm, SynthesisError> {
         let identity = allocate_direct_point(
             cs.namespace(|| "coefficient commitment"),
             SecpEncodedPointWitness::identity(),
@@ -330,17 +330,17 @@ mod tests {
             cs.namespace(|| "residual"),
             SecpEncodedPointWitness::from_point_value(standard_generator()),
         )?;
-        Ok(DirectPreparedNorm {
+        Ok(PreparedNorm {
             prepared_binding: allocate_direct_test_scalar(cs.namespace(|| "binding"), 1)?,
             coefficient_commitment: identity,
             residual,
             polynomial: vec![
-                DirectPolynomialTerm {
+                PolynomialTerm {
                     scale: allocate_direct_test_scalar(cs.namespace(|| "g scale"), 1)?,
                     offset: 0,
                     factors: vec![allocate_direct_test_scalar(cs.namespace(|| "g factor"), 1)?],
                 },
-                DirectPolynomialTerm {
+                PolynomialTerm {
                     scale: allocate_direct_test_scalar(cs.namespace(|| "h scale"), 0)?,
                     offset: N_VEC_LEN,
                     factors: vec![allocate_direct_test_scalar(cs.namespace(|| "h factor"), 1)?],
@@ -352,7 +352,7 @@ mod tests {
     fn synthesize_direct<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
         terminal: u64,
-    ) -> Result<DirectPendingClaim, SynthesisError> {
+    ) -> Result<PendingClaim, SynthesisError> {
         let prepared = allocate_direct_prepared(cs.namespace(|| "prepared norm"))?;
         let generator = allocate_standard_generator(cs.namespace(|| "standard generator"))?;
         constrain_candidate_norm_reduction(
@@ -375,7 +375,7 @@ mod tests {
         BigUint::parse_bytes(value.as_bytes(), 10).expect("decimal scalar")
     }
 
-    fn assert_point_value(direct: &DirectEncodedSecpPoint, expected: SecpEncodedPointWitness) {
+    fn assert_point_value(direct: &EncodedSecpPoint, expected: SecpEncodedPointWitness) {
         let point = encoded_point_value(expected).expect("fixed point");
         assert_eq!(direct.point().x().get_value(), Some(point.x));
         assert_eq!(direct.point().y().get_value(), Some(point.y));
@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_reduction_matches_reference_vector_and_rejects_false_equation() {
+    fn constrained_reduction_matches_reference_vector_and_rejects_false_equation() {
         let mut direct_cs = TestConstraintSystem::<Scalar>::new();
         let direct = synthesize_direct(&mut direct_cs, 0).expect("direct norm reduction");
         assert!(direct_cs.is_satisfied());
@@ -445,10 +445,10 @@ mod tests {
     }
 
     #[test]
-    fn direct_reduction_shape_is_witness_independent_and_pinned() {
-        let mut first = ShapeCS::<DirectNovaPrimaryEngine>::new();
+    fn constrained_reduction_shape_is_witness_independent_and_pinned() {
+        let mut first = ShapeCS::<PrimaryEngine>::new();
         synthesize_direct(&mut first, 0).expect("first reduction shape");
-        let mut second = ShapeCS::<DirectNovaPrimaryEngine>::new();
+        let mut second = ShapeCS::<PrimaryEngine>::new();
         synthesize_direct(&mut second, 1).expect("second reduction shape");
 
         assert_eq!(first.num_inputs(), 1);
@@ -462,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_reduction_rejects_malformed_shape() {
+    fn constrained_reduction_rejects_malformed_shape() {
         let mut cs = TestConstraintSystem::<Scalar>::new();
         let prepared =
             allocate_direct_prepared(cs.namespace(|| "prepared norm")).expect("prepared norm");

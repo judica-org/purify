@@ -4,7 +4,7 @@ use std::array;
 
 use nova_snark::frontend::{ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::DirectEncodedSecpPoint;
+use crate::gadgets::point::EncodedSecpPoint;
 use crate::gadgets::scalar::{nonzero_scalar_from_sha255, CanonicalSecpScalar};
 use crate::gadgets::sha256::{NovaByte, NovaTranscript};
 use crate::gadgets::synthesis_error;
@@ -55,7 +55,7 @@ pub(crate) fn append_scalar(
     Ok(())
 }
 
-pub(crate) fn append_point(transcript: &mut NovaTranscript, point: &DirectEncodedSecpPoint) {
+pub(crate) fn append_point(transcript: &mut NovaTranscript, point: &EncodedSecpPoint) {
     transcript.append_point(point.prefix_byte(), point.x_bytes());
 }
 

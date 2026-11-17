@@ -15,10 +15,10 @@ use nova_snark::{
 use sha2::{Digest, Sha256};
 
 use crate::gadgets::synthesis_error;
-use statement::DIRECT_STEP_RELATION_ENCODING_VERSION;
+use statement::STEP_RELATION_ENCODING_VERSION;
 use statement::{scalar_to_canonical, Scalar};
 
-const DIRECT_STEP_RELATION_DOMAIN: &[u8] = b"Purify/Receipt/DirectNovaStepRelation/v1";
+const STEP_RELATION_DOMAIN: &[u8] = b"Purify/Receipt/DirectNovaStepRelation/v1";
 
 /// Digest of one ordered direct step relation.
 ///
@@ -26,9 +26,9 @@ const DIRECT_STEP_RELATION_DOMAIN: &[u8] = b"Purify/Receipt/DirectNovaStepRelati
 /// additionally binds Nova, both engines, public parameters, compression,
 /// and the canonical proof codec.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectRelationId([u8; 32]);
+pub struct RelationId([u8; 32]);
 
-impl DirectRelationId {
+impl RelationId {
     pub fn bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -40,15 +40,15 @@ impl DirectRelationId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectStepRelationShape {
-    relation_id: DirectRelationId,
+pub struct StepRelationShape {
+    relation_id: RelationId,
     inputs: usize,
     auxiliary: usize,
     constraints: usize,
 }
 
-impl DirectStepRelationShape {
-    pub const fn relation_id(self) -> DirectRelationId {
+impl StepRelationShape {
+    pub const fn relation_id(self) -> RelationId {
         self.relation_id
     }
 
@@ -75,8 +75,8 @@ struct RelationIdentityCS {
 impl RelationIdentityCS {
     fn new() -> Self {
         let mut digest = Sha256::new();
-        digest.update(DIRECT_STEP_RELATION_DOMAIN);
-        digest.update([DIRECT_STEP_RELATION_ENCODING_VERSION]);
+        digest.update(STEP_RELATION_DOMAIN);
+        digest.update([STEP_RELATION_ENCODING_VERSION]);
         Self {
             digest,
             inputs: 1,
@@ -130,7 +130,7 @@ impl RelationIdentityCS {
         mut self,
         inputs: &[AllocatedNum<Scalar>],
         outputs: &[AllocatedNum<Scalar>],
-    ) -> Result<DirectStepRelationShape, SynthesisError> {
+    ) -> Result<StepRelationShape, SynthesisError> {
         if inputs.len() != ARITY || self.inputs != ARITY + 1 || outputs.len() != ARITY {
             return Err(synthesis_error("direct step state shape"));
         }
@@ -155,8 +155,8 @@ impl RelationIdentityCS {
             self.hash_variable(output.get_variable());
         }
 
-        Ok(DirectStepRelationShape {
-            relation_id: DirectRelationId::from_frozen_bytes(self.digest.finalize().into()),
+        Ok(StepRelationShape {
+            relation_id: RelationId::from_frozen_bytes(self.digest.finalize().into()),
             inputs: self.inputs,
             auxiliary: self.auxiliary,
             constraints: self.constraints,
@@ -232,9 +232,9 @@ impl ConstraintSystem<Scalar> for RelationIdentityCS {
     }
 }
 
-pub fn direct_step_relation_shape<const ARITY: usize, C: StepCircuit<Scalar>>(
+pub fn step_relation_shape<const ARITY: usize, C: StepCircuit<Scalar>>(
     circuit: &C,
-) -> Result<DirectStepRelationShape, SynthesisError> {
+) -> Result<StepRelationShape, SynthesisError> {
     if circuit.arity() != ARITY {
         return Err(synthesis_error("direct step arity"));
     }
@@ -336,12 +336,12 @@ mod tests {
 
     #[test]
     fn relation_identity_ignores_witnesses_and_pins_counts() {
-        let first = direct_step_relation_shape::<1, _>(&TinyRelationStep {
+        let first = step_relation_shape::<1, _>(&TinyRelationStep {
             constant: Scalar::from(17),
             ignored: IgnoredWitness::Panic,
         })
         .expect("first tiny relation");
-        let second = direct_step_relation_shape::<1, _>(&TinyRelationStep {
+        let second = step_relation_shape::<1, _>(&TinyRelationStep {
             constant: Scalar::from(17),
             ignored: IgnoredWitness::Value(Scalar::from(42)),
         })
@@ -355,12 +355,12 @@ mod tests {
 
     #[test]
     fn relation_identity_binds_matrix_constants() {
-        let first = direct_step_relation_shape::<1, _>(&TinyRelationStep {
+        let first = step_relation_shape::<1, _>(&TinyRelationStep {
             constant: Scalar::from(17),
             ignored: IgnoredWitness::Panic,
         })
         .expect("first tiny relation");
-        let changed = direct_step_relation_shape::<1, _>(&TinyRelationStep {
+        let changed = step_relation_shape::<1, _>(&TinyRelationStep {
             constant: Scalar::from(18),
             ignored: IgnoredWitness::Panic,
         })
@@ -373,9 +373,9 @@ mod tests {
 
     #[test]
     fn relation_identity_binds_output_order() {
-        let ordered = direct_step_relation_shape::<2, _>(&OrderedOutputs { reverse: false })
+        let ordered = step_relation_shape::<2, _>(&OrderedOutputs { reverse: false })
             .expect("ordered relation");
-        let reversed = direct_step_relation_shape::<2, _>(&OrderedOutputs { reverse: true })
+        let reversed = step_relation_shape::<2, _>(&OrderedOutputs { reverse: true })
             .expect("reversed relation");
         assert_ne!(ordered.relation_id(), reversed.relation_id());
         assert_eq!(ordered.inputs(), reversed.inputs());

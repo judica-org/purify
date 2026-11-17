@@ -11,29 +11,24 @@ use nova_snark::{nova::VerifierKey, traits::snark::RelaxedR1CSSNARKTrait};
 use rayon::ThreadPool;
 
 use super::{
-    DirectNovaSessionError, DirectNovaSuiteMetadata, NovaCompressedSnark, NovaProver,
-    NovaProverSession, NovaPublicParams, NovaSessionStep, SelectedNovaProver,
+    NovaCompressedSnark, NovaPublicParams, Prover, ProverSession, SelectedProver, SessionError,
+    SessionStep, SuiteMetadata,
 };
 use crate::artifact_writer::{write_artifact_payload, ArtifactWriteError};
-use statement::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine};
+use statement::{PrimaryEngine, Scalar, SecondaryEngine};
 use verifier::artifact::ArtifactIdentity;
-use verifier::codec::{NovaCompressedProofShape, NovaR1csDimensions};
+use verifier::codec::{ProofShape, R1csDimensions};
 use verifier::nova::{
     one_thread_pool, PrimarySnark, SecondarySnark, VerifyError, VERIFIER_ARTIFACT_FORMAT,
 };
 use verifier::suite::{ConstructionVersions, R1csSize, Suite, SuiteError, SuiteParameters};
 
-type NovaVerifierKey<C> = VerifierKey<
-    DirectNovaPrimaryEngine,
-    DirectNovaSecondaryEngine,
-    C,
-    PrimarySnark,
-    SecondarySnark,
->;
+type NovaVerifierKey<C> =
+    VerifierKey<PrimaryEngine, SecondaryEngine, C, PrimarySnark, SecondarySnark>;
 
 /// A freshly generated, not yet selected prover and verifier pair.
-pub(crate) struct NovaSessionSuite<const ARITY: usize, C: NovaSessionStep<ARITY>> {
-    pub(crate) prover: NovaProver<ARITY, C>,
+pub(crate) struct SessionSuite<const ARITY: usize, C: SessionStep<ARITY>> {
+    pub(crate) prover: Prover<ARITY, C>,
     pub(crate) verifier: SetupVerifier<ARITY, C>,
 }
 
@@ -43,22 +38,22 @@ pub(crate) struct NovaSessionSuite<const ARITY: usize, C: NovaSessionStep<ARITY>
 /// marker. This generic form exists so setup tests can check a proof before
 /// any artifact has been written, and for state arities other than the
 /// production one.
-pub(crate) struct SetupVerifier<const ARITY: usize, C: NovaSessionStep<ARITY>> {
+pub(crate) struct SetupVerifier<const ARITY: usize, C: SessionStep<ARITY>> {
     pub(crate) verifier_key: NovaVerifierKey<C>,
-    pub(crate) proof_shape: NovaCompressedProofShape,
-    metadata: DirectNovaSuiteMetadata,
+    pub(crate) proof_shape: ProofShape,
+    metadata: SuiteMetadata,
     pool: ThreadPool,
     operation: Mutex<()>,
 }
 
 /// A generic suite promoted through one exact local selection profile.
-pub(crate) struct SelectedNovaSessionSuite<const ARITY: usize, C: NovaSessionStep<ARITY>> {
-    pub(crate) prover: SelectedNovaProver<ARITY, C>,
+pub(crate) struct SelectedSessionSuite<const ARITY: usize, C: SessionStep<ARITY>> {
+    pub(crate) prover: SelectedProver<ARITY, C>,
     pub(crate) verifier: SelectedSetupVerifier<ARITY, C>,
 }
 
 /// A setup verifier promoted through one exact local profile.
-pub(crate) struct SelectedSetupVerifier<const ARITY: usize, C: NovaSessionStep<ARITY>> {
+pub(crate) struct SelectedSetupVerifier<const ARITY: usize, C: SessionStep<ARITY>> {
     expected: &'static Suite,
     pub(crate) inner: SetupVerifier<ARITY, C>,
 }
@@ -71,13 +66,13 @@ fn r1cs_size(constraints: usize, variables: usize) -> Result<R1csSize, SuiteErro
     })
 }
 
-impl DirectNovaSuiteMetadata {
+impl SuiteMetadata {
     /// Checks the declared relation and every measured value against one
     /// pinned profile.
     pub(crate) fn validate<const ARITY: usize>(
         &self,
         expected: &Suite,
-    ) -> Result<NovaCompressedProofShape, DirectNovaSessionError> {
+    ) -> Result<ProofShape, SessionError> {
         if self.relation_id.bytes() != &expected.parameters.relation_id {
             return Err(SuiteError::Mismatch("relation ID").into());
         }
@@ -109,14 +104,14 @@ impl DirectNovaSuiteMetadata {
     }
 }
 
-impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
+impl<const ARITY: usize, C: SessionStep<ARITY>> SessionSuite<ARITY, C> {
     /// Builds an unselected suite for internal experiments and test tools.
-    pub(crate) fn setup(trusted_step: C) -> Result<Self, DirectNovaSessionError> {
+    pub(crate) fn setup(trusted_step: C) -> Result<Self, SessionError> {
         let relation_id = trusted_step.relation_id();
-        let pool = one_thread_pool().map_err(DirectNovaSessionError::Setup)?;
+        let pool = one_thread_pool().map_err(SessionError::Setup)?;
 
         let (public_params, prover_key, verifier_key, proof_shape, metadata) =
-            pool.install(move || -> Result<_, DirectNovaSessionError> {
+            pool.install(move || -> Result<_, SessionError> {
                 let public_params = NovaPublicParams::<C>::setup(
                     &trusted_step,
                     &*PrimarySnark::ck_floor(),
@@ -125,17 +120,14 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
                 drop(trusted_step);
                 let (primary_constraints, secondary_constraints) = public_params.num_constraints();
                 let (primary_variables, secondary_variables) = public_params.num_variables();
-                let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
-                    NovaR1csDimensions::new(primary_constraints, primary_variables),
-                    NovaR1csDimensions::new(secondary_constraints, secondary_variables),
+                let proof_shape = ProofShape::from_suite_dimensions(
+                    R1csDimensions::new(primary_constraints, primary_variables),
+                    R1csDimensions::new(secondary_constraints, secondary_variables),
                     ARITY,
                 )?;
                 let (prover_key, verifier_key) = NovaCompressedSnark::<C>::setup(&public_params)?;
-                let metadata = DirectNovaSuiteMetadata::measure::<ARITY, C>(
-                    relation_id,
-                    &public_params,
-                    &proof_shape,
-                )?;
+                let metadata =
+                    SuiteMetadata::measure::<ARITY, C>(relation_id, &public_params, &proof_shape)?;
                 Ok((
                     public_params,
                     prover_key,
@@ -145,9 +137,9 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
                 ))
             })?;
 
-        let verifier_pool = one_thread_pool().map_err(DirectNovaSessionError::Setup)?;
+        let verifier_pool = one_thread_pool().map_err(SessionError::Setup)?;
         Ok(Self {
-            prover: NovaProver {
+            prover: Prover {
                 public_params,
                 prover_key,
                 proof_shape: proof_shape.clone(),
@@ -173,7 +165,7 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
     pub(crate) fn select_generated_for_qualification(
         self,
         versions: ConstructionVersions,
-    ) -> Result<SelectedNovaSessionSuite<ARITY, C>, DirectNovaSessionError> {
+    ) -> Result<SelectedSessionSuite<ARITY, C>, SessionError> {
         let expected = Box::leak(Box::new(
             self.verifier.metadata.generated_suite::<ARITY>(versions)?,
         ));
@@ -186,24 +178,24 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
     pub(crate) fn setup_exact(
         trusted_step: C,
         expected: &'static Suite,
-    ) -> Result<SelectedNovaSessionSuite<ARITY, C>, DirectNovaSessionError> {
+    ) -> Result<SelectedSessionSuite<ARITY, C>, SessionError> {
         if trusted_step.relation_id().bytes() != &expected.parameters.relation_id {
             return Err(SuiteError::Mismatch("relation ID").into());
         }
         Self::setup(trusted_step)?.select(expected)
     }
 
-    pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
+    pub(crate) fn metadata(&self) -> SuiteMetadata {
         self.verifier.metadata
     }
 
     pub(crate) fn select(
         self,
         expected: &'static Suite,
-    ) -> Result<SelectedNovaSessionSuite<ARITY, C>, DirectNovaSessionError> {
+    ) -> Result<SelectedSessionSuite<ARITY, C>, SessionError> {
         self.verifier.metadata.validate::<ARITY>(expected)?;
-        Ok(SelectedNovaSessionSuite {
-            prover: SelectedNovaProver {
+        Ok(SelectedSessionSuite {
+            prover: SelectedProver {
                 expected,
                 inner: self.prover,
             },
@@ -215,8 +207,8 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
     }
 }
 
-impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SetupVerifier<ARITY, C> {
-    pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
+impl<const ARITY: usize, C: SessionStep<ARITY>> SetupVerifier<ARITY, C> {
+    pub(crate) fn metadata(&self) -> SuiteMetadata {
         self.metadata
     }
 
@@ -224,10 +216,10 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SetupVerifier<ARITY, C> {
     /// count, returning its authenticated recurrence output.
     pub(crate) fn verify_final(
         &self,
-        initial_state: &[DirectNovaScalar; ARITY],
+        initial_state: &[Scalar; ARITY],
         expected_steps: usize,
         proof: &[u8],
-    ) -> Result<[DirectNovaScalar; ARITY], VerifyError> {
+    ) -> Result<[Scalar; ARITY], VerifyError> {
         if expected_steps == 0 {
             return Err(VerifyError::StepCount {
                 expected: 1,
@@ -256,9 +248,9 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SetupVerifier<ARITY, C> {
 
     pub(crate) fn verify_exact(
         &self,
-        initial_state: &[DirectNovaScalar; ARITY],
+        initial_state: &[Scalar; ARITY],
         expected_steps: usize,
-        expected_final_state: &[DirectNovaScalar; ARITY],
+        expected_final_state: &[Scalar; ARITY],
         proof: &[u8],
     ) -> Result<(), VerifyError> {
         if self.verify_final(initial_state, expected_steps, proof)? != *expected_final_state {
@@ -268,20 +260,20 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SetupVerifier<ARITY, C> {
     }
 }
 
-impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaSessionSuite<ARITY, C> {
+impl<const ARITY: usize, C: SessionStep<ARITY>> SelectedSessionSuite<ARITY, C> {
     pub(crate) const fn expected(&self) -> &'static Suite {
         self.prover.expected()
     }
 
-    pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
+    pub(crate) fn metadata(&self) -> SuiteMetadata {
         self.verifier.metadata()
     }
 
     pub(crate) fn start(
         &self,
-        initial_state: [DirectNovaScalar; ARITY],
+        initial_state: [Scalar; ARITY],
         expected_steps: usize,
-    ) -> Result<NovaProverSession<'_, ARITY, C>, DirectNovaSessionError> {
+    ) -> Result<ProverSession<'_, ARITY, C>, SessionError> {
         self.prover.start(initial_state, expected_steps)
     }
 
@@ -289,7 +281,7 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaSessionSuite<ARI
     ///
     /// The setup-only qualification must persist and reload this state before
     /// it is used. Production code cannot perform transparent setup.
-    pub(crate) fn into_prover(self) -> SelectedNovaProver<ARITY, C> {
+    pub(crate) fn into_prover(self) -> SelectedProver<ARITY, C> {
         self.prover
     }
 
@@ -300,12 +292,12 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaSessionSuite<ARI
     }
 }
 
-impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedSetupVerifier<ARITY, C> {
+impl<const ARITY: usize, C: SessionStep<ARITY>> SelectedSetupVerifier<ARITY, C> {
     pub(crate) const fn expected(&self) -> &'static Suite {
         self.expected
     }
 
-    pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
+    pub(crate) fn metadata(&self) -> SuiteMetadata {
         self.inner.metadata()
     }
 
@@ -313,9 +305,9 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedSetupVerifier<ARITY,
     /// suite metadata nor its own recursive step count.
     pub(crate) fn verify_exact(
         &self,
-        initial_state: &[DirectNovaScalar; ARITY],
+        initial_state: &[Scalar; ARITY],
         expected_steps: usize,
-        expected_final_state: &[DirectNovaScalar; ARITY],
+        expected_final_state: &[Scalar; ARITY],
         proof: &[u8],
     ) -> Result<(), VerifyError> {
         self.inner

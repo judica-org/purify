@@ -25,15 +25,11 @@ use circuit::native::secp::{
     standard_generator, SecpEncodedPointWitness, SecpScalarWitness,
 };
 use circuit::profile::{
-    CONSTRUCTION_LEAF_GATE_COUNT, CONSTRUCTION_LEAF_NORM_LENGTH, CONSTRUCTION_LEAF_ROUNDS,
-    CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-    CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_ROUNDS,
+    BASIS_DIGEST, LEAF_GATE_COUNT, LEAF_NORM_LENGTH, LEAF_ROUNDS, RAW_GENERATOR_DIGEST, ROOT_BYTES,
+    ROOT_ROUNDS,
 };
-use statement::inputs::{
-    ConstructionParentInputError, ConstructionParentInputs, RawConstructionParentInputs,
-    CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES,
-};
-use statement::manifest::{ConstructionManifestLeaf, ConstructionRoot};
+use statement::inputs::{PublicInputError, PublicInputs, RawPublicInputs, LEAF_DESCRIPTOR_BYTES};
+use statement::manifest::{ConstructionRoot, ManifestLeaf};
 use statement::RelationError;
 
 const MAGIC: &[u8; 16] = b"Purify/Nova/Wit4";
@@ -43,12 +39,12 @@ const PUBLIC_COMMITMENT_BYTES: usize = 33;
 const TRANSCRIPT_RECORD_BYTES: usize = 1_137;
 const REDUCTION_PROOF_BYTES: usize = 1_022;
 const STEP_PROOF_BYTES: usize = 1_056;
-const SETUP_BYTES: usize = CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES
+const SETUP_BYTES: usize = LEAF_DESCRIPTOR_BYTES
     + PUBLIC_COMMITMENT_BYTES
     + TRANSCRIPT_RECORD_BYTES
     + REDUCTION_PROOF_BYTES
     + STEP_PROOF_BYTES;
-const ANCHOR_BYTES: usize = CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES
+const ANCHOR_BYTES: usize = LEAF_DESCRIPTOR_BYTES
     + PUBLIC_COMMITMENT_BYTES
     + TRANSCRIPT_RECORD_BYTES
     + REDUCTION_PROOF_BYTES
@@ -59,36 +55,36 @@ const REDUCTION_VERSION: u8 = 2;
 const STEP_VERSION: u8 = 2;
 
 #[derive(Debug, Error, Eq, PartialEq)]
-pub(crate) enum ConstructionParentProverFixtureError {
+pub(crate) enum ProverFixtureError {
     #[error(transparent)]
-    Input(#[from] ConstructionParentInputError),
+    Input(#[from] PublicInputError),
     #[error(transparent)]
     State(#[from] RelationError),
 }
 
-pub(crate) struct ConstructionParentProverLeaf {
+pub(crate) struct ProverLeaf {
     pub(crate) statement: ManifestBoundConstructionLeafStatementV4,
     pub(crate) transcript: CircuitProofTranscriptWitnessV4,
     pub(crate) reduction: CandidateNormReductionProofWitness,
     pub(crate) step: CandidateStepProofWitness,
     /// The typed public leaf this record was checked against.
-    pub(crate) manifest_leaf: ConstructionManifestLeaf,
+    pub(crate) manifest_leaf: ManifestLeaf,
 }
 
-pub(crate) struct ConstructionParentProverFixture {
-    pub(crate) inputs: ConstructionParentInputs,
+pub(crate) struct ProverFixture {
+    pub(crate) inputs: PublicInputs,
     // The parsed phase sizes are already bound into `inputs`; only the
     // qualification checks read them back.
     #[allow(dead_code)]
     pub(crate) setup_leaf_count: usize,
     #[allow(dead_code)]
     pub(crate) anchor_leaf_count: usize,
-    pub(crate) leaves: Vec<ConstructionParentProverLeaf>,
+    pub(crate) leaves: Vec<ProverLeaf>,
     pub(crate) expected_root: ConstructionRoot,
 }
 
-impl ConstructionParentProverFixture {
-    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, ConstructionParentProverFixtureError> {
+impl ProverFixture {
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, ProverFixtureError> {
         let mut cursor = Cursor::new(bytes);
         if cursor.array::<16>()? != *MAGIC {
             return Err(RelationError::Malformed("construction prover fixture magic").into());
@@ -119,7 +115,7 @@ impl ConstructionParentProverFixture {
                     .and_then(|anchors| setup.checked_add(anchors))
             })
             .and_then(|leaves| HEADER_BYTES.checked_add(leaves))
-            .and_then(|prefix| prefix.checked_add(CONSTRUCTION_ROOT_BYTES))
+            .and_then(|prefix| prefix.checked_add(ROOT_BYTES))
             .ok_or(RelationError::Malformed(
                 "construction prover fixture length",
             ))?;
@@ -127,15 +123,16 @@ impl ConstructionParentProverFixture {
             return Err(RelationError::Malformed("construction prover fixture length").into());
         }
 
-        let descriptor_capacity = leaf_count
-            .checked_mul(CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES)
-            .ok_or(RelationError::Malformed(
-                "construction prover fixture count",
-            ))?;
+        let descriptor_capacity =
+            leaf_count
+                .checked_mul(LEAF_DESCRIPTOR_BYTES)
+                .ok_or(RelationError::Malformed(
+                    "construction prover fixture count",
+                ))?;
         let mut descriptor_bytes = Vec::with_capacity(descriptor_capacity);
         let mut leaves = Vec::with_capacity(leaf_count);
         for _ in 0..setup_count_usize {
-            let descriptor = cursor.array::<CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES>()?;
+            let descriptor = cursor.array::<LEAF_DESCRIPTOR_BYTES>()?;
             descriptor_bytes.extend_from_slice(&descriptor);
             let output = parse_finite_point(cursor.array::<PUBLIC_COMMITMENT_BYTES>()?)?;
             let record = cursor.array::<TRANSCRIPT_RECORD_BYTES>()?;
@@ -151,7 +148,7 @@ impl ConstructionParentProverFixture {
             )?);
         }
         for _ in 0..anchor_count_usize {
-            let descriptor = cursor.array::<CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES>()?;
+            let descriptor = cursor.array::<LEAF_DESCRIPTOR_BYTES>()?;
             descriptor_bytes.extend_from_slice(&descriptor);
             let punishment = parse_even_finite_point(cursor.array::<PUBLIC_COMMITMENT_BYTES>()?)?;
             let record = cursor.array::<TRANSCRIPT_RECORD_BYTES>()?;
@@ -166,20 +163,19 @@ impl ConstructionParentProverFixture {
                 step,
             )?);
         }
-        let expected_root = ConstructionRoot::parse(&cursor.array::<CONSTRUCTION_ROOT_BYTES>()?)?;
+        let expected_root = ConstructionRoot::parse(&cursor.array::<ROOT_BYTES>()?)?;
         cursor.finish()?;
 
-        let (inputs, _seed, public_leaves) =
-            ConstructionParentInputs::parse_with_leaves(RawConstructionParentInputs {
-                construction_statement_digest: statement_digest,
-                resolved_setup_record_digest: setup_digest,
-                recovery_root,
-                native_basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
-                native_raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-                setup_leaf_count: setup_count,
-                anchor_leaf_count: anchor_count,
-                leaf_descriptors: &descriptor_bytes,
-            })?;
+        let (inputs, _seed, public_leaves) = PublicInputs::parse_with_leaves(RawPublicInputs {
+            construction_statement_digest: statement_digest,
+            resolved_setup_record_digest: setup_digest,
+            recovery_root,
+            native_basis_digest: BASIS_DIGEST,
+            native_raw_generator_digest: RAW_GENERATOR_DIGEST,
+            setup_leaf_count: setup_count,
+            anchor_leaf_count: anchor_count,
+            leaf_descriptors: &descriptor_bytes,
+        })?;
         if leaves
             .iter()
             .map(|leaf| leaf.manifest_leaf)
@@ -200,21 +196,21 @@ impl ConstructionParentProverFixture {
 fn production_shape() -> CircuitTranscriptShapeV4 {
     CircuitTranscriptShapeV4 {
         mode: CircuitCommitmentModeV4::Public,
-        gate_count: CONSTRUCTION_LEAF_GATE_COUNT,
+        gate_count: LEAF_GATE_COUNT,
         commitment_count: 1,
-        n_vec_len: CONSTRUCTION_LEAF_NORM_LENGTH,
-        l_vec_len: CONSTRUCTION_LEAF_NORM_LENGTH,
+        n_vec_len: LEAF_NORM_LENGTH,
+        l_vec_len: LEAF_NORM_LENGTH,
     }
 }
 
 fn parse_leaf(
-    descriptor: [u8; CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES],
+    descriptor: [u8; LEAF_DESCRIPTOR_BYTES],
     public_commitment: SecpEncodedPointWitness,
     record: &[u8],
     expected_version: u8,
     reduction: CandidateNormReductionProofWitness,
     step: CandidateStepProofWitness,
-) -> Result<ConstructionParentProverLeaf, RelationError> {
+) -> Result<ProverLeaf, RelationError> {
     let binding_digest = descriptor[..32].try_into().expect("fixed binding digest");
     let precommitment = parse_scalar(descriptor[32..64].try_into().expect("fixed precommitment"))?;
     let coefficient_commitment = SecpEncodedPointWitness::parse(
@@ -227,7 +223,7 @@ fn parse_leaf(
             .try_into()
             .expect("fixed anchored offset"),
     )?;
-    let manifest_leaf = ConstructionManifestLeaf::new(
+    let manifest_leaf = ManifestLeaf::new(
         binding_digest,
         precommitment.bytes,
         coefficient_commitment.encoded,
@@ -236,8 +232,8 @@ fn parse_leaf(
     let statement = ManifestBoundConstructionLeafStatementV4 {
         shape: production_shape(),
         circuit_binding_digest: binding_digest,
-        raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-        basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
+        raw_generator_digest: RAW_GENERATOR_DIGEST,
+        basis_digest: BASIS_DIGEST,
     };
     let transcript = parse_record(
         record,
@@ -248,7 +244,7 @@ fn parse_leaf(
         precommitment,
         statement,
     )?;
-    Ok(ConstructionParentProverLeaf {
+    Ok(ProverLeaf {
         statement,
         transcript,
         reduction,
@@ -275,7 +271,7 @@ fn parse_record(
     let nonce_offset = t2_offset + 32;
     let response_offset = nonce_offset + 32;
     let rounds_offset = response_offset + 32;
-    let terminal_n_offset = rounds_offset + 65 * CONSTRUCTION_LEAF_ROUNDS;
+    let terminal_n_offset = rounds_offset + 65 * LEAF_ROUNDS;
     let terminal_l_offset = terminal_n_offset + 32;
     if terminal_l_offset.checked_add(32) != Some(record.len()) {
         return Err(RelationError::Malformed("construction leaf record length"));
@@ -304,8 +300,8 @@ fn parse_record(
             .try_into()
             .expect("fixed DLog response"),
     )?;
-    let mut rounds = Vec::with_capacity(CONSTRUCTION_LEAF_ROUNDS);
-    for index in 0..CONSTRUCTION_LEAF_ROUNDS {
+    let mut rounds = Vec::with_capacity(LEAF_ROUNDS);
+    for index in 0..LEAF_ROUNDS {
         let offset = rounds_offset + index * 65;
         rounds.push(parse_pair(
             record[offset..offset + 65]
@@ -386,10 +382,10 @@ fn parse_reduction(
             .try_into()
             .expect("fixed reduction evaluation"),
     )?;
-    let mut left = Vec::with_capacity(CONSTRUCTION_LEAF_ROUNDS);
-    let mut right = Vec::with_capacity(CONSTRUCTION_LEAF_ROUNDS);
+    let mut left = Vec::with_capacity(LEAF_ROUNDS);
+    let mut right = Vec::with_capacity(LEAF_ROUNDS);
     let mut offset = 33;
-    for _ in 0..CONSTRUCTION_LEAF_ROUNDS {
+    for _ in 0..LEAF_ROUNDS {
         left.push(SecpEncodedPointWitness::parse(
             encoded[offset..offset + 33]
                 .try_into()
@@ -427,10 +423,10 @@ fn parse_step(encoded: [u8; STEP_PROOF_BYTES]) -> Result<CandidateStepProofWitne
     if encoded[0] != STEP_VERSION {
         return Err(RelationError::Malformed("construction parent step version"));
     }
-    let mut left = Vec::with_capacity(CONSTRUCTION_ROOT_ROUNDS);
-    let mut right = Vec::with_capacity(CONSTRUCTION_ROOT_ROUNDS);
+    let mut left = Vec::with_capacity(ROOT_ROUNDS);
+    let mut right = Vec::with_capacity(ROOT_ROUNDS);
     let mut offset = 1;
-    for _ in 0..CONSTRUCTION_ROOT_ROUNDS {
+    for _ in 0..ROOT_ROUNDS {
         left.push(SecpEncodedPointWitness::parse(
             encoded[offset..offset + 33]
                 .try_into()
@@ -565,44 +561,44 @@ mod tests {
     #[test]
     fn fixture_frame_rejects_truncation_and_wrong_magic() {
         assert_eq!(
-            ConstructionParentProverFixture::parse(&[])
+            ProverFixture::parse(&[])
                 .err()
                 .expect("empty fixture rejects"),
-            ConstructionParentProverFixtureError::State(RelationError::Malformed(
+            ProverFixtureError::State(RelationError::Malformed(
                 "truncated construction prover fixture"
             ))
         );
         let mut wrong_magic = *MAGIC;
         wrong_magic[0] ^= 1;
         assert_eq!(
-            ConstructionParentProverFixture::parse(&wrong_magic)
+            ProverFixture::parse(&wrong_magic)
                 .err()
                 .expect("wrong magic rejects"),
-            ConstructionParentProverFixtureError::State(RelationError::Malformed(
+            ProverFixtureError::State(RelationError::Malformed(
                 "construction prover fixture magic"
             ))
         );
         assert_eq!(
-            ConstructionParentProverFixture::parse(b"Purify/Nova/Wit1")
+            ProverFixture::parse(b"Purify/Nova/Wit1")
                 .err()
                 .expect("legacy magic rejects"),
-            ConstructionParentProverFixtureError::State(RelationError::Malformed(
+            ProverFixtureError::State(RelationError::Malformed(
                 "construction prover fixture magic"
             ))
         );
         assert_eq!(
-            ConstructionParentProverFixture::parse(b"Purify/Nova/Wit2")
+            ProverFixture::parse(b"Purify/Nova/Wit2")
                 .err()
                 .expect("prior fixture magic rejects"),
-            ConstructionParentProverFixtureError::State(RelationError::Malformed(
+            ProverFixtureError::State(RelationError::Malformed(
                 "construction prover fixture magic"
             ))
         );
         assert_eq!(
-            ConstructionParentProverFixture::parse(b"Purify/Nova/Wit3")
+            ProverFixture::parse(b"Purify/Nova/Wit3")
                 .err()
                 .expect("previous fixture magic rejects"),
-            ConstructionParentProverFixtureError::State(RelationError::Malformed(
+            ProverFixtureError::State(RelationError::Malformed(
                 "construction prover fixture magic"
             ))
         );
@@ -618,10 +614,10 @@ mod tests {
         let mut encoded = vec![0; HEADER_BYTES];
         encoded[..MAGIC.len()].copy_from_slice(MAGIC);
         assert_eq!(
-            ConstructionParentProverFixture::parse(&encoded)
+            ProverFixture::parse(&encoded)
                 .err()
                 .expect("empty phases reject"),
-            ConstructionParentProverFixtureError::State(RelationError::Malformed(
+            ProverFixtureError::State(RelationError::Malformed(
                 "empty construction prover fixture"
             ))
         );
@@ -630,10 +626,10 @@ mod tests {
         encoded[setup_count_offset + 3] = 1;
         encoded[setup_count_offset + 7] = 1;
         assert_eq!(
-            ConstructionParentProverFixture::parse(&encoded)
+            ProverFixture::parse(&encoded)
                 .err()
                 .expect("missing typed leaves reject"),
-            ConstructionParentProverFixtureError::State(RelationError::Malformed(
+            ProverFixtureError::State(RelationError::Malformed(
                 "construction prover fixture length"
             ))
         );
@@ -643,12 +639,9 @@ mod tests {
     fn wit4_rejects_redundant_typed_record_prefixes() {
         let accepted =
             include_bytes!("../../../../tests/vectors/construction_parent_sha256_accepted.wit4");
-        let setup_record =
-            HEADER_BYTES + CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES + PUBLIC_COMMITMENT_BYTES;
-        let first_anchor_record = HEADER_BYTES
-            + 3 * SETUP_BYTES
-            + CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES
-            + PUBLIC_COMMITMENT_BYTES;
+        let setup_record = HEADER_BYTES + LEAF_DESCRIPTOR_BYTES + PUBLIC_COMMITMENT_BYTES;
+        let first_anchor_record =
+            HEADER_BYTES + 3 * SETUP_BYTES + LEAF_DESCRIPTOR_BYTES + PUBLIC_COMMITMENT_BYTES;
 
         for (record_offset, prefix_bytes) in
             [(setup_record, 66usize), (first_anchor_record, 96usize)]
@@ -656,10 +649,10 @@ mod tests {
             let mut prefixed = accepted.to_vec();
             prefixed.splice(record_offset + 1..record_offset + 1, vec![0; prefix_bytes]);
             assert_eq!(
-                ConstructionParentProverFixture::parse(&prefixed)
+                ProverFixture::parse(&prefixed)
                     .err()
                     .expect("redundant typed prefix rejects"),
-                ConstructionParentProverFixtureError::State(RelationError::Malformed(
+                ProverFixtureError::State(RelationError::Malformed(
                     "construction prover fixture length"
                 ))
             );
@@ -670,21 +663,18 @@ mod tests {
     fn wit4_keeps_each_typed_record_version() {
         let accepted =
             include_bytes!("../../../../tests/vectors/construction_parent_sha256_accepted.wit4");
-        let setup_record =
-            HEADER_BYTES + CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES + PUBLIC_COMMITMENT_BYTES;
-        let first_anchor_record = HEADER_BYTES
-            + 3 * SETUP_BYTES
-            + CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES
-            + PUBLIC_COMMITMENT_BYTES;
+        let setup_record = HEADER_BYTES + LEAF_DESCRIPTOR_BYTES + PUBLIC_COMMITMENT_BYTES;
+        let first_anchor_record =
+            HEADER_BYTES + 3 * SETUP_BYTES + LEAF_DESCRIPTOR_BYTES + PUBLIC_COMMITMENT_BYTES;
 
         for record_offset in [setup_record, first_anchor_record] {
             let mut wrong_version = accepted.to_vec();
             wrong_version[record_offset] ^= 0x80;
             assert_eq!(
-                ConstructionParentProverFixture::parse(&wrong_version)
+                ProverFixture::parse(&wrong_version)
                     .err()
                     .expect("wrong typed version rejects"),
-                ConstructionParentProverFixtureError::State(RelationError::Malformed(
+                ProverFixtureError::State(RelationError::Malformed(
                     "construction leaf record version"
                 ))
             );
@@ -693,11 +683,11 @@ mod tests {
 
     #[test]
     fn checked_fixtures_parse_without_private_openings() {
-        let accepted = ConstructionParentProverFixture::parse(include_bytes!(
+        let accepted = ProverFixture::parse(include_bytes!(
             "../../../../tests/vectors/construction_parent_sha256_accepted.wit4"
         ))
         .expect("parse accepted construction prover fixture");
-        let nondeciding = ConstructionParentProverFixture::parse(include_bytes!(
+        let nondeciding = ProverFixture::parse(include_bytes!(
             "../../../../tests/vectors/construction_parent_sha256_nondeciding.wit4"
         ))
         .expect("parse nondeciding construction prover fixture");
@@ -711,10 +701,7 @@ mod tests {
             .iter()
             .map(|leaf| leaf.manifest_leaf)
             .eq(nondeciding.leaves.iter().map(|leaf| leaf.manifest_leaf)));
-        assert_eq!(
-            accepted.expected_root.canonical_bytes().len(),
-            CONSTRUCTION_ROOT_BYTES
-        );
+        assert_eq!(accepted.expected_root.canonical_bytes().len(), ROOT_BYTES);
         assert_ne!(
             accepted.expected_root.canonical_bytes(),
             nondeciding.expected_root.canonical_bytes()

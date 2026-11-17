@@ -4,10 +4,10 @@ use nova_snark::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::binding::BoundConstructionParentWitness;
-use crate::fixture::ConstructionParentProverFixture;
-use crate::session::setup::{NovaSessionSuite, SelectedNovaSessionSuite};
-use crate::session::{NovaSessionStep, SelectedNovaProver};
+use crate::binding::BoundWitness;
+use crate::fixture::ProverFixture;
+use crate::session::setup::{SelectedSessionSuite, SessionSuite};
+use crate::session::{SelectedProver, SessionStep};
 use crate::ConstructionParentWitness;
 use circuit::native::candidate::{CandidateRootClaim, CandidateStepProofWitness};
 use circuit::native::circuit_norm::{
@@ -20,22 +20,17 @@ use circuit::native::circuit_transcript::{
 use circuit::native::recurrence::{validate_production_shape, ConstructionRecurrenceStateWitness};
 use circuit::native::secp::{standard_generator, SecpEncodedPointWitness, SecpScalarWitness};
 use circuit::profile::{
-    CONSTRUCTION_LEAF_GATE_COUNT, CONSTRUCTION_LEAF_NORM_LENGTH, CONSTRUCTION_LEAF_ROUNDS,
-    CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-    CONSTRUCTION_PARENT_RELATION_AUXILIARY, CONSTRUCTION_PARENT_RELATION_CONSTRAINTS,
-    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_ROUNDS,
+    BASIS_DIGEST, LEAF_GATE_COUNT, LEAF_NORM_LENGTH, LEAF_ROUNDS, RAW_GENERATOR_DIGEST,
+    RELATION_AUXILIARY, RELATION_CONSTRAINTS, ROOT_ROUNDS, STATE_ARITY,
 };
-use circuit::relation::identity::direct_step_relation_shape;
-use circuit::relation::recurrence::{
-    ConstructionParentStep, QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
-};
-use statement::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine};
-use verifier::codec::{NovaCompressedProofShape, NovaR1csDimensions};
+use circuit::relation::identity::step_relation_shape;
+use circuit::relation::recurrence::{ConstructionParentStep, QUALIFIED_RELATION_ID};
+use statement::{PrimaryEngine, Scalar, SecondaryEngine};
+use verifier::codec::{ProofShape, R1csDimensions};
 use verifier::construction::ConstructionParentVerifier;
 use verifier::nova::Verifier;
 use verifier::suite::{QUALIFIED, QUALIFIED_PROOF_LENGTH};
-type ConstructionParentNovaSuite =
-    SelectedNovaSessionSuite<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>;
+type ConstructionParentSuite = SelectedSessionSuite<STATE_ARITY, ConstructionParentStep>;
 const QUALIFIED_ACCEPTED_WIT4_SHA256: [u8; 32] = [
     0x77, 0xb7, 0x33, 0x1e, 0x92, 0xa5, 0x38, 0xeb, 0xd1, 0xbf, 0xe9, 0x04, 0x80, 0x16, 0x6b, 0x29,
     0x81, 0x96, 0xff, 0x4d, 0xd9, 0xa3, 0xd8, 0xf7, 0x55, 0x7c, 0x20, 0x2a, 0x3b, 0xab, 0x34, 0x18,
@@ -70,10 +65,10 @@ fn fixed_bincode_verifier_payload_length(metrics: PublicParamsShapeMetrics) -> u
 fn production_leaf_shape() -> CircuitTranscriptShapeV4 {
     CircuitTranscriptShapeV4 {
         mode: CircuitCommitmentModeV4::Public,
-        gate_count: CONSTRUCTION_LEAF_GATE_COUNT,
+        gate_count: LEAF_GATE_COUNT,
         commitment_count: 1,
-        n_vec_len: CONSTRUCTION_LEAF_NORM_LENGTH,
-        l_vec_len: CONSTRUCTION_LEAF_NORM_LENGTH,
+        n_vec_len: LEAF_NORM_LENGTH,
+        l_vec_len: LEAF_NORM_LENGTH,
     }
 }
 
@@ -116,8 +111,8 @@ fn zero_reduction_proof(shape: CircuitTranscriptShapeV4) -> CandidateNormReducti
 
 fn zero_candidate_step() -> CandidateStepProofWitness {
     CandidateStepProofWitness {
-        left: vec![SecpEncodedPointWitness::identity(); CONSTRUCTION_ROOT_ROUNDS],
-        right: vec![SecpEncodedPointWitness::identity(); CONSTRUCTION_ROOT_ROUNDS],
+        left: vec![SecpEncodedPointWitness::identity(); ROOT_ROUNDS],
+        right: vec![SecpEncodedPointWitness::identity(); ROOT_ROUNDS],
         terminal_scalar: SecpScalarWitness::from_u64(1),
         folded_generator: SecpEncodedPointWitness::identity(),
     }
@@ -128,7 +123,7 @@ fn prior_state(manifest_byte: u8) -> ConstructionRecurrenceStateWitness {
         root: CandidateRootClaim {
             point: SecpEncodedPointWitness::from_point_value(standard_generator()),
             scale: SecpScalarWitness::from_u64(0),
-            factors: vec![SecpScalarWitness::from_u64(0); CONSTRUCTION_ROOT_ROUNDS],
+            factors: vec![SecpScalarWitness::from_u64(0); ROOT_ROUNDS],
         },
         manifest: [manifest_byte; 32],
         index: u32::from(manifest_byte),
@@ -142,8 +137,8 @@ fn production_direct_step(binding_byte: u8, manifest_byte: u8) -> ConstructionPa
         ManifestBoundConstructionLeafStatementV4 {
             shape,
             circuit_binding_digest: [binding_byte; 32],
-            raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-            basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
+            raw_generator_digest: RAW_GENERATOR_DIGEST,
+            basis_digest: BASIS_DIGEST,
         },
         zero_transcript_witness(shape),
         zero_reduction_proof(shape),
@@ -154,14 +149,14 @@ fn production_direct_step(binding_byte: u8, manifest_byte: u8) -> ConstructionPa
 
 #[test]
 fn production_shape_is_exact() {
-    assert_eq!(CONSTRUCTION_RECURRENCE_STATE_ARITY, 20);
-    assert_eq!(CONSTRUCTION_LEAF_ROUNDS, 14);
+    assert_eq!(STATE_ARITY, 20);
+    assert_eq!(LEAF_ROUNDS, 14);
     let shape = production_leaf_shape();
     let statement = ManifestBoundConstructionLeafStatementV4 {
         shape,
         circuit_binding_digest: [0x31; 32],
-        raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-        basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
+        raw_generator_digest: RAW_GENERATOR_DIGEST,
+        basis_digest: BASIS_DIGEST,
     };
     validate_production_shape(
         statement,
@@ -172,15 +167,15 @@ fn production_shape_is_exact() {
 }
 
 #[test]
-fn direct_construction_step_fixes_profile_and_input_state() {
+fn constrained_construction_step_fixes_profile_and_input_state() {
     let shape = production_leaf_shape();
     let state = prior_state(1);
     let expected_input = state.state_fields().expect("input state");
     let statement = ManifestBoundConstructionLeafStatementV4 {
         shape,
         circuit_binding_digest: [0x31; 32],
-        raw_generator_digest: CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-        basis_digest: CONSTRUCTION_PARENT_BASIS_DIGEST,
+        raw_generator_digest: RAW_GENERATOR_DIGEST,
+        basis_digest: BASIS_DIGEST,
     };
     let transcript = zero_transcript_witness(shape);
     let reduction = zero_reduction_proof(shape);
@@ -209,32 +204,24 @@ fn direct_construction_step_fixes_profile_and_input_state() {
 
     let step = ConstructionParentStep::new(state, statement, transcript, reduction, proof)
         .expect("production direct step");
-    assert_eq!(step.arity(), CONSTRUCTION_RECURRENCE_STATE_ARITY);
+    assert_eq!(step.arity(), STATE_ARITY);
     assert_eq!(step.input_state(), &expected_input);
-    assert_eq!(
-        NovaSessionStep::relation_id(&step),
-        QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
-    );
+    assert_eq!(SessionStep::relation_id(&step), QUALIFIED_RELATION_ID);
 }
 
 #[test]
 #[ignore = "run explicitly in release mode; streams the pending relation"]
-fn direct_construction_step_relation_shape_is_deterministic() {
+fn constrained_construction_step_relation_shape_is_deterministic() {
     let first_step = production_direct_step(0x31, 1);
-    let first = direct_step_relation_shape::<CONSTRUCTION_RECURRENCE_STATE_ARITY, _>(&first_step)
-        .expect("first production relation");
-    let second = direct_step_relation_shape::<CONSTRUCTION_RECURRENCE_STATE_ARITY, _>(
-        &production_direct_step(0x32, 2),
-    )
-    .expect("second production relation");
+    let first =
+        step_relation_shape::<STATE_ARITY, _>(&first_step).expect("first production relation");
+    let second = step_relation_shape::<STATE_ARITY, _>(&production_direct_step(0x32, 2))
+        .expect("second production relation");
 
     assert_eq!(first, second);
     assert_eq!(first.inputs(), 21);
-    assert_eq!(first.auxiliary(), CONSTRUCTION_PARENT_RELATION_AUXILIARY);
-    assert_eq!(
-        first.constraints(),
-        CONSTRUCTION_PARENT_RELATION_CONSTRAINTS
-    );
+    assert_eq!(first.auxiliary(), RELATION_AUXILIARY);
+    assert_eq!(first.constraints(), RELATION_CONSTRAINTS);
     eprintln!(
         "qualified relation_id={} inputs={} auxiliary={} constraints={}",
         hex(first.relation_id().bytes()),
@@ -246,19 +233,18 @@ fn direct_construction_step_relation_shape_is_deterministic() {
 
 #[test]
 #[ignore = "run explicitly in release mode; checks qualified geometry"]
-fn direct_construction_step_augmented_shape_matches_qualified_profile() {
+fn constrained_construction_step_augmented_shape_matches_qualified_profile() {
     let step = production_direct_step(0x31, 1);
-    let augmented =
-        PublicParams::<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, _>::shape_metrics(&step)
-            .expect("direct construction augmented shapes");
+    let augmented = PublicParams::<PrimaryEngine, SecondaryEngine, _>::shape_metrics(&step)
+        .expect("direct construction augmented shapes");
     let verifier_payload_length = fixed_bincode_verifier_payload_length(augmented);
-    let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
-        NovaR1csDimensions::new(augmented.primary.constraints, augmented.primary.variables),
-        NovaR1csDimensions::new(
+    let proof_shape = ProofShape::from_suite_dimensions(
+        R1csDimensions::new(augmented.primary.constraints, augmented.primary.variables),
+        R1csDimensions::new(
             augmented.secondary.constraints,
             augmented.secondary.variables,
         ),
-        CONSTRUCTION_RECURRENCE_STATE_ARITY,
+        STATE_ARITY,
     )
     .expect("direct construction proof shape");
 
@@ -289,7 +275,7 @@ fn direct_construction_step_augmented_shape_matches_qualified_profile() {
 #[test]
 fn production_relation_digests_match_the_native_leaf_profile() {
     assert_eq!(
-        CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
+        RAW_GENERATOR_DIGEST,
         [
             0x10, 0x1c, 0xdb, 0x8d, 0x99, 0x28, 0x00, 0xb0, 0x3c, 0x39, 0x24, 0x6e, 0xb9, 0x20,
             0xc8, 0x37, 0xa8, 0x04, 0x0c, 0x5a, 0x36, 0xa0, 0x97, 0x0f, 0x0e, 0xbf, 0x85, 0x51,
@@ -297,17 +283,14 @@ fn production_relation_digests_match_the_native_leaf_profile() {
         ]
     );
     assert_eq!(
-        CONSTRUCTION_PARENT_BASIS_DIGEST,
+        BASIS_DIGEST,
         [
             0x3e, 0x22, 0x80, 0x71, 0x8c, 0xf5, 0x97, 0x0d, 0xaf, 0x53, 0xb8, 0xec, 0x3f, 0xf1,
             0x1d, 0x59, 0x2a, 0x71, 0x48, 0x35, 0x14, 0xba, 0x91, 0xa6, 0xf1, 0xb3, 0x72, 0x08,
             0xad, 0x9e, 0xb5, 0x94,
         ]
     );
-    assert_ne!(
-        CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-        CONSTRUCTION_PARENT_BASIS_DIGEST
-    );
+    assert_ne!(RAW_GENERATOR_DIGEST, BASIS_DIGEST);
 }
 
 fn read_qualification_wit4(environment: &str) -> Vec<u8> {
@@ -322,8 +305,8 @@ fn read_qualification_wit4(environment: &str) -> Vec<u8> {
     bytes
 }
 
-fn read_qualification_fixture(environment: &str) -> ConstructionParentProverFixture {
-    ConstructionParentProverFixture::parse(&read_qualification_wit4(environment))
+fn read_qualification_fixture(environment: &str) -> ProverFixture {
+    ProverFixture::parse(&read_qualification_wit4(environment))
         .expect("parse construction parent prover fixture")
 }
 
@@ -331,10 +314,7 @@ fn is_qualified_accepted_wit4(bytes: &[u8]) -> bool {
     <[u8; 32]>::from(Sha256::digest(bytes)) == QUALIFIED_ACCEPTED_WIT4_SHA256
 }
 
-fn assert_matching_public_fixtures(
-    accepted: &ConstructionParentProverFixture,
-    nondeciding: &ConstructionParentProverFixture,
-) {
+fn assert_matching_public_fixtures(accepted: &ProverFixture, nondeciding: &ProverFixture) {
     assert_ne!(accepted.setup_leaf_count, 0);
     assert_ne!(accepted.anchor_leaf_count, 0);
     assert_eq!(accepted.setup_leaf_count, nondeciding.setup_leaf_count);
@@ -365,13 +345,9 @@ fn assert_matching_public_fixtures(
 }
 
 fn bind_both_qualification_fixtures(
-    accepted: ConstructionParentProverFixture,
-    nondeciding: ConstructionParentProverFixture,
-) -> (
-    ConstructionParentStep,
-    BoundConstructionParentWitness,
-    BoundConstructionParentWitness,
-) {
+    accepted: ProverFixture,
+    nondeciding: ProverFixture,
+) -> (ConstructionParentStep, BoundWitness, BoundWitness) {
     assert_matching_public_fixtures(&accepted, &nondeciding);
     let accepted_bound = accepted
         .bind()
@@ -392,15 +368,13 @@ fn bind_both_qualification_fixtures(
         .steps()
         .iter()
         .chain(nondeciding_bound.steps())
-        .all(|step| {
-            NovaSessionStep::relation_id(step) == QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
-        }));
+        .all(|step| { SessionStep::relation_id(step) == QUALIFIED_RELATION_ID }));
     (trusted_step, accepted_bound, nondeciding_bound)
 }
 
 fn produce_qualification_proof(
-    suite: &ConstructionParentNovaSuite,
-    initial_state: [DirectNovaScalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+    suite: &ConstructionParentSuite,
+    initial_state: [Scalar; STATE_ARITY],
     steps: Vec<ConstructionParentStep>,
 ) -> Vec<u8> {
     let step_count = steps.len();
@@ -497,8 +471,8 @@ fn exported_sha_parent_fixtures_reconstruct_one_shape() {
     );
     assert!(!accepted_bound.steps().is_empty());
     assert_eq!(
-        NovaSessionStep::relation_id(&trusted_step),
-        QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
+        SessionStep::relation_id(&trusted_step),
+        QUALIFIED_RELATION_ID
     );
 }
 
@@ -531,9 +505,8 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let (mut trusted_step, mut accepted_bound, mut nondeciding_bound) =
         bind_both_qualification_fixtures(accepted, nondeciding);
 
-    let relation_shape =
-        direct_step_relation_shape::<CONSTRUCTION_RECURRENCE_STATE_ARITY, _>(&trusted_step)
-            .expect("stream exact qualification relation");
+    let relation_shape = step_relation_shape::<STATE_ARITY, _>(&trusted_step)
+        .expect("stream exact qualification relation");
     let relation_id = relation_shape.relation_id();
     trusted_step.set_qualification_relation_id(relation_id);
     for step in accepted_bound
@@ -547,7 +520,7 @@ fn native_profile_sha_parent_qualification_is_exact() {
         .steps()
         .iter()
         .chain(nondeciding_bound.steps())
-        .all(|step| NovaSessionStep::relation_id(step) == relation_id));
+        .all(|step| SessionStep::relation_id(step) == relation_id));
     eprintln!(
         "sha_parent_qualification: relation_id={} relation_inputs={} \
          relation_auxiliary={} relation_constraints={}",
@@ -559,10 +532,7 @@ fn native_profile_sha_parent_qualification_is_exact() {
 
     let setup_started = std::time::Instant::now();
     eprintln!("sha_parent_qualification: constructing transparent parameters");
-    let unselected =
-        NovaSessionSuite::<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>::setup(
-            trusted_step,
-        )
+    let unselected = SessionSuite::<STATE_ARITY, ConstructionParentStep>::setup(trusted_step)
         .expect("unselected mixed qualification suite");
     let selected = unselected
         .select_generated_for_qualification(QUALIFIED.parameters.versions)
@@ -689,11 +659,9 @@ fn setup_only_qualification_persists_a_usable_prover() {
         .expect("accepted construction parent has a setup step");
 
     let setup_started = std::time::Instant::now();
-    let selected = NovaSessionSuite::<
-        CONSTRUCTION_RECURRENCE_STATE_ARITY,
-        ConstructionParentStep,
-    >::setup_exact(trusted_step, &QUALIFIED)
-    .expect("setup exact qualified construction parent prover");
+    let selected =
+        SessionSuite::<STATE_ARITY, ConstructionParentStep>::setup_exact(trusted_step, &QUALIFIED)
+            .expect("setup exact qualified construction parent prover");
     let setup_seconds = setup_started.elapsed().as_secs_f64();
 
     let artifact_started = std::time::Instant::now();
@@ -730,10 +698,7 @@ fn setup_only_qualification_persists_a_usable_prover() {
     let reload_started = std::time::Instant::now();
     let mut artifact = std::fs::File::open(&prover_artifact_path)
         .expect("open qualification prover artifact read-only");
-    let prover = SelectedNovaProver::<
-        CONSTRUCTION_RECURRENCE_STATE_ARITY,
-        ConstructionParentStep,
-    >::from_artifact_reader(
+    let prover = SelectedProver::<STATE_ARITY, ConstructionParentStep>::from_artifact_reader(
         &mut artifact,
         &QUALIFIED,
         &descriptor,

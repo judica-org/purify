@@ -21,18 +21,15 @@ use thiserror::Error;
 use crate::artifact::{
     read_artifact_payload, ArtifactCodecError, ArtifactFormat, ArtifactIdentity,
 };
-use crate::codec::{FixedSerdeError, NovaCompressedProofShape};
+use crate::codec::{FixedSerdeError, ProofShape};
 use crate::suite::{Suite, SuiteError};
-use statement::profile::CONSTRUCTION_STATE_ARITY;
+use statement::profile::STATE_ARITY;
 use statement::Scalar;
-use statement::{DirectNovaPrimaryEngine, DirectNovaSecondaryEngine};
+use statement::{PrimaryEngine, SecondaryEngine};
 
-pub type PrimarySnark =
-    RelaxedR1CSSNARK<DirectNovaPrimaryEngine, ipa_pc::EvaluationEngine<DirectNovaPrimaryEngine>>;
-pub type SecondarySnark = RelaxedR1CSSNARK<
-    DirectNovaSecondaryEngine,
-    ipa_pc::EvaluationEngine<DirectNovaSecondaryEngine>,
->;
+pub type PrimarySnark = RelaxedR1CSSNARK<PrimaryEngine, ipa_pc::EvaluationEngine<PrimaryEngine>>;
+pub type SecondarySnark =
+    RelaxedR1CSSNARK<SecondaryEngine, ipa_pc::EvaluationEngine<SecondaryEngine>>;
 
 /// Uninhabited circuit marker for verification-only Nova types.
 ///
@@ -57,20 +54,10 @@ impl StepCircuit<Scalar> for VerifierOnlyStep {
     }
 }
 
-pub type CompressedProof = CompressedSNARK<
-    DirectNovaPrimaryEngine,
-    DirectNovaSecondaryEngine,
-    VerifierOnlyStep,
-    PrimarySnark,
-    SecondarySnark,
->;
-pub type Key = VerifierKey<
-    DirectNovaPrimaryEngine,
-    DirectNovaSecondaryEngine,
-    VerifierOnlyStep,
-    PrimarySnark,
-    SecondarySnark,
->;
+pub type CompressedProof =
+    CompressedSNARK<PrimaryEngine, SecondaryEngine, VerifierOnlyStep, PrimarySnark, SecondarySnark>;
+pub type Key =
+    VerifierKey<PrimaryEngine, SecondaryEngine, VerifierOnlyStep, PrimarySnark, SecondarySnark>;
 
 const MAX_DECODED_PAYLOAD_LENGTH: usize = 4_000_000_000;
 
@@ -160,7 +147,7 @@ pub fn one_thread_pool() -> Result<ThreadPool, &'static str> {
 /// Verification-only state for one pinned suite.
 pub struct Verifier {
     key: Key,
-    proof_shape: NovaCompressedProofShape,
+    proof_shape: ProofShape,
     pool: ThreadPool,
     operation: Mutex<()>,
 }
@@ -184,7 +171,7 @@ impl Verifier {
     where
         R: Read + Seek,
     {
-        if usize::try_from(suite.parameters.state_arity) != Ok(CONSTRUCTION_STATE_ARITY) {
+        if usize::try_from(suite.parameters.state_arity) != Ok(STATE_ARITY) {
             return Err(SuiteError::Mismatch("state arity").into());
         }
         let proof_shape = suite.proof_shape()?;
@@ -192,7 +179,7 @@ impl Verifier {
             artifact,
             &VERIFIER_ARTIFACT_FORMAT,
             suite.suite_id,
-            CONSTRUCTION_STATE_ARITY,
+            STATE_ARITY,
             *identity,
         )?;
         Ok(Self {
@@ -210,10 +197,10 @@ impl Verifier {
     /// count. The returned state is not construction-receipt acceptance.
     pub fn verify_final(
         &self,
-        initial_state: &[Scalar; CONSTRUCTION_STATE_ARITY],
+        initial_state: &[Scalar; STATE_ARITY],
         expected_steps: usize,
         proof: &[u8],
-    ) -> Result<[Scalar; CONSTRUCTION_STATE_ARITY], VerifyError> {
+    ) -> Result<[Scalar; STATE_ARITY], VerifyError> {
         if expected_steps == 0 {
             return Err(VerifyError::StepCount {
                 expected: 1,

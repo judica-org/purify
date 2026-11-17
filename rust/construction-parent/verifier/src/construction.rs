@@ -10,11 +10,9 @@ use thiserror::Error;
 
 use crate::nova::{LoadError, Verifier, VerifyError, QUALIFIED_VERIFIER_ARTIFACT};
 use crate::suite::QUALIFIED;
-use statement::inputs::ConstructionParentInputs;
+use statement::inputs::PublicInputs;
 use statement::manifest::ConstructionRoot;
-use statement::profile::{
-    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
-};
+use statement::profile::{ROOT_BYTES, ROOT_STATE_ARITY, STATE_ARITY};
 use statement::{RelationError, Scalar};
 
 /// The sole production verifier: Nova verification under the qualified suite.
@@ -48,7 +46,7 @@ impl ConstructionParentVerifier {
     /// checks.
     pub(crate) fn authenticate(
         &self,
-        inputs: &ConstructionParentInputs,
+        inputs: &PublicInputs,
         proof: &[u8],
     ) -> Result<AuthenticatedConstructionParentOutput, ConstructionParentVerifierError> {
         let authenticated_final =
@@ -60,10 +58,10 @@ impl ConstructionParentVerifier {
     /// step count. The returned state is not receipt acceptance.
     pub fn verify_final(
         &self,
-        initial_state: &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+        initial_state: &[Scalar; STATE_ARITY],
         expected_steps: usize,
         proof: &[u8],
-    ) -> Result<[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY], VerifyError> {
+    ) -> Result<[Scalar; STATE_ARITY], VerifyError> {
         self.nova.verify_final(initial_state, expected_steps, proof)
     }
 }
@@ -86,26 +84,26 @@ pub(crate) enum ConstructionParentVerifierError {
 /// bytes must be parsed against the native construction-leaf basis and pass
 /// the final accumulation decision before an acceptance type may be produced.
 pub(crate) struct AuthenticatedConstructionParentOutput {
-    canonical_root: [u8; CONSTRUCTION_ROOT_BYTES],
+    canonical_root: [u8; ROOT_BYTES],
 }
 
 impl AuthenticatedConstructionParentOutput {
-    pub(crate) fn canonical_root_bytes(&self) -> &[u8; CONSTRUCTION_ROOT_BYTES] {
+    pub(crate) fn canonical_root_bytes(&self) -> &[u8; ROOT_BYTES] {
         &self.canonical_root
     }
 }
 
 fn validated_output_from_authenticated_state(
-    authenticated_final: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+    authenticated_final: [Scalar; STATE_ARITY],
     expected_suffix: [Scalar; 2],
 ) -> Result<AuthenticatedConstructionParentOutput, ConstructionParentVerifierError> {
-    if authenticated_final[CONSTRUCTION_ROOT_STATE_ARITY] != expected_suffix[0] {
+    if authenticated_final[ROOT_STATE_ARITY] != expected_suffix[0] {
         return Err(ConstructionParentVerifierError::FinalManifest);
     }
-    if authenticated_final[CONSTRUCTION_ROOT_STATE_ARITY + 1] != expected_suffix[1] {
+    if authenticated_final[ROOT_STATE_ARITY + 1] != expected_suffix[1] {
         return Err(ConstructionParentVerifierError::FinalIndex);
     }
-    let root_fields = authenticated_final[..CONSTRUCTION_ROOT_STATE_ARITY]
+    let root_fields = authenticated_final[..ROOT_STATE_ARITY]
         .try_into()
         .expect("construction state has a fixed root prefix");
     let root = ConstructionRoot::from_state_fields(root_fields)?;

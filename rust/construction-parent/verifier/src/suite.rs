@@ -8,11 +8,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::codec::{
-    FixedSerdeError, NovaCompressedProofShape, NovaR1csDimensions,
-    NOVA_COMPRESSED_PROOF_CODEC_VERSION,
+    FixedSerdeError, ProofShape, R1csDimensions, NOVA_COMPRESSED_PROOF_CODEC_VERSION,
 };
-use statement::profile::CONSTRUCTION_STATE_ARITY;
-use statement::DIRECT_STEP_RELATION_ENCODING_VERSION;
+use statement::profile::STATE_ARITY;
+use statement::STEP_RELATION_ENCODING_VERSION;
 
 const SUITE_ID_TAG: &[u8] = b"Purify/Accountable/ConstructionParentNovaSuite/v2";
 const SUITE_ENCODING_VERSION: u8 = 2;
@@ -53,8 +52,8 @@ pub struct R1csSize {
 }
 
 impl R1csSize {
-    fn dimensions(self) -> Result<NovaR1csDimensions, SuiteError> {
-        Ok(NovaR1csDimensions::new(
+    fn dimensions(self) -> Result<R1csDimensions, SuiteError> {
+        Ok(R1csDimensions::new(
             usize::try_from(self.constraints)
                 .map_err(|_| SuiteError::Identity("constraint count"))?,
             usize::try_from(self.variables).map_err(|_| SuiteError::Identity("variable count"))?,
@@ -75,10 +74,10 @@ pub struct SuiteParameters {
 
 impl SuiteParameters {
     /// Derives the fixed proof codec shape implied by these dimensions.
-    pub fn proof_shape(&self) -> Result<NovaCompressedProofShape, SuiteError> {
+    pub fn proof_shape(&self) -> Result<ProofShape, SuiteError> {
         let state_arity =
             usize::try_from(self.state_arity).map_err(|_| SuiteError::Identity("state arity"))?;
-        Ok(NovaCompressedProofShape::from_suite_dimensions(
+        Ok(ProofShape::from_suite_dimensions(
             self.primary.dimensions()?,
             self.secondary.dimensions()?,
             state_arity,
@@ -86,7 +85,7 @@ impl SuiteParameters {
     }
 
     /// Commits to the complete local proof suite with BIP340 tagged SHA256.
-    pub fn suite_id(&self, proof_shape: &NovaCompressedProofShape) -> Result<[u8; 32], SuiteError> {
+    pub fn suite_id(&self, proof_shape: &ProofShape) -> Result<[u8; 32], SuiteError> {
         let tag_hash = Sha256::digest(SUITE_ID_TAG);
         let mut digest = Sha256::new();
         digest.update(tag_hash);
@@ -97,10 +96,7 @@ impl SuiteParameters {
         // engine/backend/codec identifiers; big-endian u32 arity; relation
         // and PP digests; five big-endian u64 dimensions/lengths; then a
         // big-endian u32 schedule count and every schedule length as u32.
-        digest.update([
-            SUITE_ENCODING_VERSION,
-            DIRECT_STEP_RELATION_ENCODING_VERSION,
-        ]);
+        digest.update([SUITE_ENCODING_VERSION, STEP_RELATION_ENCODING_VERSION]);
         digest.update(self.versions.payload.to_be_bytes());
         digest.update(self.versions.statement.to_be_bytes());
         digest.update(self.versions.manifest.to_be_bytes());
@@ -156,7 +152,7 @@ impl Suite {
     /// Derives the proof codec shape and checks every pinned value that the
     /// pinned parameters independently determine: the encoded proof length,
     /// the codec sequence count, and the suite ID.
-    pub fn proof_shape(&self) -> Result<NovaCompressedProofShape, SuiteError> {
+    pub fn proof_shape(&self) -> Result<ProofShape, SuiteError> {
         let proof_shape = self.parameters.proof_shape()?;
         if suite_u64(proof_shape.encoded_len(), "proof length")? != self.proof_length {
             return Err(SuiteError::Mismatch("proof length"));
@@ -187,7 +183,7 @@ pub static QUALIFIED: Suite = Suite {
             manifest: 3,
             native_decision: 1,
         },
-        state_arity: CONSTRUCTION_STATE_ARITY as u32,
+        state_arity: STATE_ARITY as u32,
         relation_id: [
             0xa6, 0x6c, 0x58, 0xa8, 0x6a, 0xfc, 0xe6, 0x4b, 0x2b, 0x69, 0xd5, 0x3e, 0x83, 0xd3,
             0xd5, 0x43, 0x0d, 0x08, 0x0f, 0xaf, 0x0b, 0x68, 0x06, 0x4c, 0xad, 0xb3, 0xa6, 0xd8,
@@ -304,10 +300,7 @@ mod tests {
 
     #[test]
     fn qualified_construction_parent_suite_frame_is_frozen() {
-        assert_eq!(
-            QUALIFIED.parameters.state_arity as usize,
-            CONSTRUCTION_STATE_ARITY
-        );
+        assert_eq!(QUALIFIED.parameters.state_arity as usize, STATE_ARITY);
         let proof_shape = QUALIFIED
             .parameters
             .proof_shape()

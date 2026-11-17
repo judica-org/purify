@@ -13,13 +13,12 @@ use nova_snark::frontend::{
 use nova_snark::traits::circuit::StepCircuit;
 use thiserror::Error;
 
-use crate::fixture::ConstructionParentProverFixture;
+use crate::fixture::ProverFixture;
 use circuit::native::candidate::CandidateRootClaim;
 use circuit::native::recurrence::ConstructionRecurrenceStateWitness;
 use circuit::profile::{
-    CONSTRUCTION_PARENT_RELATION_AUXILIARY, CONSTRUCTION_PARENT_RELATION_CONSTRAINTS,
-    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_ROUNDS,
-    CONSTRUCTION_ROOT_STATE_ARITY,
+    RELATION_AUXILIARY, RELATION_CONSTRAINTS, ROOT_BYTES, ROOT_ROUNDS, ROOT_STATE_ARITY,
+    STATE_ARITY,
 };
 use circuit::relation::recurrence::ConstructionParentStep;
 use statement::manifest::ConstructionRoot;
@@ -83,20 +82,20 @@ impl From<RelationError> for ConstructionParentWitnessBindingError {
 }
 
 /// Exact prover input after all ordered witness equations have been checked.
-pub(crate) struct BoundConstructionParentWitness {
-    initial_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
-    final_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+pub(crate) struct BoundWitness {
+    initial_state: [Scalar; STATE_ARITY],
+    final_state: [Scalar; STATE_ARITY],
     steps: Vec<ConstructionParentStep>,
 }
 
-impl BoundConstructionParentWitness {
+impl BoundWitness {
     #[cfg(test)]
-    pub(crate) const fn initial_state(&self) -> &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {
+    pub(crate) const fn initial_state(&self) -> &[Scalar; STATE_ARITY] {
         &self.initial_state
     }
 
     #[cfg(test)]
-    pub(crate) const fn final_state(&self) -> &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {
+    pub(crate) const fn final_state(&self) -> &[Scalar; STATE_ARITY] {
         &self.final_state
     }
 
@@ -112,19 +111,17 @@ impl BoundConstructionParentWitness {
     pub(crate) fn into_parts(
         self,
     ) -> (
-        [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
-        [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+        [Scalar; STATE_ARITY],
+        [Scalar; STATE_ARITY],
         Vec<ConstructionParentStep>,
     ) {
         (self.initial_state, self.final_state, self.steps)
     }
 }
 
-impl ConstructionParentProverFixture {
+impl ProverFixture {
     /// Consume one canonical Wit4 input and bind its complete state chain.
-    pub(crate) fn bind(
-        self,
-    ) -> Result<BoundConstructionParentWitness, ConstructionParentWitnessBindingError> {
+    pub(crate) fn bind(self) -> Result<BoundWitness, ConstructionParentWitnessBindingError> {
         let expected_count = self.inputs.step_count();
         if self.leaves.len() != expected_count {
             return Err(ConstructionParentWitnessBindingError::StepCount {
@@ -168,7 +165,7 @@ impl ConstructionParentProverFixture {
             steps.push(step);
         }
 
-        if expected_input[CONSTRUCTION_ROOT_STATE_ARITY..] != self.inputs.expected_suffix() {
+        if expected_input[ROOT_STATE_ARITY..] != self.inputs.expected_suffix() {
             return Err(ConstructionParentWitnessBindingError::FinalManifest);
         }
         let root = construction_root_from_claim(&state.root)?;
@@ -176,7 +173,7 @@ impl ConstructionParentProverFixture {
             return Err(ConstructionParentWitnessBindingError::FinalRoot);
         }
 
-        Ok(BoundConstructionParentWitness {
+        Ok(BoundWitness {
             initial_state,
             final_state: expected_input,
             steps,
@@ -280,9 +277,9 @@ impl ConstraintSystem<Scalar> for CheckingWitnessCs {
 fn synthesize_output(
     step_number: usize,
     step: &ConstructionParentStep,
-) -> Result<[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY], ConstructionParentWitnessBindingError> {
-    let mut cs = CheckingWitnessCs::with_auxiliary_capacity(CONSTRUCTION_PARENT_RELATION_AUXILIARY);
-    let mut inputs = Vec::with_capacity(CONSTRUCTION_RECURRENCE_STATE_ARITY);
+) -> Result<[Scalar; STATE_ARITY], ConstructionParentWitnessBindingError> {
+    let mut cs = CheckingWitnessCs::with_auxiliary_capacity(RELATION_AUXILIARY);
+    let mut inputs = Vec::with_capacity(STATE_ARITY);
     for (index, value) in step.input_state().iter().enumerate() {
         let input =
             AllocatedNum::alloc_input(cs.namespace(|| format!("state {index}")), || Ok(*value))
@@ -304,21 +301,21 @@ fn synthesize_output(
             constraint,
         });
     }
-    if cs.auxiliary.len() != CONSTRUCTION_PARENT_RELATION_AUXILIARY {
+    if cs.auxiliary.len() != RELATION_AUXILIARY {
         return Err(ConstructionParentWitnessBindingError::Auxiliary {
             step: step_number,
-            expected: CONSTRUCTION_PARENT_RELATION_AUXILIARY,
+            expected: RELATION_AUXILIARY,
             actual: cs.auxiliary.len(),
         });
     }
-    if cs.constraints != CONSTRUCTION_PARENT_RELATION_CONSTRAINTS {
+    if cs.constraints != RELATION_CONSTRAINTS {
         return Err(ConstructionParentWitnessBindingError::Constraints {
             step: step_number,
-            expected: CONSTRUCTION_PARENT_RELATION_CONSTRAINTS,
+            expected: RELATION_CONSTRAINTS,
             actual: cs.constraints,
         });
     }
-    if outputs.len() != CONSTRUCTION_RECURRENCE_STATE_ARITY {
+    if outputs.len() != STATE_ARITY {
         return Err(ConstructionParentWitnessBindingError::Synthesis {
             step: step_number,
             stage: "output state arity",
@@ -344,17 +341,17 @@ fn synthesize_output(
 }
 
 fn recurrence_state_from_fields(
-    fields: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+    fields: [Scalar; STATE_ARITY],
     expected_index: u32,
 ) -> Result<ConstructionRecurrenceStateWitness, ConstructionParentWitnessBindingError> {
-    let root_fields = fields[..CONSTRUCTION_ROOT_STATE_ARITY]
+    let root_fields = fields[..ROOT_STATE_ARITY]
         .try_into()
         .map_err(|_| RelationError::Malformed("construction root state arity"))?;
     let root = ConstructionRoot::from_state_fields(root_fields)?;
-    let manifest_field = fields[CONSTRUCTION_ROOT_STATE_ARITY];
+    let manifest_field = fields[ROOT_STATE_ARITY];
     let mut manifest = scalar_to_canonical(&manifest_field);
     manifest.reverse();
-    if fields[CONSTRUCTION_ROOT_STATE_ARITY + 1] != Scalar::from(u64::from(expected_index)) {
+    if fields[ROOT_STATE_ARITY + 1] != Scalar::from(u64::from(expected_index)) {
         return Err(ConstructionParentWitnessBindingError::RecurrenceIndex {
             expected: expected_index,
         });
@@ -369,10 +366,10 @@ fn recurrence_state_from_fields(
 fn construction_root_from_claim(
     root: &CandidateRootClaim,
 ) -> Result<ConstructionRoot, ConstructionParentWitnessBindingError> {
-    if root.factors.len() != CONSTRUCTION_ROOT_ROUNDS {
+    if root.factors.len() != ROOT_ROUNDS {
         return Err(RelationError::Malformed("construction recurrence root factors").into());
     }
-    let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
+    let mut encoded = [0; ROOT_BYTES];
     encoded[..33].copy_from_slice(&root.point.encoded);
     encoded[33..65].copy_from_slice(&root.scale.bytes);
     for (index, factor) in root.factors.iter().enumerate() {
@@ -386,8 +383,8 @@ fn construction_root_from_claim(
 mod tests {
     use super::*;
 
-    fn accepted_fixture() -> ConstructionParentProverFixture {
-        ConstructionParentProverFixture::parse(include_bytes!(
+    fn accepted_fixture() -> ProverFixture {
+        ProverFixture::parse(include_bytes!(
             "../../../../tests/vectors/construction_parent_sha256_accepted.wit4"
         ))
         .expect("parse accepted construction parent witness")
@@ -425,7 +422,7 @@ mod tests {
     fn recurrence_state_rejects_a_mismatched_index() {
         let fixture = accepted_fixture();
         let mut fields = *fixture.inputs.initial_state();
-        fields[CONSTRUCTION_ROOT_STATE_ARITY + 1] = Scalar::ONE;
+        fields[ROOT_STATE_ARITY + 1] = Scalar::ONE;
         assert_eq!(
             recurrence_state_from_fields(fields, 0).expect_err("mismatched index rejects"),
             ConstructionParentWitnessBindingError::RecurrenceIndex { expected: 0 }

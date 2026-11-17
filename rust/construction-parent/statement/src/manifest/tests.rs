@@ -38,15 +38,15 @@ fn generator() -> TestPoint {
     }
 }
 
-fn put_u64_scalar(encoded: &mut [u8; CONSTRUCTION_ROOT_BYTES], offset: usize, value: u64) {
+fn put_u64_scalar(encoded: &mut [u8; ROOT_BYTES], offset: usize, value: u64) {
     encoded[offset + 24..offset + 32].copy_from_slice(&value.to_be_bytes());
 }
 
-fn seed_bytes() -> [u8; CONSTRUCTION_ROOT_BYTES] {
-    let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
+fn seed_bytes() -> [u8; ROOT_BYTES] {
+    let mut encoded = [0; ROOT_BYTES];
     encoded[..33].copy_from_slice(&generator().encoded);
     put_u64_scalar(&mut encoded, 33, 1);
-    for index in 0..CONSTRUCTION_ROOT_ROUNDS {
+    for index in 0..ROOT_ROUNDS {
         put_u64_scalar(&mut encoded, 65 + 32 * index, index as u64 + 2);
     }
     encoded
@@ -60,8 +60,8 @@ fn recovery_root() -> [u8; 64] {
     [0x71; 64]
 }
 
-fn manifest_seed(setup_count: u32, anchor_count: u32) -> ConstructionManifestSeed {
-    ConstructionManifestSeed::new(
+fn manifest_seed(setup_count: u32, anchor_count: u32) -> ManifestSeed {
+    ManifestSeed::new(
         [0x31; 32],
         [0x52; 32],
         recovery_root(),
@@ -71,12 +71,8 @@ fn manifest_seed(setup_count: u32, anchor_count: u32) -> ConstructionManifestSee
     .expect("construction manifest seed")
 }
 
-fn leaf(
-    marker: u8,
-    coefficient_commitment: TestPoint,
-    anchored_offset: TestPoint,
-) -> ConstructionManifestLeaf {
-    ConstructionManifestLeaf::new(
+fn leaf(marker: u8, coefficient_commitment: TestPoint, anchored_offset: TestPoint) -> ManifestLeaf {
+    ManifestLeaf::new(
         [marker; 32],
         SecpScalarWitness::from_u64(u64::from(marker) + 1).bytes,
         coefficient_commitment.encoded,
@@ -87,7 +83,7 @@ fn leaf(
 
 #[test]
 fn root_claim_is_byte_identical_and_maps_to_18_fields() {
-    assert_eq!(CONSTRUCTION_ROOT_BYTES, 545);
+    assert_eq!(ROOT_BYTES, 545);
     let encoded = seed_bytes();
     let root = ConstructionRoot::parse(&encoded).expect("root claim");
     assert_eq!(root.canonical_bytes(), &encoded);
@@ -101,7 +97,7 @@ fn root_claim_is_byte_identical_and_maps_to_18_fields() {
     );
 
     let fields = root.state_fields();
-    assert_eq!(fields.len(), CONSTRUCTION_ROOT_STATE_ARITY);
+    assert_eq!(fields.len(), ROOT_STATE_ARITY);
     assert_eq!(fields[0], Scalar::from(2));
     assert_eq!(
         fields[1],
@@ -110,7 +106,7 @@ fn root_claim_is_byte_identical_and_maps_to_18_fields() {
             .x
     );
     assert_eq!(fields[2], Scalar::ONE);
-    for index in 0..CONSTRUCTION_ROOT_ROUNDS {
+    for index in 0..ROOT_ROUNDS {
         assert_eq!(fields[3 + index], Scalar::from(index as u64 + 2));
     }
     let reconstructed =
@@ -140,7 +136,7 @@ fn root_claim_is_byte_identical_and_maps_to_18_fields() {
 
 #[test]
 fn root_claim_parser_rejects_noncanonical_encodings() {
-    assert!(ConstructionRoot::parse(&seed_bytes()[..CONSTRUCTION_ROOT_BYTES - 1]).is_err());
+    assert!(ConstructionRoot::parse(&seed_bytes()[..ROOT_BYTES - 1]).is_err());
 
     let mut bad_prefix = seed_bytes();
     bad_prefix[0] = 4;
@@ -205,7 +201,7 @@ fn root_claim_parser_rejects_noncanonical_encodings() {
 #[test]
 fn initial_state_is_fully_verifier_derived_and_starts_at_zero() {
     let seed = manifest_seed(1, 1);
-    assert_eq!(seed.root.canonical_bytes(), &[0; CONSTRUCTION_ROOT_BYTES]);
+    assert_eq!(seed.root.canonical_bytes(), &[0; ROOT_BYTES]);
     let (state, manifest) = seed
         .initial_state_and_manifest()
         .expect("nonzero initial manifest");
@@ -217,17 +213,14 @@ fn initial_state_is_fully_verifier_derived_and_starts_at_zero() {
 
     let fields = seed.initial_state_fields().expect("initial state fields");
     assert_eq!(state, fields);
-    assert_eq!(fields.len(), CONSTRUCTION_STATE_ARITY);
+    assert_eq!(fields.len(), STATE_ARITY);
+    assert_eq!(&fields[..ROOT_STATE_ARITY], &seed.root.state_fields());
     assert_eq!(
-        &fields[..CONSTRUCTION_ROOT_STATE_ARITY],
-        &seed.root.state_fields()
-    );
-    assert_eq!(
-        fields[CONSTRUCTION_ROOT_STATE_ARITY],
+        fields[ROOT_STATE_ARITY],
         coordinate_field_value(seed.initial_manifest().expect("nonzero initial manifest"))
             .expect("manifest field")
     );
-    assert_eq!(fields[CONSTRUCTION_ROOT_STATE_ARITY + 1], Scalar::ZERO);
+    assert_eq!(fields[ROOT_STATE_ARITY + 1], Scalar::ZERO);
 }
 
 #[test]
@@ -235,21 +228,18 @@ fn initial_manifest_binds_statement_setup_root_and_counts() {
     let baseline = manifest_seed(1, 1)
         .initial_manifest()
         .expect("nonzero baseline manifest");
-    let changed_statement =
-        ConstructionManifestSeed::new([0x32; 32], [0x52; 32], recovery_root(), 1, 1)
-            .expect("changed statement")
-            .initial_manifest()
-            .expect("nonzero changed statement manifest");
-    let changed_setup =
-        ConstructionManifestSeed::new([0x31; 32], [0x53; 32], recovery_root(), 1, 1)
-            .expect("changed setup")
-            .initial_manifest()
-            .expect("nonzero changed setup manifest");
-    let changed_recovery_root =
-        ConstructionManifestSeed::new([0x31; 32], [0x52; 32], [0x72; 64], 1, 1)
-            .expect("changed recovery root seed")
-            .initial_manifest()
-            .expect("nonzero changed recovery root manifest");
+    let changed_statement = ManifestSeed::new([0x32; 32], [0x52; 32], recovery_root(), 1, 1)
+        .expect("changed statement")
+        .initial_manifest()
+        .expect("nonzero changed statement manifest");
+    let changed_setup = ManifestSeed::new([0x31; 32], [0x53; 32], recovery_root(), 1, 1)
+        .expect("changed setup")
+        .initial_manifest()
+        .expect("nonzero changed setup manifest");
+    let changed_recovery_root = ManifestSeed::new([0x31; 32], [0x52; 32], [0x72; 64], 1, 1)
+        .expect("changed recovery root seed")
+        .initial_manifest()
+        .expect("nonzero changed recovery root manifest");
     let changed_setup_count = manifest_seed(2, 1)
         .initial_manifest()
         .expect("nonzero changed setup count manifest");
@@ -281,14 +271,11 @@ fn initial_manifest_binds_phase_boundary_with_the_same_total() {
 
 #[test]
 fn initial_seed_rejects_unresolved_and_empty_inputs() {
-    assert!(ConstructionManifestSeed::new([0x31; 32], [0; 32], recovery_root(), 1, 1).is_err());
-    assert!(ConstructionManifestSeed::new([0x31; 32], [0x52; 32], [0; 64], 1, 1).is_err());
-    assert!(ConstructionManifestSeed::new([0x31; 32], [0x52; 32], recovery_root(), 0, 1).is_err());
-    assert!(ConstructionManifestSeed::new([0x31; 32], [0x52; 32], recovery_root(), 1, 0).is_err());
-    assert!(
-        ConstructionManifestSeed::new([0x31; 32], [0x52; 32], recovery_root(), u32::MAX, 1)
-            .is_err()
-    );
+    assert!(ManifestSeed::new([0x31; 32], [0; 32], recovery_root(), 1, 1).is_err());
+    assert!(ManifestSeed::new([0x31; 32], [0x52; 32], [0; 64], 1, 1).is_err());
+    assert!(ManifestSeed::new([0x31; 32], [0x52; 32], recovery_root(), 0, 1).is_err());
+    assert!(ManifestSeed::new([0x31; 32], [0x52; 32], recovery_root(), 1, 0).is_err());
+    assert!(ManifestSeed::new([0x31; 32], [0x52; 32], recovery_root(), u32::MAX, 1).is_err());
 }
 
 #[test]
@@ -336,24 +323,19 @@ fn step_manifest_binds_every_constrained_public_input() {
         .expect("nonzero prior manifest");
     let baseline_leaf = leaf(0x11, generator(), TestPoint::identity());
     let baseline = derive_step_manifest(
-        &ConstructionManifestStepInput::new(prior, 0, baseline_leaf).expect("baseline input"),
+        &ManifestStepInput::new(prior, 0, baseline_leaf).expect("baseline input"),
     )
     .expect("baseline manifest");
 
-    let changed_prior =
-        ConstructionManifestStepInput::new([0; 32], 0, baseline_leaf).expect("changed prior");
-    let changed_index =
-        ConstructionManifestStepInput::new(prior, 1, baseline_leaf).expect("changed index");
-    let changed_binding = ConstructionManifestStepInput::new(
+    let changed_prior = ManifestStepInput::new([0; 32], 0, baseline_leaf).expect("changed prior");
+    let changed_index = ManifestStepInput::new(prior, 1, baseline_leaf).expect("changed index");
+    let changed_binding =
+        ManifestStepInput::new(prior, 0, leaf(0x12, generator(), TestPoint::identity()))
+            .expect("changed binding");
+    let changed_precommitment = ManifestStepInput::new(
         prior,
         0,
-        leaf(0x12, generator(), TestPoint::identity()),
-    )
-    .expect("changed binding");
-    let changed_precommitment = ConstructionManifestStepInput::new(
-        prior,
-        0,
-        ConstructionManifestLeaf::new(
+        ManifestLeaf::new(
             [0x11; 32],
             SecpScalarWitness::from_u64(0x99).bytes,
             generator().encoded,
@@ -362,15 +344,14 @@ fn step_manifest_binds_every_constrained_public_input() {
         .expect("changed precommitment leaf"),
     )
     .expect("changed precommitment");
-    let changed_commitment = ConstructionManifestStepInput::new(
+    let changed_commitment = ManifestStepInput::new(
         prior,
         0,
         leaf(0x11, TestPoint::identity(), TestPoint::identity()),
     )
     .expect("changed coefficient commitment");
-    let changed_offset =
-        ConstructionManifestStepInput::new(prior, 0, leaf(0x11, generator(), generator()))
-            .expect("changed anchored offset");
+    let changed_offset = ManifestStepInput::new(prior, 0, leaf(0x11, generator(), generator()))
+        .expect("changed anchored offset");
 
     for changed in [
         changed_prior,
@@ -390,15 +371,15 @@ fn step_manifest_binds_every_constrained_public_input() {
 #[test]
 fn step_input_rejects_noncanonical_fields_points_and_precommitments() {
     let valid = leaf(0x11, generator(), TestPoint::identity());
-    assert!(ConstructionManifestStepInput::new(SECP_FIELD, 0, valid).is_err());
-    assert!(ConstructionManifestLeaf::new(
+    assert!(ManifestStepInput::new(SECP_FIELD, 0, valid).is_err());
+    assert!(ManifestLeaf::new(
         [0x11; 32],
         SecpScalarWitness::from_u64(0).bytes,
         generator().encoded,
         TestPoint::identity().encoded,
     )
     .is_err());
-    assert!(ConstructionManifestLeaf::new(
+    assert!(ManifestLeaf::new(
         [0x11; 32],
         SECP_ORDER,
         generator().encoded,
@@ -408,7 +389,7 @@ fn step_input_rejects_noncanonical_fields_points_and_precommitments() {
 
     let mut bad_point = generator();
     bad_point.encoded[0] = 4;
-    assert!(ConstructionManifestLeaf::new(
+    assert!(ManifestLeaf::new(
         [0x11; 32],
         SecpScalarWitness::from_u64(1).bytes,
         bad_point.encoded,
@@ -423,7 +404,7 @@ fn manifest_leaf_validates_public_point_encodings() {
     let mut odd_encoding = generator().encoded;
     odd_encoding[0] = 3;
 
-    ConstructionManifestLeaf::new(
+    ManifestLeaf::new(
         [0x41; 32],
         SecpScalarWitness::from_u64(7).bytes,
         coefficient,
@@ -437,15 +418,15 @@ fn step_index_is_zero_based_and_overflow_checked() {
     let seed = manifest_seed(1, 1);
     let leaf = leaf(0x11, generator(), TestPoint::identity());
     let initial = seed.initial_manifest().expect("nonzero initial manifest");
-    let zero = ConstructionManifestStepInput::new(initial, 0, leaf).expect("zero-based step");
-    let one = ConstructionManifestStepInput::new(initial, 1, leaf).expect("next-index step");
+    let zero = ManifestStepInput::new(initial, 0, leaf).expect("zero-based step");
+    let one = ManifestStepInput::new(initial, 1, leaf).expect("next-index step");
     assert_ne!(
         derive_step_manifest(&zero).expect("zero manifest"),
         derive_step_manifest(&one).expect("one manifest")
     );
     assert_eq!(
         derive_step_manifest(&zero).expect("first step"),
-        ConstructionManifestState {
+        ManifestState {
             manifest: initial,
             index: 0
         }
@@ -462,7 +443,7 @@ fn step_index_is_zero_based_and_overflow_checked() {
         ]
     );
 
-    let exhausted = ConstructionManifestState {
+    let exhausted = ManifestState {
         manifest: seed.initial_manifest().expect("nonzero initial manifest"),
         index: u32::MAX,
     };

@@ -19,18 +19,17 @@ pub mod profile;
 pub mod secp;
 pub mod transcript;
 
-pub type DirectNovaPrimaryEngine = Secq256k1Sha256Engine;
-pub type DirectNovaSecondaryEngine = Secp256k1Sha256Engine;
+pub type PrimaryEngine = Secq256k1Sha256Engine;
+pub type SecondaryEngine = Secp256k1Sha256Engine;
 
 /// The field every recursive state element and step constraint lives in.
-pub type Scalar = <DirectNovaPrimaryEngine as Engine>::Scalar;
-pub type DirectNovaScalar = Scalar;
+pub type Scalar = <PrimaryEngine as Engine>::Scalar;
 
 /// Canonical encoding of an ordered direct step relation.
 ///
 /// This version is part of both the streamed relation ID and the complete
 /// Nova suite ID.
-pub const DIRECT_STEP_RELATION_ENCODING_VERSION: u8 = 1;
+pub const STEP_RELATION_ENCODING_VERSION: u8 = 1;
 
 pub fn scalar_from_canonical(bytes: &[u8; 32]) -> Option<Scalar> {
     let mut repr = <Scalar as PrimeField>::Repr::default();

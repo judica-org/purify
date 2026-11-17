@@ -1,13 +1,13 @@
 use ff::Field;
 use nova_snark::frontend::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
 
-use super::setup::NovaSessionSuite;
+use super::setup::SessionSuite;
 use super::*;
 use crate::artifact_writer::{identity_of_bytes, ArtifactWriteError};
-use circuit::relation::identity::direct_step_relation_shape;
+use circuit::relation::identity::step_relation_shape;
 use statement::Scalar;
 use verifier::artifact::ArtifactIdentity;
-use verifier::codec::NovaR1csDimensions;
+use verifier::codec::R1csDimensions;
 use verifier::nova::{
     CompressedProof, Key, LoadError, Verifier, VerifyError, VERIFIER_ARTIFACT_FORMAT,
 };
@@ -110,9 +110,9 @@ impl StepCircuit<Scalar> for TestSessionStep {
     }
 }
 
-impl NovaSessionStep<TEST_ARITY> for TestSessionStep {
-    fn relation_id(&self) -> DirectRelationId {
-        direct_step_relation_shape::<TEST_ARITY, _>(self)
+impl SessionStep<TEST_ARITY> for TestSessionStep {
+    fn relation_id(&self) -> RelationId {
+        step_relation_shape::<TEST_ARITY, _>(self)
             .expect("test session relation")
             .relation_id()
     }
@@ -130,15 +130,15 @@ fn load_slice(
     Verifier::load(&mut std::io::Cursor::new(artifact), suite, identity)
 }
 
-fn fixed_suite_fixture() -> (DirectNovaSuiteMetadata, NovaCompressedProofShape) {
-    let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
-        NovaR1csDimensions::new(101, 103),
-        NovaR1csDimensions::new(107, 109),
+fn fixed_suite_fixture() -> (SuiteMetadata, ProofShape) {
+    let proof_shape = ProofShape::from_suite_dimensions(
+        R1csDimensions::new(101, 103),
+        R1csDimensions::new(107, 109),
         TEST_ARITY,
     )
     .expect("synthetic suite proof shape");
-    let metadata = DirectNovaSuiteMetadata {
-        relation_id: DirectRelationId::from_frozen_bytes([0x11; 32]),
+    let metadata = SuiteMetadata {
+        relation_id: RelationId::from_frozen_bytes([0x11; 32]),
         public_parameter_digest: [0x22; 32],
         primary_constraints: 101,
         secondary_constraints: 107,
@@ -158,11 +158,11 @@ fn bound_step_with_another_shape_fails_relation_check() {
     assert!(validate_step_relation(trusted.relation_id(), &trusted).is_ok());
     assert_eq!(
         validate_step_relation(trusted.relation_id(), &different),
-        Err(DirectNovaSessionError::StepRelation)
+        Err(SessionError::StepRelation)
     );
 }
 
-fn mismatch(label: &'static str) -> DirectNovaSessionError {
+fn mismatch(label: &'static str) -> SessionError {
     SuiteError::Mismatch(label).into()
 }
 
@@ -249,13 +249,11 @@ fn exact_suite_prechecks_relation_before_parameter_setup() {
         suite
     };
     assert!(matches!(
-        NovaSessionSuite::<TEST_ARITY, TestSessionStep>::setup_exact(
+        SessionSuite::<TEST_ARITY, TestSessionStep>::setup_exact(
             trusted_step,
             &WRONG_RELATION_SUITE,
         ),
-        Err(DirectNovaSessionError::Suite(SuiteError::Mismatch(
-            "relation ID"
-        )))
+        Err(SessionError::Suite(SuiteError::Mismatch("relation ID")))
     ));
 }
 
@@ -272,7 +270,7 @@ fn tiny_twenty_state_session_round_trips_canonically() {
     let trusted_step = TestSessionStep::new(source_z0, true);
     let first_step = TestSessionStep::new(source_z0, true);
     let second_step = TestSessionStep::new(source_z1, true);
-    let suite = NovaSessionSuite::<TEST_ARITY, TestSessionStep>::setup(trusted_step)
+    let suite = SessionSuite::<TEST_ARITY, TestSessionStep>::setup(trusted_step)
         .expect("unselected tiny direct Nova suite");
     let metadata = suite.metadata();
     let proof_shape = suite.verifier.proof_shape.clone();
@@ -293,7 +291,7 @@ fn tiny_twenty_state_session_round_trips_canonically() {
     let incomplete = selected.start(z0, 2).expect("incomplete session");
     assert!(matches!(
         incomplete.finish(),
-        Err(DirectNovaSessionError::StepCount {
+        Err(SessionError::StepCount {
             expected: 2,
             actual: 0
         })
@@ -303,10 +301,7 @@ fn tiny_twenty_state_session_round_trips_canonically() {
         .start(z0, 2)
         .expect("discontinuous session")
         .add_step(second_step.clone());
-    assert!(matches!(
-        discontinuous,
-        Err(DirectNovaSessionError::StateContinuity)
-    ));
+    assert!(matches!(discontinuous, Err(SessionError::StateContinuity)));
 
     let session = selected
         .start(z0, 2)
@@ -533,7 +528,7 @@ fn tiny_twenty_state_session_round_trips_canonically() {
     ));
 
     let mut wrong_final = z2;
-    wrong_final[0] += DirectNovaScalar::ONE;
+    wrong_final[0] += Scalar::ONE;
     assert!(matches!(
         verifier.verify_exact(&z0, 2, &wrong_final, &proof),
         Err(VerifyError::FinalState)

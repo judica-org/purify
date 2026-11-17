@@ -153,12 +153,12 @@ impl<'a> FixedSerdeShape<'a> {
 /// These values must come from locally selected `PublicParams`, never from a
 /// proof, receipt, or peer-selected descriptor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NovaR1csDimensions {
+pub struct R1csDimensions {
     num_constraints: usize,
     num_variables: usize,
 }
 
-impl NovaR1csDimensions {
+impl R1csDimensions {
     pub const fn new(num_constraints: usize, num_variables: usize) -> Self {
         Self {
             num_constraints,
@@ -166,7 +166,7 @@ impl NovaR1csDimensions {
         }
     }
 
-    fn spartan_rounds(self) -> Result<NovaSpartanRounds, FixedSerdeError> {
+    fn spartan_rounds(self) -> Result<SpartanRounds, FixedSerdeError> {
         if self.num_constraints == 0 || self.num_variables == 0 {
             return Err(FixedSerdeError::InvalidShape);
         }
@@ -205,7 +205,7 @@ impl NovaR1csDimensions {
             return Err(FixedSerdeError::InvalidShape);
         }
 
-        Ok(NovaSpartanRounds {
+        Ok(SpartanRounds {
             constraint_rounds,
             variable_rounds,
             batch_rounds,
@@ -214,13 +214,13 @@ impl NovaR1csDimensions {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct NovaSpartanRounds {
+struct SpartanRounds {
     constraint_rounds: usize,
     variable_rounds: usize,
     batch_rounds: usize,
 }
 
-impl NovaSpartanRounds {
+impl SpartanRounds {
     fn encoded_round_bytes(self) -> Result<usize, FixedSerdeError> {
         self.constraint_rounds
             .checked_mul(NOVA_OUTER_ROUND_BYTES)
@@ -266,15 +266,15 @@ impl NovaSpartanRounds {
 /// The owned schedule is derived only from immutable local suite dimensions
 /// and the suite's fixed final-state arity. It is not an acceptance API.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NovaCompressedProofShape {
+pub struct ProofShape {
     encoded_len: usize,
     sequence_lengths: Vec<usize>,
 }
 
-impl NovaCompressedProofShape {
+impl ProofShape {
     pub fn from_suite_dimensions(
-        primary: NovaR1csDimensions,
-        secondary: NovaR1csDimensions,
+        primary: R1csDimensions,
+        secondary: R1csDimensions,
         final_state_arity: usize,
     ) -> Result<Self, FixedSerdeError> {
         if final_state_arity == 0 {
@@ -800,7 +800,7 @@ impl<'de> de::Deserializer<'de> for &mut Decoder<'de, '_> {
 
 #[cfg(test)]
 mod tests {
-    impl super::NovaCompressedProofShape {
+    impl super::ProofShape {
         /// Perturbs one schedule entry so suite-ID tests can show the ID
         /// commits to the schedule.
         pub(crate) fn increment_suite_sequence_length_for_test(&mut self, index: usize) {
@@ -1211,9 +1211,9 @@ mod tests {
 
     #[test]
     fn nova_shape_preserves_unequal_rounds_and_exact_schedule_order() {
-        let shape = NovaCompressedProofShape::from_suite_dimensions(
-            NovaR1csDimensions::new(4, 16),
-            NovaR1csDimensions::new(5, 9),
+        let shape = ProofShape::from_suite_dimensions(
+            R1csDimensions::new(4, 16),
+            R1csDimensions::new(5, 9),
             7,
         )
         .expect("Nova shape");
@@ -1236,16 +1236,16 @@ mod tests {
 
     #[test]
     fn nova_shape_matches_known_padded_formula() {
-        let primary = NovaR1csDimensions::new(101, 103);
-        let secondary = NovaR1csDimensions::new(107, 109);
-        let one_field = NovaCompressedProofShape::from_suite_dimensions(primary, secondary, 1)
-            .expect("one-field shape");
+        let primary = R1csDimensions::new(101, 103);
+        let secondary = R1csDimensions::new(107, 109);
+        let one_field =
+            ProofShape::from_suite_dimensions(primary, secondary, 1).expect("one-field shape");
         assert_eq!(one_field.encoded_len, 5_768);
         assert_eq!(one_field.sequence_lengths.len(), 62);
         assert_eq!(one_field.sequence_lengths.iter().sum::<usize>(), 189);
 
-        let twenty_fields = NovaCompressedProofShape::from_suite_dimensions(primary, secondary, 20)
-            .expect("twenty-field shape");
+        let twenty_fields =
+            ProofShape::from_suite_dimensions(primary, secondary, 20).expect("twenty-field shape");
         assert_eq!(twenty_fields.encoded_len, 6_376);
         assert_eq!(twenty_fields.sequence_lengths.len(), 62);
         assert_eq!(twenty_fields.sequence_lengths.last(), Some(&20));
@@ -1254,24 +1254,24 @@ mod tests {
     #[test]
     fn nova_padding_preserves_only_already_regular_dimensions() {
         assert_eq!(
-            NovaR1csDimensions::new(4, 16).spartan_rounds(),
-            Ok(NovaSpartanRounds {
+            R1csDimensions::new(4, 16).spartan_rounds(),
+            Ok(SpartanRounds {
                 constraint_rounds: 2,
                 variable_rounds: 4,
                 batch_rounds: 4,
             })
         );
         assert_eq!(
-            NovaR1csDimensions::new(5, 16).spartan_rounds(),
-            Ok(NovaSpartanRounds {
+            R1csDimensions::new(5, 16).spartan_rounds(),
+            Ok(SpartanRounds {
                 constraint_rounds: 4,
                 variable_rounds: 4,
                 batch_rounds: 4,
             })
         );
         assert_eq!(
-            NovaR1csDimensions::new(16, 4).spartan_rounds(),
-            Ok(NovaSpartanRounds {
+            R1csDimensions::new(16, 4).spartan_rounds(),
+            Ok(SpartanRounds {
                 constraint_rounds: 4,
                 variable_rounds: 2,
                 batch_rounds: 4,
@@ -1281,50 +1281,44 @@ mod tests {
 
     #[test]
     fn nova_shape_rejects_empty_overflowing_and_oversized_dimensions() {
-        let small = NovaR1csDimensions::new(4, 4);
+        let small = R1csDimensions::new(4, 4);
         assert_eq!(
-            NovaCompressedProofShape::from_suite_dimensions(small, small, 0),
+            ProofShape::from_suite_dimensions(small, small, 0),
             Err(FixedSerdeError::InvalidShape)
         );
         assert_eq!(
-            NovaR1csDimensions::new(0, 4).spartan_rounds(),
+            R1csDimensions::new(0, 4).spartan_rounds(),
             Err(FixedSerdeError::InvalidShape)
         );
         assert_eq!(
-            NovaR1csDimensions::new(1, 4).spartan_rounds(),
+            R1csDimensions::new(1, 4).spartan_rounds(),
             Err(FixedSerdeError::InvalidShape)
         );
         assert_eq!(
-            NovaR1csDimensions::new(2, 2).spartan_rounds(),
+            R1csDimensions::new(2, 2).spartan_rounds(),
             Err(FixedSerdeError::InvalidShape)
         );
         assert_eq!(
-            NovaR1csDimensions::new(usize::MAX, usize::MAX).spartan_rounds(),
+            R1csDimensions::new(usize::MAX, usize::MAX).spartan_rounds(),
             Err(FixedSerdeError::InvalidShape)
         );
-        assert!(
-            NovaCompressedProofShape::from_suite_dimensions(small, small, MAX_SEQUENCE_LENGTH,)
-                .is_ok()
-        );
+        assert!(ProofShape::from_suite_dimensions(small, small, MAX_SEQUENCE_LENGTH,).is_ok());
         assert_eq!(
-            NovaCompressedProofShape::from_suite_dimensions(small, small, MAX_SEQUENCE_LENGTH + 1,),
+            ProofShape::from_suite_dimensions(small, small, MAX_SEQUENCE_LENGTH + 1,),
             Err(FixedSerdeError::InvalidShape)
         );
         assert_eq!(
-            NovaCompressedProofShape::from_suite_dimensions(small, small, usize::MAX),
+            ProofShape::from_suite_dimensions(small, small, usize::MAX),
             Err(FixedSerdeError::InvalidShape)
         );
 
         let maximum_ipa_dimension = 1usize.checked_shl(31).expect("31-bit dimension");
-        let maximum_ipa = NovaR1csDimensions::new(maximum_ipa_dimension, maximum_ipa_dimension);
-        assert!(
-            NovaCompressedProofShape::from_suite_dimensions(maximum_ipa, maximum_ipa, 1).is_ok()
-        );
+        let maximum_ipa = R1csDimensions::new(maximum_ipa_dimension, maximum_ipa_dimension);
+        assert!(ProofShape::from_suite_dimensions(maximum_ipa, maximum_ipa, 1).is_ok());
         if let Some(oversized_ipa_dimension) = 1usize.checked_shl(32) {
-            let oversized =
-                NovaR1csDimensions::new(oversized_ipa_dimension, oversized_ipa_dimension);
+            let oversized = R1csDimensions::new(oversized_ipa_dimension, oversized_ipa_dimension);
             assert_eq!(
-                NovaCompressedProofShape::from_suite_dimensions(oversized, small, 1),
+                ProofShape::from_suite_dimensions(oversized, small, 1),
                 Err(FixedSerdeError::InvalidShape)
             );
         }

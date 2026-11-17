@@ -6,7 +6,7 @@
 
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::{allocate_encoded_point, DirectEncodedSecpPoint};
+use crate::gadgets::point::{allocate_encoded_point, EncodedSecpPoint};
 use crate::gadgets::scalar::{allocate_canonical_scalar, CanonicalSecpScalar};
 use crate::gadgets::sha256::{NovaByte, NovaTranscript};
 use crate::gadgets::synthesis_error;
@@ -20,24 +20,24 @@ use crate::native::circuit_transcript::{
 use crate::native::secp::SecpEncodedPointWitness;
 use statement::Scalar;
 
-pub(crate) struct DirectCircuitPointPairV4 {
-    pub(crate) first: DirectEncodedSecpPoint,
-    pub(crate) second: DirectEncodedSecpPoint,
+pub(crate) struct CircuitPointPairV4 {
+    pub(crate) first: EncodedSecpPoint,
+    pub(crate) second: EncodedSecpPoint,
 }
 
-pub(crate) struct DirectCircuitTranscriptResultV4 {
-    pub(crate) public_commitments: Vec<DirectEncodedSecpPoint>,
-    pub(crate) raw_commitment: DirectEncodedSecpPoint,
-    pub(crate) coefficient_commitment: DirectEncodedSecpPoint,
-    pub(crate) anchored_offset: DirectEncodedSecpPoint,
-    pub(crate) anchored_commitment: DirectEncodedSecpPoint,
-    pub(crate) batched_public_commitment: DirectEncodedSecpPoint,
-    pub(crate) dlog_nonce: DirectEncodedSecpPoint,
+pub(crate) struct CircuitTranscriptResultV4 {
+    pub(crate) public_commitments: Vec<EncodedSecpPoint>,
+    pub(crate) raw_commitment: EncodedSecpPoint,
+    pub(crate) coefficient_commitment: EncodedSecpPoint,
+    pub(crate) anchored_offset: EncodedSecpPoint,
+    pub(crate) anchored_commitment: EncodedSecpPoint,
+    pub(crate) batched_public_commitment: EncodedSecpPoint,
+    pub(crate) dlog_nonce: EncodedSecpPoint,
     pub(crate) dlog_response: CanonicalSecpScalar,
-    pub(crate) mask_commitment: DirectEncodedSecpPoint,
+    pub(crate) mask_commitment: EncodedSecpPoint,
     pub(crate) t2: CanonicalSecpScalar,
-    pub(crate) combined_commitment: DirectEncodedSecpPoint,
-    pub(crate) rounds: Vec<DirectCircuitPointPairV4>,
+    pub(crate) combined_commitment: EncodedSecpPoint,
+    pub(crate) rounds: Vec<CircuitPointPairV4>,
     pub(crate) terminal_n: CanonicalSecpScalar,
     pub(crate) terminal_l: CanonicalSecpScalar,
     pub(crate) precommitment: CanonicalSecpScalar,
@@ -108,7 +108,7 @@ fn append_pair<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     transcript: &mut NovaTranscript,
     witness: &CircuitPointPairWitnessV4,
-) -> Result<DirectCircuitPointPairV4, SynthesisError> {
+) -> Result<CircuitPointPairV4, SynthesisError> {
     let first = allocate_encoded_point(cs.namespace(|| "first point"), pair_point(witness, 0)?)?;
     let second = allocate_encoded_point(cs.namespace(|| "second point"), pair_point(witness, 1)?)?;
     let parity = NovaByte::from_constrained_bits_le([
@@ -122,19 +122,19 @@ fn append_pair<CS: ConstraintSystem<Scalar>>(
         Boolean::constant(false),
     ]);
     transcript.append_point_pair(&parity, first.x_bytes(), second.x_bytes());
-    Ok(DirectCircuitPointPairV4 { first, second })
+    Ok(CircuitPointPairV4 { first, second })
 }
 
 fn require_identity<CS: ConstraintSystem<Scalar>>(
     cs: CS,
-    point: &DirectEncodedSecpPoint,
+    point: &EncodedSecpPoint,
 ) -> Result<(), SynthesisError> {
     Boolean::enforce_equal(cs, &point.point().is_identity(), &Boolean::constant(true))
 }
 
 fn require_finite_even<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    point: &DirectEncodedSecpPoint,
+    point: &EncodedSecpPoint,
 ) -> Result<(), SynthesisError> {
     Boolean::enforce_equal(
         cs.namespace(|| "finite"),
@@ -159,7 +159,7 @@ fn install_transcript_with_binding<CS, F>(
     raw_generator_digest: [u8; 32],
     witness: &CircuitProofTranscriptWitnessV4,
     append_binding: F,
-) -> Result<DirectCircuitTranscriptResultV4, SynthesisError>
+) -> Result<CircuitTranscriptResultV4, SynthesisError>
 where
     CS: ConstraintSystem<Scalar>,
     F: FnOnce(&mut NovaTranscript) -> Result<(), SynthesisError>,
@@ -279,7 +279,7 @@ where
         prepared_round,
     )?;
 
-    Ok(DirectCircuitTranscriptResultV4 {
+    Ok(CircuitTranscriptResultV4 {
         public_commitments,
         raw_commitment,
         coefficient_commitment,
@@ -313,7 +313,7 @@ pub(crate) fn install_transcript_with_constrained_binding<CS: ConstraintSystem<S
     circuit_binding_digest: &[NovaByte; 32],
     raw_generator_digest: [u8; 32],
     witness: &CircuitProofTranscriptWitnessV4,
-) -> Result<DirectCircuitTranscriptResultV4, SynthesisError> {
+) -> Result<CircuitTranscriptResultV4, SynthesisError> {
     install_transcript_with_binding(cs, shape, raw_generator_digest, witness, |transcript| {
         append_bytes(transcript, circuit_binding_digest)
     })
@@ -332,7 +332,7 @@ mod tests {
     use super::*;
     use crate::native::circuit_transcript::replay_circuit_transcript_v4;
     use crate::native::secp::SecpScalarWitness;
-    use statement::DirectNovaPrimaryEngine;
+    use statement::PrimaryEngine;
 
     pub(crate) fn install_transcript<CS: ConstraintSystem<Scalar>>(
         cs: CS,
@@ -340,7 +340,7 @@ mod tests {
         circuit_binding_digest: [u8; 32],
         raw_generator_digest: [u8; 32],
         witness: &CircuitProofTranscriptWitnessV4,
-    ) -> Result<DirectCircuitTranscriptResultV4, SynthesisError> {
+    ) -> Result<CircuitTranscriptResultV4, SynthesisError> {
         install_transcript_with_binding(cs, shape, raw_generator_digest, witness, |transcript| {
             append_constant_bytes(transcript, &circuit_binding_digest)
         })
@@ -430,7 +430,7 @@ mod tests {
         }
     }
 
-    fn direct_integer(value: &CanonicalSecpScalar) -> BigInt {
+    fn constrained_integer(value: &CanonicalSecpScalar) -> BigInt {
         value.integer().expect("direct scalar witness").clone()
     }
 
@@ -438,23 +438,23 @@ mod tests {
         BigInt::from_bytes_be(Sign::Plus, &value.bytes)
     }
 
-    fn direct_scalars(result: &DirectCircuitTranscriptResultV4) -> Vec<BigInt> {
+    fn constrained_scalars(result: &CircuitTranscriptResultV4) -> Vec<BigInt> {
         let mut values = vec![
-            direct_integer(&result.dlog_response),
-            direct_integer(&result.t2),
-            direct_integer(&result.terminal_n),
-            direct_integer(&result.terminal_l),
-            direct_integer(&result.precommitment),
-            direct_integer(&result.rho),
-            direct_integer(&result.mul_scale),
-            direct_integer(&result.mul_ratio),
-            direct_integer(&result.row_ratio),
-            direct_integer(&result.eta),
-            direct_integer(&result.dlog_challenge),
-            direct_integer(&result.alpha),
-            direct_integer(&result.prepared_binding),
+            constrained_integer(&result.dlog_response),
+            constrained_integer(&result.t2),
+            constrained_integer(&result.terminal_n),
+            constrained_integer(&result.terminal_l),
+            constrained_integer(&result.precommitment),
+            constrained_integer(&result.rho),
+            constrained_integer(&result.mul_scale),
+            constrained_integer(&result.mul_ratio),
+            constrained_integer(&result.row_ratio),
+            constrained_integer(&result.eta),
+            constrained_integer(&result.dlog_challenge),
+            constrained_integer(&result.alpha),
+            constrained_integer(&result.prepared_binding),
         ];
-        values.extend(result.gammas.iter().map(direct_integer));
+        values.extend(result.gammas.iter().map(constrained_integer));
         values
     }
 
@@ -515,23 +515,23 @@ mod tests {
         digest.finalize().into()
     }
 
-    fn direct_challenges(result: &DirectCircuitTranscriptResultV4) -> Vec<BigInt> {
+    fn constrained_challenges(result: &CircuitTranscriptResultV4) -> Vec<BigInt> {
         let mut challenges = vec![
-            direct_integer(&result.precommitment),
-            direct_integer(&result.rho),
-            direct_integer(&result.mul_scale),
-            direct_integer(&result.mul_ratio),
-            direct_integer(&result.row_ratio),
-            direct_integer(&result.eta),
-            direct_integer(&result.dlog_challenge),
-            direct_integer(&result.alpha),
-            direct_integer(&result.prepared_binding),
+            constrained_integer(&result.precommitment),
+            constrained_integer(&result.rho),
+            constrained_integer(&result.mul_scale),
+            constrained_integer(&result.mul_ratio),
+            constrained_integer(&result.row_ratio),
+            constrained_integer(&result.eta),
+            constrained_integer(&result.dlog_challenge),
+            constrained_integer(&result.alpha),
+            constrained_integer(&result.prepared_binding),
         ];
-        challenges.extend(result.gammas.iter().map(direct_integer));
+        challenges.extend(result.gammas.iter().map(constrained_integer));
         challenges
     }
 
-    fn assert_point_witnesses(result: &DirectCircuitTranscriptResultV4) {
+    fn assert_point_witnesses(result: &CircuitTranscriptResultV4) {
         let points = [
             &result.raw_commitment,
             &result.coefficient_commitment,
@@ -555,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_replay_matches_native_vectors_for_hidden_and_public_modes() {
+    fn constrained_replay_matches_native_vectors_for_hidden_and_public_modes() {
         for mode in [
             CircuitCommitmentModeV4::Hidden,
             CircuitCommitmentModeV4::Public,
@@ -579,9 +579,9 @@ mod tests {
                 &witness,
             )
             .expect("direct transcript");
-            assert_eq!(direct_scalars(&result), expected);
+            assert_eq!(constrained_scalars(&result), expected);
             assert_eq!(
-                direct_challenges(&result),
+                constrained_challenges(&result),
                 native_challenges(mode, &witness)
             );
             assert_point_witnesses(&result);
@@ -619,7 +619,10 @@ mod tests {
             &witness,
         )
         .expect("constrained binding transcript");
-        assert_eq!(direct_scalars(&constant), direct_scalars(&constrained));
+        assert_eq!(
+            constrained_scalars(&constant),
+            constrained_scalars(&constrained)
+        );
         assert!(constant_cs.is_satisfied());
         assert!(constrained_cs.is_satisfied());
     }
@@ -627,8 +630,8 @@ mod tests {
     fn synthesize_shape(
         mode: CircuitCommitmentModeV4,
         witness: &CircuitProofTranscriptWitnessV4,
-    ) -> ShapeCS<DirectNovaPrimaryEngine> {
-        let mut cs = ShapeCS::<DirectNovaPrimaryEngine>::new();
+    ) -> ShapeCS<PrimaryEngine> {
+        let mut cs = ShapeCS::<PrimaryEngine>::new();
         install_transcript(
             cs.namespace(|| "direct transcript"),
             shape(mode),
@@ -641,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_replay_shape_excludes_point_and_scalar_witnesses() {
+    fn constrained_replay_shape_excludes_point_and_scalar_witnesses() {
         let mode = CircuitCommitmentModeV4::Public;
         let first_witness = witness(mode);
         let mut second_witness = first_witness.clone();
@@ -658,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_replay_rejects_branch_and_pair_violations() {
+    fn constrained_replay_rejects_branch_and_pair_violations() {
         let hidden_mode = CircuitCommitmentModeV4::Hidden;
         let mut nonzero_response = witness(hidden_mode);
         nonzero_response.dlog_response = SecpScalarWitness::from_u64(1);

@@ -15,8 +15,7 @@ use crate::native::secp::{
     canonical_scalar_value, coordinate_field_value, encoded_point_value, SecpScalarWitness,
 };
 use crate::profile::{
-    CONSTRUCTION_LEAF_GATE_COUNT, CONSTRUCTION_LEAF_NORM_LENGTH, CONSTRUCTION_LEAF_ROUNDS,
-    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_ROUNDS, CONSTRUCTION_ROOT_STATE_ARITY,
+    LEAF_GATE_COUNT, LEAF_NORM_LENGTH, LEAF_ROUNDS, ROOT_ROUNDS, ROOT_STATE_ARITY, STATE_ARITY,
 };
 use statement::{RelationError, Scalar};
 
@@ -24,7 +23,7 @@ pub(crate) const ROOT_PREFIX_INDEX: usize = 0;
 pub(crate) const ROOT_X_INDEX: usize = 1;
 pub(crate) const ROOT_SCALE_INDEX: usize = 2;
 pub(crate) const ROOT_FACTORS_START: usize = 3;
-pub(crate) const MANIFEST_INDEX: usize = CONSTRUCTION_ROOT_STATE_ARITY;
+pub(crate) const MANIFEST_INDEX: usize = ROOT_STATE_ARITY;
 pub(crate) const STEP_INDEX: usize = MANIFEST_INDEX + 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,16 +36,14 @@ pub struct ConstructionRecurrenceStateWitness {
 
 impl ConstructionRecurrenceStateWitness {
     /// Returns the recurrence's exact public-state field order.
-    pub fn state_fields(
-        &self,
-    ) -> Result<[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY], RelationError> {
-        if self.root.factors.len() != CONSTRUCTION_ROOT_ROUNDS {
+    pub fn state_fields(&self) -> Result<[Scalar; STATE_ARITY], RelationError> {
+        if self.root.factors.len() != ROOT_ROUNDS {
             return Err(RelationError::Malformed(
                 "construction recurrence root factors",
             ));
         }
         let point = encoded_point_value(self.root.point)?;
-        let mut state = [Scalar::ZERO; CONSTRUCTION_RECURRENCE_STATE_ARITY];
+        let mut state = [Scalar::ZERO; STATE_ARITY];
         state[ROOT_PREFIX_INDEX] = Scalar::from(u64::from(self.root.point.encoded[0]));
         state[ROOT_X_INDEX] = point.x;
         state[ROOT_SCALE_INDEX] = secp_scalar_value(self.root.scale)?;
@@ -70,15 +67,15 @@ pub fn validate_production_shape(
 ) -> Result<(), RelationError> {
     let shape = statement.shape;
     if shape.mode != CircuitCommitmentModeV4::Public
-        || shape.gate_count != CONSTRUCTION_LEAF_GATE_COUNT
+        || shape.gate_count != LEAF_GATE_COUNT
         || shape.commitment_count != 1
-        || shape.n_vec_len != CONSTRUCTION_LEAF_NORM_LENGTH
-        || shape.l_vec_len != CONSTRUCTION_LEAF_NORM_LENGTH
-        || shape.round_count() != CONSTRUCTION_LEAF_ROUNDS
-        || reduction.left.len() != CONSTRUCTION_LEAF_ROUNDS
-        || reduction.right.len() != CONSTRUCTION_LEAF_ROUNDS
-        || step.left.len() != CONSTRUCTION_ROOT_ROUNDS
-        || step.right.len() != CONSTRUCTION_ROOT_ROUNDS
+        || shape.n_vec_len != LEAF_NORM_LENGTH
+        || shape.l_vec_len != LEAF_NORM_LENGTH
+        || shape.round_count() != LEAF_ROUNDS
+        || reduction.left.len() != LEAF_ROUNDS
+        || reduction.right.len() != LEAF_ROUNDS
+        || step.left.len() != ROOT_ROUNDS
+        || step.right.len() != ROOT_ROUNDS
     {
         return Err(RelationError::Malformed(
             "production construction leaf recurrence shape",
@@ -90,14 +87,14 @@ pub fn validate_production_shape(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_STATE_ARITY};
-    use statement::manifest::ConstructionManifestSeed;
+    use crate::profile::{ROOT_BYTES, STATE_ARITY};
+    use statement::manifest::ManifestSeed;
 
     #[test]
     fn initial_recurrence_witness_matches_the_verifier_derived_state() {
-        let seed = ConstructionManifestSeed::new([0x31; 32], [0x52; 32], [0x71; 64], 1, 1)
+        let seed = ManifestSeed::new([0x31; 32], [0x52; 32], [0x71; 64], 1, 1)
             .expect("construction manifest seed");
-        assert_eq!(seed.root().canonical_bytes(), &[0; CONSTRUCTION_ROOT_BYTES]);
+        assert_eq!(seed.root().canonical_bytes(), &[0; ROOT_BYTES]);
         let (fields, manifest) = seed
             .initial_state_and_manifest()
             .expect("nonzero initial manifest");
@@ -111,10 +108,7 @@ mod tests {
             witness.state_fields().expect("recurrence witness fields"),
             fields
         );
-        assert_eq!(fields.len(), CONSTRUCTION_STATE_ARITY);
-        assert_eq!(
-            &fields[..CONSTRUCTION_ROOT_STATE_ARITY],
-            &seed.root().state_fields()
-        );
+        assert_eq!(fields.len(), STATE_ARITY);
+        assert_eq!(&fields[..ROOT_STATE_ARITY], &seed.root().state_fields());
     }
 }

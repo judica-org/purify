@@ -13,10 +13,13 @@
 #include <utility>
 #include <vector>
 
+#include "checked_size.hpp"
 #include "purify/curve.hpp"
 
 namespace purify::accountable {
 namespace {
+
+using ::purify::detail::CheckedSize;
 
 const TaggedHash kConstructionReceiptStatementHash(
     "Purify/Accountable/ConstructionReceiptStatement/v5");
@@ -124,26 +127,17 @@ Result<std::size_t> encoded_size_for_counts(
     std::size_t entry_count = 0;
     if (!size_fits_u32(setup_count) ||
         !size_fits_u32(anchor_count) ||
-        !checked_add_size(setup_count, anchor_count, entry_count) ||
+        !(CheckedSize(setup_count) + anchor_count).store(entry_count) ||
         !size_fits_u32(entry_count)) {
         return unexpected_error(ErrorCode::UnexpectedSize);
     }
-    std::size_t setup_size = 0;
-    std::size_t anchor_size = 0;
-    std::size_t entries_size = 0;
     std::size_t encoded_size = 0;
-    if (!checked_mul_size(
-            setup_count,
-            ConstructionReceiptPayload::kSetupEntrySize,
-            setup_size) ||
-        !checked_mul_size(
-            anchor_count,
-            ConstructionReceiptPayload::kAnchorEntrySize,
-            anchor_size) ||
-        !checked_add_size(setup_size, anchor_size, entries_size) ||
-        !checked_add_size(ConstructionReceiptPayload::kFixedHeaderSize,
-                          entries_size,
-                          encoded_size)) {
+    if (!(CheckedSize(setup_count) *
+              ConstructionReceiptPayload::kSetupEntrySize +
+          CheckedSize(anchor_count) *
+              ConstructionReceiptPayload::kAnchorEntrySize +
+          ConstructionReceiptPayload::kFixedHeaderSize)
+             .store(encoded_size)) {
         return unexpected_error(ErrorCode::UnexpectedSize);
     }
     return encoded_size;

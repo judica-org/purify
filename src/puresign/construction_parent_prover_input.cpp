@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "../bridge/bppp_bridge.h"
+#include "checked_size.hpp"
 
 namespace purify::accountable {
 namespace {
@@ -162,20 +163,15 @@ Result<Bytes> serialize_accepted_construction_parent_witness(
         return unexpected_error(ErrorCode::BindingMismatch);
     }
 
-    std::size_t setup_size = 0;
-    std::size_t anchor_size = 0;
-    std::size_t body_size = 0;
     std::size_t expected_size = 0;
     constexpr std::size_t kFinalRootSize =
         ConstructionReceiptAccumulator::kRootClaimSerializedSize;
-    if (!checked_mul_size(setup_witnesses.size(), kSetupWitnessSize,
-                          setup_size) ||
-        !checked_mul_size(anchor_witnesses.size(), kAnchorWitnessSize,
-                          anchor_size) ||
-        !checked_add_size(setup_size, anchor_size, body_size) ||
-        !checked_add_size(kHeaderSize, body_size, expected_size) ||
-        !checked_add_size(expected_size, kFinalRootSize,
-                          expected_size)) {
+    if (!(::purify::detail::CheckedSize(setup_witnesses.size()) *
+              kSetupWitnessSize +
+          ::purify::detail::CheckedSize(anchor_witnesses.size()) *
+              kAnchorWitnessSize +
+          kHeaderSize + kFinalRootSize)
+             .store(expected_size)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 

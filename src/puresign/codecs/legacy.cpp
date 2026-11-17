@@ -16,6 +16,7 @@
 #include <optional>
 
 #include "../detail/common.hpp"
+#include "checked_size.hpp"
 #include "purify/secp_bridge.h"
 
 namespace purify::puresign {
@@ -123,7 +124,7 @@ Result<Bytes> NonceProof::serialize(purify_secp_context* secp_context) const {
         return unexpected_error(ErrorCode::UnexpectedSize);
     }
     std::size_t serialized_size = 0;
-    if (!checked_add_size(37, proof_bytes.size(), serialized_size)) {
+    if (!(::purify::detail::CheckedSize(37) + proof_bytes.size()).store(serialized_size)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 
@@ -168,7 +169,7 @@ Result<Bytes> ProvenSignature::serialize(purify_secp_context* secp_context) cons
         return unexpected_error(ErrorCode::UnexpectedSize);
     }
     std::size_t serialized_size = 0;
-    if (!checked_add_size(69, nonce_proof_bytes.size(), serialized_size)) {
+    if (!(::purify::detail::CheckedSize(69) + nonce_proof_bytes.size()).store(serialized_size)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 

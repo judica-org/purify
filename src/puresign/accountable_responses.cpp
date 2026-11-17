@@ -12,10 +12,13 @@
 #include <vector>
 
 #include "bppp_bridge.h"
+#include "checked_size.hpp"
 #include "purify/secp_bridge.h"
 
 namespace purify::accountable {
 namespace {
+
+using ::purify::detail::CheckedSize;
 
 std::array<unsigned char, 8> encode_u64(std::size_t value) {
     std::array<unsigned char, 8> out{};
@@ -45,9 +48,9 @@ Result<NonceHostCommitment> compute_nonce_host_commitment(
 
     const auto count = encode_u64(ordered_hosts.size());
     std::size_t encoded_size = 0;
-    if (!checked_mul_size(ordered_hosts.size(), 33 + 96, encoded_size) ||
-        !checked_add_size(32 + 32 + count.size(), encoded_size,
-                          encoded_size)) {
+    if (!(CheckedSize(ordered_hosts.size()) * (33 + 96) + 32 + 32 +
+          count.size())
+             .store(encoded_size)) {
         return unexpected_error(ErrorCode::RangeViolation);
     }
     Bytes preimage;

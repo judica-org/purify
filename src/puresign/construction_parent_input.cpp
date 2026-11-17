@@ -5,11 +5,14 @@
 #include "construction_parent_input_internal.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <utility>
+
+#include "checked_size.hpp"
 
 namespace purify::accountable::detail {
 namespace {
+
+using ::purify::detail::CheckedSize;
 
 template <std::size_t N>
 void append(std::vector<unsigned char>& output,
@@ -73,16 +76,14 @@ resolve_construction_parent_public_inputs(
         construction_receipt_statement_digest(payload, setup.resolved_digest(),
                                               resolved_entries));
 
-    std::size_t leaf_count = 0;
-    if (!checked_add_size(setup_entries.size(), anchor_entries.size(),
-                          leaf_count) ||
-        leaf_count >
-            std::numeric_limits<std::size_t>::max() /
-                kConstructionParentDescriptorSize) {
+    std::size_t descriptor_bytes = 0;
+    if (!((CheckedSize(setup_entries.size()) + anchor_entries.size()) *
+          kConstructionParentDescriptorSize)
+             .store(descriptor_bytes)) {
         return unexpected_error(ErrorCode::Overflow);
     }
     std::vector<unsigned char> descriptors;
-    descriptors.reserve(leaf_count * kConstructionParentDescriptorSize);
+    descriptors.reserve(descriptor_bytes);
     std::array<unsigned char, 32> raw_generator_digest{};
     bool have_raw_generator_digest = false;
 

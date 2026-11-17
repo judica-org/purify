@@ -9,6 +9,7 @@
 
 #include "purify/curve.hpp"
 #include "bppp_bridge.h"
+#include "checked_size.hpp"
 
 namespace purify::accountable {
 
@@ -21,7 +22,8 @@ Result<SigningRoster> SigningRoster::aggregate(
     }
     std::size_t encoded_size = 0;
     if (ordered_public_keys.size() > SigningRoster::kMaxMembers ||
-        !checked_mul_size(ordered_public_keys.size(), 33, encoded_size)) {
+        !(::purify::detail::CheckedSize(ordered_public_keys.size()) * 33)
+             .store(encoded_size)) {
         return unexpected_error(ErrorCode::RangeViolation);
     }
     for (const auto& key : ordered_public_keys) {

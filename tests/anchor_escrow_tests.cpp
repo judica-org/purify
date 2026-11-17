@@ -44,8 +44,7 @@ Result<std::array<unsigned char, 33>> public_point(
     std::array<unsigned char, 32> xonly{};
     if (purify_bip340_key_from_seckey(
             secp_context, normalized.data(), xonly.data()) == 0) {
-        return purify::unexpected_error(purify::ErrorCode::RangeViolation,
-                                        "anchor_escrow_test:point");
+        return purify::unexpected_error(purify::ErrorCode::RangeViolation);
     }
     std::array<unsigned char, 33> out{};
     out[0] = normalized == original ? 0x02 : 0x03;
@@ -64,54 +63,43 @@ Result<BoundRosterFixture> make_roster(
     purify_secp_context* secp_context) {
     auto member_secret = FieldElement::from_u64(3);
     PURIFY_ASSIGN_OR_RETURN(auto member_key,
-                            public_point(member_secret, secp_context),
-                            "anchor_escrow_test:member_key");
+                            public_point(member_secret, secp_context));
     if (member_key[0] == 0x03) {
         member_key[0] = 0x02;
         member_secret = member_secret.negate();
     }
     const std::array<std::array<unsigned char, 33>, 1> members{member_key};
-    PURIFY_ASSIGN_OR_RETURN(
-        auto raw, SigningRoster::aggregate(members, secp_context),
-        "anchor_escrow_test:roster");
+    PURIFY_ASSIGN_OR_RETURN(auto raw,
+                            SigningRoster::aggregate(members, secp_context));
     const auto signing_scalar =
         raw.members().front().coefficient * member_secret;
     PURIFY_ASSIGN_OR_RETURN(
         const auto& recovery_root,
-        purify::accountable::derive_recovery_root(signing_scalar),
-        "anchor_escrow_test:recovery_root");
+        purify::accountable::derive_recovery_root(signing_scalar));
     CoalitionCoreDigest coalition_core_digest{};
     coalition_core_digest.fill(digest_marker);
     std::array<unsigned char, 32> host_seed{};
     host_seed.fill(host_marker);
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& host_key, purify::generate_key(host_seed),
-        "anchor_escrow_test:host_key");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto host,
-        purify::puresign_plusplus::PublicKey::from_secret(
-            host_key.secret, secp_context),
-        "anchor_escrow_test:host");
+    PURIFY_ASSIGN_OR_RETURN(const auto& host_key,
+                            purify::generate_key(host_seed));
+    PURIFY_ASSIGN_OR_RETURN(auto host,
+                            purify::puresign_plusplus::PublicKey::from_secret(
+                                host_key.secret, secp_context));
     std::copy(member_key.begin() + 1, member_key.end(),
               host.bip340_pubkey.begin());
     const std::array hosts{host};
     PURIFY_ASSIGN_OR_RETURN(
         auto nonce_bound,
         purify::accountable::bind_nonce_hosts(
-            std::move(raw), coalition_core_digest, hosts, secp_context),
-        "anchor_escrow_test:nonce_bound");
+            std::move(raw), coalition_core_digest, hosts, secp_context));
+    PURIFY_ASSIGN_OR_RETURN(auto setup_proof,
+                            purify::accountable::prove_recovery_root_setup(
+                                nonce_bound, recovery_root.public_key,
+                                signing_scalar, secp_context));
     PURIFY_ASSIGN_OR_RETURN(
-        auto setup_proof,
-        purify::accountable::prove_recovery_root_setup(
-            nonce_bound, recovery_root.public_key, signing_scalar,
-            secp_context),
-        "anchor_escrow_test:setup_proof");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto bound,
-        purify::accountable::verify_recovery_root_setup(
-            std::move(nonce_bound), recovery_root.public_key, setup_proof,
-            secp_context),
-        "anchor_escrow_test:bound_roster");
+        auto bound, purify::accountable::verify_recovery_root_setup(
+                        std::move(nonce_bound), recovery_root.public_key,
+                        setup_proof, secp_context));
     return BoundRosterFixture{
         std::move(bound), signing_scalar, std::move(setup_proof)};
 }

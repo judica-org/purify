@@ -43,8 +43,7 @@ Result<Point> public_point(FieldElement scalar,
     std::array<unsigned char, 32> x{};
     if (purify_bip340_key_from_seckey(
             secp_context, normalized.data(), x.data()) == 0) {
-        return purify::unexpected_error(purify::ErrorCode::RangeViolation,
-                                        "response_test:point");
+        return purify::unexpected_error(purify::ErrorCode::RangeViolation);
     }
     Point out{};
     out[0] = normalized == original ? 0x02 : 0x03;
@@ -54,8 +53,7 @@ Result<Point> public_point(FieldElement scalar,
 
 Result<std::pair<FieldElement, Point>> even_secret_and_point(
     FieldElement scalar, purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto point, public_point(scalar, secp_context),
-                            "response_test:even_point");
+    PURIFY_ASSIGN_OR_RETURN(auto point, public_point(scalar, secp_context));
     if (point[0] == 0x03) {
         scalar = scalar.negate();
         point[0] = 0x02;
@@ -70,8 +68,7 @@ Result<std::vector<PartialResponse>> toy_partials(
     const FieldElement& challenge) {
     if (secrets.size() != roster.members().size() ||
         raw_nonces.size() != secrets.size()) {
-        return purify::unexpected_error(purify::ErrorCode::SizeMismatch,
-                                        "response_test:partial_count");
+        return purify::unexpected_error(purify::ErrorCode::SizeMismatch);
     }
     std::vector<PartialResponse> out;
     out.reserve(secrets.size());
@@ -80,9 +77,7 @@ Result<std::vector<PartialResponse>> toy_partials(
             raw_nonces[i] + challenge * roster.members()[i].coefficient *
                                 secrets[i];
         PURIFY_ASSIGN_OR_RETURN(
-            auto response,
-            ScalarSignature::deserialize(value.to_bytes_be()),
-            "response_test:response_scalar");
+            auto response, ScalarSignature::deserialize(value.to_bytes_be()));
         out.push_back({response});
     }
     return out;
@@ -95,8 +90,7 @@ Result<ScalarSignature> toy_aggregate_response(
     const FieldElement& challenge) {
     PURIFY_ASSIGN_OR_RETURN(
         const auto& partials,
-        toy_partials(roster, secrets, raw_nonces, challenge),
-        "response_test:aggregate_partials");
+        toy_partials(roster, secrets, raw_nonces, challenge));
     auto aggregate = FieldElement::zero();
     for (const auto& partial : partials) {
         aggregate = aggregate +
@@ -110,9 +104,7 @@ Result<RecoveryBoundSigningRoster> bind_recovery_root(
     std::span<const FieldElement> secrets,
     purify_secp_context* secp_context) {
     if (secrets.size() != roster.members().size()) {
-        return purify::unexpected_error(
-            purify::ErrorCode::SizeMismatch,
-            "response_test:recovery_binding_secrets");
+        return purify::unexpected_error(purify::ErrorCode::SizeMismatch);
     }
     auto aggregate_secret = FieldElement::zero();
     for (std::size_t i = 0; i < secrets.size(); ++i) {
@@ -121,13 +113,11 @@ Result<RecoveryBoundSigningRoster> bind_recovery_root(
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto& root,
-        purify::accountable::derive_recovery_root(aggregate_secret),
-        "response_test:recovery_root");
+        purify::accountable::derive_recovery_root(aggregate_secret));
     PURIFY_ASSIGN_OR_RETURN(
         auto setup_proof,
         purify::accountable::prove_recovery_root_setup(
-            roster, root.public_key, aggregate_secret, secp_context),
-        "response_test:setup_proof");
+            roster, root.public_key, aggregate_secret, secp_context));
     return purify::accountable::verify_recovery_root_setup(
         roster, root.public_key, setup_proof, secp_context);
 }

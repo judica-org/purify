@@ -61,15 +61,15 @@ inline std::size_t circuit_n_commitments(const NativeBulletproofCircuit::PackedW
 }
 
 template <typename CircuitLike>
-Status validate_proof_cache_circuit(const CircuitLike& circuit, const char* context) {
+Status validate_proof_cache_circuit(const CircuitLike& circuit) {
     if (!circuit.has_valid_shape()) {
-        return unexpected_error(ErrorCode::InvalidDimensions, context);
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     if (!is_power_of_two_size(circuit_n_gates(circuit))) {
-        return unexpected_error(ErrorCode::InvalidDimensions, context);
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     if (circuit_n_commitments(circuit) != 1) {
-        return unexpected_error(ErrorCode::InvalidDimensions, context);
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     return {};
 }
@@ -78,12 +78,11 @@ template <typename CacheLike>
 inline Status validate_message_proof_cache(const CacheLike& cache,
                                            std::string_view nonce_tag) {
     if (cache.eval_input != tagged_eval_input(nonce_tag, cache.message)) {
-        return unexpected_error(ErrorCode::BindingMismatch, "validate_message_proof_cache:eval_input");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(const auto& template_digest, cache.circuit_template.integrity_digest(),
-                            "validate_message_proof_cache:integrity_digest");
+    PURIFY_ASSIGN_OR_RETURN(const auto& template_digest, cache.circuit_template.integrity_digest());
     if (cache.template_digest != template_digest) {
-        return unexpected_error(ErrorCode::BindingMismatch, "validate_message_proof_cache:circuit_template");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     return {};
 }
@@ -92,15 +91,14 @@ template <typename CacheLike>
 inline Status validate_topic_proof_cache(const CacheLike& cache,
                                          std::string_view nonce_tag) {
     if (cache.topic.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput, "validate_topic_proof_cache:empty_topic");
+        return unexpected_error(ErrorCode::EmptyInput);
     }
     if (cache.eval_input != tagged_eval_input(nonce_tag, cache.topic)) {
-        return unexpected_error(ErrorCode::BindingMismatch, "validate_topic_proof_cache:eval_input");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(const auto& template_digest, cache.circuit_template.integrity_digest(),
-                            "validate_topic_proof_cache:integrity_digest");
+    PURIFY_ASSIGN_OR_RETURN(const auto& template_digest, cache.circuit_template.integrity_digest());
     if (cache.template_digest != template_digest) {
-        return unexpected_error(ErrorCode::BindingMismatch, "validate_topic_proof_cache:circuit_template");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     return {};
 }

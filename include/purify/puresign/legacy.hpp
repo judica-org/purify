@@ -325,8 +325,7 @@ public:
      */
     [[nodiscard]] Result<Scalar32> scalar() const {
         if (!available_) {
-            return unexpected_error(ErrorCode::UninitializedState,
-                                    "PreparedNonce::scalar:consumed");
+            return unexpected_error(ErrorCode::UninitializedState);
         }
         return scalar_;
     }

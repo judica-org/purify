@@ -32,21 +32,15 @@ Result<NonceHostCommitment> compute_nonce_host_commitment(
     const Roster& roster,
     std::span<const puresign_plusplus::PublicKey> ordered_hosts,
     purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context,
-                             "accountable:nonce_hosts_context"),
-        "accountable:nonce_hosts_context");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
     if (roster.members().empty()) {
-        return unexpected_error(ErrorCode::EmptyInput,
-                                "accountable:nonce_hosts_empty");
+        return unexpected_error(ErrorCode::EmptyInput);
     }
     if (ordered_hosts.size() != roster.members().size()) {
-        return unexpected_error(ErrorCode::SizeMismatch,
-                                "accountable:nonce_hosts_count");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
     if (!size_fits_u64(ordered_hosts.size())) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "accountable:nonce_hosts_count");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
 
     const auto count = encode_u64(ordered_hosts.size());
@@ -54,8 +48,7 @@ Result<NonceHostCommitment> compute_nonce_host_commitment(
     if (!checked_mul_size(ordered_hosts.size(), 33 + 96, encoded_size) ||
         !checked_add_size(32 + 32 + count.size(), encoded_size,
                           encoded_size)) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "accountable:nonce_hosts_size");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     Bytes preimage;
     preimage.reserve(encoded_size);
@@ -72,20 +65,16 @@ Result<NonceHostCommitment> compute_nonce_host_commitment(
             !std::equal(host.bip340_pubkey.begin(),
                         host.bip340_pubkey.end(),
                         member.public_key.begin() + 1)) {
-            return unexpected_error(ErrorCode::BindingMismatch,
-                                    "accountable:nonce_host_member_key");
+            return unexpected_error(ErrorCode::BindingMismatch);
         }
-        PURIFY_RETURN_IF_ERROR(validate_public_key(host.purify_pubkey),
-                               "accountable:nonce_host_purify_key");
+        PURIFY_RETURN_IF_ERROR(validate_public_key(host.purify_pubkey));
         if (purify_bip340_validate_xonly_pubkey(
                 secp_context, host.bip340_pubkey.data()) == 0) {
-            return unexpected_error(ErrorCode::RangeViolation,
-                                    "accountable:nonce_host_signing_key");
+            return unexpected_error(ErrorCode::RangeViolation);
         }
         for (std::size_t j = 0; j < i; ++j) {
             if (ordered_hosts[j].purify_pubkey == host.purify_pubkey) {
-                return unexpected_error(ErrorCode::BindingMismatch,
-                                        "accountable:duplicate_nonce_host");
+                return unexpected_error(ErrorCode::BindingMismatch);
             }
         }
         const auto encoded_host = host.serialize();
@@ -112,16 +101,12 @@ Result<FieldElement> roster_challenge(
         nonce_set.host_commitment() != roster.nonce_host_commitment() ||
         nonce_set.coalition_core_digest() !=
             roster.coalition_core_digest()) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "accountable:response_roster_binding");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& nonce_input,
-        nonce_evaluation_input(context, secp_context),
-        "accountable:response_nonce_input");
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_input,
+                            nonce_evaluation_input(context, secp_context));
     if (nonce_input != nonce_set.nonce_input()) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "accountable:response_nonce_context");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     return signature_challenge(context, canonical_body, secp_context);
 }
@@ -135,16 +120,14 @@ Result<std::array<unsigned char, 33>> response_nonce(
     std::array<unsigned char, 33> key_term{};
     if (purify_point_scale(secp_context, key.data(),
                            negative_weight.data(), key_term.data()) == 0) {
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "accountable:response_key_term");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
     const auto scalar = response.serialize();
     std::array<unsigned char, 33> nonce{};
     if (purify_bppp_offset_commitment(
             secp_context, key_term.data(), scalar.data(),
             nonce.data()) == 0) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "accountable:response_nonce_at_infinity");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     return nonce;
 }
@@ -154,15 +137,12 @@ Status check_partial(
     const std::array<unsigned char, 33>& verified_nonce,
     const FieldElement& challenge, const PartialResponse& partial,
     purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& nonce,
-        response_nonce(member.public_key,
-                       challenge * member.coefficient,
-                       partial.response, secp_context),
-        "accountable:partial_nonce");
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce,
+                            response_nonce(member.public_key,
+                                           challenge * member.coefficient,
+                                           partial.response, secp_context));
     if (nonce != verified_nonce) {
-        return unexpected_error(ErrorCode::EquationMismatch,
-                                "accountable:partial_response_equation");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
     return {};
 }
@@ -201,8 +181,7 @@ Result<NonceHostBoundSigningRoster> bind_nonce_hosts(
     purify_secp_context* secp_context) {
     PURIFY_ASSIGN_OR_RETURN(
         const auto& commitment,
-        nonce_host_commitment(roster, ordered_hosts, secp_context),
-        "accountable:bind_nonce_hosts");
+        nonce_host_commitment(roster, ordered_hosts, secp_context));
     return NonceHostBoundSigningRoster(
         std::move(roster), coalition_core_digest, commitment);
 }
@@ -216,28 +195,22 @@ Result<VerifiedCoalitionNonceSet> verify_coalition_nonce_set(
     bppp::ExperimentalCircuitBackend* cache) {
     if (ordered_proofs.size() != ordered_hosts.size() ||
         ordered_hosts.size() != roster.members().size()) {
-        return unexpected_error(ErrorCode::SizeMismatch,
-                                "accountable:nonce_proof_count");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto& registered_hosts,
-        nonce_host_commitment(roster, ordered_hosts, secp_context),
-        "accountable:nonce_host_commitment");
+        nonce_host_commitment(roster, ordered_hosts, secp_context));
     if (registered_hosts != roster.nonce_host_commitment() ||
         context.host_commitment != registered_hosts ||
         context.signing_key != roster.signing_key() ||
         context.coalition_core_digest != roster.coalition_core_digest()) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "accountable:nonce_roster_binding");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& nonce_input,
-        nonce_evaluation_input(context, secp_context),
-        "accountable:nonce_input");
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_input,
+                            nonce_evaluation_input(context, secp_context));
     PURIFY_ASSIGN_OR_RETURN(
         auto proof_cache,
-        puresign_plusplus::TopicProofCache::build(nonce_input),
-        "accountable:nonce_proof_cache");
+        puresign_plusplus::TopicProofCache::build(nonce_input));
 
     std::vector<VerifiedCoalitionNonceSet::Point> member_nonces;
     member_nonces.reserve(ordered_proofs.size());
@@ -246,11 +219,9 @@ Result<VerifiedCoalitionNonceSet> verify_coalition_nonce_set(
         PURIFY_ASSIGN_OR_RETURN(
             const auto& accepted,
             ordered_hosts[i].verify_topic_nonce_proof(
-                proof_cache, ordered_proofs[i], secp_context, cache),
-            "accountable:nonce_proof");
+                proof_cache, ordered_proofs[i], secp_context, cache));
         if (!accepted) {
-            return unexpected_error(ErrorCode::EquationMismatch,
-                                    "accountable:nonce_proof");
+            return unexpected_error(ErrorCode::EquationMismatch);
         }
         const auto point = ordered_proofs[i].commitment_point;
         member_nonces.push_back(point);
@@ -266,15 +237,13 @@ Result<VerifiedCoalitionNonceSet> verify_coalition_nonce_set(
             VerifiedCoalitionNonceSet::Point next{};
             if (purify_point_add(secp_context, aggregate->data(),
                                  point.data(), next.data()) == 0) {
-                return unexpected_error(ErrorCode::InternalMismatch,
-                                        "accountable:aggregate_nonce_sum");
+                return unexpected_error(ErrorCode::InternalMismatch);
             }
             aggregate = next;
         }
     }
     if (!aggregate) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "accountable:aggregate_nonce_infinity");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     return VerifiedCoalitionNonceSet(
         std::move(member_nonces), *aggregate, roster.signing_key(),
@@ -290,14 +259,11 @@ Status verify_partial_response(
     purify_secp_context* secp_context) {
     if (member_index >= roster.members().size() ||
         member_index >= nonce_set.member_nonces_.size()) {
-        return unexpected_error(ErrorCode::IndexOutOfRange,
-                                "accountable:response_member_index");
+        return unexpected_error(ErrorCode::IndexOutOfRange);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& challenge,
-        roster_challenge(roster, nonce_set, context, canonical_body,
-                         secp_context),
-        "accountable:partial_challenge");
+    PURIFY_ASSIGN_OR_RETURN(const auto& challenge,
+                            roster_challenge(roster, nonce_set, context,
+                                             canonical_body, secp_context));
     return check_partial(roster.members()[member_index],
                          nonce_set.member_nonces_[member_index], challenge,
                          partial, secp_context);
@@ -310,17 +276,13 @@ Result<VerifiedScalarResponse> verify_scalar_response(
     std::span<const unsigned char> canonical_body,
     const ScalarSignature& response,
     purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(
-        roster_challenge(roster, nonce_set, context, canonical_body,
-                         secp_context),
-        "accountable:scalar_response_context");
+    PURIFY_RETURN_IF_ERROR(roster_challenge(roster, nonce_set, context,
+                                            canonical_body, secp_context));
     PURIFY_ASSIGN_OR_RETURN(
         const auto& reconstructed,
-        reconstruct_nonce(context, canonical_body, response, secp_context),
-        "accountable:scalar_response_nonce");
+        reconstruct_nonce(context, canonical_body, response, secp_context));
     if (reconstructed != nonce_set.aggregate_nonce_) {
-        return unexpected_error(ErrorCode::EquationMismatch,
-                                "accountable:scalar_response_nonce");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
     return VerifiedScalarResponse(
         response, reconstructed, roster.signing_key(),
@@ -337,32 +299,25 @@ Result<VerifiedScalarResponse> aggregate_responses(
     std::span<const PartialResponse> partials,
     purify_secp_context* secp_context) {
     if (roster.members().empty()) {
-        return unexpected_error(ErrorCode::EmptyInput,
-                                "accountable:empty_response_roster");
+        return unexpected_error(ErrorCode::EmptyInput);
     }
     if (partials.size() != roster.members().size() ||
         partials.size() != nonce_set.member_nonces_.size()) {
-        return unexpected_error(ErrorCode::SizeMismatch,
-                                "accountable:response_member_count");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& challenge,
-        roster_challenge(roster, nonce_set, context, canonical_body,
-                         secp_context),
-        "accountable:aggregate_challenge");
+    PURIFY_ASSIGN_OR_RETURN(const auto& challenge,
+                            roster_challenge(roster, nonce_set, context,
+                                             canonical_body, secp_context));
     auto sum = FieldElement::zero();
     for (std::size_t i = 0; i < partials.size(); ++i) {
         PURIFY_RETURN_IF_ERROR(
             check_partial(roster.members()[i], nonce_set.member_nonces_[i],
-                          challenge, partials[i], secp_context),
-            "accountable:aggregate_partial");
+                          challenge, partials[i], secp_context));
         sum = sum + FieldElement::from_bytes32(
                         partials[i].response.serialize());
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& response,
-        ScalarSignature::deserialize(sum.to_bytes_be()),
-        "accountable:aggregate_response");
+    PURIFY_ASSIGN_OR_RETURN(const auto& response,
+                            ScalarSignature::deserialize(sum.to_bytes_be()));
     return verify_scalar_response(roster, nonce_set, context,
                                   canonical_body, response, secp_context);
 }
@@ -375,12 +330,10 @@ Result<ExposedCoalitionKey> recover_verified_same_slot_key(
         first.host_commitment_ != second.host_commitment_ ||
         first.coalition_core_digest_ != second.coalition_core_digest_ ||
         first.slot_ != second.slot_ || first.nonce_ != second.nonce_) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "accountable:verified_conflict_binding");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     if (first.body_ == second.body_) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "accountable:verified_conflict_body");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     const ConflictContext context{
         first.signing_key_, first.host_commitment_,
@@ -388,8 +341,7 @@ Result<ExposedCoalitionKey> recover_verified_same_slot_key(
     PURIFY_ASSIGN_OR_RETURN(
         const auto& recovered,
         recover_same_slot_key(context, first.body_, first.response_,
-                              second.body_, second.response_, secp_context),
-        "accountable:verified_conflict_recover");
+                              second.body_, second.response_, secp_context));
     return ExposedCoalitionKey(
         FieldElement::from_bytes32(recovered), first.signing_key_,
         first.host_commitment_, first.coalition_core_digest_);

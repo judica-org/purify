@@ -15,27 +15,26 @@ namespace purify::accountable {
 Result<SigningRoster> SigningRoster::aggregate(
     std::span<const std::array<unsigned char, 33>> ordered_public_keys,
     purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "accountable:roster"),
-                           "accountable:aggregate_roster");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
     if (ordered_public_keys.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput, "accountable:empty_roster");
+        return unexpected_error(ErrorCode::EmptyInput);
     }
     std::size_t encoded_size = 0;
     if (ordered_public_keys.size() > SigningRoster::kMaxMembers ||
         !checked_mul_size(ordered_public_keys.size(), 33, encoded_size)) {
-        return unexpected_error(ErrorCode::RangeViolation, "accountable:roster_size");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     for (const auto& key : ordered_public_keys) {
         if ((key[0] != 0x02 && key[0] != 0x03) ||
             purify_bip340_validate_xonly_pubkey(secp_context, key.data() + 1) == 0) {
-            return unexpected_error(ErrorCode::RangeViolation, "accountable:member_key");
+            return unexpected_error(ErrorCode::RangeViolation);
         }
     }
     // Sorting a copy detects duplicates without changing the authenticated order.
     auto sorted = std::vector(ordered_public_keys.begin(), ordered_public_keys.end());
     std::sort(sorted.begin(), sorted.end());
     if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end()) {
-        return unexpected_error(ErrorCode::BindingMismatch, "accountable:duplicate_member_key");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
 
     Bytes encoded;
@@ -60,12 +59,12 @@ Result<SigningRoster> SigningRoster::aggregate(
             coefficient = purify::detail::FieldElementAccess::from_raw(raw);
         }
         if (coefficient.is_zero()) {
-            return unexpected_error(ErrorCode::RangeViolation, "accountable:zero_key_coefficient");
+            return unexpected_error(ErrorCode::RangeViolation);
         }
         const auto scalar = coefficient.to_bytes_be();
         std::array<unsigned char, 33> term{};
         if (purify_point_scale(secp_context, key.data(), scalar.data(), term.data()) == 0) {
-            return unexpected_error(ErrorCode::InternalMismatch, "accountable:weighted_member_key");
+            return unexpected_error(ErrorCode::InternalMismatch);
         }
         out.members_.push_back({key, coefficient});
         if (!sum) {
@@ -76,13 +75,13 @@ Result<SigningRoster> SigningRoster::aggregate(
         } else {
             std::array<unsigned char, 33> next{};
             if (purify_point_add(secp_context, sum->data(), term.data(), next.data()) == 0) {
-                return unexpected_error(ErrorCode::InternalMismatch, "accountable:aggregate_key_sum");
+                return unexpected_error(ErrorCode::InternalMismatch);
             }
             sum = next;
         }
     }
     if (!sum) {
-        return unexpected_error(ErrorCode::RangeViolation, "accountable:aggregate_key_at_infinity");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     out.aggregate_was_negated_ = (*sum)[0] == 0x03;
     std::copy(sum->begin() + 1, sum->end(), out.signing_key_.begin());

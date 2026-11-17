@@ -45,8 +45,7 @@ struct RosterVector {
 purify::Result<FieldElement> aggregate_secret(
     const SigningRoster& roster, std::span<const FieldElement> secrets) {
     if (secrets.size() != roster.members().size()) {
-        return purify::unexpected_error(purify::ErrorCode::SizeMismatch,
-                                        "roster_test:recovery_binding_secrets");
+        return purify::unexpected_error(purify::ErrorCode::SizeMismatch);
     }
     auto out = FieldElement::zero();
     for (std::size_t i = 0; i < secrets.size(); ++i) {
@@ -64,14 +63,11 @@ nonce_hosts(std::span<const std::array<unsigned char, 33>> member_keys,
         std::array<unsigned char, 32> seed{};
         seed[0] = marker;
         seed[1] = static_cast<unsigned char>(i);
+        PURIFY_ASSIGN_OR_RETURN(const auto& generated,
+                                purify::generate_key(seed));
         PURIFY_ASSIGN_OR_RETURN(
-            const auto& generated, purify::generate_key(seed),
-            "roster_test:nonce_host_secret");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto host,
-            purify::puresign_plusplus::PublicKey::from_secret(
-                generated.secret, secp_context),
-            "roster_test:nonce_host");
+            auto host, purify::puresign_plusplus::PublicKey::from_secret(
+                           generated.secret, secp_context));
         std::copy(member_keys[i].begin() + 1, member_keys[i].end(),
                   host.bip340_pubkey.begin());
         out.push_back(std::move(host));

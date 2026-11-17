@@ -56,20 +56,14 @@ prepare_hidden_v4_algebraic(
     purify_secp_context* secp) {
     ScalarBytes seed{};
     seed.fill(seed_byte);
-    PURIFY_ASSIGN_OR_RETURN(
-        auto publication,
-        candidate::prove_circuit_zk_norm_arg_v4(
-            circuit, assignment, seed, secp, binding),
-        "test:v4_algebraic_publication");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto prepared,
-        candidate::prepare_circuit_zk_norm_arg_v4(
-            circuit, publication, secp, binding),
-        "test:v4_algebraic_prepare");
+    PURIFY_ASSIGN_OR_RETURN(auto publication,
+                            candidate::prove_circuit_zk_norm_arg_v4(
+                                circuit, assignment, seed, secp, binding));
+    PURIFY_ASSIGN_OR_RETURN(auto prepared,
+                            candidate::prepare_circuit_zk_norm_arg_v4(
+                                circuit, publication, secp, binding));
     if (!prepared.has_value()) {
-        return purify::unexpected_error(
-            purify::ErrorCode::EquationMismatch,
-            "test:v4_algebraic_outer_equation");
+        return purify::unexpected_error(purify::ErrorCode::EquationMismatch);
     }
     return accum::prepare_v4_circuit_norm_for_algebraic_reduction(
         basis, std::move(*prepared), secp);
@@ -94,9 +88,8 @@ purify::Result<PublishedCircuitNorm> publish_circuit_norm(
             assignment.left.back() * assignment.right.back());
     }
     assignment.commitments = {FieldElement::from_int(7 + owner)};
-    PURIFY_ASSIGN_OR_RETURN(
-        auto output, scalar_point(assignment.commitments[0], secp),
-        "test:circuit_output");
+    PURIFY_ASSIGN_OR_RETURN(auto output,
+                            scalar_point(assignment.commitments[0], secp));
     const std::array<PointBytes, 1> outputs{output};
     ScalarBytes secret_prover_seed{};
     secret_prover_seed.fill(static_cast<unsigned char>(0x81 + owner));
@@ -107,8 +100,7 @@ purify::Result<PublishedCircuitNorm> publish_circuit_norm(
         purify::bppp::
             prove_experimental_circuit_zk_norm_arg_with_public_commitments(
                 circuit, assignment, secret_prover_seed, outputs, secp,
-                binding),
-        "test:circuit_proof");
+                binding));
     return PublishedCircuitNorm{std::move(proof), output,
                                 std::move(binding)};
 }
@@ -138,8 +130,7 @@ purify::Result<PublishedGenericCircuitNorm> publish_generic_circuit_norm(
     PURIFY_ASSIGN_OR_RETURN(
         auto proof,
         purify::bppp::prove_experimental_circuit_zk_norm_arg(
-            circuit, assignment, secret_prover_seed, secp, binding),
-        "test:generic_circuit_proof");
+            circuit, assignment, secret_prover_seed, secp, binding));
     return PublishedGenericCircuitNorm{std::move(proof),
                                        std::move(binding)};
 }
@@ -180,12 +171,9 @@ purify::Result<std::vector<accum::PendingClaim>> public_claims(
     for (const auto& proof : proofs) {
         ctx.expect(purify::bppp::verify_norm_arg(proof, secp),
                    "independently published standalone norm proof verifies");
-        PURIFY_ASSIGN_OR_RETURN(auto prepared, accum::prepare_norm(basis, proof, secp),
-                                "test:prepare_public_norm");
-        PURIFY_ASSIGN_OR_RETURN(auto reduction, accum::prove_norm_reduction(basis, prepared, secp),
-                                "test:prove_public_reduction");
-        PURIFY_ASSIGN_OR_RETURN(auto claim, accum::verify_norm_reduction(basis, prepared, reduction, secp),
-                                "test:verify_public_reduction");
+        PURIFY_ASSIGN_OR_RETURN(auto prepared, accum::prepare_norm(basis, proof, secp));
+        PURIFY_ASSIGN_OR_RETURN(auto reduction, accum::prove_norm_reduction(basis, prepared, secp));
+        PURIFY_ASSIGN_OR_RETURN(auto claim, accum::verify_norm_reduction(basis, prepared, reduction, secp));
         expect_ok(ctx, accum::decide(basis, claim, secp),
                   "authenticated norm reduction agrees with standalone verification");
         claims.push_back(std::move(claim));

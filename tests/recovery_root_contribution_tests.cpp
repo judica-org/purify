@@ -71,20 +71,16 @@ Result<ContributionFixture> make_fixture(
     std::vector<PointBytes> member_keys;
     member_keys.reserve(secrets.size());
     for (auto& secret : secrets) {
-        PURIFY_ASSIGN_OR_RETURN(
-            auto point, secp_point(secret, secp_context),
-            "recovery_contribution_test:member_point");
+        PURIFY_ASSIGN_OR_RETURN(auto point, secp_point(secret, secp_context));
         if (point[0] == 0x03) {
             secret = secret.negate();
             point[0] = 0x02;
         }
         member_keys.push_back(std::move(point));
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto roster,
-        purify::accountable::SigningRoster::aggregate(member_keys,
-                                                       secp_context),
-        "recovery_contribution_test:roster");
+    PURIFY_ASSIGN_OR_RETURN(auto roster,
+                            purify::accountable::SigningRoster::aggregate(
+                                member_keys, secp_context));
 
     std::vector<purify::puresign_plusplus::PublicKey> hosts;
     hosts.reserve(member_keys.size());
@@ -92,14 +88,10 @@ Result<ContributionFixture> make_fixture(
         std::array<unsigned char, 32> seed{};
         seed[0] = 0xc1;
         seed[1] = static_cast<unsigned char>(i + 1);
+        PURIFY_ASSIGN_OR_RETURN(auto generated, purify::generate_key(seed));
         PURIFY_ASSIGN_OR_RETURN(
-            auto generated, purify::generate_key(seed),
-            "recovery_contribution_test:host_secret");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto host,
-            purify::puresign_plusplus::PublicKey::from_secret(
-                generated.secret, secp_context),
-            "recovery_contribution_test:host");
+            auto host, purify::puresign_plusplus::PublicKey::from_secret(
+                           generated.secret, secp_context));
         std::copy(member_keys[i].begin() + 1, member_keys[i].end(),
                   host.bip340_pubkey.begin());
         hosts.push_back(std::move(host));
@@ -112,14 +104,10 @@ Result<ContributionFixture> make_fixture(
     input.permit.output_index = 4;
     input.manifest_digest.fill(0x44);
     PURIFY_ASSIGN_OR_RETURN(
-        auto formation,
-        purify::accountable::CoalitionFormation::create(input),
-        "recovery_contribution_test:formation");
+        auto formation, purify::accountable::CoalitionFormation::create(input));
     PURIFY_ASSIGN_OR_RETURN(
-        auto bound,
-        purify::accountable::bind_formation_nonce_hosts(
-            std::move(roster), formation, hosts, secp_context),
-        "recovery_contribution_test:bound_roster");
+        auto bound, purify::accountable::bind_formation_nonce_hosts(
+                        std::move(roster), formation, hosts, secp_context));
     return ContributionFixture{
         std::move(bound), std::move(formation), std::move(secrets)};
 }

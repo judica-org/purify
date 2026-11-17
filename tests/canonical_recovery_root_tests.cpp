@@ -42,14 +42,11 @@ Result<std::vector<purify::puresign_plusplus::PublicKey>> nonce_hosts(
         std::array<unsigned char, 32> seed{};
         seed[0] = 0x91;
         seed[1] = static_cast<unsigned char>(i);
+        PURIFY_ASSIGN_OR_RETURN(const auto& generated,
+                                purify::generate_key(seed));
         PURIFY_ASSIGN_OR_RETURN(
-            const auto& generated, purify::generate_key(seed),
-            "recovery_root_test:nonce_host_secret");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto host,
-            purify::puresign_plusplus::PublicKey::from_secret(
-                generated.secret, secp_context),
-            "recovery_root_test:nonce_host");
+            auto host, purify::puresign_plusplus::PublicKey::from_secret(
+                           generated.secret, secp_context));
         std::copy(member_keys[i].begin() + 1, member_keys[i].end(),
                   host.bip340_pubkey.begin());
         out.push_back(std::move(host));

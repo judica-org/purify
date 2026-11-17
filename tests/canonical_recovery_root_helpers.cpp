@@ -91,7 +91,7 @@ std::vector<Expr> signed_window_bits(purify::Transcript& transcript, const std::
 Result<purify::CircuitMainResult> setup_relation(purify::Transcript& transcript,
                                                 const std::optional<FieldElement>& scalar) {
     if (scalar && scalar->is_zero()) {
-        return purify::unexpected_error(purify::ErrorCode::RangeViolation, "root_setup:zero_witness");
+        return purify::unexpected_error(purify::ErrorCode::RangeViolation);
     }
     std::optional<UInt256> value;
     std::optional<FieldElement> sign_value;
@@ -118,21 +118,21 @@ Result<purify::CircuitMainResult> setup_relation(purify::Transcript& transcript,
 }
 
 Result<purify::NativeBulletproofCircuit> public_setup_circuit(const UInt512& root) {
-    PURIFY_RETURN_IF_ERROR(decode_root(root), "root_setup:root");
+    PURIFY_RETURN_IF_ERROR(decode_root(root));
     purify::Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(const auto& relation, setup_relation(transcript), "root_setup:relation");
+    PURIFY_ASSIGN_OR_RETURN(const auto& relation, setup_relation(transcript));
     purify::BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits), "root_setup:lower");
-    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(root, relation.p1x, relation.p2x, relation.out), "root_setup:bind");
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits));
+    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(root, relation.p1x, relation.p2x, relation.out));
     return bp.native_circuit();
 }
 
 Result<purify::BulletproofAssignmentData> setup_assignment(const UInt512& root, const FieldElement& scalar) {
     purify::Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(const auto& relation, setup_relation(transcript, scalar), "root_setup:witness");
+    PURIFY_ASSIGN_OR_RETURN(const auto& relation, setup_relation(transcript, scalar));
     purify::BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits), "root_setup:lower");
-    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(root, relation.p1x, relation.p2x, relation.out), "root_setup:bind");
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits));
+    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(root, relation.p1x, relation.p2x, relation.out));
     return bp.assignment_data(transcript.varmap(), scalar);
 }
 
@@ -146,9 +146,9 @@ Result<bool> verify_setup(const PointBytes& key, const UInt512& root, const Byte
                           const purify::bppp::ExperimentalCircuitZkNormArgProof& proof,
                           purify_secp_context* secp) {
     if (key[0] != 0x02 || purify_bip340_validate_xonly_pubkey(secp, key.data() + 1) == 0) {
-        return purify::unexpected_error(purify::ErrorCode::RangeViolation, "root_setup:even_key");
+        return purify::unexpected_error(purify::ErrorCode::RangeViolation);
     }
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, public_setup_circuit(root), "root_setup:public_circuit");
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, public_setup_circuit(root));
     const std::array<PointBytes, 1> outputs{key};
     return purify::bppp::verify_experimental_circuit_zk_norm_arg_with_public_commitments(
         circuit, proof, outputs, secp, binding(key, root, context));
@@ -156,24 +156,24 @@ Result<bool> verify_setup(const PointBytes& key, const UInt512& root, const Byte
 
 Result<purify::GeneratedKey> recover_root(const FieldElement& scalar, const PointBytes& key,
                                          const UInt512& expected_root, purify_secp_context* secp) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& point, secp_point(scalar, secp), "root_setup:recovered_point");
+    PURIFY_ASSIGN_OR_RETURN(const auto& point, secp_point(scalar, secp));
     if (key[0] != 0x02 || point != key) {
-        return purify::unexpected_error(purify::ErrorCode::BindingMismatch, "root_setup:exact_key");
+        return purify::unexpected_error(purify::ErrorCode::BindingMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(auto root, root_from_scalar(scalar), "root_setup:recover");
+    PURIFY_ASSIGN_OR_RETURN(auto root, root_from_scalar(scalar));
     if (root.public_key != expected_root) {
-        return purify::unexpected_error(purify::ErrorCode::BindingMismatch, "root_setup:exact_root");
+        return purify::unexpected_error(purify::ErrorCode::BindingMismatch);
     }
     return root;
 }
 
 Result<FieldElement> leaf_output(const purify::SecretKey& secret, const UInt512& peer) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& scalars, purify::unpack_secret(secret.packed()), "root_setup:leaf_secret");
-    PURIFY_ASSIGN_OR_RETURN(const auto& points, decode_root(peer), "root_setup:leaf_peer");
+    PURIFY_ASSIGN_OR_RETURN(const auto& scalars, purify::unpack_secret(secret.packed()));
+    PURIFY_ASSIGN_OR_RETURN(const auto& points, decode_root(peer));
     PURIFY_ASSIGN_OR_RETURN(const auto& first,
-        purify::curve1().mul_secret_affine(points.first, scalars.first), "root_setup:leaf_first");
+                            purify::curve1().mul_secret_affine(points.first, scalars.first));
     PURIFY_ASSIGN_OR_RETURN(const auto& second,
-        purify::curve2().mul_secret_affine(points.second, scalars.second), "root_setup:leaf_second");
+                            purify::curve2().mul_secret_affine(points.second, scalars.second));
     return purify::combine(first.x, second.x);
 }
 

@@ -209,9 +209,20 @@ fn constrained_construction_step_fixes_profile_and_input_state() {
     assert_eq!(SessionStep::relation_id(&step), QUALIFIED_RELATION_ID);
 }
 
+/// Streams the production step circuit into its relation ID and compares it
+/// with both pinned copies: the constant every production step declares and
+/// the relation ID inside the qualified suite profile the verifier ships.
+///
+/// Any change to a constraint, a coefficient, or the allocation order fails
+/// here in about twenty seconds, instead of surfacing only when someone
+/// reruns setup. After a deliberate relation change, requalify and update
+/// both constants from the line this test prints.
 #[test]
-#[ignore = "run explicitly in release mode; streams the pending relation"]
-fn constrained_construction_step_relation_shape_is_deterministic() {
+#[cfg_attr(
+    debug_assertions,
+    ignore = "streams 7.6 million constraints; runs by default in release"
+)]
+fn constrained_construction_step_relation_id_is_pinned() {
     let first_step = production_direct_step(0x31, 1);
     let first =
         step_relation_shape::<STATE_ARITY, _>(&first_step).expect("first production relation");
@@ -229,6 +240,17 @@ fn constrained_construction_step_relation_shape_is_deterministic() {
         first.auxiliary(),
         first.constraints(),
     );
+    assert_eq!(
+        first.relation_id(),
+        QUALIFIED_RELATION_ID,
+        "the step circuit no longer matches the relation ID its steps declare"
+    );
+    assert_eq!(
+        first.relation_id().bytes(),
+        &QUALIFIED.parameters.relation_id,
+        "the step circuit no longer matches the qualified suite profile"
+    );
+    assert_eq!(SessionStep::relation_id(&first_step), first.relation_id());
 }
 
 #[test]

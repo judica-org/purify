@@ -27,6 +27,12 @@ static_assert(
 static_assert(!purify::detail::SecureErasable<std::vector<bool>>);
 static_assert(!purify::detail::SecretValue<std::vector<unsigned char>>);
 
+// SecretVector must keep the wiping allocator: that is what erases a
+// superseded block when the vector grows.
+static_assert(std::is_same_v<
+    purify::detail::SecretVector<std::uint32_t>::allocator_type,
+    purify::detail::SecureAllocator<std::uint32_t>>);
+
 using OwnedSecret =
     purify::detail::Secret<std::array<unsigned char, 32>>;
 static_assert(!std::is_copy_constructible_v<OwnedSecret>);

@@ -159,8 +159,7 @@ Result<AffinePoint> EllipticCurve::mul_secret_affine(const JacobianPoint& point,
     purify_affine_point out{};
     WipeOnDestruction out_guard(out);
     if (purify_curve_mul_secret_affine(&out, &curve, &point_core, scalar.limbs.data()) == 0) {
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "EllipticCurve::mul_secret_affine:purify_curve_mul_secret_affine");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
     return from_core(out);
 }
@@ -274,7 +273,7 @@ Result<JacobianPoint> hash_to_curve(const Bytes& data, const EllipticCurve& curv
     purify_curve curve_core = make_core_curve(curve.a_, curve.b_, curve.n_);
     purify_jacobian_point out{};
     if (purify_curve_hash_to_curve(&out, &curve_core, data.data(), data.size()) == 0) {
-        return unexpected_error(ErrorCode::HashToCurveExhausted, "hash_to_curve:purify_curve_hash_to_curve");
+        return unexpected_error(ErrorCode::HashToCurveExhausted);
     }
     return from_core(out);
 }
@@ -311,14 +310,14 @@ bool is_valid_public_key(const UInt512& packed) {
 
 Status validate_secret_key(const UInt512& z) {
     if (!is_valid_secret_key(z)) {
-        return unexpected_error(ErrorCode::RangeViolation, "validate_secret_key:out_of_range");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     return {};
 }
 
 Status validate_public_key(const UInt512& packed) {
     if (!is_valid_public_key(packed)) {
-        return unexpected_error(ErrorCode::RangeViolation, "validate_public_key:out_of_range");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     return {};
 }
@@ -329,7 +328,7 @@ Result<std::pair<UInt256, UInt256>> unpack_secret(const UInt512& z) {
     UInt256 second;
     WipeOnDestruction second_guard(second);
     if (purify_curve_unpack_secret(first.limbs.data(), second.limbs.data(), z.limbs.data()) == 0) {
-        return unexpected_error(ErrorCode::RangeViolation, "unpack_secret:validate_secret_key");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     std::pair<UInt256, UInt256> unpacked{first, second};
     WipeOnDestruction unpacked_guard(unpacked);
@@ -339,8 +338,7 @@ Result<std::pair<UInt256, UInt256>> unpack_secret(const UInt512& z) {
 Result<UInt512> pack_secret(const UInt256& first, const UInt256& second) {
     if (first.is_zero() || half_n1() < first ||
         second.is_zero() || half_n2() < second) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "pack_secret:scalar_range");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     auto first_offset = first;
     WipeOnDestruction first_offset_guard(first_offset);
@@ -361,38 +359,31 @@ Result<std::pair<UInt256, UInt256>> unpack_public(const UInt512& packed) {
     UInt256 first;
     UInt256 second;
     if (purify_curve_unpack_public(first.limbs.data(), second.limbs.data(), packed.limbs.data()) == 0) {
-        return unexpected_error(ErrorCode::RangeViolation, "unpack_public:validate_public_key");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     return std::make_pair(first, second);
 }
 
 Result<std::pair<JacobianPoint, JacobianPoint>>
 unpack_public_points(const UInt512& packed) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& coordinates, unpack_public(packed),
-                            "unpack_public_points:unpack");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& first_x,
-        FieldElement::try_from_uint256(coordinates.first),
-        "unpack_public_points:first_x");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& second_x,
-        FieldElement::try_from_uint256(coordinates.second),
-        "unpack_public_points:second_x");
+    PURIFY_ASSIGN_OR_RETURN(const auto& coordinates, unpack_public(packed));
+    PURIFY_ASSIGN_OR_RETURN(const auto& first_x,
+                            FieldElement::try_from_uint256(coordinates.first));
+    PURIFY_ASSIGN_OR_RETURN(const auto& second_x,
+                            FieldElement::try_from_uint256(coordinates.second));
 
     const auto first = curve1().lift_x(first_x);
     const auto second = curve2().lift_x(second_x);
     if (!first || !second || first->infinity || second->infinity ||
         !curve1().mul(*first, order_n1()).infinity ||
         !curve2().mul(*second, order_n2()).infinity) {
-        return unexpected_error(ErrorCode::BackendRejectedInput,
-                                "unpack_public_points:invalid_points");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     return std::make_pair(*first, *second);
 }
 
 Status validate_public_points(const UInt512& packed) {
-    PURIFY_RETURN_IF_ERROR(unpack_public_points(packed),
-                           "validate_public_points:unpack");
+    PURIFY_RETURN_IF_ERROR(unpack_public_points(packed));
     return {};
 }
 
@@ -413,7 +404,7 @@ FieldElement combine(const FieldElement& x1, const FieldElement& x2) {
 Result<std::vector<int>> key_to_bits(UInt256 n, const UInt256& max_value) {
     std::vector<int> out(max_value.bit_length());
     if (purify_curve_key_to_bits(out.data(), out.size(), n.limbs.data(), max_value.limbs.data()) == 0) {
-        return unexpected_error(ErrorCode::RangeViolation, "key_to_bits:out_of_range");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     return out;
 }

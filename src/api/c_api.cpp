@@ -112,12 +112,11 @@ Bytes tagged_message(std::string_view prefix, const Bytes& message) {
 
 Result<UInt512> parse_secret_key(const unsigned char* secret_key) {
     if (secret_key == nullptr) {
-        return unexpected_error(ErrorCode::MissingValue, "parse_secret_key:null_secret_key");
+        return unexpected_error(ErrorCode::MissingValue);
     }
     const purify_error_code code = purify_validate_secret_key(secret_key);
     if (code != PURIFY_ERROR_OK) {
-        return unexpected_error(core_api_detail::from_core_error_code(code),
-                                "parse_secret_key:purify_validate_secret_key");
+        return unexpected_error(core_api_detail::from_core_error_code(code));
     }
     UInt512 packed = UInt512::from_bytes_be(secret_key, PURIFY_SECRET_KEY_BYTES);
     WipeOnDestruction packed_guard(packed);
@@ -126,12 +125,11 @@ Result<UInt512> parse_secret_key(const unsigned char* secret_key) {
 
 Result<UInt512> parse_public_key(const unsigned char* public_key) {
     if (public_key == nullptr) {
-        return unexpected_error(ErrorCode::MissingValue, "parse_public_key:null_public_key");
+        return unexpected_error(ErrorCode::MissingValue);
     }
     const purify_error_code code = purify_validate_public_key(public_key);
     if (code != PURIFY_ERROR_OK) {
-        return unexpected_error(core_api_detail::from_core_error_code(code),
-                                "parse_public_key:purify_validate_public_key");
+        return unexpected_error(core_api_detail::from_core_error_code(code));
     }
     UInt512 packed = UInt512::from_bytes_be(public_key, PURIFY_PUBLIC_KEY_BYTES);
     return packed;
@@ -152,15 +150,11 @@ void write_field_element(const FieldElement& value, unsigned char* out) {
 Result<UInt512> derive_public_key_from_secret(const UInt512& secret) {
     Result<std::pair<UInt256, UInt256>> unpacked = unpack_secret(secret);
     if (!unpacked.has_value()) {
-        return unexpected_error(
-            unpacked.error(),
-            "derive_public_key_from_secret:unpack_secret");
+        return unexpected_error(unpacked.error());
     }
     WipeOnDestruction unpacked_guard(*unpacked);
-    PURIFY_ASSIGN_OR_RETURN(const auto& p1, curve1().mul_secret_affine(generator1(), unpacked->first),
-                            "derive_public_key_from_secret:mul_secret_affine_p1");
-    PURIFY_ASSIGN_OR_RETURN(const auto& p2, curve2().mul_secret_affine(generator2(), unpacked->second),
-                            "derive_public_key_from_secret:mul_secret_affine_p2");
+    PURIFY_ASSIGN_OR_RETURN(const auto& p1, curve1().mul_secret_affine(generator1(), unpacked->first));
+    PURIFY_ASSIGN_OR_RETURN(const auto& p2, curve2().mul_secret_affine(generator2(), unpacked->second));
     return pack_public(p1.x.to_uint256(), p2.x.to_uint256());
 }
 

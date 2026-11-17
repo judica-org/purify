@@ -15,8 +15,7 @@ inline Result<FieldElement> canonical_sqrt_minus_one()
 {
     std::optional<FieldElement> root = FieldElement::one().negate().sqrt();
     if (!root.has_value()) {
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "bppp:canonical_sqrt_minus_one");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
     if ((root->to_bytes_be().back() & 1U) != 0U) {
         *root = root->negate();

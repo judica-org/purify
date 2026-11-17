@@ -38,7 +38,7 @@ inline Result<Bytes> bytes_from_hex(std::string_view hex) {
         }
     }
     if ((filtered.size() & 1U) != 0) {
-        return unexpected_error(ErrorCode::InvalidHexLength, "bytes_from_hex:odd_length");
+        return unexpected_error(ErrorCode::InvalidHexLength);
     }
     for (std::size_t i = 0; i < filtered.size(); i += 2) {
         auto decode = [](char ch) -> int {
@@ -56,7 +56,7 @@ inline Result<Bytes> bytes_from_hex(std::string_view hex) {
         int high = decode(filtered[i]);
         int low = decode(filtered[i + 1]);
         if (high < 0 || low < 0) {
-            return unexpected_error(ErrorCode::InvalidHex, "bytes_from_hex:invalid_digit");
+            return unexpected_error(ErrorCode::InvalidHex);
         }
         out.push_back(static_cast<unsigned char>((high << 4) | low));
     }
@@ -73,10 +73,10 @@ template <std::size_t N>
 inline Result<std::array<unsigned char, N>> array_from_hex(std::string_view hex) {
     Result<Bytes> bytes = bytes_from_hex(hex);
     if (!bytes.has_value()) {
-        return unexpected_error(bytes.error(), "array_from_hex:parse_bytes");
+        return unexpected_error(bytes.error());
     }
     if (bytes->size() != N) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "array_from_hex:wrong_size");
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
     std::array<unsigned char, N> out{};
     std::copy(bytes->begin(), bytes->end(), out.begin());
@@ -107,11 +107,11 @@ inline std::string hex_from_bytes(const ByteContainer& bytes) {
 inline Status write_file(const std::string& path, const Bytes& bytes) {
     std::ofstream file(path, std::ios::binary);
     if (!file) {
-        return unexpected_error(ErrorCode::IoOpenFailed, "write_file:open");
+        return unexpected_error(ErrorCode::IoOpenFailed);
     }
     file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     if (!file) {
-        return unexpected_error(ErrorCode::IoWriteFailed, "write_file:write");
+        return unexpected_error(ErrorCode::IoWriteFailed);
     }
     return {};
 }
@@ -125,7 +125,7 @@ inline Status write_file(const std::string& path, const Bytes& bytes) {
 inline Status prove(const Bytes& message, const SecretKey& secret, const std::string& output_path = "prove.assn") {
     Result<Bytes> assignment = prove_assignment(message, secret);
     if (!assignment.has_value()) {
-        return unexpected_error(assignment.error(), "prove:prove_assignment");
+        return unexpected_error(assignment.error());
     }
     return write_file(output_path, *assignment);
 }

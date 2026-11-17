@@ -326,8 +326,8 @@ inline constexpr std::string_view Error::message() const noexcept {
  * This is intended for `Status`-style propagation and may also be used with `Result<T>` when the
  * value is intentionally discarded. `context` is forwarded to `unexpected_error()`.
  */
-#define PURIFY_RETURN_IF_ERROR(expr, context) \
-    PURIFY_DETAIL_RETURN_IF_ERROR_IMPL(PURIFY_DETAIL_CONCAT(_purify_status_, __COUNTER__), expr, context)
+#define PURIFY_RETURN_IF_ERROR(expr, ...) \
+    PURIFY_DETAIL_RETURN_IF_ERROR_IMPL(PURIFY_DETAIL_CONCAT(_purify_status_, __COUNTER__), expr)
 
 /**
  * @brief Evaluates an expected-like expression, binds the value to `lhs`, and propagates errors.
@@ -335,16 +335,16 @@ inline constexpr std::string_view Error::message() const noexcept {
  * Example: `PURIFY_ASSIGN_OR_RETURN(auto secret, SecretKey::from_hex(hex), "caller:from_hex");`
  * `context` is forwarded to `unexpected_error()`.
  */
-#define PURIFY_ASSIGN_OR_RETURN(lhs, expr, context) \
-    PURIFY_DETAIL_ASSIGN_OR_RETURN_IMPL(PURIFY_DETAIL_CONCAT(_purify_result_, __COUNTER__), lhs, expr, context)
+#define PURIFY_ASSIGN_OR_RETURN(lhs, expr, ...) \
+    PURIFY_DETAIL_ASSIGN_OR_RETURN_IMPL(PURIFY_DETAIL_CONCAT(_purify_result_, __COUNTER__), lhs, expr)
 
-#define PURIFY_DETAIL_RETURN_IF_ERROR_IMPL(status_name, expr, context) \
+#define PURIFY_DETAIL_RETURN_IF_ERROR_IMPL(status_name, expr) \
     auto status_name = (expr); \
     if (!status_name.has_value()) \
-        return ::purify::unexpected_error(status_name.error(), context)
+        return ::purify::unexpected_error(status_name.error())
 
-#define PURIFY_DETAIL_ASSIGN_OR_RETURN_IMPL(result_name, lhs, expr, context) \
+#define PURIFY_DETAIL_ASSIGN_OR_RETURN_IMPL(result_name, lhs, expr) \
     auto result_name = (expr); \
     if (!result_name.has_value()) \
-        return ::purify::unexpected_error(result_name.error(), context); \
+        return ::purify::unexpected_error(result_name.error()); \
     lhs = std::move(*result_name)

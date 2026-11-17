@@ -198,9 +198,7 @@ Result<ExperimentalCircuitCacheLine> ExperimentalCircuitCache::clone_line_for_th
   purify_bppp_backend_resources* cloned =
       purify_bppp_backend_resources_clone(it->second.get());
   if (cloned == nullptr) {
-    return unexpected_error(
-        ErrorCode::BackendRejectedInput,
-        "ExperimentalCircuitCache::clone_line_for_thread:backend_resources");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   clone.impl_->backend_key = key;
   clone.impl_->has_backend_key = true;
@@ -409,15 +407,14 @@ ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
   return out;
 }
 
-Result<std::size_t> round_up_power_of_two(std::size_t value,
-                                          const char *context) {
+Result<std::size_t> round_up_power_of_two(std::size_t value) {
   if (value == 0) {
-    return unexpected_error(ErrorCode::Overflow, context);
+    return unexpected_error(ErrorCode::Overflow);
   }
   std::size_t out = 1;
   while (out < value) {
     if (out > std::numeric_limits<std::size_t>::max() / 2) {
-      return unexpected_error(ErrorCode::Overflow, context);
+      return unexpected_error(ErrorCode::Overflow);
     }
     out <<= 1;
   }
@@ -434,10 +431,7 @@ Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
                                            const TaggedHash& tag,
                                            std::size_t index) {
   Bytes prefix(seed.begin(), seed.end());
-  PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index,
-                          narrow_size_to_u64(index,
-                                             "derive_nonzero_scalar:index"),
-                          "derive_nonzero_scalar:index");
+  PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index, narrow_size_to_u64(index));
   append_u64_le(prefix, encoded_index);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
     Bytes input = prefix;
@@ -451,8 +445,7 @@ Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
       return candidate;
     }
   }
-  return unexpected_error(ErrorCode::InternalMismatch,
-                          "derive_nonzero_scalar:exhausted");
+  return unexpected_error(ErrorCode::InternalMismatch);
 }
 
 Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
@@ -461,9 +454,7 @@ Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
   SecretBytes prefix;
   prefix.value.reserve(seed.size() + 2 * sizeof(std::uint64_t));
   prefix.value.assign(seed.begin(), seed.end());
-  PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index,
-                          narrow_size_to_u64(index, "derive_scalar:index"),
-                          "derive_scalar:index");
+  PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index, narrow_size_to_u64(index));
   append_u64_le(prefix.value, encoded_index);
   append_u64_le(prefix.value, attempt);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
@@ -484,8 +475,7 @@ Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
       return {};
     }
   }
-  return unexpected_error(ErrorCode::InternalMismatch,
-                          "derive_scalar:exhausted");
+  return unexpected_error(ErrorCode::InternalMismatch);
 }
 
 Status derive_secret_nonzero_scalar(FieldElement &out,
@@ -495,10 +485,7 @@ Status derive_secret_nonzero_scalar(FieldElement &out,
   SecretBytes prefix;
   prefix.value.reserve(seed.size() + sizeof(std::uint64_t));
   prefix.value.assign(seed.begin(), seed.end());
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &encoded_index,
-      narrow_size_to_u64(index, "derive_secret_nonzero_scalar:index"),
-      "derive_secret_nonzero_scalar:index");
+  PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index, narrow_size_to_u64(index));
   append_u64_le(prefix.value, encoded_index);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
     SecretBytes input;
@@ -521,8 +508,7 @@ Status derive_secret_nonzero_scalar(FieldElement &out,
       secure_clear_field_element(*candidate);
     }
   }
-  return unexpected_error(ErrorCode::InternalMismatch,
-                          "derive_secret_nonzero_scalar:exhausted");
+  return unexpected_error(ErrorCode::InternalMismatch);
 }
 
 FieldElement weighted_bppp_inner_product(std::span<const FieldElement> lhs,
@@ -613,21 +599,16 @@ Result<CircuitNormArgDimensions> circuit_norm_arg_dimensions(
       externalize_commitments ? 0 : circuit.n_commitments;
   std::size_t minimum_gate_count = 0;
   if (!checked_add_size(committed_values, 1, minimum_gate_count)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "circuit_norm_arg_dimensions:minimum_gate_count");
+    return unexpected_error(ErrorCode::Overflow);
   }
   PURIFY_ASSIGN_OR_RETURN(
       out.gate_count,
-      round_up_power_of_two(std::max(circuit.n_gates, minimum_gate_count),
-                            "circuit_norm_arg_dimensions:gate_count"),
-      "circuit_norm_arg_dimensions:gate_count");
+      round_up_power_of_two(std::max(circuit.n_gates, minimum_gate_count)));
   if (!checked_add_size(out.gate_count, committed_values, out.used_l)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "circuit_norm_arg_dimensions:used_l");
+    return unexpected_error(ErrorCode::Overflow);
   }
   if (!checked_mul_size(out.gate_count, 2, out.n_vec_len)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "circuit_norm_arg_dimensions:n_vec_len");
+    return unexpected_error(ErrorCode::Overflow);
   }
   out.l_vec_len = out.n_vec_len;
   assert(out.used_l < out.l_vec_len &&
@@ -645,32 +626,25 @@ Result<NormArgInputs> build_raw_circuit_norm_arg_inputs(
       assignment.right.size() != circuit.n_gates ||
       assignment.output.size() != circuit.n_gates ||
       assignment.commitments.size() != circuit.n_commitments) {
-    return unexpected_error(
-        ErrorCode::SizeMismatch,
-        "build_raw_circuit_norm_arg_inputs:assignment_shape");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   PURIFY_ASSIGN_OR_RETURN(
       const auto &dimensions,
-      circuit_norm_arg_dimensions(circuit, externalize_commitments),
-      "build_raw_circuit_norm_arg_inputs:dimensions");
+      circuit_norm_arg_dimensions(circuit, externalize_commitments));
   const std::size_t padding_size = dimensions.l_vec_len - dimensions.used_l;
   if (!padding.empty() && padding.size() != padding_size) {
-    return unexpected_error(
-        ErrorCode::SizeMismatch,
-        "build_raw_circuit_norm_arg_inputs:padding_size");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
 
   std::size_t generator_count = 0;
   if (!checked_add_size(dimensions.n_vec_len, dimensions.l_vec_len,
                         generator_count)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "build_raw_circuit_norm_arg_inputs:generator_count");
+    return unexpected_error(ErrorCode::Overflow);
   }
 
   NormArgInputs out;
-  PURIFY_ASSIGN_OR_RETURN(
-      out.generators, create_generators(generator_count, secp_context),
-      "build_raw_circuit_norm_arg_inputs:create_generators");
+  PURIFY_ASSIGN_OR_RETURN(out.generators,
+                          create_generators(generator_count, secp_context));
   std::vector<FieldElement> raw_n(dimensions.n_vec_len,
                                   FieldElement::zero());
   std::vector<FieldElement> raw_l(dimensions.l_vec_len,
@@ -705,17 +679,12 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
     ExperimentalCircuitBackend *cache = nullptr,
     const CircuitNormArgChallenges *explicit_challenges = nullptr) {
   (void)cache;
-  PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context, "build_circuit_norm_arg_public_data:secp_context"),
-      "build_circuit_norm_arg_public_data:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!circuit.has_valid_shape()) {
-    return unexpected_error(ErrorCode::InvalidDimensions,
-                            "build_circuit_norm_arg_public_data:circuit_shape");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (!is_power_of_two_size(circuit.n_gates)) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "build_circuit_norm_arg_public_data:n_gates_power_of_two");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
 
   Bytes challenge_digest;
@@ -730,48 +699,35 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
     row_ratio = explicit_challenges->row_ratio;
   } else {
     if (raw_commitment == nullptr) {
-      return unexpected_error(
-          ErrorCode::InternalMismatch,
-          "build_circuit_norm_arg_public_data:raw_commitment");
+      return unexpected_error(ErrorCode::InternalMismatch);
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto &binding_digest,
-        experimental_circuit_binding_digest(circuit, statement_binding),
-        "build_circuit_norm_arg_public_data:binding_digest");
+        experimental_circuit_binding_digest(circuit, statement_binding));
     PURIFY_ASSIGN_OR_RETURN(
         challenge_digest,
-        circuit_norm_arg_precommit_digest(binding_digest, *raw_commitment),
-        "build_circuit_norm_arg_public_data:challenge_digest");
+        circuit_norm_arg_precommit_digest(binding_digest, *raw_commitment));
     PURIFY_ASSIGN_OR_RETURN(
-        rho,
-        derive_nonzero_scalar(challenge_digest, kCircuitNormArgRhoTaggedHash,
-                              0),
-        "build_circuit_norm_arg_public_data:rho");
+        rho, derive_nonzero_scalar(challenge_digest,
+                                   kCircuitNormArgRhoTaggedHash, 0));
     PURIFY_ASSIGN_OR_RETURN(
-        mul_scale,
-        derive_nonzero_scalar(challenge_digest, kCircuitNormArgMulTaggedHash,
-                              0),
-        "build_circuit_norm_arg_public_data:mul_scale");
+        mul_scale, derive_nonzero_scalar(challenge_digest,
+                                         kCircuitNormArgMulTaggedHash, 0));
     PURIFY_ASSIGN_OR_RETURN(
-        mul_ratio,
-        derive_nonzero_scalar(challenge_digest, kCircuitNormArgMulTaggedHash,
-                              1),
-        "build_circuit_norm_arg_public_data:mul_ratio");
+        mul_ratio, derive_nonzero_scalar(challenge_digest,
+                                         kCircuitNormArgMulTaggedHash, 1));
     if (!circuit.c.empty()) {
       PURIFY_ASSIGN_OR_RETURN(
           row_ratio,
           derive_nonzero_scalar(challenge_digest,
-                                kCircuitNormArgConstraintTaggedHash, 0),
-          "build_circuit_norm_arg_public_data:constraint_ratio");
+                                kCircuitNormArgConstraintTaggedHash, 0));
     }
   }
   PURIFY_ASSIGN_OR_RETURN(
       const auto &dimensions,
-      circuit_norm_arg_dimensions(circuit, externalize_commitments),
-      "build_circuit_norm_arg_public_data:dimensions");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &sqrt_minus_one, detail::canonical_sqrt_minus_one(),
-      "build_circuit_norm_arg_public_data:sqrt_minus_one");
+      circuit_norm_arg_dimensions(circuit, externalize_commitments));
+  PURIFY_ASSIGN_OR_RETURN(const auto &sqrt_minus_one,
+                          detail::canonical_sqrt_minus_one());
 
   const FieldElement zero = FieldElement::zero();
   const FieldElement two = FieldElement::from_int(2);
@@ -868,26 +824,21 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
 
   std::size_t raw_n_value_count = 0;
   if (!checked_mul_size(dimensions.gate_count, 2, raw_n_value_count)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "build_circuit_norm_arg_public_data:raw_n_value_count");
+    return unexpected_error(ErrorCode::Overflow);
   }
   std::size_t generator_count = 0;
   if (!checked_add_size(out->n_vec_len, out->c_vec.size(),
                         generator_count)) {
-    return unexpected_error(
-        ErrorCode::Overflow,
-        "build_circuit_norm_arg_public_data:generator_count");
+    return unexpected_error(ErrorCode::Overflow);
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      auto generators, create_generators(generator_count, secp_context),
-      "build_circuit_norm_arg_public_data:create_generators");
+  PURIFY_ASSIGN_OR_RETURN(auto generators,
+                          create_generators(generator_count, secp_context));
   out->raw_generators = generators;
   out->generators = std::move(generators);
   out->raw_generator_points.reserve(raw_n_value_count);
   for (std::size_t i = 0; i < raw_n_value_count; ++i) {
     PURIFY_ASSIGN_OR_RETURN(
-        auto point, generator_to_point(out->raw_generators[i], secp_context),
-        "build_circuit_norm_arg_public_data:generator_to_point");
+        auto point, generator_to_point(out->raw_generators[i], secp_context));
     out->raw_generator_points.push_back(point);
   }
 
@@ -896,11 +847,10 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
   for (std::size_t i = 0; i < out->n_vec_len; ++i) {
     const FieldElement term =
         (i % 2 == 0) ? generator_term : sqrt_minus_one * generator_term;
-    PURIFY_ASSIGN_OR_RETURN(
-        out->generators[i],
-        generator_scale(out->raw_generators[i],
-                        rho_power * term.inverse(), secp_context),
-        "build_circuit_norm_arg_public_data:scale_generator");
+    PURIFY_ASSIGN_OR_RETURN(out->generators[i],
+                            generator_scale(out->raw_generators[i],
+                                            rho_power * term.inverse(),
+                                            secp_context));
     if (i % 2 == 1) {
       generator_term = generator_term * mul_ratio;
     }
@@ -947,18 +897,14 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
       assignment.right.size() != circuit.n_gates ||
       assignment.output.size() != circuit.n_gates ||
       assignment.commitments.size() != circuit.n_commitments) {
-    return unexpected_error(
-        ErrorCode::SizeMismatch,
-        "reduce_experimental_circuit_to_norm_arg:assignment_shape");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
 
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &public_data,
-      build_circuit_norm_arg_public_data(circuit, statement_binding,
-                                         raw_commitment, secp_context,
-                                         externalize_commitments, cache,
-                                         explicit_challenges),
-      "reduce_experimental_circuit_to_norm_arg:public_data");
+  PURIFY_ASSIGN_OR_RETURN(const auto &public_data,
+                          build_circuit_norm_arg_public_data(
+                              circuit, statement_binding, raw_commitment,
+                              secp_context, externalize_commitments, cache,
+                              explicit_challenges));
 
   CircuitNormArgReduction out;
   out.public_data = public_data;
@@ -1007,25 +953,22 @@ Result<PointBytes>
 commit_norm_arg_witness_only(const NormArgInputs &inputs,
                              purify_secp_context *secp_context,
                              ExperimentalCircuitBackend *cache = nullptr) {
-  PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context, "commit_norm_arg_witness_only:secp_context"),
-      "commit_norm_arg_witness_only:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (inputs.n_vec.empty() || inputs.l_vec.empty()) {
-    return unexpected_error(ErrorCode::EmptyInput,
-                            "commit_norm_arg_witness_only:empty_vectors");
+    return unexpected_error(ErrorCode::EmptyInput);
   }
   if (!inputs.generators.empty() &&
       inputs.generators.size() != inputs.n_vec.size() + inputs.l_vec.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "commit_norm_arg_witness_only:generator_size");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
 
   const std::vector<PointBytes> *generators = &inputs.generators;
   std::vector<PointBytes> generated_generators;
   if (generators->empty()) {
     PURIFY_ASSIGN_OR_RETURN(
-        auto generated, create_generators(inputs.n_vec.size() + inputs.l_vec.size(), secp_context),
-        "commit_norm_arg_witness_only:create_generators");
+        auto generated,
+        create_generators(inputs.n_vec.size() + inputs.l_vec.size(),
+                          secp_context));
     generated_generators = std::move(generated);
     generators = &generated_generators;
   }
@@ -1046,8 +989,7 @@ commit_norm_arg_witness_only(const NormArgInputs &inputs,
                 n_vec.data(), inputs.n_vec.size(), l_vec.data(),
                 inputs.l_vec.size(), commitment.data());
   if (!require_ok(ok)) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "commit_norm_arg_witness_only:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return commitment;
 }
@@ -1060,13 +1002,11 @@ Result<PointBytes> offset_commitment(const PointBytes &commitment,
   purify_scalar_get_b32(
       scalar32.value.data(),
       &::purify::detail::FieldElementAccess::raw(scalar));
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "offset_commitment:secp_context"),
-                         "offset_commitment:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!require_ok(purify_bppp_offset_commitment(secp_context, commitment.data(),
                                                 scalar32.value.data(),
                                                 out.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "offset_commitment:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
 }
@@ -1079,13 +1019,11 @@ Result<PointBytes> point_scale(const PointBytes &point,
   purify_scalar_get_b32(
       scalar32.value.data(),
       &::purify::detail::FieldElementAccess::raw(scalar));
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "point_scale:secp_context"),
-                         "point_scale:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!require_ok(
           purify_point_scale(secp_context, point.data(),
                              scalar32.value.data(), out.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "point_scale:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
 }
@@ -1098,14 +1036,11 @@ Result<PointBytes> generator_scale(const PointBytes &generator,
   purify_scalar_get_b32(
       scalar32.value.data(),
       &::purify::detail::FieldElementAccess::raw(scalar));
-  PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context, "generator_scale:secp_context"),
-      "generator_scale:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!require_ok(purify_bppp_scale_generator(
           secp_context, generator.data(), scalar32.value.data(),
           out.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "generator_scale:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
 }
@@ -1113,13 +1048,10 @@ Result<PointBytes> generator_scale(const PointBytes &generator,
 Result<PointBytes> generator_to_point(const PointBytes &generator,
                                       purify_secp_context *secp_context) {
   PointBytes out{};
-  PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context, "generator_to_point:secp_context"),
-      "generator_to_point:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!require_ok(purify_bppp_generator_to_point(
           secp_context, generator.data(), out.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "generator_to_point:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
 }
@@ -1128,12 +1060,10 @@ Result<PointBytes> point_add(const PointBytes &lhs,
                              const PointBytes &rhs,
                              purify_secp_context *secp_context) {
   PointBytes out{};
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "point_add:secp_context"),
-                         "point_add:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!require_ok(
           purify_point_add(secp_context, lhs.data(), rhs.data(), out.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "point_add:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
 }
@@ -1142,14 +1072,10 @@ Result<PointBytes> point_add_allow_infinity(
     const PointBytes &lhs, const PointBytes &rhs,
     purify_secp_context *secp_context) {
   PointBytes out{};
-  PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context,
-                           "point_add_allow_infinity:secp_context"),
-      "point_add_allow_infinity:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!require_ok(purify_point_add_allow_infinity(
           secp_context, lhs.data(), rhs.data(), out.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "point_add_allow_infinity:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
 }
@@ -1158,14 +1084,10 @@ Result<PointBytes> point_subtract_allow_infinity(
     const PointBytes &lhs, const PointBytes &rhs,
     purify_secp_context *secp_context) {
   PointBytes out{};
-  PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context,
-                           "point_subtract_allow_infinity:secp_context"),
-      "point_subtract_allow_infinity:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!require_ok(purify_point_subtract_allow_infinity(
           secp_context, lhs.data(), rhs.data(), out.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "point_subtract_allow_infinity:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
 }
@@ -1192,8 +1114,7 @@ Result<BatchedPublicCommitment> batch_public_commitments_with_eta(
     const FieldElement &eta,
     purify_secp_context *secp_context) {
   if (public_commitments.empty()) {
-    return unexpected_error(ErrorCode::EmptyInput,
-                            "batch_public_commitments:empty");
+    return unexpected_error(ErrorCode::EmptyInput);
   }
 
   BatchedPublicCommitment out;
@@ -1204,11 +1125,9 @@ Result<BatchedPublicCommitment> batch_public_commitments_with_eta(
   for (std::size_t i = 1; i < public_commitments.size(); ++i) {
     PURIFY_ASSIGN_OR_RETURN(
         const auto &scaled,
-        point_scale(public_commitments[i], weight, secp_context),
-        "batch_public_commitments:scale");
-    PURIFY_ASSIGN_OR_RETURN(
-        out.point, point_add(out.point, scaled, secp_context),
-        "batch_public_commitments:add");
+        point_scale(public_commitments[i], weight, secp_context));
+    PURIFY_ASSIGN_OR_RETURN(out.point,
+                            point_add(out.point, scaled, secp_context));
     out.weights.push_back(weight);
     weight = weight * eta;
   }
@@ -1221,8 +1140,7 @@ Result<BatchedPublicCommitment> batch_public_commitments(
     purify_secp_context *secp_context) {
   PURIFY_ASSIGN_OR_RETURN(
       const auto &eta,
-      derive_nonzero_scalar(challenge_digest, kCircuitDlogBatchTaggedHash, 0),
-      "batch_public_commitments:eta");
+      derive_nonzero_scalar(challenge_digest, kCircuitDlogBatchTaggedHash, 0));
   return batch_public_commitments_with_eta(public_commitments, eta,
                                            secp_context);
 }
@@ -1249,8 +1167,7 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog(
     const ScalarBytes &secret_prover_seed,
     purify_secp_context *secp_context) {
   if (batched.weights.size() != commitment_values.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "prove_public_commitment_dlog:values");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   FieldElement value = FieldElement::zero();
   WipeOnDestruction value_wiper(value);
@@ -1277,35 +1194,29 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog(
                           challenge_digest.end());
   FieldElement nonce = FieldElement::zero();
   WipeOnDestruction nonce_wiper(nonce);
-  PURIFY_RETURN_IF_ERROR(
-      derive_secret_nonzero_scalar(nonce, nonce_seed.value,
-                                   kCircuitDlogNonceTaggedHash, 0),
-      "prove_public_commitment_dlog:nonce");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &nonce_point, point_from_scalar_base(nonce, secp_context),
-      "prove_public_commitment_dlog:nonce_point");
+  PURIFY_RETURN_IF_ERROR(derive_secret_nonzero_scalar(
+      nonce, nonce_seed.value, kCircuitDlogNonceTaggedHash, 0));
+  PURIFY_ASSIGN_OR_RETURN(const auto &nonce_point,
+                          point_from_scalar_base(nonce, secp_context));
 
   PublicCommitmentDlogProof out;
   int parity = 0;
   if (purify_bip340_xonly_from_point(
           secp_context, nonce_point.data(), out.nonce_xonly.data(), &parity) ==
       0) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "prove_public_commitment_dlog:nonce_xonly");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   FieldElement negated_nonce = nonce.negate();
   WipeOnDestruction negated_nonce_wiper(negated_nonce);
   nonce.conditional_assign(negated_nonce, parity != 0);
   PURIFY_ASSIGN_OR_RETURN(
       const auto &challenge,
-      dlog_challenge(challenge_digest, batched.point, out.nonce_xonly),
-      "prove_public_commitment_dlog:challenge");
+      dlog_challenge(challenge_digest, batched.point, out.nonce_xonly));
   FieldElement challenge_value = challenge * value;
   WipeOnDestruction challenge_value_wiper(challenge_value);
   const FieldElement response = nonce + challenge_value;
   if (response.is_zero()) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "prove_public_commitment_dlog:zero_response");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   out.response = scalar_bytes(response);
   return out;
@@ -1320,8 +1231,7 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog_v4(
     purify_secp_context *secp_context,
     ChallengeCallback &&challenge_callback) {
   if (batched.weights.size() != commitment_values.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "prove_public_commitment_dlog_v4:values");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   FieldElement value = FieldElement::zero();
   WipeOnDestruction value_wiper(value);
@@ -1348,34 +1258,28 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog_v4(
                           nonce_binding.end());
   FieldElement nonce = FieldElement::zero();
   WipeOnDestruction nonce_wiper(nonce);
-  PURIFY_RETURN_IF_ERROR(
-      derive_secret_nonzero_scalar(nonce, nonce_seed.value,
-                                   kCircuitDlogNonceV4TaggedHash, 0),
-      "prove_public_commitment_dlog_v4:nonce");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &nonce_point, point_from_scalar_base(nonce, secp_context),
-      "prove_public_commitment_dlog_v4:nonce_point");
+  PURIFY_RETURN_IF_ERROR(derive_secret_nonzero_scalar(
+      nonce, nonce_seed.value, kCircuitDlogNonceV4TaggedHash, 0));
+  PURIFY_ASSIGN_OR_RETURN(const auto &nonce_point,
+                          point_from_scalar_base(nonce, secp_context));
 
   PublicCommitmentDlogProof out;
   int parity = 0;
   if (purify_bip340_xonly_from_point(
           secp_context, nonce_point.data(), out.nonce_xonly.data(), &parity) ==
       0) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "prove_public_commitment_dlog_v4:nonce_xonly");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   FieldElement negated_nonce = nonce.negate();
   WipeOnDestruction negated_nonce_wiper(negated_nonce);
   nonce.conditional_assign(negated_nonce, parity != 0);
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &challenge, challenge_callback(out.nonce_xonly),
-      "prove_public_commitment_dlog_v4:challenge");
+  PURIFY_ASSIGN_OR_RETURN(const auto &challenge,
+                          challenge_callback(out.nonce_xonly));
   FieldElement challenge_value = challenge * value;
   WipeOnDestruction challenge_value_wiper(challenge_value);
   const FieldElement response = nonce + challenge_value;
   if (response.is_zero()) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "prove_public_commitment_dlog_v4:zero_response");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   out.response = scalar_bytes(response);
   return out;
@@ -1386,9 +1290,8 @@ Result<bool> verify_public_commitment_dlog(
     const FieldElement &challenge,
     const PublicCommitmentDlogProof &proof,
     purify_secp_context *secp_context) {
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &response, FieldElement::try_from_bytes32(proof.response),
-      "verify_public_commitment_dlog:response");
+  PURIFY_ASSIGN_OR_RETURN(const auto &response,
+                          FieldElement::try_from_bytes32(proof.response));
   if (response.is_zero()) {
     return false;
   }
@@ -1396,13 +1299,10 @@ Result<bool> verify_public_commitment_dlog(
   nonce_point[0] = 0x02;
   std::copy(proof.nonce_xonly.begin(), proof.nonce_xonly.end(),
             nonce_point.begin() + 1);
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &lhs, point_from_scalar_base(response, secp_context),
-      "verify_public_commitment_dlog:lhs");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &scaled_commitment,
-      point_scale(batched.point, challenge, secp_context),
-      "verify_public_commitment_dlog:scale_commitment");
+  PURIFY_ASSIGN_OR_RETURN(const auto &lhs,
+                          point_from_scalar_base(response, secp_context));
+  PURIFY_ASSIGN_OR_RETURN(const auto &scaled_commitment,
+                          point_scale(batched.point, challenge, secp_context));
   Result<PointBytes> rhs =
       point_add(nonce_point, scaled_commitment, secp_context);
   return rhs.has_value() && lhs == *rhs;
@@ -1415,8 +1315,7 @@ Result<bool> verify_public_commitment_dlog(
     purify_secp_context *secp_context) {
   PURIFY_ASSIGN_OR_RETURN(
       const auto &challenge,
-      dlog_challenge(challenge_digest, batched.point, proof.nonce_xonly),
-      "verify_public_commitment_dlog:challenge");
+      dlog_challenge(challenge_digest, batched.point, proof.nonce_xonly));
   return verify_public_commitment_dlog(batched, challenge, proof,
                                        secp_context);
 }
@@ -1424,16 +1323,10 @@ Result<bool> verify_public_commitment_dlog(
 Result<Bytes> bind_public_commitments(
     std::span<const PointBytes> public_commitments,
     std::span<const unsigned char> statement_binding) {
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &encoded_commitment_count,
-      narrow_size_to_u64(public_commitments.size(),
-                         "bind_public_commitments:count"),
-      "bind_public_commitments:count");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &encoded_binding_size,
-      narrow_size_to_u64(statement_binding.size(),
-                         "bind_public_commitments:statement_binding"),
-      "bind_public_commitments:statement_binding");
+  PURIFY_ASSIGN_OR_RETURN(const auto &encoded_commitment_count,
+                          narrow_size_to_u64(public_commitments.size()));
+  PURIFY_ASSIGN_OR_RETURN(const auto &encoded_binding_size,
+                          narrow_size_to_u64(statement_binding.size()));
 
   std::size_t point_bytes = 0;
   std::size_t total_size = 0;
@@ -1444,8 +1337,7 @@ Result<Bytes> bind_public_commitments(
       !checked_add_size(total_size, point_bytes, total_size) ||
       !checked_add_size(total_size, 8, total_size) ||
       !checked_add_size(total_size, statement_binding.size(), total_size)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "bind_public_commitments:reserve");
+    return unexpected_error(ErrorCode::Overflow);
   }
   out.reserve(total_size);
   append_u64_le(out, encoded_commitment_count);
@@ -1462,16 +1354,14 @@ validate_public_commitments(std::span<const PointBytes> public_commitments,
                             std::span<const FieldElement> commitments,
                             purify_secp_context *secp_context) {
   if (public_commitments.size() != commitments.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "validate_public_commitments:size");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   for (std::size_t i = 0; i < commitments.size(); ++i) {
     PURIFY_ASSIGN_OR_RETURN(
-        const auto &expected, point_from_scalar_base(commitments[i], secp_context),
-        "validate_public_commitments:point_from_scalar_base");
+        const auto &expected,
+        point_from_scalar_base(commitments[i], secp_context));
     if (expected != public_commitments[i]) {
-      return unexpected_error(ErrorCode::BindingMismatch,
-                              "validate_public_commitments:mismatch");
+      return unexpected_error(ErrorCode::BindingMismatch);
     }
   }
   return {};
@@ -1483,21 +1373,17 @@ Result<PointBytes> add_scaled_points_allow_infinity(
     std::span<const FieldElement> scalars,
     purify_secp_context *secp_context) {
   if (points.size() != scalars.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "add_scaled_points_allow_infinity:size");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   PointBytes out = base_commitment;
   for (std::size_t i = 0; i < points.size(); ++i) {
     if (scalars[i].is_zero()) {
       continue;
     }
+    PURIFY_ASSIGN_OR_RETURN(const auto &scaled,
+                            point_scale(points[i], scalars[i], secp_context));
     PURIFY_ASSIGN_OR_RETURN(
-        const auto &scaled,
-        point_scale(points[i], scalars[i], secp_context),
-        "add_scaled_points_allow_infinity:scale");
-    PURIFY_ASSIGN_OR_RETURN(
-        out, point_add_allow_infinity(out, scaled, secp_context),
-        "add_scaled_points_allow_infinity:add");
+        out, point_add_allow_infinity(out, scaled, secp_context));
   }
   return out;
 }
@@ -1508,8 +1394,7 @@ Result<PointBytes> circuit_anchored_offset_v4(
     purify_secp_context *secp_context) {
   if (public_commitments.size() !=
       public_data.public_commitment_coeffs.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "circuit_anchored_offset_v4:public_size");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
 
   std::vector<PointBytes> points;
@@ -1525,9 +1410,7 @@ Result<PointBytes> circuit_anchored_offset_v4(
   }
   if (!public_data.target.is_zero()) {
     PURIFY_ASSIGN_OR_RETURN(
-        auto target,
-        point_from_scalar_base(public_data.target, secp_context),
-        "circuit_anchored_offset_v4:target");
+        auto target, point_from_scalar_base(public_data.target, secp_context));
     points.push_back(std::move(target));
     scalars.push_back(FieldElement::one());
   }
@@ -1545,19 +1428,14 @@ anchor_zk_a_commitment(const PointBytes &a_witness_commitment,
                        const CircuitNormArgPublicData &public_data,
                        std::span<const PointBytes> public_commitments,
                        purify_secp_context *secp_context) {
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &offset,
-      circuit_anchored_offset_v4(public_data, public_commitments,
-                                 secp_context),
-      "anchor_zk_a_commitment:offset");
+  PURIFY_ASSIGN_OR_RETURN(const auto &offset,
+                          circuit_anchored_offset_v4(
+                              public_data, public_commitments, secp_context));
   PURIFY_ASSIGN_OR_RETURN(
       const auto &anchored,
-      point_add_allow_infinity(a_witness_commitment, offset,
-                               secp_context),
-      "anchor_zk_a_commitment:add");
+      point_add_allow_infinity(a_witness_commitment, offset, secp_context));
   if (anchored == PointBytes{}) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "anchor_zk_a_commitment:identity");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return anchored;
 }
@@ -1584,8 +1462,8 @@ commit_explicit_norm_arg(const NormArgInputs &inputs, const FieldElement &value,
                          purify_secp_context *secp_context,
                          ExperimentalCircuitBackend *cache = nullptr) {
   PURIFY_ASSIGN_OR_RETURN(
-      const auto &witness_commitment, commit_norm_arg_witness_only(inputs, secp_context, cache),
-      "commit_explicit_norm_arg:witness_commitment");
+      const auto &witness_commitment,
+      commit_norm_arg_witness_only(inputs, secp_context, cache));
   return offset_commitment(witness_commitment, value, secp_context);
 }
 
@@ -1594,10 +1472,8 @@ Result<PointBytes> combine_zk_commitments(const PointBytes &a_commitment,
                                           const FieldElement &challenge,
                                           const FieldElement &t2,
                                           purify_secp_context *secp_context) {
-  PURIFY_ASSIGN_OR_RETURN(const auto &scaled_s, point_scale(s_commitment, challenge, secp_context),
-                          "combine_zk_commitments:scale_s");
-  PURIFY_ASSIGN_OR_RETURN(const auto &combined, point_add(a_commitment, scaled_s, secp_context),
-                          "combine_zk_commitments:add");
+  PURIFY_ASSIGN_OR_RETURN(const auto &scaled_s, point_scale(s_commitment, challenge, secp_context));
+  PURIFY_ASSIGN_OR_RETURN(const auto &combined, point_add(a_commitment, scaled_s, secp_context));
   return offset_commitment(combined, challenge * challenge * t2, secp_context);
 }
 
@@ -1606,23 +1482,21 @@ Result<NormArgProof>
 prove_norm_arg_impl(Inputs &&inputs,
                     purify_secp_context *secp_context,
                     ExperimentalCircuitBackend *cache = nullptr) {
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "prove_norm_arg:secp_context"),
-                         "prove_norm_arg:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (inputs.n_vec.empty() || inputs.l_vec.empty() || inputs.c_vec.empty()) {
-    return unexpected_error(ErrorCode::EmptyInput,
-                            "prove_norm_arg:empty_vectors");
+    return unexpected_error(ErrorCode::EmptyInput);
   }
   if (inputs.l_vec.size() != inputs.c_vec.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "prove_norm_arg:l_c_size_mismatch");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
 
   const std::vector<PointBytes> *generators = &inputs.generators;
   std::vector<PointBytes> generated_generators;
   if (generators->empty()) {
     PURIFY_ASSIGN_OR_RETURN(
-        auto generated, create_generators(inputs.n_vec.size() + inputs.l_vec.size(), secp_context),
-        "prove_norm_arg:create_generators");
+        auto generated,
+        create_generators(inputs.n_vec.size() + inputs.l_vec.size(),
+                          secp_context));
     generated_generators = std::move(generated);
     generators = &generated_generators;
   }
@@ -1637,8 +1511,7 @@ prove_norm_arg_impl(Inputs &&inputs,
   Bytes proof(proof_len);
 
   if (proof_len == 0) {
-    return unexpected_error(ErrorCode::InvalidDimensions,
-                            "prove_norm_arg:proof_len_zero");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   const int ok =
       resolved.backend_resources != nullptr
@@ -1654,8 +1527,7 @@ prove_norm_arg_impl(Inputs &&inputs,
                 inputs.c_vec.size(), commitment.data(), proof.data(),
                 &proof_len);
   if (!require_ok(ok)) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "prove_norm_arg:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   proof.resize(proof_len);
 
@@ -1724,19 +1596,16 @@ Result<std::vector<PointBytes>> create_generators(std::size_t count,
   if (count == 0) {
     return out;
   }
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "create_generators:secp_context"),
-                         "create_generators:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   std::span<unsigned char> serialized = writable_byte_span(out);
   std::size_t serialized_len = serialized.size();
   if (!require_ok(purify_bppp_create_generators(secp_context, count,
                                                 serialized.data(),
                                                 &serialized_len))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "create_generators:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   if (serialized_len != serialized.size()) {
-    return unexpected_error(ErrorCode::UnexpectedSize,
-                            "create_generators:serialized_len");
+    return unexpected_error(ErrorCode::UnexpectedSize);
   }
   return out;
 }
@@ -1745,23 +1614,21 @@ Result<PointBytes>
 commit_norm_arg_with_cache(const NormArgInputs &inputs,
                            purify_secp_context *secp_context,
                            ExperimentalCircuitBackend *cache = nullptr) {
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "commit_norm_arg:secp_context"),
-                         "commit_norm_arg:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (inputs.n_vec.empty() || inputs.l_vec.empty() || inputs.c_vec.empty()) {
-    return unexpected_error(ErrorCode::EmptyInput,
-                            "commit_norm_arg:empty_vectors");
+    return unexpected_error(ErrorCode::EmptyInput);
   }
   if (inputs.l_vec.size() != inputs.c_vec.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "commit_norm_arg:l_c_size_mismatch");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
 
   const std::vector<PointBytes> *generators = &inputs.generators;
   std::vector<PointBytes> generated_generators;
   if (generators->empty()) {
     PURIFY_ASSIGN_OR_RETURN(
-        auto generated, create_generators(inputs.n_vec.size() + inputs.l_vec.size(), secp_context),
-        "commit_norm_arg:create_generators");
+        auto generated,
+        create_generators(inputs.n_vec.size() + inputs.l_vec.size(),
+                          secp_context));
     generated_generators = std::move(generated);
     generators = &generated_generators;
   }
@@ -1784,8 +1651,7 @@ commit_norm_arg_with_cache(const NormArgInputs &inputs,
                 l_vec.data(), inputs.l_vec.size(), c_vec.data(),
                 inputs.c_vec.size(), commitment.data());
   if (!require_ok(ok)) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "commit_norm_arg:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return commitment;
 }
@@ -1804,13 +1670,11 @@ Result<PointBytes> pedersen_commit_char(const ScalarBytes &blind,
                                         const GeneratorBytes &value_gen,
                                         const GeneratorBytes &blind_gen) {
   PointBytes commitment{};
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "pedersen_commit_char:secp_context"),
-                         "pedersen_commit_char:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!require_ok(purify_pedersen_commit_char(
           secp_context, blind.data(), value.data(), value_gen.data(), blind_gen.data(),
           commitment.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "pedersen_commit_char:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return commitment;
 }
@@ -1829,24 +1693,21 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
     const NormArgInputs &inputs, const PointBytes &commitment,
     purify_secp_context *secp_context,
     ExperimentalCircuitBackend *cache = nullptr) {
-  PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context, "prove_norm_arg_to_commitment:secp_context"),
-      "prove_norm_arg_to_commitment:secp_context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (inputs.n_vec.empty() || inputs.l_vec.empty() || inputs.c_vec.empty()) {
-    return unexpected_error(ErrorCode::EmptyInput,
-                            "prove_norm_arg_to_commitment:empty_vectors");
+    return unexpected_error(ErrorCode::EmptyInput);
   }
   if (inputs.l_vec.size() != inputs.c_vec.size()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "prove_norm_arg_to_commitment:l_c_size_mismatch");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
 
   const std::vector<PointBytes> *generators = &inputs.generators;
   std::vector<PointBytes> generated_generators;
   if (generators->empty()) {
     PURIFY_ASSIGN_OR_RETURN(
-        auto generated, create_generators(inputs.n_vec.size() + inputs.l_vec.size(), secp_context),
-        "prove_norm_arg_to_commitment:create_generators");
+        auto generated,
+        create_generators(inputs.n_vec.size() + inputs.l_vec.size(),
+                          secp_context));
     generated_generators = std::move(generated);
     generators = &generated_generators;
   }
@@ -1860,8 +1721,7 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
       purify_bppp_required_proof_size(inputs.n_vec.size(), inputs.c_vec.size());
   Bytes proof(proof_len);
   if (proof_len == 0) {
-    return unexpected_error(ErrorCode::InvalidDimensions,
-                            "prove_norm_arg_to_commitment:proof_len_zero");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   const int ok =
       resolved.backend_resources != nullptr
@@ -1878,8 +1738,7 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
                 inputs.c_vec.size(), commitment.data(), proof.data(),
                 &proof_len);
   if (!require_ok(ok)) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "prove_norm_arg_to_commitment:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   proof.resize(proof_len);
 
@@ -1931,14 +1790,12 @@ Result<NormArgProof> prove_norm_arg_to_commitment_v4(
       inputs.l_vec.size() != inputs.c_vec.size() ||
       inputs.generators.size() !=
           inputs.n_vec.size() + inputs.l_vec.size()) {
-    return unexpected_error(ErrorCode::InvalidDimensions,
-                            "prove_norm_arg_to_commitment_v4:inputs");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   const std::size_t proof_capacity = purify_bppp_required_proof_size(
       inputs.n_vec.size(), inputs.c_vec.size());
   if (proof_capacity == 0) {
-    return unexpected_error(ErrorCode::InvalidDimensions,
-                            "prove_norm_arg_to_commitment_v4:proof_size");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
 
   Bytes proof(proof_capacity);
@@ -1957,15 +1814,12 @@ Result<NormArgProof> prove_norm_arg_to_commitment_v4(
       &proof_len);
   if (ok == 0) {
     if (callback.error.has_value()) {
-      return unexpected_error(*callback.error,
-                              "prove_norm_arg_to_commitment_v4:transcript");
+      return unexpected_error(*callback.error);
     }
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "prove_norm_arg_to_commitment_v4:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   if (callback.rounds.size() != transcript.shape().round_count()) {
-    return unexpected_error(ErrorCode::InternalMismatch,
-                            "prove_norm_arg_to_commitment_v4:rounds");
+    return unexpected_error(ErrorCode::InternalMismatch);
   }
   proof.resize(proof_len);
   return NormArgProof{inputs.rho, inputs.generators, inputs.c_vec,
@@ -2008,8 +1862,7 @@ parse_norm_rounds_v4(const Bytes &proof, std::size_t round_count,
                         sizeof(candidate::PackedPointPairV4), pair_bytes) ||
       !checked_add_size(pair_bytes, 2 * sizeof(ScalarBytes), expected_size) ||
       proof.size() != expected_size) {
-    return unexpected_error(ErrorCode::InvalidDimensions,
-                            "parse_norm_rounds_v4:proof_size");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   std::vector<candidate::PackedPointPairV4> rounds(round_count);
   for (std::size_t i = 0; i < rounds.size(); ++i) {
@@ -2051,8 +1904,7 @@ Result<PointBytes> prepare_norm_arg_v4(
           reinterpret_cast<const unsigned char *>(encoded_gammas.data()),
           encoded_gammas.size(), terminal_n.data(), terminal_l.data(),
           residual.data()) == 0) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "prepare_norm_arg_v4:backend");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return residual;
 }
@@ -2096,11 +1948,9 @@ Result<PointBytes> commit_experimental_circuit_witness(
     const BulletproofAssignmentData &assignment,
     purify_secp_context *secp_context,
     ExperimentalCircuitBackend *cache) {
-  PURIFY_ASSIGN_OR_RETURN(
-      auto raw_inputs,
-      build_raw_circuit_norm_arg_inputs(circuit, assignment, {}, false,
-                                        secp_context),
-      "commit_experimental_circuit_witness:raw_inputs");
+  PURIFY_ASSIGN_OR_RETURN(auto raw_inputs,
+                          build_raw_circuit_norm_arg_inputs(
+                              circuit, assignment, {}, false, secp_context));
   WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
   WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
   return commit_norm_arg_witness_only(raw_inputs, secp_context, cache);
@@ -2115,52 +1965,37 @@ prove_experimental_circuit_norm_arg_to_commitment(
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend *cache) {
   if (!circuit.has_valid_shape()) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "prove_experimental_circuit_norm_arg_to_commitment:circuit_shape");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (!is_power_of_two_size(circuit.n_gates)) {
-    return unexpected_error(ErrorCode::InvalidDimensions,
-                            "prove_experimental_circuit_norm_arg_to_commitment:"
-                            "n_gates_power_of_two");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (assignment.left.size() != circuit.n_gates ||
       assignment.right.size() != circuit.n_gates ||
       assignment.output.size() != circuit.n_gates ||
       assignment.commitments.size() != circuit.n_commitments) {
-    return unexpected_error(
-        ErrorCode::SizeMismatch,
-        "prove_experimental_circuit_norm_arg_to_commitment:assignment_shape");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   if (!circuit.evaluate(assignment)) {
-    return unexpected_error(
-        ErrorCode::EquationMismatch,
-        "prove_experimental_circuit_norm_arg_to_commitment:assignment_invalid");
+    return unexpected_error(ErrorCode::EquationMismatch);
   }
 
-  PURIFY_ASSIGN_OR_RETURN(
-      auto raw_inputs,
-      build_raw_circuit_norm_arg_inputs(circuit, assignment, {}, false,
-                                        secp_context),
-      "prove_experimental_circuit_norm_arg_to_commitment:raw_inputs");
+  PURIFY_ASSIGN_OR_RETURN(auto raw_inputs,
+                          build_raw_circuit_norm_arg_inputs(
+                              circuit, assignment, {}, false, secp_context));
   WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
   WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
   PURIFY_ASSIGN_OR_RETURN(
       const auto &computed_witness_commitment,
-      commit_norm_arg_witness_only(raw_inputs, secp_context, cache),
-      "prove_experimental_circuit_norm_arg_to_commitment:commit_witness");
+      commit_norm_arg_witness_only(raw_inputs, secp_context, cache));
   if (computed_witness_commitment != witness_commitment) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "prove_experimental_circuit_norm_arg_to_commitment:"
-                            "witness_commitment_mismatch");
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
 
-  PURIFY_ASSIGN_OR_RETURN(
-      auto reduction,
-      reduce_experimental_circuit_to_norm_arg(
-          circuit, assignment, witness_commitment, secp_context,
-          statement_binding, false, cache),
-      "prove_experimental_circuit_norm_arg_to_commitment:reduce");
+  PURIFY_ASSIGN_OR_RETURN(auto reduction,
+                          reduce_experimental_circuit_to_norm_arg(
+                              circuit, assignment, witness_commitment,
+                              secp_context, statement_binding, false, cache));
   WipeOnDestruction reduction_n_wiper(reduction.n_vec);
   WipeOnDestruction reduction_l_wiper(reduction.l_vec);
 
@@ -2168,17 +2003,14 @@ prove_experimental_circuit_norm_arg_to_commitment(
   WipeOnDestruction input_n_wiper(inputs.n_vec);
   WipeOnDestruction input_l_wiper(inputs.l_vec);
 
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &anchored_commitment,
-      anchor_zk_a_commitment(witness_commitment, *reduction.public_data, {},
-                             secp_context),
-      "prove_experimental_circuit_norm_arg_to_commitment:anchor");
+  PURIFY_ASSIGN_OR_RETURN(const auto &anchored_commitment,
+                          anchor_zk_a_commitment(witness_commitment,
+                                                 *reduction.public_data, {},
+                                                 secp_context));
 
   PURIFY_ASSIGN_OR_RETURN(
-      auto proof,
-      prove_norm_arg_to_commitment_with_cache(inputs, anchored_commitment,
-                                              secp_context, nullptr),
-      "prove_experimental_circuit_norm_arg_to_commitment:prove");
+      auto proof, prove_norm_arg_to_commitment_with_cache(
+                      inputs, anchored_commitment, secp_context, nullptr));
   return ExperimentalCircuitNormArgProof{witness_commitment,
                                          std::move(proof.proof)};
 }
@@ -2189,11 +2021,9 @@ Result<ExperimentalCircuitNormArgProof> prove_experimental_circuit_norm_arg(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend *cache) {
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &witness_commitment,
-      commit_experimental_circuit_witness(circuit, assignment, secp_context,
-                                          cache),
-      "prove_experimental_circuit_norm_arg:commit_witness");
+  PURIFY_ASSIGN_OR_RETURN(const auto &witness_commitment,
+                          commit_experimental_circuit_witness(
+                              circuit, assignment, secp_context, cache));
   return prove_experimental_circuit_norm_arg_to_commitment(
       circuit, assignment, witness_commitment, secp_context, statement_binding, cache);
 }
@@ -2205,31 +2035,24 @@ Result<bool> verify_experimental_circuit_norm_arg(
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend *cache) {
   if (!circuit.has_valid_shape()) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "verify_experimental_circuit_norm_arg:circuit_shape");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (!is_power_of_two_size(circuit.n_gates)) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "verify_experimental_circuit_norm_arg:n_gates_power_of_two");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (proof.proof.empty()) {
-    return unexpected_error(ErrorCode::EmptyInput,
-                            "verify_experimental_circuit_norm_arg:proof_empty");
+    return unexpected_error(ErrorCode::EmptyInput);
   }
 
   PURIFY_ASSIGN_OR_RETURN(
       const auto &public_data,
       build_circuit_norm_arg_public_data(circuit, statement_binding,
                                          proof.witness_commitment, secp_context,
-                                         false, cache),
-      "verify_experimental_circuit_norm_arg:public_data");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &anchored_commitment,
-      anchor_zk_a_commitment(proof.witness_commitment, *public_data, {},
-                             secp_context),
-      "verify_experimental_circuit_norm_arg:anchor");
+                                         false, cache));
+  PURIFY_ASSIGN_OR_RETURN(const auto &anchored_commitment,
+                          anchor_zk_a_commitment(proof.witness_commitment,
+                                                 *public_data, {},
+                                                 secp_context));
 
   NormArgProof bundle;
   bundle.rho = public_data->rho_bytes;
@@ -2251,61 +2074,45 @@ prove_experimental_circuit_zk_norm_arg_impl(
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments, ExperimentalCircuitBackend *cache) {
   if (!circuit.has_valid_shape()) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "prove_experimental_circuit_zk_norm_arg_impl:circuit_shape");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (!is_power_of_two_size(circuit.n_gates)) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "prove_experimental_circuit_zk_norm_arg_impl:n_gates_power_of_two");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (assignment.left.size() != circuit.n_gates ||
       assignment.right.size() != circuit.n_gates ||
       assignment.output.size() != circuit.n_gates ||
       assignment.commitments.size() != circuit.n_commitments) {
-    return unexpected_error(
-        ErrorCode::SizeMismatch,
-        "prove_experimental_circuit_zk_norm_arg_impl:assignment_shape");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   if (externalize_commitments &&
       public_commitments.size() != circuit.n_commitments) {
-    return unexpected_error(
-        ErrorCode::SizeMismatch,
-        "prove_experimental_circuit_zk_norm_arg_impl:public_commitment_count");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   if (!circuit.evaluate(assignment)) {
-    return unexpected_error(
-        ErrorCode::EquationMismatch,
-        "prove_experimental_circuit_zk_norm_arg_impl:assignment_invalid");
+    return unexpected_error(ErrorCode::EquationMismatch);
   }
 
   Bytes bound_statement_binding;
   if (externalize_commitments) {
     PURIFY_ASSIGN_OR_RETURN(
         bound_statement_binding,
-        bind_public_commitments(public_commitments, statement_binding),
-        "prove_experimental_circuit_zk_norm_arg_impl:bound_statement_binding");
+        bind_public_commitments(public_commitments, statement_binding));
   } else {
     bound_statement_binding =
         Bytes(statement_binding.begin(), statement_binding.end());
   }
   if (externalize_commitments) {
     if (public_commitments.empty()) {
-      return unexpected_error(
-          ErrorCode::EmptyInput,
-          "prove_experimental_circuit_zk_norm_arg_impl:public_commitments");
+      return unexpected_error(ErrorCode::EmptyInput);
     }
-    PURIFY_RETURN_IF_ERROR(
-        validate_public_commitments(public_commitments, assignment.commitments, secp_context),
-        "prove_experimental_circuit_zk_norm_arg_impl:"
-        "validate_public_commitments");
+    PURIFY_RETURN_IF_ERROR(validate_public_commitments(
+        public_commitments, assignment.commitments, secp_context));
   }
 
   PURIFY_ASSIGN_OR_RETURN(
       const auto &binding_digest,
-      experimental_circuit_binding_digest(circuit, bound_statement_binding),
-      "prove_experimental_circuit_zk_norm_arg_impl:binding_digest");
+      experimental_circuit_binding_digest(circuit, bound_statement_binding));
   SecretBytes seed;
   seed.value.reserve(binding_digest.size() + secret_prover_seed.size());
   seed.value.insert(seed.value.end(), binding_digest.begin(),
@@ -2314,8 +2121,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
                     secret_prover_seed.end());
   PURIFY_ASSIGN_OR_RETURN(
       const auto &dimensions,
-      circuit_norm_arg_dimensions(circuit, externalize_commitments),
-      "prove_experimental_circuit_zk_norm_arg_impl:dimensions");
+      circuit_norm_arg_dimensions(circuit, externalize_commitments));
   std::optional<Error> masked_failure;
 
   for (std::uint64_t attempt = 0; attempt < 32; ++attempt) {
@@ -2323,39 +2129,30 @@ prove_experimental_circuit_zk_norm_arg_impl(
         dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
     WipeOnDestruction padding_wiper(padding);
     for (std::size_t i = 0; i < padding.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(padding[i], seed.value, kCircuitZkBlindTaggedHash, i,
-                        attempt),
-          "prove_experimental_circuit_zk_norm_arg_impl:blind");
+      PURIFY_RETURN_IF_ERROR(derive_scalar(
+          padding[i], seed.value, kCircuitZkBlindTaggedHash, i, attempt));
     }
 
-    PURIFY_ASSIGN_OR_RETURN(
-        auto raw_inputs,
-        build_raw_circuit_norm_arg_inputs(circuit, assignment, padding,
-                                          externalize_commitments,
-                                          secp_context),
-        "prove_experimental_circuit_zk_norm_arg_impl:raw_inputs");
+    PURIFY_ASSIGN_OR_RETURN(auto raw_inputs,
+                            build_raw_circuit_norm_arg_inputs(
+                                circuit, assignment, padding,
+                                externalize_commitments, secp_context));
     WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
     WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
     Result<PointBytes> raw_commitment =
         commit_norm_arg_witness_only(raw_inputs, secp_context, cache);
     if (!raw_commitment.has_value()) {
       if (!masked_failure.has_value()) {
-        masked_failure = unexpected_error(
-                             raw_commitment.error(),
-                             "prove_experimental_circuit_zk_norm_arg_impl:"
-                             "raw_commitment")
-                             .error();
+        masked_failure = unexpected_error(raw_commitment.error()).error();
       }
       continue;
     }
 
-    PURIFY_ASSIGN_OR_RETURN(
-        auto hidden,
-        reduce_experimental_circuit_to_norm_arg(
-            circuit, assignment, *raw_commitment, secp_context,
-            bound_statement_binding, externalize_commitments, cache),
-        "prove_experimental_circuit_zk_norm_arg_impl:reduce");
+    PURIFY_ASSIGN_OR_RETURN(auto hidden,
+                            reduce_experimental_circuit_to_norm_arg(
+                                circuit, assignment, *raw_commitment,
+                                secp_context, bound_statement_binding,
+                                externalize_commitments, cache));
     WipeOnDestruction hidden_n_wiper(hidden.n_vec);
     WipeOnDestruction hidden_l_wiper(hidden.l_vec);
     std::copy(padding.begin(), padding.end(),
@@ -2368,11 +2165,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
           secp_context);
       if (!batched.has_value()) {
         if (!masked_failure.has_value()) {
-          masked_failure = unexpected_error(
-                               batched.error(),
-                               "prove_experimental_circuit_zk_norm_arg_impl:"
-                               "batch_public_commitments")
-                               .error();
+          masked_failure = unexpected_error(batched.error()).error();
         }
         continue;
       }
@@ -2383,11 +2176,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
               secp_context);
       if (!dlog.has_value()) {
         if (!masked_failure.has_value()) {
-          masked_failure = unexpected_error(
-                               dlog.error(),
-                               "prove_experimental_circuit_zk_norm_arg_impl:"
-                               "prove_public_commitment_dlog")
-                               .error();
+          masked_failure = unexpected_error(dlog.error()).error();
         }
         continue;
       }
@@ -2397,19 +2186,15 @@ prove_experimental_circuit_zk_norm_arg_impl(
     std::vector<FieldElement> mask_n(hidden.n_vec.size(), FieldElement::zero());
     WipeOnDestruction mask_n_wiper(mask_n);
     for (std::size_t i = 0; i < mask_n.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_n[i], seed.value, kCircuitZkMaskNTaggedHash, i,
-                        attempt),
-          "prove_experimental_circuit_zk_norm_arg_impl:mask_n");
+      PURIFY_RETURN_IF_ERROR(derive_scalar(
+          mask_n[i], seed.value, kCircuitZkMaskNTaggedHash, i, attempt));
     }
 
     std::vector<FieldElement> mask_l(hidden.l_vec.size(), FieldElement::zero());
     WipeOnDestruction mask_l_wiper(mask_l);
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_l[i], seed.value, kCircuitZkMaskLTaggedHash, i,
-                        attempt),
-          "prove_experimental_circuit_zk_norm_arg_impl:mask_l");
+      PURIFY_RETURN_IF_ERROR(derive_scalar(
+          mask_l[i], seed.value, kCircuitZkMaskLTaggedHash, i, attempt));
     }
 
     FieldElement t2 =
@@ -2439,11 +2224,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
         *raw_commitment, *hidden.public_data, public_commitments, secp_context);
     if (!a_commitment.has_value()) {
       if (!masked_failure.has_value()) {
-        masked_failure =
-            unexpected_error(
-                a_commitment.error(),
-                "prove_experimental_circuit_zk_norm_arg_impl:a_commitment")
-                .error();
+        masked_failure = unexpected_error(a_commitment.error()).error();
       }
       continue;
     }
@@ -2451,19 +2232,14 @@ prove_experimental_circuit_zk_norm_arg_impl(
         commit_explicit_norm_arg(mask_inputs, t1, secp_context, nullptr);
     if (!s_commitment.has_value()) {
       if (!masked_failure.has_value()) {
-        masked_failure =
-            unexpected_error(
-                s_commitment.error(),
-                "prove_experimental_circuit_zk_norm_arg_impl:s_commitment")
-                .error();
+        masked_failure = unexpected_error(s_commitment.error()).error();
       }
       continue;
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto &challenge,
-        derive_zk_challenge(hidden.public_data->challenge_digest,
-                            *a_commitment, *s_commitment, t2),
-        "prove_experimental_circuit_zk_norm_arg_impl:challenge");
+        derive_zk_challenge(hidden.public_data->challenge_digest, *a_commitment,
+                            *s_commitment, t2));
 
     CircuitNormArgReduction masked = hidden;
     WipeOnDestruction masked_n_wiper(masked.n_vec);
@@ -2482,10 +2258,7 @@ prove_experimental_circuit_zk_norm_arg_impl(
         combine_zk_commitments(*a_commitment, *s_commitment, challenge, t2, secp_context);
     if (!combined_commitment.has_value()) {
       if (!masked_failure.has_value()) {
-        masked_failure = unexpected_error(combined_commitment.error(),
-                                          "prove_experimental_circuit_zk_norm_"
-                                          "arg_impl:combined_commitment")
-                             .error();
+        masked_failure = unexpected_error(combined_commitment.error()).error();
       }
       continue;
     }
@@ -2493,29 +2266,19 @@ prove_experimental_circuit_zk_norm_arg_impl(
         commit_norm_arg_with_cache(masked_inputs, secp_context, nullptr);
     if (!direct_commitment.has_value()) {
       if (!masked_failure.has_value()) {
-        masked_failure =
-            unexpected_error(
-                direct_commitment.error(),
-                "prove_experimental_circuit_zk_norm_arg_impl:direct_commitment")
-                .error();
+        masked_failure = unexpected_error(direct_commitment.error()).error();
       }
       continue;
     }
     if (*combined_commitment != *direct_commitment) {
-      return unexpected_error(
-          ErrorCode::InternalMismatch,
-          "prove_experimental_circuit_zk_norm_arg_impl:commitment_mismatch");
+      return unexpected_error(ErrorCode::InternalMismatch);
     }
 
     Result<NormArgProof> proof = prove_norm_arg_to_commitment_with_cache(
         masked_inputs, *combined_commitment, secp_context, nullptr);
     if (!proof.has_value()) {
       if (!masked_failure.has_value()) {
-        masked_failure =
-            unexpected_error(proof.error(),
-                             "prove_experimental_circuit_zk_norm_arg_impl:"
-                             "prove_norm_arg_to_commitment")
-                .error();
+        masked_failure = unexpected_error(proof.error()).error();
       }
       continue;
     }
@@ -2529,13 +2292,9 @@ prove_experimental_circuit_zk_norm_arg_impl(
   }
 
   if (masked_failure.has_value()) {
-    return unexpected_error(
-        *masked_failure,
-        "prove_experimental_circuit_zk_norm_arg_impl:masking_attempts");
+    return unexpected_error(*masked_failure);
   }
-  return unexpected_error(
-      ErrorCode::BackendRejectedInput,
-      "prove_experimental_circuit_zk_norm_arg_impl:masking_attempts");
+  return unexpected_error(ErrorCode::BackendRejectedInput);
 }
 
 namespace {
@@ -2544,19 +2303,13 @@ Status validate_prepared_circuit_proof(
     const NativeBulletproofCircuit &circuit,
     const ExperimentalCircuitZkNormArgProof &proof) {
   if (!circuit.has_valid_shape()) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "prepare_experimental_circuit_zk_norm_arg:circuit_shape");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (!is_power_of_two_size(circuit.n_gates)) {
-    return unexpected_error(
-        ErrorCode::InvalidDimensions,
-        "prepare_experimental_circuit_zk_norm_arg:n_gates_power_of_two");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (proof.proof.empty()) {
-    return unexpected_error(
-        ErrorCode::EmptyInput,
-        "prepare_experimental_circuit_zk_norm_arg:proof_empty");
+    return unexpected_error(ErrorCode::EmptyInput);
   }
   return {};
 }
@@ -2577,24 +2330,20 @@ finish_prepared_circuit_proof(
     const CircuitNormArgPublicDataPtr &public_data,
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context) {
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &t2, FieldElement::try_from_bytes32(proof.t2),
-      "prepare_experimental_circuit_zk_norm_arg:t2");
+  PURIFY_ASSIGN_OR_RETURN(const auto &t2,
+                          FieldElement::try_from_bytes32(proof.t2));
   PURIFY_ASSIGN_OR_RETURN(
       const auto &a_commitment,
       anchor_zk_a_commitment(proof.a_commitment, *public_data,
-                             public_commitments, secp_context),
-      "prepare_experimental_circuit_zk_norm_arg:a_commitment");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &challenge,
-      derive_zk_challenge(public_data->challenge_digest, a_commitment,
-                          proof.s_commitment, t2),
-      "prepare_experimental_circuit_zk_norm_arg:challenge");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &commitment,
-      combine_zk_commitments(a_commitment, proof.s_commitment, challenge, t2,
-                             secp_context),
-      "prepare_experimental_circuit_zk_norm_arg:commitment");
+                             public_commitments, secp_context));
+  PURIFY_ASSIGN_OR_RETURN(const auto &challenge,
+                          derive_zk_challenge(public_data->challenge_digest,
+                                              a_commitment, proof.s_commitment,
+                                              t2));
+  PURIFY_ASSIGN_OR_RETURN(const auto &commitment,
+                          combine_zk_commitments(a_commitment,
+                                                 proof.s_commitment, challenge,
+                                                 t2, secp_context));
 
   detail::PreparedExperimentalCircuitZkNormArg out;
   out.norm.rho = public_data->rho_bytes;
@@ -2625,50 +2374,37 @@ detail::prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend *cache) {
-  PURIFY_RETURN_IF_ERROR(validate_prepared_circuit_proof(circuit, proof),
-                         "prepare_experimental_circuit_zk_norm_arg:validate");
+  PURIFY_RETURN_IF_ERROR(validate_prepared_circuit_proof(circuit, proof));
   if (public_commitments.empty()) {
-    return unexpected_error(
-        ErrorCode::EmptyInput,
-        "prepare_experimental_circuit_zk_norm_arg:public_commitments");
+    return unexpected_error(ErrorCode::EmptyInput);
   }
   if (public_commitments.size() != circuit.n_commitments) {
-    return unexpected_error(
-        ErrorCode::SizeMismatch,
-        "prepare_experimental_circuit_zk_norm_arg:public_commitment_count");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   PURIFY_ASSIGN_OR_RETURN(
       const auto &bound_statement_binding,
-      bind_public_commitments(public_commitments, statement_binding),
-      "prepare_experimental_circuit_zk_norm_arg:bound_statement_binding");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &public_data,
-      build_circuit_norm_arg_public_data(
-          circuit, bound_statement_binding, proof.a_commitment, secp_context,
-          true, cache),
-      "prepare_experimental_circuit_zk_norm_arg:public_data");
+      bind_public_commitments(public_commitments, statement_binding));
+  PURIFY_ASSIGN_OR_RETURN(const auto &public_data,
+                          build_circuit_norm_arg_public_data(
+                              circuit, bound_statement_binding,
+                              proof.a_commitment, secp_context, true, cache));
   PURIFY_ASSIGN_OR_RETURN(
       const auto &batched,
       batch_public_commitments(public_commitments,
-                               public_data->challenge_digest, secp_context),
-      "prepare_experimental_circuit_zk_norm_arg:batch_public_commitments");
+                               public_data->challenge_digest, secp_context));
   const PublicCommitmentDlogProof dlog_proof{
       proof.public_commitment_dlog_nonce,
       proof.public_commitment_dlog_response};
   PURIFY_ASSIGN_OR_RETURN(
       const auto &dlog_ok,
-      verify_public_commitment_dlog(
-          batched, public_data->challenge_digest, dlog_proof,
-          secp_context),
-      "prepare_experimental_circuit_zk_norm_arg:verify_public_commitment_dlog");
+      verify_public_commitment_dlog(batched, public_data->challenge_digest,
+                                    dlog_proof, secp_context));
   if (!dlog_ok) {
     return std::optional<PreparedExperimentalCircuitZkNormArg>{};
   }
   PURIFY_ASSIGN_OR_RETURN(
-      auto out,
-      finish_prepared_circuit_proof(proof, public_data, public_commitments,
-                                    secp_context),
-      "prepare_experimental_circuit_zk_norm_arg:finish");
+      auto out, finish_prepared_circuit_proof(
+                    proof, public_data, public_commitments, secp_context));
   return std::optional<PreparedExperimentalCircuitZkNormArg>(std::move(out));
 }
 
@@ -2679,24 +2415,19 @@ detail::prepare_experimental_circuit_zk_norm_arg(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend *cache) {
-  PURIFY_RETURN_IF_ERROR(validate_prepared_circuit_proof(circuit, proof),
-                         "prepare_experimental_circuit_zk_norm_arg:validate");
+  PURIFY_RETURN_IF_ERROR(validate_prepared_circuit_proof(circuit, proof));
 
   const Bytes bound_statement_binding(statement_binding.begin(),
                                       statement_binding.end());
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &public_data,
-      build_circuit_norm_arg_public_data(
-          circuit, bound_statement_binding, proof.a_commitment, secp_context,
-          false, cache),
-      "prepare_experimental_circuit_zk_norm_arg:public_data");
+  PURIFY_ASSIGN_OR_RETURN(const auto &public_data,
+                          build_circuit_norm_arg_public_data(
+                              circuit, bound_statement_binding,
+                              proof.a_commitment, secp_context, false, cache));
   if (!has_zero_public_commitment_dlog(proof)) {
     return std::optional<PreparedExperimentalCircuitZkNormArg>{};
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      auto out,
-      finish_prepared_circuit_proof(proof, public_data, {}, secp_context),
-      "prepare_experimental_circuit_zk_norm_arg:finish");
+  PURIFY_ASSIGN_OR_RETURN(auto out, finish_prepared_circuit_proof(
+                                        proof, public_data, {}, secp_context));
   return std::optional<PreparedExperimentalCircuitZkNormArg>(std::move(out));
 }
 
@@ -2709,8 +2440,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_impl(
   PURIFY_ASSIGN_OR_RETURN(
       auto prepared,
       detail::prepare_experimental_circuit_zk_norm_arg(
-          circuit, proof, secp_context, statement_binding, cache),
-      "verify_experimental_circuit_zk_norm_arg_impl:prepare");
+          circuit, proof, secp_context, statement_binding, cache));
   if (!prepared.has_value()) {
     return false;
   }
@@ -2723,8 +2453,7 @@ Result<candidate::CircuitTranscriptShapeV4> circuit_shape_v4(
     const NativeBulletproofCircuit &circuit, bool externalize_commitments) {
   PURIFY_ASSIGN_OR_RETURN(
       const auto &dimensions,
-      circuit_norm_arg_dimensions(circuit, externalize_commitments),
-      "circuit_shape_v4:dimensions");
+      circuit_norm_arg_dimensions(circuit, externalize_commitments));
   const auto mode = externalize_commitments
                         ? candidate::CircuitCommitmentModeV4::Public
                         : candidate::CircuitCommitmentModeV4::Hidden;
@@ -2738,12 +2467,10 @@ Result<candidate::TranscriptDigest> circuit_binding_digest_v4(
     std::span<const unsigned char> statement_binding) {
   PURIFY_ASSIGN_OR_RETURN(
       const auto &digest,
-      experimental_circuit_binding_digest(circuit, statement_binding),
-      "circuit_binding_digest_v4:digest");
+      experimental_circuit_binding_digest(circuit, statement_binding));
   candidate::TranscriptDigest out{};
   if (digest.size() != out.size()) {
-    return unexpected_error(ErrorCode::InternalMismatch,
-                            "circuit_binding_digest_v4:size");
+    return unexpected_error(ErrorCode::InternalMismatch);
   }
   std::copy(digest.begin(), digest.end(), out.begin());
   return out;
@@ -2755,12 +2482,10 @@ Result<candidate::TranscriptDigest> raw_generator_digest_v4(
   std::size_t generator_count = 0;
   if (!checked_add_size(shape.n_vec_len(), shape.l_vec_len(),
                         generator_count)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "raw_generator_digest_v4:generator_count");
+    return unexpected_error(ErrorCode::Overflow);
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &generators, create_generators(generator_count, secp_context),
-      "raw_generator_digest_v4:generators");
+  PURIFY_ASSIGN_OR_RETURN(const auto &generators,
+                          create_generators(generator_count, secp_context));
   return generator_backend_cache_key(generators);
 }
 
@@ -2773,40 +2498,33 @@ Status validate_circuit_proof_v4_inputs(
     const NativeBulletproofCircuit &circuit,
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context, bool externalize_commitments) {
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context,
-                                              "circuit_proof_v4:context"),
-                         "circuit_proof_v4:context");
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!circuit.has_valid_shape() ||
       !is_power_of_two_size(circuit.n_gates)) {
-    return unexpected_error(ErrorCode::InvalidDimensions,
-                            "circuit_proof_v4:circuit_shape");
+    return unexpected_error(ErrorCode::InvalidDimensions);
   }
   if (externalize_commitments) {
     if (public_commitments.empty() ||
         public_commitments.size() != circuit.n_commitments) {
-      return unexpected_error(ErrorCode::SizeMismatch,
-                              "circuit_proof_v4:public_commitments");
+      return unexpected_error(ErrorCode::SizeMismatch);
     }
     if (std::any_of(public_commitments.begin(), public_commitments.end(),
                     is_identity_point_v4)) {
-      return unexpected_error(ErrorCode::BackendRejectedInput,
-                              "circuit_proof_v4:identity_public_commitment");
+      return unexpected_error(ErrorCode::BackendRejectedInput);
     }
   } else if (!public_commitments.empty()) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "circuit_proof_v4:hidden_commitments");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   return {};
 }
 
 Status validate_finite_point_v4(const PointBytes &point,
-                                purify_secp_context *secp_context,
-                                const char *label) {
+                                purify_secp_context *secp_context) {
   std::array<unsigned char, 32> xonly{};
   int parity = 0;
   if (purify_bip340_xonly_from_point(
           secp_context, point.data(), xonly.data(), &parity) == 0) {
-    return unexpected_error(ErrorCode::BackendRejectedInput, label);
+    return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return {};
 }
@@ -2815,44 +2533,29 @@ Status validate_circuit_zk_norm_arg_proof_v4_fixed_encoding_impl(
     const candidate::CircuitZkNormArgProofV4 &proof,
     candidate::CircuitCommitmentModeV4 mode, std::size_t round_count,
     purify_secp_context *secp_context) {
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context,
-                           "circuit_proof_v4_encoding:context"),
-      "circuit_proof_v4_encoding:context");
+      validate_finite_point_v4(proof.raw_commitment, secp_context));
   PURIFY_RETURN_IF_ERROR(
-      validate_finite_point_v4(proof.raw_commitment, secp_context,
-                               "circuit_proof_v4_encoding:raw"),
-      "circuit_proof_v4_encoding:raw");
-  PURIFY_RETURN_IF_ERROR(
-      validate_finite_point_v4(proof.mask_commitment, secp_context,
-                               "circuit_proof_v4_encoding:mask"),
-      "circuit_proof_v4_encoding:mask");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto t2, FieldElement::try_from_bytes32(proof.t2),
-      "circuit_proof_v4_encoding:t2");
+      validate_finite_point_v4(proof.mask_commitment, secp_context));
+  PURIFY_ASSIGN_OR_RETURN(const auto t2,
+                          FieldElement::try_from_bytes32(proof.t2));
   (void)t2;
 
   if (mode == candidate::CircuitCommitmentModeV4::Public) {
     if (purify_bip340_validate_xonly_pubkey(
             secp_context,
             proof.public_commitment_dlog_nonce.data()) == 0) {
-      return unexpected_error(
-          ErrorCode::BackendRejectedInput,
-          "circuit_proof_v4_encoding:dlog_nonce");
+      return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto response,
-        FieldElement::try_from_bytes32(
-            proof.public_commitment_dlog_response),
-        "circuit_proof_v4_encoding:dlog_response");
+        FieldElement::try_from_bytes32(proof.public_commitment_dlog_response));
     if (response.is_zero()) {
-      return unexpected_error(
-          ErrorCode::RangeViolation,
-          "circuit_proof_v4_encoding:dlog_response");
+      return unexpected_error(ErrorCode::RangeViolation);
     }
   } else if (mode != candidate::CircuitCommitmentModeV4::Hidden) {
-    return unexpected_error(ErrorCode::UnsupportedSymbol,
-                            "circuit_proof_v4_encoding:mode");
+    return unexpected_error(ErrorCode::UnsupportedSymbol);
   } else if (!std::all_of(
                  proof.public_commitment_dlog_nonce.begin(),
                  proof.public_commitment_dlog_nonce.end(),
@@ -2861,30 +2564,22 @@ Status validate_circuit_zk_norm_arg_proof_v4_fixed_encoding_impl(
                  proof.public_commitment_dlog_response.begin(),
                  proof.public_commitment_dlog_response.end(),
                  [](unsigned char byte) { return byte == 0; })) {
-    return unexpected_error(ErrorCode::BindingMismatch,
-                            "circuit_proof_v4_encoding:hidden_dlog");
+    return unexpected_error(ErrorCode::BindingMismatch);
   }
 
   ScalarBytes terminal_n{};
   ScalarBytes terminal_l{};
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto rounds,
-      parse_norm_rounds_v4(proof.norm_proof, round_count,
-                           terminal_n, terminal_l),
-      "circuit_proof_v4_encoding:rounds");
+  PURIFY_ASSIGN_OR_RETURN(const auto rounds,
+                          parse_norm_rounds_v4(proof.norm_proof, round_count,
+                                               terminal_n, terminal_l));
   for (const auto &round : rounds) {
     PURIFY_RETURN_IF_ERROR(
-        candidate::validate_packed_point_pair_v4(round, secp_context),
-        "circuit_proof_v4_encoding:round");
+        candidate::validate_packed_point_pair_v4(round, secp_context));
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto terminal_n_scalar,
-      FieldElement::try_from_bytes32(terminal_n),
-      "circuit_proof_v4_encoding:terminal_n");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto terminal_l_scalar,
-      FieldElement::try_from_bytes32(terminal_l),
-      "circuit_proof_v4_encoding:terminal_l");
+  PURIFY_ASSIGN_OR_RETURN(const auto terminal_n_scalar,
+                          FieldElement::try_from_bytes32(terminal_n));
+  PURIFY_ASSIGN_OR_RETURN(const auto terminal_l_scalar,
+                          FieldElement::try_from_bytes32(terminal_l));
   (void)terminal_n_scalar;
   (void)terminal_l_scalar;
   return {};
@@ -2895,15 +2590,10 @@ Status validate_circuit_zk_norm_arg_proof_v4_encoding_impl(
     const candidate::CircuitZkNormArgProofV4 &proof,
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context, bool externalize_commitments) {
-  PURIFY_RETURN_IF_ERROR(
-      validate_circuit_proof_v4_inputs(
-          circuit, public_commitments, secp_context,
-          externalize_commitments),
-      "circuit_proof_v4_encoding:inputs");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto shape,
-      circuit_shape_v4(circuit, externalize_commitments),
-      "circuit_proof_v4_encoding:shape");
+  PURIFY_RETURN_IF_ERROR(validate_circuit_proof_v4_inputs(
+      circuit, public_commitments, secp_context, externalize_commitments));
+  PURIFY_ASSIGN_OR_RETURN(const auto shape,
+                          circuit_shape_v4(circuit, externalize_commitments));
   return validate_circuit_zk_norm_arg_proof_v4_fixed_encoding_impl(
       proof, shape.mode(), shape.round_count(), secp_context);
 }
@@ -2916,25 +2606,18 @@ reconstruct_circuit_zk_norm_arg_publication_v4_impl(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments) {
-  PURIFY_RETURN_IF_ERROR(
-      validate_circuit_zk_norm_arg_proof_v4_encoding_impl(
-          circuit, proof, public_commitments, secp_context,
-          externalize_commitments),
-      "reconstruct_circuit_proof_v4:encoding");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto shape,
-      circuit_shape_v4(circuit, externalize_commitments),
-      "reconstruct_circuit_proof_v4:shape");
+  PURIFY_RETURN_IF_ERROR(validate_circuit_zk_norm_arg_proof_v4_encoding_impl(
+      circuit, proof, public_commitments, secp_context,
+      externalize_commitments));
+  PURIFY_ASSIGN_OR_RETURN(const auto shape,
+                          circuit_shape_v4(circuit, externalize_commitments));
   PURIFY_ASSIGN_OR_RETURN(
       const auto binding_digest,
-      circuit_binding_digest_v4(circuit, statement_binding),
-      "reconstruct_circuit_proof_v4:binding");
-  PURIFY_ASSIGN_OR_RETURN(
-      auto precommitment,
-      candidate::derive_circuit_precommitment_v4(
-          shape, binding_digest, public_commitments,
-          proof.raw_commitment, secp_context),
-      "reconstruct_circuit_proof_v4:precommitment");
+      circuit_binding_digest_v4(circuit, statement_binding));
+  PURIFY_ASSIGN_OR_RETURN(auto precommitment,
+                          candidate::derive_circuit_precommitment_v4(
+                              shape, binding_digest, public_commitments,
+                              proof.raw_commitment, secp_context));
   return candidate::CircuitZkNormArgPublicationV4{
       std::move(precommitment.digest), std::move(proof)};
 }
@@ -2948,40 +2631,30 @@ prove_circuit_zk_norm_arg_v4_impl(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments, ExperimentalCircuitBackend *cache) {
-  PURIFY_RETURN_IF_ERROR(
-      validate_circuit_proof_v4_inputs(circuit, public_commitments,
-                                       secp_context,
-                                       externalize_commitments),
-      "prove_circuit_zk_norm_arg_v4:inputs");
+  PURIFY_RETURN_IF_ERROR(validate_circuit_proof_v4_inputs(
+      circuit, public_commitments, secp_context, externalize_commitments));
   if (assignment.left.size() != circuit.n_gates ||
       assignment.right.size() != circuit.n_gates ||
       assignment.output.size() != circuit.n_gates ||
       assignment.commitments.size() != circuit.n_commitments) {
-    return unexpected_error(ErrorCode::SizeMismatch,
-                            "prove_circuit_zk_norm_arg_v4:assignment_shape");
+    return unexpected_error(ErrorCode::SizeMismatch);
   }
   if (!circuit.evaluate(assignment)) {
-    return unexpected_error(ErrorCode::EquationMismatch,
-                            "prove_circuit_zk_norm_arg_v4:assignment");
+    return unexpected_error(ErrorCode::EquationMismatch);
   }
   if (externalize_commitments) {
-    PURIFY_RETURN_IF_ERROR(
-        validate_public_commitments(public_commitments,
-                                    assignment.commitments, secp_context),
-        "prove_circuit_zk_norm_arg_v4:public_values");
+    PURIFY_RETURN_IF_ERROR(validate_public_commitments(
+        public_commitments, assignment.commitments, secp_context));
   }
 
   PURIFY_ASSIGN_OR_RETURN(
       const auto &binding_digest,
-      circuit_binding_digest_v4(circuit, statement_binding),
-      "prove_circuit_zk_norm_arg_v4:binding_digest");
+      circuit_binding_digest_v4(circuit, statement_binding));
   PURIFY_ASSIGN_OR_RETURN(
       const auto &dimensions,
-      circuit_norm_arg_dimensions(circuit, externalize_commitments),
-      "prove_circuit_zk_norm_arg_v4:dimensions");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto shape, circuit_shape_v4(circuit, externalize_commitments),
-      "prove_circuit_zk_norm_arg_v4:shape");
+      circuit_norm_arg_dimensions(circuit, externalize_commitments));
+  PURIFY_ASSIGN_OR_RETURN(const auto shape,
+                          circuit_shape_v4(circuit, externalize_commitments));
 
   std::size_t public_point_bytes = 0;
   std::size_t assignment_scalar_count = 0;
@@ -3006,8 +2679,7 @@ prove_circuit_zk_norm_arg_v4_impl(
       !checked_add_size(seed_prefix_size, 1, seed_prefix_size) ||
       !checked_add_size(seed_prefix_size, public_point_bytes, seed_size) ||
       !checked_add_size(seed_size, assignment_bytes, seed_size)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "prove_circuit_zk_norm_arg_v4:seed_size");
+    return unexpected_error(ErrorCode::Overflow);
   }
   SecretBytes seed;
   seed.value.reserve(seed_size);
@@ -3021,11 +2693,8 @@ prove_circuit_zk_norm_arg_v4_impl(
   }
   const auto append_assignment_values =
       [&](std::span<const FieldElement> values) -> Status {
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto &count,
-        narrow_size_to_u64(values.size(),
-                           "prove_circuit_zk_norm_arg_v4:assignment_count"),
-        "prove_circuit_zk_norm_arg_v4:assignment_count");
+    PURIFY_ASSIGN_OR_RETURN(const auto &count,
+                            narrow_size_to_u64(values.size()));
     append_u64_le(seed.value, count);
     for (const auto &value : values) {
       SecretScalarBytes encoded;
@@ -3037,14 +2706,10 @@ prove_circuit_zk_norm_arg_v4_impl(
     }
     return {};
   };
-  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.left),
-                         "prove_circuit_zk_norm_arg_v4:left_seed");
-  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.right),
-                         "prove_circuit_zk_norm_arg_v4:right_seed");
-  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.output),
-                         "prove_circuit_zk_norm_arg_v4:output_seed");
-  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.commitments),
-                         "prove_circuit_zk_norm_arg_v4:commitment_seed");
+  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.left));
+  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.right));
+  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.output));
+  PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.commitments));
   assert(seed.value.size() == seed_size);
 
   std::optional<Error> masked_failure;
@@ -3053,18 +2718,14 @@ prove_circuit_zk_norm_arg_v4_impl(
         dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
     WipeOnDestruction padding_wiper(padding);
     for (std::size_t i = 0; i < padding.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(padding[i], seed.value, kCircuitZkBlindV4TaggedHash,
-                        i, attempt),
-          "prove_circuit_zk_norm_arg_v4:blind");
+      PURIFY_RETURN_IF_ERROR(derive_scalar(
+          padding[i], seed.value, kCircuitZkBlindV4TaggedHash, i, attempt));
     }
 
-    PURIFY_ASSIGN_OR_RETURN(
-        auto raw_inputs,
-        build_raw_circuit_norm_arg_inputs(circuit, assignment, padding,
-                                          externalize_commitments,
-                                          secp_context),
-        "prove_circuit_zk_norm_arg_v4:raw_inputs");
+    PURIFY_ASSIGN_OR_RETURN(auto raw_inputs,
+                            build_raw_circuit_norm_arg_inputs(
+                                circuit, assignment, padding,
+                                externalize_commitments, secp_context));
     WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
     WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
     auto raw_commitment =
@@ -3074,32 +2735,27 @@ prove_circuit_zk_norm_arg_v4_impl(
       continue;
     }
 
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto precommitment,
-        candidate::derive_circuit_precommitment_v4(
-            shape, binding_digest, public_commitments, *raw_commitment,
-            secp_context),
-        "prove_circuit_zk_norm_arg_v4:precommitment");
+    PURIFY_ASSIGN_OR_RETURN(const auto precommitment,
+                            candidate::derive_circuit_precommitment_v4(
+                                shape, binding_digest, public_commitments,
+                                *raw_commitment, secp_context));
     const candidate::TranscriptDigest raw_generator_digest =
         generator_backend_cache_key(raw_inputs.generators);
     PURIFY_ASSIGN_OR_RETURN(
         auto transcript,
-        candidate::CircuitProofTranscriptV4::create(
-            shape, precommitment.digest, raw_generator_digest),
-        "prove_circuit_zk_norm_arg_v4:transcript");
+        candidate::CircuitProofTranscriptV4::create(shape, precommitment.digest,
+                                                    raw_generator_digest));
     const CircuitNormArgChallenges challenges{
         transcript.rho().scalar, transcript.mul_scale().scalar,
         transcript.mul_ratio().scalar, transcript.row_ratio().scalar};
-    PURIFY_ASSIGN_OR_RETURN(
-        auto hidden,
-        reduce_experimental_circuit_to_norm_arg(
-            circuit, assignment, *raw_commitment, secp_context,
-            statement_binding, externalize_commitments, cache, &challenges),
-        "prove_circuit_zk_norm_arg_v4:reduce");
+    PURIFY_ASSIGN_OR_RETURN(auto hidden,
+                            reduce_experimental_circuit_to_norm_arg(
+                                circuit, assignment, *raw_commitment,
+                                secp_context, statement_binding,
+                                externalize_commitments, cache, &challenges));
     if (generator_backend_cache_key(hidden.public_data->raw_generators) !=
         raw_generator_digest) {
-      return unexpected_error(ErrorCode::InternalMismatch,
-                              "prove_circuit_zk_norm_arg_v4:raw_basis");
+      return unexpected_error(ErrorCode::InternalMismatch);
     }
     WipeOnDestruction hidden_n_wiper(hidden.n_vec);
     WipeOnDestruction hidden_l_wiper(hidden.l_vec);
@@ -3109,31 +2765,25 @@ prove_circuit_zk_norm_arg_v4_impl(
     PURIFY_ASSIGN_OR_RETURN(
         const auto &anchored_commitment,
         anchor_zk_a_commitment(*raw_commitment, *hidden.public_data,
-                               public_commitments, secp_context),
-        "prove_circuit_zk_norm_arg_v4:anchored_commitment");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto &anchored_offset,
-        point_subtract_allow_infinity(anchored_commitment, *raw_commitment,
-                                      secp_context),
-        "prove_circuit_zk_norm_arg_v4:anchored_offset");
+                               public_commitments, secp_context));
+    PURIFY_ASSIGN_OR_RETURN(const auto &anchored_offset,
+                            point_subtract_allow_infinity(anchored_commitment,
+                                                          *raw_commitment,
+                                                          secp_context));
     PURIFY_ASSIGN_OR_RETURN(
         const auto &coefficient_commitment,
-        coefficient_commitment_v4(*hidden.public_data, secp_context),
-        "prove_circuit_zk_norm_arg_v4:coefficient_commitment");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto &eta,
-        transcript.append_anchored_commitments(
-            coefficient_commitment, anchored_offset, anchored_commitment,
-            secp_context),
-        "prove_circuit_zk_norm_arg_v4:eta");
+        coefficient_commitment_v4(*hidden.public_data, secp_context));
+    PURIFY_ASSIGN_OR_RETURN(const auto &eta,
+                            transcript.append_anchored_commitments(
+                                coefficient_commitment, anchored_offset,
+                                anchored_commitment, secp_context));
 
     PublicCommitmentDlogProof dlog_proof;
     if (externalize_commitments) {
       PURIFY_ASSIGN_OR_RETURN(
           const auto &batched,
           batch_public_commitments_with_eta(public_commitments, eta.scalar,
-                                            secp_context),
-          "prove_circuit_zk_norm_arg_v4:batch_public");
+                                            secp_context));
       const ScalarBytes nonce_binding = precommitment.digest.bytes();
       auto dlog = prove_public_commitment_dlog_v4(
           batched, assignment.commitments, nonce_binding,
@@ -3143,9 +2793,7 @@ prove_circuit_zk_norm_arg_v4_impl(
             auto challenge = transcript.append_public_opening(
                 batched.point, nonce, secp_context);
             if (!challenge.has_value()) {
-              return unexpected_error(
-                  challenge.error(),
-                  "prove_circuit_zk_norm_arg_v4:dlog_e");
+              return unexpected_error(challenge.error());
             }
             return challenge->scalar;
           });
@@ -3157,25 +2805,20 @@ prove_circuit_zk_norm_arg_v4_impl(
     } else {
       PURIFY_ASSIGN_OR_RETURN(
           const auto ignored,
-          transcript.append_public_opening(
-              PointBytes{}, dlog_proof.nonce_xonly, secp_context),
-          "prove_circuit_zk_norm_arg_v4:hidden_dlog");
+          transcript.append_public_opening(PointBytes{}, dlog_proof.nonce_xonly,
+                                           secp_context));
       (void)ignored;
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto &dlog_response,
-        FieldElement::try_from_bytes32(dlog_proof.response),
-        "prove_circuit_zk_norm_arg_v4:dlog_response_scalar");
-    PURIFY_RETURN_IF_ERROR(
-        transcript.append_dlog_response(dlog_response),
-        "prove_circuit_zk_norm_arg_v4:dlog_response");
+        FieldElement::try_from_bytes32(dlog_proof.response));
+    PURIFY_RETURN_IF_ERROR(transcript.append_dlog_response(dlog_response));
 
     const ScalarBytes precommitment_bytes = precommitment.digest.bytes();
     std::size_t mask_seed_size = 0;
     if (!checked_add_size(seed.value.size(), precommitment_bytes.size(),
                           mask_seed_size)) {
-      return unexpected_error(ErrorCode::Overflow,
-                              "prove_circuit_zk_norm_arg_v4:mask_seed_size");
+      return unexpected_error(ErrorCode::Overflow);
     }
     SecretBytes mask_seed;
     mask_seed.value.reserve(mask_seed_size);
@@ -3188,19 +2831,15 @@ prove_circuit_zk_norm_arg_v4_impl(
                                      FieldElement::zero());
     WipeOnDestruction mask_n_wiper(mask_n);
     for (std::size_t i = 0; i < mask_n.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_n[i], mask_seed.value,
-                        kCircuitZkMaskNV4TaggedHash, i, attempt),
-          "prove_circuit_zk_norm_arg_v4:mask_n");
+      PURIFY_RETURN_IF_ERROR(derive_scalar(
+          mask_n[i], mask_seed.value, kCircuitZkMaskNV4TaggedHash, i, attempt));
     }
     std::vector<FieldElement> mask_l(hidden.l_vec.size(),
                                      FieldElement::zero());
     WipeOnDestruction mask_l_wiper(mask_l);
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_l[i], mask_seed.value,
-                        kCircuitZkMaskLV4TaggedHash, i, attempt),
-          "prove_circuit_zk_norm_arg_v4:mask_l");
+      PURIFY_RETURN_IF_ERROR(derive_scalar(
+          mask_l[i], mask_seed.value, kCircuitZkMaskLV4TaggedHash, i, attempt));
     }
 
     FieldElement t2 = weighted_bppp_inner_product(
@@ -3234,8 +2873,7 @@ prove_circuit_zk_norm_arg_v4_impl(
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto &alpha,
-        transcript.append_mask(*mask_commitment, t2, secp_context),
-        "prove_circuit_zk_norm_arg_v4:alpha");
+        transcript.append_mask(*mask_commitment, t2, secp_context));
 
     CircuitNormArgReduction masked = hidden;
     WipeOnDestruction masked_n_wiper(masked.n_vec);
@@ -3260,16 +2898,12 @@ prove_circuit_zk_norm_arg_v4_impl(
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto &direct_commitment,
-        commit_norm_arg_with_cache(masked_inputs, secp_context, nullptr),
-        "prove_circuit_zk_norm_arg_v4:direct_commitment");
+        commit_norm_arg_with_cache(masked_inputs, secp_context, nullptr));
     if (*combined_commitment != direct_commitment) {
-      return unexpected_error(ErrorCode::InternalMismatch,
-                              "prove_circuit_zk_norm_arg_v4:commitment");
+      return unexpected_error(ErrorCode::InternalMismatch);
     }
-    PURIFY_RETURN_IF_ERROR(
-        transcript.append_combined_commitment(*combined_commitment,
-                                              secp_context),
-        "prove_circuit_zk_norm_arg_v4:combined_transcript");
+    PURIFY_RETURN_IF_ERROR(transcript.append_combined_commitment(
+        *combined_commitment, secp_context));
 
     auto norm = prove_norm_arg_to_commitment_v4(
         masked_inputs, *combined_commitment, transcript, secp_context);
@@ -3279,24 +2913,18 @@ prove_circuit_zk_norm_arg_v4_impl(
     }
     ScalarBytes terminal_n{};
     ScalarBytes terminal_l{};
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto &rounds,
-        parse_norm_rounds_v4(norm->proof, shape.round_count(), terminal_n,
-                             terminal_l),
-        "prove_circuit_zk_norm_arg_v4:parse_norm");
+    PURIFY_ASSIGN_OR_RETURN(const auto &rounds,
+                            parse_norm_rounds_v4(norm->proof,
+                                                 shape.round_count(),
+                                                 terminal_n, terminal_l));
     (void)rounds;
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto &terminal_n_scalar,
-        FieldElement::try_from_bytes32(terminal_n),
-        "prove_circuit_zk_norm_arg_v4:terminal_n");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto &terminal_l_scalar,
-        FieldElement::try_from_bytes32(terminal_l),
-        "prove_circuit_zk_norm_arg_v4:terminal_l");
+    PURIFY_ASSIGN_OR_RETURN(const auto &terminal_n_scalar,
+                            FieldElement::try_from_bytes32(terminal_n));
+    PURIFY_ASSIGN_OR_RETURN(const auto &terminal_l_scalar,
+                            FieldElement::try_from_bytes32(terminal_l));
     PURIFY_ASSIGN_OR_RETURN(
         const auto finished,
-        transcript.finish(terminal_n_scalar, terminal_l_scalar),
-        "prove_circuit_zk_norm_arg_v4:finish_transcript");
+        transcript.finish(terminal_n_scalar, terminal_l_scalar));
     (void)finished;
 
     candidate::CircuitZkNormArgProofV4 proof{
@@ -3311,11 +2939,9 @@ prove_circuit_zk_norm_arg_v4_impl(
   }
 
   if (masked_failure.has_value()) {
-    return unexpected_error(*masked_failure,
-                            "prove_circuit_zk_norm_arg_v4:attempts");
+    return unexpected_error(*masked_failure);
   }
-  return unexpected_error(ErrorCode::BackendRejectedInput,
-                          "prove_circuit_zk_norm_arg_v4:attempts");
+  return unexpected_error(ErrorCode::BackendRejectedInput);
 }
 
 } // namespace
@@ -3378,83 +3004,64 @@ candidate::prepare_circuit_zk_norm_arg_v4_impl(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments, ExperimentalCircuitBackend *cache) {
-  PURIFY_RETURN_IF_ERROR(
-      validate_circuit_proof_v4_inputs(circuit, public_commitments,
-                                       secp_context,
-                                       externalize_commitments),
-      "prepare_circuit_zk_norm_arg_v4:inputs");
+  PURIFY_RETURN_IF_ERROR(validate_circuit_proof_v4_inputs(
+      circuit, public_commitments, secp_context, externalize_commitments));
   if (publication.proof.norm_proof.empty()) {
-    return unexpected_error(ErrorCode::EmptyInput,
-                            "prepare_circuit_zk_norm_arg_v4:proof");
+    return unexpected_error(ErrorCode::EmptyInput);
   }
   if (is_identity_point_v4(publication.proof.raw_commitment) ||
       is_identity_point_v4(publication.proof.mask_commitment)) {
     return std::optional<candidate::PreparedCircuitZkNormArgV4>{};
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto shape, circuit_shape_v4(circuit, externalize_commitments),
-      "prepare_circuit_zk_norm_arg_v4:shape");
+  PURIFY_ASSIGN_OR_RETURN(const auto shape,
+                          circuit_shape_v4(circuit, externalize_commitments));
   PURIFY_ASSIGN_OR_RETURN(
       const auto &binding_digest,
-      circuit_binding_digest_v4(circuit, statement_binding),
-      "prepare_circuit_zk_norm_arg_v4:binding_digest");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &expected_precommitment,
-      candidate::derive_circuit_precommitment_v4(
-          shape, binding_digest, public_commitments,
-          publication.proof.raw_commitment, secp_context),
-      "prepare_circuit_zk_norm_arg_v4:precommitment");
+      circuit_binding_digest_v4(circuit, statement_binding));
+  PURIFY_ASSIGN_OR_RETURN(const auto &expected_precommitment,
+                          candidate::derive_circuit_precommitment_v4(
+                              shape, binding_digest, public_commitments,
+                              publication.proof.raw_commitment, secp_context));
   if (expected_precommitment.digest.bytes() !=
       publication.precommitment.bytes()) {
     return std::optional<candidate::PreparedCircuitZkNormArgV4>{};
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &raw_generator_digest,
-      raw_generator_digest_v4(shape, secp_context),
-      "prepare_circuit_zk_norm_arg_v4:raw_generator_digest");
+  PURIFY_ASSIGN_OR_RETURN(const auto &raw_generator_digest,
+                          raw_generator_digest_v4(shape, secp_context));
   PURIFY_ASSIGN_OR_RETURN(
       auto transcript,
       candidate::CircuitProofTranscriptV4::create(
-          shape, publication.precommitment, raw_generator_digest),
-      "prepare_circuit_zk_norm_arg_v4:transcript");
+          shape, publication.precommitment, raw_generator_digest));
   const CircuitNormArgChallenges challenges{
       transcript.rho().scalar, transcript.mul_scale().scalar,
       transcript.mul_ratio().scalar, transcript.row_ratio().scalar};
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &public_data,
-      build_circuit_norm_arg_public_data(
-          circuit, statement_binding, publication.proof.raw_commitment,
-          secp_context, externalize_commitments, cache, &challenges),
-      "prepare_circuit_zk_norm_arg_v4:public_data");
+  PURIFY_ASSIGN_OR_RETURN(const auto &public_data,
+                          build_circuit_norm_arg_public_data(
+                              circuit, statement_binding,
+                              publication.proof.raw_commitment, secp_context,
+                              externalize_commitments, cache, &challenges));
   if (generator_backend_cache_key(public_data->raw_generators) !=
       raw_generator_digest) {
-    return unexpected_error(ErrorCode::InternalMismatch,
-                            "prepare_circuit_zk_norm_arg_v4:raw_basis");
+    return unexpected_error(ErrorCode::InternalMismatch);
   }
   PURIFY_ASSIGN_OR_RETURN(
       const auto &anchored_commitment,
       anchor_zk_a_commitment(publication.proof.raw_commitment, *public_data,
-                             public_commitments, secp_context),
-      "prepare_circuit_zk_norm_arg_v4:anchored_commitment");
+                             public_commitments, secp_context));
   if (is_identity_point_v4(anchored_commitment)) {
     return std::optional<candidate::PreparedCircuitZkNormArgV4>{};
   }
   PURIFY_ASSIGN_OR_RETURN(
       const auto &anchored_offset,
-      point_subtract_allow_infinity(anchored_commitment,
-                                    publication.proof.raw_commitment,
-                                    secp_context),
-      "prepare_circuit_zk_norm_arg_v4:anchored_offset");
+      point_subtract_allow_infinity(
+          anchored_commitment, publication.proof.raw_commitment, secp_context));
   PURIFY_ASSIGN_OR_RETURN(
       const auto &coefficient_commitment,
-      coefficient_commitment_v4(*public_data, secp_context),
-      "prepare_circuit_zk_norm_arg_v4:coefficient_commitment");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &eta,
-      transcript.append_anchored_commitments(
-          coefficient_commitment, anchored_offset, anchored_commitment,
-          secp_context),
-      "prepare_circuit_zk_norm_arg_v4:eta");
+      coefficient_commitment_v4(*public_data, secp_context));
+  PURIFY_ASSIGN_OR_RETURN(const auto &eta,
+                          transcript.append_anchored_commitments(
+                              coefficient_commitment, anchored_offset,
+                              anchored_commitment, secp_context));
 
   PointBytes batched_public_commitment{};
   std::optional<candidate::CircuitChallengeV4> staged_dlog_challenge;
@@ -3462,23 +3069,19 @@ candidate::prepare_circuit_zk_norm_arg_v4_impl(
       publication.proof.public_commitment_dlog_nonce,
       publication.proof.public_commitment_dlog_response};
   if (externalize_commitments) {
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto &batched,
-        batch_public_commitments_with_eta(public_commitments, eta.scalar,
-                                          secp_context),
-        "prepare_circuit_zk_norm_arg_v4:batch_public");
+    PURIFY_ASSIGN_OR_RETURN(const auto &batched,
+                            batch_public_commitments_with_eta(
+                                public_commitments, eta.scalar, secp_context));
     batched_public_commitment = batched.point;
     PURIFY_ASSIGN_OR_RETURN(
         const auto &dlog_challenge,
-        transcript.append_public_opening(
-            batched.point, dlog_proof.nonce_xonly, secp_context),
-        "prepare_circuit_zk_norm_arg_v4:dlog_e");
+        transcript.append_public_opening(batched.point, dlog_proof.nonce_xonly,
+                                         secp_context));
     staged_dlog_challenge = dlog_challenge;
     PURIFY_ASSIGN_OR_RETURN(
         const bool dlog_valid,
         verify_public_commitment_dlog(batched, dlog_challenge.scalar,
-                                      dlog_proof, secp_context),
-        "prepare_circuit_zk_norm_arg_v4:dlog");
+                                      dlog_proof, secp_context));
     if (!dlog_valid) {
       return std::optional<candidate::PreparedCircuitZkNormArgV4>{};
     }
@@ -3493,69 +3096,51 @@ candidate::prepare_circuit_zk_norm_arg_v4_impl(
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto hidden_dlog_challenge,
-        transcript.append_public_opening(
-            batched_public_commitment, dlog_proof.nonce_xonly, secp_context),
-        "prepare_circuit_zk_norm_arg_v4:hidden_dlog");
+        transcript.append_public_opening(batched_public_commitment,
+                                         dlog_proof.nonce_xonly, secp_context));
     staged_dlog_challenge = hidden_dlog_challenge;
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &dlog_response,
-      FieldElement::try_from_bytes32(dlog_proof.response),
-      "prepare_circuit_zk_norm_arg_v4:dlog_response_scalar");
-  PURIFY_RETURN_IF_ERROR(
-      transcript.append_dlog_response(dlog_response),
-      "prepare_circuit_zk_norm_arg_v4:dlog_response");
+  PURIFY_ASSIGN_OR_RETURN(const auto &dlog_response,
+                          FieldElement::try_from_bytes32(dlog_proof.response));
+  PURIFY_RETURN_IF_ERROR(transcript.append_dlog_response(dlog_response));
 
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &t2,
-      FieldElement::try_from_bytes32(publication.proof.t2),
-      "prepare_circuit_zk_norm_arg_v4:t2");
+  PURIFY_ASSIGN_OR_RETURN(const auto &t2,
+                          FieldElement::try_from_bytes32(publication.proof.t2));
   PURIFY_ASSIGN_OR_RETURN(
       const auto &alpha,
-      transcript.append_mask(publication.proof.mask_commitment,
-                             t2, secp_context),
-      "prepare_circuit_zk_norm_arg_v4:alpha");
+      transcript.append_mask(publication.proof.mask_commitment, t2,
+                             secp_context));
   PURIFY_ASSIGN_OR_RETURN(
       const auto &combined_commitment,
       combine_zk_commitments(anchored_commitment,
-                             publication.proof.mask_commitment,
-                             alpha.scalar, t2, secp_context),
-      "prepare_circuit_zk_norm_arg_v4:combined_commitment");
+                             publication.proof.mask_commitment, alpha.scalar,
+                             t2, secp_context));
   if (is_identity_point_v4(combined_commitment)) {
     return std::optional<candidate::PreparedCircuitZkNormArgV4>{};
   }
   PURIFY_RETURN_IF_ERROR(
-      transcript.append_combined_commitment(combined_commitment,
-                                            secp_context),
-      "prepare_circuit_zk_norm_arg_v4:combined_transcript");
+      transcript.append_combined_commitment(combined_commitment, secp_context));
 
   ScalarBytes terminal_n{};
   ScalarBytes terminal_l{};
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &rounds,
-      parse_norm_rounds_v4(publication.proof.norm_proof,
-                           shape.round_count(), terminal_n, terminal_l),
-      "prepare_circuit_zk_norm_arg_v4:rounds");
+  PURIFY_ASSIGN_OR_RETURN(const auto &rounds,
+                          parse_norm_rounds_v4(publication.proof.norm_proof,
+                                               shape.round_count(), terminal_n,
+                                               terminal_l));
   std::vector<candidate::CircuitChallengeV4> staged_gammas;
   staged_gammas.reserve(rounds.size());
   for (const auto &round : rounds) {
-    PURIFY_ASSIGN_OR_RETURN(
-        auto gamma, transcript.append_round(round, secp_context),
-        "prepare_circuit_zk_norm_arg_v4:gamma");
+    PURIFY_ASSIGN_OR_RETURN(auto gamma,
+                            transcript.append_round(round, secp_context));
     staged_gammas.push_back(std::move(gamma));
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &terminal_n_scalar,
-      FieldElement::try_from_bytes32(terminal_n),
-      "prepare_circuit_zk_norm_arg_v4:terminal_n");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &terminal_l_scalar,
-      FieldElement::try_from_bytes32(terminal_l),
-      "prepare_circuit_zk_norm_arg_v4:terminal_l");
+  PURIFY_ASSIGN_OR_RETURN(const auto &terminal_n_scalar,
+                          FieldElement::try_from_bytes32(terminal_n));
+  PURIFY_ASSIGN_OR_RETURN(const auto &terminal_l_scalar,
+                          FieldElement::try_from_bytes32(terminal_l));
   PURIFY_ASSIGN_OR_RETURN(
       const auto prepared_binding,
-      transcript.finish(terminal_n_scalar, terminal_l_scalar),
-      "prepare_circuit_zk_norm_arg_v4:finish");
+      transcript.finish(terminal_n_scalar, terminal_l_scalar));
 
   NormArgProof norm{public_data->rho_bytes,
                     public_data->generators,
@@ -3582,8 +3167,7 @@ candidate::prepare_circuit_zk_norm_arg_v4_impl(
   PURIFY_ASSIGN_OR_RETURN(
       auto transcript_result,
       candidate::derive_circuit_proof_transcript_v4(
-          shape, publication.precommitment, transcript_input, secp_context),
-      "prepare_circuit_zk_norm_arg_v4:replay");
+          shape, publication.precommitment, transcript_input, secp_context));
   const auto same_challenge = [](const auto &lhs, const auto &rhs) {
     return lhs.scalar == rhs.scalar;
   };
@@ -3602,17 +3186,14 @@ candidate::prepare_circuit_zk_norm_arg_v4_impl(
       !same_challenge(alpha, transcript_result.alpha) || !matching_gammas ||
       !same_challenge(prepared_binding,
                       transcript_result.prepared_binding)) {
-    return unexpected_error(ErrorCode::InternalMismatch,
-                            "prepare_circuit_zk_norm_arg_v4:replay");
+    return unexpected_error(ErrorCode::InternalMismatch);
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &residual,
-      prepare_norm_arg_v4(norm, transcript_result.gammas, prepared_n,
-                          prepared_l, secp_context),
-      "prepare_circuit_zk_norm_arg_v4:norm");
+  PURIFY_ASSIGN_OR_RETURN(const auto &residual,
+                          prepare_norm_arg_v4(norm, transcript_result.gammas,
+                                              prepared_n, prepared_l,
+                                              secp_context));
   if (prepared_n != terminal_n || prepared_l != terminal_l) {
-    return unexpected_error(ErrorCode::InternalMismatch,
-                            "prepare_circuit_zk_norm_arg_v4:terminal");
+    return unexpected_error(ErrorCode::InternalMismatch);
   }
   return std::optional<candidate::PreparedCircuitZkNormArgV4>(
       candidate::PreparedCircuitZkNormArgV4(
@@ -3682,57 +3263,36 @@ derive_circuit_norm_parent_constants_v4_impl(
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding) {
-  PURIFY_RETURN_IF_ERROR(
-      validate_circuit_proof_v4_inputs(
-          circuit, public_commitments, secp_context, true),
-      "circuit_parent_constants_v4:inputs");
+  PURIFY_RETURN_IF_ERROR(validate_circuit_proof_v4_inputs(
+      circuit, public_commitments, secp_context, true));
   for (const auto &point : public_commitments) {
-    PURIFY_RETURN_IF_ERROR(
-        validate_finite_point_v4(
-            point, secp_context,
-            "circuit_parent_constants_v4:public_commitment"),
-        "circuit_parent_constants_v4:public_commitment");
+    PURIFY_RETURN_IF_ERROR(validate_finite_point_v4(point, secp_context));
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      auto binding_digest,
-      circuit_binding_digest_v4(circuit, statement_binding),
-      "circuit_parent_constants_v4:binding");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto shape,
-      circuit_shape_v4(circuit, true),
-      "circuit_parent_constants_v4:shape");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto raw_generator_digest,
-      raw_generator_digest_v4(shape, secp_context),
-      "circuit_parent_constants_v4:raw_basis");
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto transcript,
-      candidate::CircuitProofTranscriptV4::create(
-          shape, precommitment, raw_generator_digest),
-      "circuit_parent_constants_v4:transcript");
+  PURIFY_ASSIGN_OR_RETURN(auto binding_digest, circuit_binding_digest_v4(
+                                                   circuit, statement_binding));
+  PURIFY_ASSIGN_OR_RETURN(const auto shape, circuit_shape_v4(circuit, true));
+  PURIFY_ASSIGN_OR_RETURN(const auto raw_generator_digest,
+                          raw_generator_digest_v4(shape, secp_context));
+  PURIFY_ASSIGN_OR_RETURN(const auto transcript,
+                          candidate::CircuitProofTranscriptV4::create(
+                              shape, precommitment, raw_generator_digest));
   const CircuitNormArgChallenges challenges{
       transcript.rho().scalar, transcript.mul_scale().scalar,
       transcript.mul_ratio().scalar, transcript.row_ratio().scalar};
   PURIFY_ASSIGN_OR_RETURN(
       const auto public_data,
       build_circuit_norm_arg_public_data_from_challenges(
-          circuit, secp_context, true, nullptr,
-          challenges),
-      "circuit_parent_constants_v4:public_data");
+          circuit, secp_context, true, nullptr, challenges));
   if (generator_backend_cache_key(public_data->raw_generators) !=
       raw_generator_digest) {
-    return unexpected_error(ErrorCode::InternalMismatch,
-                            "circuit_parent_constants_v4:raw_digest");
+    return unexpected_error(ErrorCode::InternalMismatch);
   }
   PURIFY_ASSIGN_OR_RETURN(
       auto coefficient_commitment,
-      coefficient_commitment_v4(*public_data, secp_context),
-      "circuit_parent_constants_v4:coefficient_commitment");
-  PURIFY_ASSIGN_OR_RETURN(
-      auto anchored_offset,
-      circuit_anchored_offset_v4(*public_data, public_commitments,
-                                 secp_context),
-      "circuit_parent_constants_v4:anchored_offset");
+      coefficient_commitment_v4(*public_data, secp_context));
+  PURIFY_ASSIGN_OR_RETURN(auto anchored_offset,
+                          circuit_anchored_offset_v4(
+                              *public_data, public_commitments, secp_context));
   return candidate::CircuitNormParentConstantsV4{
       std::move(binding_digest), std::move(raw_generator_digest),
       std::move(coefficient_commitment), std::move(anchored_offset)};
@@ -3758,11 +3318,9 @@ Result<bool> candidate::verify_circuit_zk_norm_arg_v4(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend *cache) {
-  PURIFY_ASSIGN_OR_RETURN(
-      auto prepared,
-      prepare_circuit_zk_norm_arg_v4(circuit, publication, secp_context,
-                                     statement_binding, cache),
-      "verify_circuit_zk_norm_arg_v4:prepare");
+  PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_circuit_zk_norm_arg_v4(
+                                             circuit, publication, secp_context,
+                                             statement_binding, cache));
   return prepared.has_value() &&
          verify_norm_arg_v4(prepared->norm(), prepared->transcript().gammas,
                             secp_context);
@@ -3777,11 +3335,9 @@ candidate::verify_circuit_zk_norm_arg_v4_with_public_commitments(
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend *cache) {
   PURIFY_ASSIGN_OR_RETURN(
-      auto prepared,
-      prepare_circuit_zk_norm_arg_v4_with_public_commitments(
-          circuit, publication, public_commitments, secp_context,
-          statement_binding, cache),
-      "verify_circuit_zk_norm_arg_v4_public:prepare");
+      auto prepared, prepare_circuit_zk_norm_arg_v4_with_public_commitments(
+                         circuit, publication, public_commitments, secp_context,
+                         statement_binding, cache));
   return prepared.has_value() &&
          verify_norm_arg_v4(prepared->norm(), prepared->transcript().gammas,
                             secp_context);
@@ -3835,8 +3391,7 @@ Result<bool> verify_experimental_circuit_zk_norm_arg_with_public_commitments(
       auto prepared,
       detail::prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
           circuit, proof, public_commitments, secp_context, statement_binding,
-          cache),
-      "verify_experimental_circuit_zk_norm_arg_with_public_commitments:prepare");
+          cache));
   if (!prepared.has_value()) {
     return false;
   }
@@ -3856,17 +3411,15 @@ commit_output_witness(const Bytes &message, const SecretKey &secret,
                       const ScalarBytes &blind, purify_secp_context *secp_context,
                       const GeneratorBytes &value_gen,
                       const GeneratorBytes &blind_gen) {
-  PURIFY_ASSIGN_OR_RETURN(auto witness, prove_assignment_data(message, secret),
-                          "commit_output_witness:prove_assignment_data");
+  PURIFY_ASSIGN_OR_RETURN(auto witness, prove_assignment_data(message, secret));
   SecretScalarBytes output;
   purify_scalar_get_b32(
       output.value.data(),
       &::purify::detail::FieldElementAccess::raw(witness.output));
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &commitment,
-      pedersen_commit_char(blind, output.value, secp_context, value_gen,
-                           blind_gen),
-      "commit_output_witness:pedersen_commit_char");
+  PURIFY_ASSIGN_OR_RETURN(const auto &commitment,
+                          pedersen_commit_char(blind, output.value,
+                                               secp_context, value_gen,
+                                               blind_gen));
   return CommittedPurifyWitness{witness.public_key, witness.output,
                                 std::move(witness.assignment), commitment};
 }

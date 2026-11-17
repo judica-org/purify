@@ -161,14 +161,14 @@ template <typename FillRandom>
 requires NoexceptCheckedByteFill<FillRandom>
 Result<UInt512> random_below(const UInt512& range, FillRandom&& fill_random) {
     if (range.is_zero()) {
-        return unexpected_error(ErrorCode::RangeViolation, "random_below:zero_range");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     std::size_t bits = range.bit_length();
     std::size_t bytes_needed = (bits + 7) / 8;
     std::array<unsigned char, 64> bytes{};
     std::span<unsigned char> out(bytes.data(), bytes_needed);
     while (true) {
-        PURIFY_RETURN_IF_ERROR(std::forward<FillRandom>(fill_random)(out), "random_below:fill_random");
+        PURIFY_RETURN_IF_ERROR(std::forward<FillRandom>(fill_random)(out));
         UInt512 candidate = UInt512::from_bytes_be(bytes.data(), bytes_needed);
         candidate.mask_bits(bits);
         if (candidate.compare(range) < 0) {
@@ -187,7 +187,7 @@ template <typename FillRandom>
 requires NoexceptByteFill<FillRandom>
 Result<UInt512> random_below(const UInt512& range, FillRandom&& fill_random) {
     if (range.is_zero()) {
-        return unexpected_error(ErrorCode::RangeViolation, "random_below:zero_range");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     std::size_t bits = range.bit_length();
     std::size_t bytes_needed = (bits + 7) / 8;
@@ -229,7 +229,7 @@ Result<GeneratedKey> generate_key(KeySeed seed);
  * @return Generated keypair bundle.
  */
 inline Result<GeneratedKey> generate_key(std::span<const unsigned char> seed) {
-    PURIFY_ASSIGN_OR_RETURN(auto checked, KeySeed::try_from(seed), "generate_key:seed_too_short");
+    PURIFY_ASSIGN_OR_RETURN(auto checked, KeySeed::try_from(seed));
     return generate_key(checked);
 }
 
@@ -241,9 +241,8 @@ inline Result<GeneratedKey> generate_key(std::span<const unsigned char> seed) {
 template <typename FillRandom>
 requires(NoexceptByteFill<FillRandom> || NoexceptCheckedByteFill<FillRandom>)
 Result<GeneratedKey> generate_key(FillRandom&& fill_random) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& secret, random_below(key_space_size(), std::forward<FillRandom>(fill_random)),
-                            "generate_key:random_below_custom");
-    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(secret), "generate_key:from_packed_secret");
+    PURIFY_ASSIGN_OR_RETURN(const auto& secret, random_below(key_space_size(), std::forward<FillRandom>(fill_random)));
+    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, SecretKey::from_packed(secret));
     return derive_key(std::move(owned_secret));
 }
 

@@ -76,13 +76,12 @@ purify::Status sample_witness(std::vector<ScalarBytes>& values) {
     // Dimensions are bounded by the CLI. One bulk RNG call avoids measuring
     // a system-call-per-coordinate workload instead of the proof protocol.
     PURIFY_RETURN_IF_ERROR(purify::fill_secure_random(std::span(
-        reinterpret_cast<unsigned char*>(values.data()), values.size() * sizeof(ScalarBytes))),
-        "benchmark:random_witness");
+        reinterpret_cast<unsigned char*>(values.data()), values.size() * sizeof(ScalarBytes))));
     for (auto& value : values) {
         for (;;) {
             const auto parsed = FieldElement::try_from_bytes32(value);
             if (parsed && !parsed->is_zero()) break;
-            PURIFY_RETURN_IF_ERROR(purify::fill_secure_random(value), "benchmark:resample_witness");
+            PURIFY_RETURN_IF_ERROR(purify::fill_secure_random(value));
         }
     }
     return {};
@@ -109,10 +108,9 @@ purify::Result<PublishedNorm> publish_norm(const accumulation::Basis& basis, std
     }
     witness.inputs.n_vec.resize(basis.n_vec_len());
     witness.inputs.l_vec.resize(basis.l_vec_len());
-    PURIFY_RETURN_IF_ERROR(sample_witness(witness.inputs.n_vec), "benchmark:n_witness");
-    PURIFY_RETURN_IF_ERROR(sample_witness(witness.inputs.l_vec), "benchmark:l_witness");
-    PURIFY_ASSIGN_OR_RETURN(auto published, purify::bppp::prove_norm_arg(witness.inputs, context),
-                            "benchmark:publish_norm");
+    PURIFY_RETURN_IF_ERROR(sample_witness(witness.inputs.n_vec));
+    PURIFY_RETURN_IF_ERROR(sample_witness(witness.inputs.l_vec));
+    PURIFY_ASSIGN_OR_RETURN(auto published, purify::bppp::prove_norm_arg(witness.inputs, context));
     // The private input vectors are erased as this function exits. Only the
     // completed public norm proof escapes into the subsequent public stages.
     return PublishedNorm{published.rho, published.commitment,

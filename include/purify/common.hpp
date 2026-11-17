@@ -53,9 +53,10 @@ inline SecpContextPtr make_secp_context() noexcept {
     return SecpContextPtr(purify_secp_context_create());
 }
 
-inline Status require_secp_context(const purify_secp_context* context, const char* error_context) {
+inline Status require_secp_context(const purify_secp_context* context,
+                                   [[maybe_unused]] const char* error_context = nullptr) {
     if (context == nullptr) {
-        return unexpected_error(ErrorCode::MissingValue, error_context);
+        return unexpected_error(ErrorCode::MissingValue);
     }
     return {};
 }
@@ -84,9 +85,10 @@ inline Status require_secp_context(const purify_secp_context* context, const cha
     return value <= static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max());
 }
 
-[[nodiscard]] inline Result<std::uint64_t> narrow_size_to_u64(std::size_t value, const char* context) {
+[[nodiscard]] inline Result<std::uint64_t> narrow_size_to_u64(std::size_t value,
+                                                              [[maybe_unused]] const char* context = nullptr) {
     if (!size_fits_u64(value)) {
-        return unexpected_error(ErrorCode::UnexpectedSize, context);
+        return unexpected_error(ErrorCode::UnexpectedSize);
     }
     return static_cast<std::uint64_t>(value);
 }
@@ -137,7 +139,7 @@ public:
 
     [[nodiscard]] static Result<SpanAtLeast> try_from(std::span<T> span) {
         if (span.size() < MinSize) {
-            return unexpected_error(ErrorCode::RangeViolation, "SpanAtLeast::try_from:too_short");
+            return unexpected_error(ErrorCode::RangeViolation);
         }
         return SpanAtLeast(span);
     }

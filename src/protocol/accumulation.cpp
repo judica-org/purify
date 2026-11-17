@@ -70,9 +70,7 @@ std::size_t log2_dimension(std::size_t size) {
 Status validate_algebraic_dimension(std::size_t dimension) {
     if (!is_power_of_two_size(dimension) ||
         log2_dimension(dimension) > kMaxAlgebraicRounds) {
-        return unexpected_error(
-            ErrorCode::InvalidDimensions,
-            "accumulation:algebraic_dimension");
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     return {};
 }
@@ -95,7 +93,7 @@ Result<FieldElement> challenge(const TaggedHash& hash, std::span<const unsigned 
         auto candidate = FieldElement::try_from_bytes32(hash.digest(input));
         if (candidate.has_value() && !candidate->is_zero()) return candidate;
     }
-    return unexpected_error(ErrorCode::InternalMismatch, "accumulation:challenge_exhausted");
+    return unexpected_error(ErrorCode::InternalMismatch);
 }
 
 Status validate_basis(const Basis& basis) {
@@ -107,39 +105,33 @@ Status validate_basis(const Basis& basis) {
         !checked_mul_size(basis.n_vec_len(), 2, dimension) ||
         !checked_add_size(basis.n_vec_len(), basis.l_vec_len(), generators) ||
         basis.dimension() != dimension || basis.norm_generators().size() != generators) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:basis_shape");
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     return {};
 }
 
 Status validate_prepared(const Basis& basis, const PreparedNorm& norm) {
     if (norm.basis_digest() != basis.digest()) {
-        return unexpected_error(ErrorCode::BindingMismatch, "accumulation:prepared_basis");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     const auto& g = norm.polynomial()[0];
     const auto& h = norm.polynomial()[1];
     if (norm.c_vec().size() != basis.l_vec_len() || g.offset != 0 || h.offset != basis.n_vec_len() ||
         g.factors.size() != log2_dimension(basis.n_vec_len()) ||
         h.factors.size() != log2_dimension(basis.l_vec_len())) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:prepared_shape");
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     return {};
 }
 
 Status validate_algebraic_prepared(
     const Basis& basis, const AlgebraicPreparedNorm& norm) {
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.dimension()),
-        "accumulation:algebraic_prepared_dimension");
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
     if (norm.basis_digest() != basis.digest()) {
-        return unexpected_error(
-            ErrorCode::BindingMismatch,
-            "accumulation:algebraic_prepared_basis");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     if (norm.prepared_binding().is_zero()) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "accumulation:algebraic_prepared_binding_zero");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     const auto& g = norm.polynomial()[0];
     const auto& h = norm.polynomial()[1];
@@ -147,9 +139,7 @@ Status validate_algebraic_prepared(
         g.offset != 0 || h.offset != basis.n_vec_len() ||
         g.factors.size() != log2_dimension(basis.n_vec_len()) ||
         h.factors.size() != log2_dimension(basis.l_vec_len())) {
-        return unexpected_error(
-            ErrorCode::InvalidDimensions,
-            "accumulation:algebraic_prepared_shape");
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     return {};
 }
@@ -167,9 +157,7 @@ void append_polynomial(Bytes& encoded, std::span<const PolynomialTerm> polynomia
 Status append_algebraic_point(
     candidate::Sha256Transcript& transcript, const PointBytes& point) {
     if (purify_bppp_public_point_validate(point.data()) == 0) {
-        return unexpected_error(
-            ErrorCode::BackendRejectedInput,
-            "accumulation:algebraic_point");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     candidate::TranscriptBytes32 x{};
     std::copy(point.begin() + 1, point.end(), x.begin());
@@ -180,17 +168,13 @@ Status append_algebraic_polynomial(
     candidate::Sha256Transcript& transcript,
     std::span<const PolynomialTerm> polynomial) {
     if (!size_fits_u64(polynomial.size())) {
-        return unexpected_error(
-            ErrorCode::Overflow,
-            "accumulation:algebraic_polynomial_size");
+        return unexpected_error(ErrorCode::Overflow);
     }
     transcript.append_u64(static_cast<std::uint64_t>(polynomial.size()));
     for (const auto& term : polynomial) {
         if (!size_fits_u64(term.offset) ||
             !size_fits_u64(term.factors.size())) {
-            return unexpected_error(
-                ErrorCode::Overflow,
-                "accumulation:algebraic_term_size");
+            return unexpected_error(ErrorCode::Overflow);
         }
         transcript.append_scalar(term.scale);
         transcript.append_u64(static_cast<std::uint64_t>(term.offset));
@@ -205,19 +189,19 @@ Status append_algebraic_polynomial(
 
 Status validate_claim(const Basis& basis, const PendingClaim& claim) {
     if (claim.basis_digest() != basis.digest()) {
-        return unexpected_error(ErrorCode::BindingMismatch, "accumulation:claim_basis");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     // A reduced norm has three coupled terms; an accumulated IPA has one.
     if (claim.polynomial().empty() || claim.polynomial().size() > 3) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:polynomial_shape");
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     for (const auto& term : claim.polynomial()) {
         if (term.factors.size() >= std::numeric_limits<std::size_t>::digits) {
-            return unexpected_error(ErrorCode::Overflow, "accumulation:polynomial_degree");
+            return unexpected_error(ErrorCode::Overflow);
         }
         const std::size_t width = std::size_t{1} << term.factors.size();
         if (width > basis.dimension() || term.offset > basis.dimension() - width) {
-            return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:polynomial_degree");
+            return unexpected_error(ErrorCode::InvalidDimensions);
         }
     }
     return {};
@@ -257,7 +241,7 @@ void add_coefficients(std::vector<FieldElement>& out, std::span<const Polynomial
 Result<PointBytes> msm(std::span<const PointBytes> points, std::span<const FieldElement> scalars,
                       purify_secp_context* context) {
     if (points.size() != scalars.size()) {
-        return unexpected_error(ErrorCode::SizeMismatch, "accumulation:msm_shape");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
     std::vector<ScalarBytes> encoded;
     encoded.reserve(scalars.size());
@@ -266,16 +250,14 @@ Result<PointBytes> msm(std::span<const PointBytes> points, std::span<const Field
     if (purify_bppp_public_msm(context,
             reinterpret_cast<const unsigned char*>(points.data()),
             reinterpret_cast<const unsigned char*>(encoded.data()), points.size(), out.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:public_msm");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     return out;
 }
 
 Result<FieldElement> append_algebraic_challenge(
     candidate::Sha256Transcript& transcript, std::uint64_t round) {
-    PURIFY_ASSIGN_OR_RETURN(
-        auto challenge, transcript.challenge(round),
-        "accumulation:algebraic_challenge");
+    PURIFY_ASSIGN_OR_RETURN(auto challenge, transcript.challenge(round));
     return std::move(challenge.scalar);
 }
 
@@ -284,14 +266,10 @@ Result<PointBytes> derive_algebraic_opening_base(
     std::uint64_t role, purify_secp_context* context) {
     if (role != kReductionOpeningRole &&
         role != kAccumulationOpeningRole) {
-        return unexpected_error(
-            ErrorCode::UnsupportedSymbol,
-            "accumulation:opening_role");
+        return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
     PURIFY_ASSIGN_OR_RETURN(
-        auto challenge,
-        transcript.opening_base_scalar(basis.digest(), role),
-        "accumulation:opening_scalar");
+        auto challenge, transcript.opening_base_scalar(basis.digest(), role));
 
     std::array<PointBytes, 2> pair{};
     for (std::size_t index = 0; index < pair.size(); ++index) {
@@ -305,48 +283,35 @@ Result<PointBytes> derive_algebraic_opening_base(
                 context, seed.data(), seed.size(),
                 pair[index].data()) == 0 ||
             pair[index] == PointBytes{}) {
-            return unexpected_error(
-                ErrorCode::BackendRejectedInput,
-                "accumulation:opening_pair");
+            return unexpected_error(ErrorCode::BackendRejectedInput);
         }
     }
     if (pair[0] == pair[1]) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "accumulation:opening_pair_duplicate");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
     const std::array<FieldElement, 2> scalars{
         FieldElement::one(), challenge.scalar};
-    PURIFY_ASSIGN_OR_RETURN(
-        auto opening_base, msm(pair, scalars, context),
-        "accumulation:opening_pair_msm");
+    PURIFY_ASSIGN_OR_RETURN(auto opening_base, msm(pair, scalars, context));
     if (opening_base == PointBytes{}) {
-        return unexpected_error(
-            ErrorCode::EquationMismatch,
-            "accumulation:opening_pair_identity");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
     return opening_base;
 }
 
 Status validate_root_claim(const Basis& basis, const PendingClaim& claim,
                            purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(context, "accumulation:root_claim_context"),
-        "accumulation:root_claim_context");
-    PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim),
-                           "accumulation:root_claim");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim));
     if (claim.polynomial().size() != 1 ||
         claim.polynomial()[0].offset != 0 ||
         claim.polynomial()[0].factors.size() !=
             log2_dimension(basis.dimension())) {
-        return unexpected_error(ErrorCode::InvalidDimensions,
-                                "accumulation:root_claim_shape");
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     const std::array<PointBytes, 1> points{claim.point()};
     const std::array<FieldElement, 1> scalars{FieldElement::zero()};
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& identity, msm(points, scalars, context),
-        "accumulation:root_claim_point");
+    PURIFY_ASSIGN_OR_RETURN(const auto& identity,
+                            msm(points, scalars, context));
     (void)identity;
     return {};
 }
@@ -354,17 +319,15 @@ Status validate_root_claim(const Basis& basis, const PendingClaim& claim,
 template <typename Proof>
 Status validate_ipa_encoding(std::size_t dimension, const Proof& proof,
                              purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
-                            "accumulation:context");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
     if (!is_power_of_two_size(dimension)) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:ipa_encoding_dimension");
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     const auto rounds = log2_dimension(dimension);
     if (proof.left.size() != rounds || proof.right.size() != rounds) {
-        return unexpected_error(ErrorCode::SizeMismatch, "accumulation:step_encoding_rounds");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar),
-                            "accumulation:step_encoding_scalar");
+    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar));
     (void)terminal;
     const auto is_canonical_point = [](const PointBytes& point) {
         return purify_bppp_public_point_validate(point.data()) != 0;
@@ -372,15 +335,11 @@ Status validate_ipa_encoding(std::size_t dimension, const Proof& proof,
     for (std::size_t round = 0; round < rounds; ++round) {
         if (!is_canonical_point(proof.left[round]) ||
             !is_canonical_point(proof.right[round])) {
-            return unexpected_error(
-                ErrorCode::BackendRejectedInput,
-                "accumulation:step_encoding_points");
+            return unexpected_error(ErrorCode::BackendRejectedInput);
         }
     }
     if (!is_canonical_point(proof.folded_generator)) {
-        return unexpected_error(
-            ErrorCode::BackendRejectedInput,
-            "accumulation:step_encoding_points");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     return {};
 }
@@ -401,7 +360,7 @@ Result<Proof> parse_ipa(std::size_t dimension,
                        purify_secp_context* context) {
     const auto rounds = log2_dimension(dimension);
     if (encoded.size() != 66 * rounds + 65) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "accumulation:parse_ipa_size");
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
     Proof proof;
     proof.left.resize(rounds);
@@ -416,7 +375,7 @@ Result<Proof> parse_ipa(std::size_t dimension,
     std::copy_n(encoded.data() + offset, 32, proof.terminal_scalar.begin());
     offset += 32;
     std::copy_n(encoded.data() + offset, 33, proof.folded_generator.begin());
-    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(dimension, proof, context), "accumulation:parse_ipa");
+    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(dimension, proof, context));
     return proof;
 }
 
@@ -431,24 +390,22 @@ struct StepContext {
 
 Result<StepContext> make_step_context(const Basis& basis, std::span<const PendingClaim> claims,
                                       purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
-                            "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     if (claims.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput, "accumulation:claims");
+        return unexpected_error(ErrorCode::EmptyInput);
     }
     Bytes encoded;
     append(encoded, basis.digest());
     append_size(encoded, claims.size());
     for (const auto& claim : claims) {
-        PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim), "accumulation:claim");
+        PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim));
         append(encoded, claim.point());
         append_polynomial(encoded, claim.polynomial());
     }
     const auto claims_digest = kClaimsHash.digest(encoded);
     StepContext out;
-    PURIFY_ASSIGN_OR_RETURN(out.beta, challenge(kBatchHash, claims_digest),
-                            "accumulation:batch_challenge");
+    PURIFY_ASSIGN_OR_RETURN(out.beta, challenge(kBatchHash, claims_digest));
     std::vector<PointBytes> commitments;
     std::vector<FieldElement> weights;
     commitments.reserve(claims.size());
@@ -459,14 +416,12 @@ Result<StepContext> make_step_context(const Basis& basis, std::span<const Pendin
         weights.push_back(weight);
         weight = weight * out.beta;
     }
-    PURIFY_ASSIGN_OR_RETURN(out.commitment, msm(commitments, weights, context),
-                            "accumulation:batch_commitment");
+    PURIFY_ASSIGN_OR_RETURN(out.commitment, msm(commitments, weights, context));
     encoded.clear();
     append(encoded, claims_digest);
     append(encoded, out.beta.to_bytes_be());
     append(encoded, out.commitment);
-    PURIFY_ASSIGN_OR_RETURN(out.x, challenge(kEvaluationHash, encoded),
-                            "accumulation:evaluation_challenge");
+    PURIFY_ASSIGN_OR_RETURN(out.x, challenge(kEvaluationHash, encoded));
     out.y = FieldElement::zero();
     for (std::size_t i = 0; i < claims.size(); ++i) {
         out.y = out.y + weights[i] * evaluate(claims[i].polynomial(), out.x);
@@ -478,7 +433,7 @@ Result<StepContext> make_step_context(const Basis& basis, std::span<const Pendin
     const auto opening_seed = kOpeningBaseHash.digest(encoded);
     if (purify_bppp_public_hash_to_point(context, opening_seed.data(), opening_seed.size(),
                                         out.opening_base.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:opening_base");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     append(encoded, out.opening_base);
     out.transcript = kOpeningHash.digest(encoded);
@@ -497,54 +452,37 @@ struct AlgebraicStepContext {
 Result<AlgebraicStepContext> make_algebraic_step_context(
     const Basis& basis, std::span<const PendingClaim> claims,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(context, "accumulation:context"),
-        "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     if (claims.empty()) {
-        return unexpected_error(
-            ErrorCode::EmptyInput, "accumulation:claims");
+        return unexpected_error(ErrorCode::EmptyInput);
     }
     const auto rounds = log2_dimension(basis.dimension());
     if (claims.size() > kMaxAlgebraicClaims) {
-        return unexpected_error(
-            ErrorCode::InvalidDimensions,
-            "accumulation:algebraic_step_shape");
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.dimension()),
-        "accumulation:algebraic_step_shape");
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
     AlgebraicStepContext out;
     const auto domain = std::span(
         reinterpret_cast<const unsigned char*>(
             kAlgebraicStepDomain.data()),
         kAlgebraicStepDomain.size());
-    PURIFY_RETURN_IF_ERROR(
-        out.transcript.append_bytes(domain),
-        "accumulation:algebraic_step_domain");
-    PURIFY_RETURN_IF_ERROR(
-        out.transcript.append_bytes(basis.digest()),
-        "accumulation:algebraic_step_basis");
+    PURIFY_RETURN_IF_ERROR(out.transcript.append_bytes(domain));
+    PURIFY_RETURN_IF_ERROR(out.transcript.append_bytes(basis.digest()));
     out.transcript.append_u64(
         static_cast<std::uint64_t>(rounds));
     out.transcript.append_u64(
         static_cast<std::uint64_t>(claims.size()));
     for (const auto& claim : claims) {
+        PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim));
         PURIFY_RETURN_IF_ERROR(
-            validate_claim(basis, claim), "accumulation:claim");
+            append_algebraic_point(out.transcript, claim.point()));
         PURIFY_RETURN_IF_ERROR(
-            append_algebraic_point(out.transcript, claim.point()),
-            "accumulation:algebraic_claim_point");
-        PURIFY_RETURN_IF_ERROR(
-            append_algebraic_polynomial(
-                out.transcript, claim.polynomial()),
-            "accumulation:algebraic_claim_polynomial");
+            append_algebraic_polynomial(out.transcript, claim.polynomial()));
     }
 
-    PURIFY_ASSIGN_OR_RETURN(
-        out.beta, append_algebraic_challenge(out.transcript, 0),
-        "accumulation:algebraic_batch_challenge");
+    PURIFY_ASSIGN_OR_RETURN(out.beta,
+                            append_algebraic_challenge(out.transcript, 0));
     std::vector<PointBytes> commitments;
     std::vector<FieldElement> weights;
     commitments.reserve(claims.size());
@@ -555,16 +493,12 @@ Result<AlgebraicStepContext> make_algebraic_step_context(
         weights.push_back(weight);
         weight = weight * out.beta;
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        out.commitment, msm(commitments, weights, context),
-        "accumulation:algebraic_batch_commitment");
+    PURIFY_ASSIGN_OR_RETURN(out.commitment, msm(commitments, weights, context));
     PURIFY_RETURN_IF_ERROR(
-        append_algebraic_point(out.transcript, out.commitment),
-        "accumulation:algebraic_commitment");
+        append_algebraic_point(out.transcript, out.commitment));
 
-    PURIFY_ASSIGN_OR_RETURN(
-        out.x, append_algebraic_challenge(out.transcript, 1),
-        "accumulation:algebraic_evaluation_challenge");
+    PURIFY_ASSIGN_OR_RETURN(out.x,
+                            append_algebraic_challenge(out.transcript, 1));
     out.y = FieldElement::zero();
     for (std::size_t i = 0; i < claims.size(); ++i) {
         out.y = out.y +
@@ -574,13 +508,10 @@ Result<AlgebraicStepContext> make_algebraic_step_context(
 
     PURIFY_ASSIGN_OR_RETURN(
         out.opening_base,
-        derive_algebraic_opening_base(
-            basis, out.transcript, kAccumulationOpeningRole,
-            context),
-        "accumulation:algebraic_opening_base");
+        derive_algebraic_opening_base(basis, out.transcript,
+                                      kAccumulationOpeningRole, context));
     PURIFY_RETURN_IF_ERROR(
-        append_algebraic_point(out.transcript, out.opening_base),
-        "accumulation:algebraic_opening_point");
+        append_algebraic_point(out.transcript, out.opening_base));
     return out;
 }
 
@@ -591,7 +522,7 @@ Result<FieldElement> round_challenge(Digest& transcript, std::size_t round,
     append_size(encoded, round);
     append(encoded, left);
     append(encoded, right);
-    PURIFY_ASSIGN_OR_RETURN(auto t, challenge(kRoundHash, encoded), "accumulation:round_challenge");
+    PURIFY_ASSIGN_OR_RETURN(auto t, challenge(kRoundHash, encoded));
     append(encoded, t.to_bytes_be());
     transcript = kRoundHash.digest(encoded);
     return t;
@@ -653,23 +584,18 @@ Result<Proof> prove_ipa_with_challenges(
         right_points.push_back(opening_base);
         left_scalars.push_back(left_inner);
         right_scalars.push_back(right_inner);
-        PURIFY_ASSIGN_OR_RETURN(auto left, msm(left_points, left_scalars, context),
-                                "accumulation:prove_left");
-        PURIFY_ASSIGN_OR_RETURN(auto right, msm(right_points, right_scalars, context),
-                                "accumulation:prove_right");
+        PURIFY_ASSIGN_OR_RETURN(auto left, msm(left_points, left_scalars, context));
+        PURIFY_ASSIGN_OR_RETURN(auto right, msm(right_points, right_scalars, context));
         proof.left.push_back(left);
         proof.right.push_back(right);
-        PURIFY_ASSIGN_OR_RETURN(auto t,
-                                round_challenge(round, left, right),
-                                "accumulation:prove_round");
+        PURIFY_ASSIGN_OR_RETURN(auto t, round_challenge(round, left, right));
         const auto t_inv = t.inverse();
         for (std::size_t i = 0; i < half; ++i) {
             a[i] = t * a[i] + t_inv * a[half + i];
             b[i] = t_inv * b[i] + t * b[half + i];
             const std::array<PointBytes, 2> pair{generators[i], generators[half + i]};
             const std::array<FieldElement, 2> fold_weights{t_inv, t};
-            PURIFY_ASSIGN_OR_RETURN(generators[i], msm(pair, fold_weights, context),
-                                    "accumulation:prove_fold_basis");
+            PURIFY_ASSIGN_OR_RETURN(generators[i], msm(pair, fold_weights, context));
         }
         a.resize(half);
         b.resize(half);
@@ -708,19 +634,16 @@ Result<IpaVerification> evaluate_ipa_with_challenges(
     assert(weights.offset == 0 && weights.factors.size() == log2_dimension(dimension));
     const auto rounds = log2_dimension(dimension);
     if (proof.left.size() != rounds || proof.right.size() != rounds) {
-        return unexpected_error(ErrorCode::SizeMismatch, "accumulation:step_proof_rounds");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(auto a, FieldElement::try_from_bytes32(proof.terminal_scalar),
-                            "accumulation:step_terminal_scalar");
+    PURIFY_ASSIGN_OR_RETURN(auto a, FieldElement::try_from_bytes32(proof.terminal_scalar));
     PolynomialTerm folded{FieldElement::one(), 0, {}};
     folded.factors.resize(rounds);
     std::vector<PointBytes> points{commitment};
     std::vector<FieldElement> scalars{FieldElement::one()};
     for (std::size_t round = 0; round < rounds; ++round) {
         PURIFY_ASSIGN_OR_RETURN(auto t,
-                                round_challenge(round, proof.left[round],
-                                                proof.right[round]),
-                                "accumulation:verify_round");
+                                round_challenge(round, proof.left[round], proof.right[round]));
         const auto t_inv = t.inverse();
         const auto t_squared = t * t;
         folded.scale = folded.scale * t_inv;
@@ -736,8 +659,7 @@ Result<IpaVerification> evaluate_ipa_with_challenges(
     scalars.push_back(evaluation - a * b_final);
     points.push_back(proof.folded_generator);
     scalars.push_back(a.negate());
-    PURIFY_ASSIGN_OR_RETURN(auto residual, msm(points, scalars, context),
-                            "accumulation:verify_equation");
+    PURIFY_ASSIGN_OR_RETURN(auto residual, msm(points, scalars, context));
     return IpaVerification{std::move(folded), residual};
 }
 
@@ -750,13 +672,10 @@ Result<PolynomialTerm> verify_ipa_with_challenges(
     PURIFY_ASSIGN_OR_RETURN(
         auto verified,
         evaluate_ipa_with_challenges(
-            dimension, proof, weights, commitment, evaluation,
-            opening_base, std::forward<RoundChallenge>(round_challenge),
-            context),
-        "accumulation:evaluate_ipa");
+            dimension, proof, weights, commitment, evaluation, opening_base,
+            std::forward<RoundChallenge>(round_challenge), context));
     if (verified.residual != PointBytes{}) {
-        return unexpected_error(
-            ErrorCode::EquationMismatch, "accumulation:step_equation");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
     return std::move(verified.folded);
 }
@@ -782,15 +701,11 @@ Result<AlgebraicStepProof> prove_algebraic_ipa(
     std::uint64_t first_round, purify_secp_context* context) {
     return prove_ipa_with_challenges<AlgebraicStepProof>(
         basis, std::move(a), weights, opening_base,
-        [&transcript, first_round](
-            std::size_t round, const PointBytes& left,
-            const PointBytes& right) -> Result<FieldElement> {
-            PURIFY_RETURN_IF_ERROR(
-                append_algebraic_point(transcript, left),
-                "accumulation:algebraic_left");
-            PURIFY_RETURN_IF_ERROR(
-                append_algebraic_point(transcript, right),
-                "accumulation:algebraic_right");
+        [&transcript,
+         first_round](std::size_t round, const PointBytes& left,
+                      const PointBytes& right) -> Result<FieldElement> {
+            PURIFY_RETURN_IF_ERROR(append_algebraic_point(transcript, left));
+            PURIFY_RETURN_IF_ERROR(append_algebraic_point(transcript, right));
             return append_algebraic_challenge(
                 transcript,
                 first_round + static_cast<std::uint64_t>(round));
@@ -806,15 +721,11 @@ Result<IpaVerification> evaluate_algebraic_ipa(
     std::uint64_t first_round, purify_secp_context* context) {
     return evaluate_ipa_with_challenges(
         dimension, proof, weights, commitment, evaluation, opening_base,
-        [&transcript, first_round](
-            std::size_t round, const PointBytes& left,
-            const PointBytes& right) -> Result<FieldElement> {
-            PURIFY_RETURN_IF_ERROR(
-                append_algebraic_point(transcript, left),
-                "accumulation:algebraic_left");
-            PURIFY_RETURN_IF_ERROR(
-                append_algebraic_point(transcript, right),
-                "accumulation:algebraic_right");
+        [&transcript,
+         first_round](std::size_t round, const PointBytes& left,
+                      const PointBytes& right) -> Result<FieldElement> {
+            PURIFY_RETURN_IF_ERROR(append_algebraic_point(transcript, left));
+            PURIFY_RETURN_IF_ERROR(append_algebraic_point(transcript, right));
             return append_algebraic_challenge(
                 transcript,
                 first_round + static_cast<std::uint64_t>(round));
@@ -829,14 +740,11 @@ Result<PolynomialTerm> verify_algebraic_ipa(
     candidate::Sha256Transcript& transcript,
     std::uint64_t first_round, purify_secp_context* context) {
     PURIFY_ASSIGN_OR_RETURN(
-        auto verified,
-        evaluate_algebraic_ipa(
-            dimension, proof, weights, commitment, evaluation,
-            opening_base, transcript, first_round, context),
-        "accumulation:evaluate_algebraic_ipa");
+        auto verified, evaluate_algebraic_ipa(
+                           dimension, proof, weights, commitment, evaluation,
+                           opening_base, transcript, first_round, context));
     if (verified.residual != PointBytes{}) {
-        return unexpected_error(
-            ErrorCode::EquationMismatch, "accumulation:step_equation");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
     return std::move(verified.folded);
 }
@@ -851,12 +759,11 @@ struct NormOpeningContext {
 Result<NormOpeningContext> make_norm_context(const Basis& basis, const PreparedNorm& norm,
                                             const ScalarBytes& evaluation,
                                             purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"), "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(validate_prepared(basis, norm), "accumulation:prepared");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_prepared(basis, norm));
     NormOpeningContext out;
-    PURIFY_ASSIGN_OR_RETURN(out.evaluation, FieldElement::try_from_bytes32(evaluation),
-                            "accumulation:coefficient_evaluation");
+    PURIFY_ASSIGN_OR_RETURN(out.evaluation, FieldElement::try_from_bytes32(evaluation));
     out.weights = PolynomialTerm{FieldElement::one(), 0, norm.polynomial()[1].factors};
     Bytes encoded;
     append(encoded, basis.digest());
@@ -868,7 +775,7 @@ Result<NormOpeningContext> make_norm_context(const Basis& basis, const PreparedN
     // C_c and the claimed tensor evaluation are fixed before choosing U.
     const auto seed = kNormOpeningBaseHash.digest(encoded);
     if (purify_bppp_public_hash_to_point(context, seed.data(), seed.size(), out.opening_base.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:coefficient_opening_base");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     append(encoded, out.opening_base);
     out.transcript = kNormOpeningHash.digest(encoded);
@@ -885,24 +792,15 @@ struct AlgebraicNormOpeningContext {
 Result<AlgebraicNormOpeningContext> make_algebraic_norm_context(
     const Basis& basis, const AlgebraicPreparedNorm& norm,
     const ScalarBytes& evaluation, purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(context, "accumulation:context"),
-        "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_prepared(basis, norm),
-        "accumulation:algebraic_prepared");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_prepared(basis, norm));
 
     AlgebraicNormOpeningContext out;
     const auto rounds = log2_dimension(basis.l_vec_len());
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.l_vec_len()),
-        "accumulation:algebraic_norm_shape");
-    PURIFY_ASSIGN_OR_RETURN(
-        out.evaluation,
-        FieldElement::try_from_bytes32(evaluation),
-        "accumulation:coefficient_evaluation");
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.l_vec_len()));
+    PURIFY_ASSIGN_OR_RETURN(out.evaluation,
+                            FieldElement::try_from_bytes32(evaluation));
     out.weights = PolynomialTerm{
         FieldElement::one(), 0,
         norm.polynomial()[1].factors};
@@ -911,34 +809,24 @@ Result<AlgebraicNormOpeningContext> make_algebraic_norm_context(
         reinterpret_cast<const unsigned char*>(
             kAlgebraicNormDomain.data()),
         kAlgebraicNormDomain.size());
-    PURIFY_RETURN_IF_ERROR(
-        out.transcript.append_bytes(domain),
-        "accumulation:algebraic_norm_domain");
-    PURIFY_RETURN_IF_ERROR(
-        out.transcript.append_bytes(basis.digest()),
-        "accumulation:algebraic_norm_basis");
+    PURIFY_RETURN_IF_ERROR(out.transcript.append_bytes(domain));
+    PURIFY_RETURN_IF_ERROR(out.transcript.append_bytes(basis.digest()));
     out.transcript.append_u64(
         static_cast<std::uint64_t>(rounds));
     out.transcript.append_scalar(norm.prepared_binding());
     PURIFY_RETURN_IF_ERROR(
-        append_algebraic_point(
-            out.transcript, norm.coefficient_commitment()),
-        "accumulation:algebraic_norm_commitment");
+        append_algebraic_point(out.transcript, norm.coefficient_commitment()));
     const std::array<PolynomialTerm, 1> weights{out.weights};
     PURIFY_RETURN_IF_ERROR(
-        append_algebraic_polynomial(out.transcript, weights),
-        "accumulation:algebraic_norm_weights");
+        append_algebraic_polynomial(out.transcript, weights));
     out.transcript.append_scalar(out.evaluation);
 
-    PURIFY_ASSIGN_OR_RETURN(
-        out.opening_base,
-        derive_algebraic_opening_base(
-            basis, out.transcript, kReductionOpeningRole,
-            context),
-        "accumulation:algebraic_norm_opening_base");
+    PURIFY_ASSIGN_OR_RETURN(out.opening_base,
+                            derive_algebraic_opening_base(basis, out.transcript,
+                                                          kReductionOpeningRole,
+                                                          context));
     PURIFY_RETURN_IF_ERROR(
-        append_algebraic_point(out.transcript, out.opening_base),
-        "accumulation:algebraic_norm_opening_point");
+        append_algebraic_point(out.transcript, out.opening_base));
     return out;
 }
 
@@ -964,8 +852,7 @@ Result<CircuitPreparedNorm> prepare_circuit_norm_components(
             basis.n_vec_len() + basis.l_vec_len() ||
         prepared.raw_generator_digest !=
             generator_digest(basis.norm_generators())) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "accumulation:circuit_raw_basis");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
 
     const auto rounds = log2_dimension(basis.n_vec_len());
@@ -982,23 +869,17 @@ Result<CircuitPreparedNorm> prepare_circuit_norm_components(
             l_bytes.data(),
             reinterpret_cast<unsigned char*>(gammas.data()), gammas.size(),
             residual.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput,
-                                "accumulation:circuit_inner_norm");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
 
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& n, FieldElement::try_from_bytes32(n_bytes),
-        "accumulation:circuit_norm_n");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& l, FieldElement::try_from_bytes32(l_bytes),
-        "accumulation:circuit_norm_l");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& rho, FieldElement::try_from_bytes32(norm.rho),
-        "accumulation:circuit_norm_rho");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& sqrt_minus_one,
-        detail::canonical_sqrt_minus_one(),
-        "accumulation:circuit_sqrt_minus_one");
+    PURIFY_ASSIGN_OR_RETURN(const auto& n,
+                            FieldElement::try_from_bytes32(n_bytes));
+    PURIFY_ASSIGN_OR_RETURN(const auto& l,
+                            FieldElement::try_from_bytes32(l_bytes));
+    PURIFY_ASSIGN_OR_RETURN(const auto& rho,
+                            FieldElement::try_from_bytes32(norm.rho));
+    PURIFY_ASSIGN_OR_RETURN(const auto& sqrt_minus_one,
+                            detail::canonical_sqrt_minus_one());
 
     PolynomialTerm g{
         n * pow_size(rho, basis.n_vec_len()) *
@@ -1009,9 +890,8 @@ Result<CircuitPreparedNorm> prepare_circuit_norm_components(
     const auto h_rounds = log2_dimension(basis.l_vec_len());
     auto ratio_inv_power = prepared.mul_ratio.inverse();
     for (std::size_t j = 0; j < rounds; ++j) {
-        PURIFY_ASSIGN_OR_RETURN(
-            const auto& gamma, FieldElement::try_from_bytes32(gammas[j]),
-            "accumulation:circuit_norm_gamma");
+        PURIFY_ASSIGN_OR_RETURN(const auto& gamma,
+                                FieldElement::try_from_bytes32(gammas[j]));
         if (j == 0) {
             g.factors.push_back(gamma * sqrt_minus_one.inverse());
         } else {
@@ -1024,19 +904,15 @@ Result<CircuitPreparedNorm> prepare_circuit_norm_components(
     std::vector<FieldElement> coefficients;
     coefficients.reserve(norm.c_vec.size());
     for (const auto& encoded : norm.c_vec) {
-        PURIFY_ASSIGN_OR_RETURN(
-            const auto& coefficient,
-            FieldElement::try_from_bytes32(encoded),
-            "accumulation:circuit_norm_coefficient");
+        PURIFY_ASSIGN_OR_RETURN(const auto& coefficient,
+                                FieldElement::try_from_bytes32(encoded));
         coefficients.push_back(coefficient);
     }
     const auto h_basis = std::span(basis.points())
                              .subspan(basis.n_vec_len(),
                                       basis.l_vec_len());
-    PURIFY_ASSIGN_OR_RETURN(
-        auto coefficient_commitment,
-        msm(h_basis, coefficients, context),
-        "accumulation:circuit_coefficient_commitment");
+    PURIFY_ASSIGN_OR_RETURN(auto coefficient_commitment,
+                            msm(h_basis, coefficients, context));
 
     Bytes encoded;
     append(encoded, basis.digest());
@@ -1070,26 +946,24 @@ Result<CircuitPreparedNorm> prepare_circuit_norm_components(
 
 Result<Basis> Basis::create(std::size_t n_vec_len, std::size_t l_vec_len,
                             std::string_view semantic_domain, purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
-                            "accumulation:context");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
     std::size_t dimension = 0;
     if (!is_power_of_two_size(n_vec_len) || !is_power_of_two_size(l_vec_len) ||
         l_vec_len > n_vec_len || !checked_mul_size(n_vec_len, 2, dimension)) {
-        return unexpected_error(ErrorCode::InvalidDimensions, "accumulation:create_basis_shape");
+        return unexpected_error(ErrorCode::InvalidDimensions);
     }
     if (semantic_domain.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput, "accumulation:basis_semantic_domain");
+        return unexpected_error(ErrorCode::EmptyInput);
     }
     Basis out;
     out.n_vec_len_ = n_vec_len;
     out.l_vec_len_ = l_vec_len;
-    PURIFY_ASSIGN_OR_RETURN(auto generators, create_generators(dimension, context),
-                            "accumulation:deterministic_generators");
+    PURIFY_ASSIGN_OR_RETURN(auto generators, create_generators(dimension, context));
     out.points_.resize(dimension);
     if (purify_bppp_generators_to_points(context,
             reinterpret_cast<const unsigned char*>(generators.data()), generators.size(),
             reinterpret_cast<unsigned char*>(out.points_.data())) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:raw_basis");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     generators.resize(n_vec_len + l_vec_len);
     out.norm_generators_ = std::move(generators);
@@ -1106,9 +980,8 @@ Result<Basis> Basis::create(std::size_t n_vec_len, std::size_t l_vec_len,
 
 Result<Bytes> serialize_step(const Basis& basis, const StepProof& proof,
                              purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.dimension(), proof, context),
-                            "accumulation:serialize_step");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.dimension(), proof, context));
     Bytes out;
     out.reserve(66 * log2_dimension(basis.dimension()) + 66);
     out.push_back(1);
@@ -1118,13 +991,13 @@ Result<Bytes> serialize_step(const Basis& basis, const StepProof& proof,
 
 Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> encoded,
                              purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"), "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     if (encoded.size() != 66 * log2_dimension(basis.dimension()) + 66) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "accumulation:parse_step_size");
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
     if (encoded[0] != 1) {
-        return unexpected_error(ErrorCode::UnsupportedSymbol, "accumulation:parse_step_version");
+        return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
     return parse_ipa<StepProof>(
         basis.dimension(), encoded.subspan(1), context);
@@ -1133,15 +1006,10 @@ Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> 
 Result<Bytes> serialize_algebraic_step(
     const Basis& basis, const AlgebraicStepProof& proof,
     purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
     PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.dimension()),
-        "accumulation:algebraic_step_dimension");
-    PURIFY_RETURN_IF_ERROR(
-        validate_ipa_encoding(
-            basis.dimension(), proof, context),
-        "accumulation:serialize_algebraic_step");
+        validate_ipa_encoding(basis.dimension(), proof, context));
     Bytes out;
     out.reserve(
         66 * log2_dimension(basis.dimension()) + 66);
@@ -1153,24 +1021,15 @@ Result<Bytes> serialize_algebraic_step(
 Result<AlgebraicStepProof> parse_algebraic_step(
     const Basis& basis, std::span<const unsigned char> encoded,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(context, "accumulation:context"),
-        "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.dimension()),
-        "accumulation:algebraic_step_dimension");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
     if (encoded.size() !=
         66 * log2_dimension(basis.dimension()) + 66) {
-        return unexpected_error(
-            ErrorCode::InvalidFixedSize,
-            "accumulation:parse_algebraic_step_size");
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
     if (encoded[0] != 2) {
-        return unexpected_error(
-            ErrorCode::UnsupportedSymbol,
-            "accumulation:parse_algebraic_step_version");
+        return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
     return parse_ipa<AlgebraicStepProof>(
         basis.dimension(), encoded.subspan(1), context);
@@ -1179,10 +1038,8 @@ Result<AlgebraicStepProof> parse_algebraic_step(
 Result<Bytes> serialize_root_claim(const Basis& basis,
                                    const PendingClaim& claim,
                                    purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_root_claim(basis, claim, context),
-        "accumulation:serialize_root_claim");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_root_claim(basis, claim, context));
     const auto& polynomial = claim.polynomial()[0];
     Bytes out;
     out.reserve(65 + 32 * polynomial.factors.size());
@@ -1197,11 +1054,10 @@ Result<Bytes> serialize_root_claim(const Basis& basis,
 Result<PendingClaim> parse_root_claim(
     const Basis& basis, std::span<const unsigned char> encoded,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     const auto factor_count = log2_dimension(basis.dimension());
     if (encoded.size() != 65 + 32 * factor_count) {
-        return unexpected_error(ErrorCode::InvalidFixedSize,
-                                "accumulation:parse_root_claim_size");
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
 
     PointBytes point{};
@@ -1209,9 +1065,7 @@ Result<PendingClaim> parse_root_claim(
     ScalarBytes scalar{};
     std::copy_n(encoded.begin() + static_cast<std::ptrdiff_t>(point.size()),
                 scalar.size(), scalar.begin());
-    PURIFY_ASSIGN_OR_RETURN(
-        auto scale, FieldElement::try_from_bytes32(scalar),
-        "accumulation:parse_root_claim_scale");
+    PURIFY_ASSIGN_OR_RETURN(auto scale, FieldElement::try_from_bytes32(scalar));
     std::vector<FieldElement> factors;
     factors.reserve(factor_count);
     std::size_t offset = point.size() + scalar.size();
@@ -1219,27 +1073,22 @@ Result<PendingClaim> parse_root_claim(
         std::copy_n(encoded.begin() + static_cast<std::ptrdiff_t>(offset),
                     scalar.size(), scalar.begin());
         offset += scalar.size();
-        PURIFY_ASSIGN_OR_RETURN(
-            auto factor, FieldElement::try_from_bytes32(scalar),
-            "accumulation:parse_root_claim_factor");
+        PURIFY_ASSIGN_OR_RETURN(auto factor,
+                                FieldElement::try_from_bytes32(scalar));
         factors.push_back(factor);
     }
     PendingClaim out(basis.digest(), point,
                      {PolynomialTerm{scale, 0, std::move(factors)}});
-    PURIFY_RETURN_IF_ERROR(
-        validate_root_claim(basis, out, context),
-        "accumulation:parse_root_claim");
+    PURIFY_RETURN_IF_ERROR(validate_root_claim(basis, out, context));
     return out;
 }
 
 Result<Bytes> serialize_norm_reduction(const Basis& basis, const NormReductionProof& proof,
                                        purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation),
-                            "accumulation:serialize_reduction_evaluation");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation));
     (void)evaluation;
-    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.l_vec_len(), proof.coefficient_opening, context),
-                            "accumulation:serialize_reduction");
+    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.l_vec_len(), proof.coefficient_opening, context));
     Bytes out;
     out.reserve(66 * log2_dimension(basis.l_vec_len()) + 98);
     out.push_back(1);
@@ -1250,23 +1099,20 @@ Result<Bytes> serialize_norm_reduction(const Basis& basis, const NormReductionPr
 
 Result<NormReductionProof> parse_norm_reduction(const Basis& basis, std::span<const unsigned char> encoded,
                                                purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"), "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     if (encoded.size() != 66 * log2_dimension(basis.l_vec_len()) + 98) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, "accumulation:parse_reduction_size");
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
     if (encoded[0] != 1) {
-        return unexpected_error(ErrorCode::UnsupportedSymbol, "accumulation:parse_reduction_version");
+        return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
     NormReductionProof proof;
     std::copy_n(encoded.data() + 1, 32, proof.coefficient_evaluation.begin());
-    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation),
-                            "accumulation:parse_reduction_evaluation");
+    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation));
     (void)evaluation;
     PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening,
-        parse_ipa<StepProof>(basis.l_vec_len(), encoded.subspan(33),
-                             context),
-        "accumulation:parse_reduction_ipa");
+                            parse_ipa<StepProof>(basis.l_vec_len(), encoded.subspan(33), context));
     return proof;
 }
 
@@ -1274,25 +1120,14 @@ Result<Bytes> serialize_algebraic_norm_reduction(
     const Basis& basis,
     const AlgebraicNormReductionProof& proof,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.dimension()),
-        "accumulation:algebraic_reduction_dimension");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.l_vec_len()),
-        "accumulation:algebraic_reduction_dimension");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto evaluation,
-        FieldElement::try_from_bytes32(
-            proof.coefficient_evaluation),
-        "accumulation:serialize_algebraic_evaluation");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.l_vec_len()));
+    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(
+                                                 proof.coefficient_evaluation));
     (void)evaluation;
-    PURIFY_RETURN_IF_ERROR(
-        validate_ipa_encoding(
-            basis.l_vec_len(), proof.coefficient_opening,
-            context),
-        "accumulation:serialize_algebraic_reduction");
+    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(
+        basis.l_vec_len(), proof.coefficient_opening, context));
     Bytes out;
     out.reserve(
         66 * log2_dimension(basis.l_vec_len()) + 98);
@@ -1306,54 +1141,38 @@ Result<AlgebraicNormReductionProof>
 parse_algebraic_norm_reduction(
     const Basis& basis, std::span<const unsigned char> encoded,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(context, "accumulation:context"),
-        "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.dimension()),
-        "accumulation:algebraic_reduction_dimension");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.l_vec_len()),
-        "accumulation:algebraic_reduction_dimension");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.l_vec_len()));
     if (encoded.size() !=
         66 * log2_dimension(basis.l_vec_len()) + 98) {
-        return unexpected_error(
-            ErrorCode::InvalidFixedSize,
-            "accumulation:parse_algebraic_reduction_size");
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
     if (encoded[0] != 2) {
-        return unexpected_error(
-            ErrorCode::UnsupportedSymbol,
-            "accumulation:parse_algebraic_reduction_version");
+        return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
     AlgebraicNormReductionProof proof;
     std::copy_n(
         encoded.data() + 1, 32,
         proof.coefficient_evaluation.begin());
-    PURIFY_ASSIGN_OR_RETURN(
-        auto evaluation,
-        FieldElement::try_from_bytes32(
-            proof.coefficient_evaluation),
-        "accumulation:parse_algebraic_evaluation");
+    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(
+                                                 proof.coefficient_evaluation));
     (void)evaluation;
-    PURIFY_ASSIGN_OR_RETURN(
-        proof.coefficient_opening,
-        parse_ipa<AlgebraicStepProof>(
-            basis.l_vec_len(), encoded.subspan(33), context),
-        "accumulation:parse_algebraic_reduction_ipa");
+    PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening,
+                            parse_ipa<AlgebraicStepProof>(basis.l_vec_len(),
+                                                          encoded.subspan(33),
+                                                          context));
     return proof;
 }
 
 Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,
                                   purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
-                            "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     if (proof.n_vec_len != basis.n_vec_len() || proof.c_vec.size() != basis.l_vec_len() ||
         proof.generators != basis.norm_generators()) {
-        return unexpected_error(ErrorCode::BindingMismatch, "accumulation:norm_basis");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     const auto rounds = log2_dimension(basis.n_vec_len());
     std::vector<ScalarBytes> gammas(rounds);
@@ -1365,18 +1184,17 @@ Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,
             proof.n_vec_len, proof.commitment.data(), proof.proof.data(), proof.proof.size(),
             n_bytes.data(), l_bytes.data(), reinterpret_cast<unsigned char*>(gammas.data()),
             gammas.size(), residual.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:prepare_norm");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
-    PURIFY_ASSIGN_OR_RETURN(auto n, FieldElement::try_from_bytes32(n_bytes), "accumulation:norm_n");
-    PURIFY_ASSIGN_OR_RETURN(auto l, FieldElement::try_from_bytes32(l_bytes), "accumulation:norm_l");
-    PURIFY_ASSIGN_OR_RETURN(auto rho, FieldElement::try_from_bytes32(proof.rho), "accumulation:norm_rho");
+    PURIFY_ASSIGN_OR_RETURN(auto n, FieldElement::try_from_bytes32(n_bytes));
+    PURIFY_ASSIGN_OR_RETURN(auto l, FieldElement::try_from_bytes32(l_bytes));
+    PURIFY_ASSIGN_OR_RETURN(auto rho, FieldElement::try_from_bytes32(proof.rho));
     PolynomialTerm g{n * pow_size(rho, basis.n_vec_len() - 1), 0, {}};
     PolynomialTerm h{l, basis.n_vec_len(), {}};
     auto rho_inv_power = rho.inverse();
     const auto h_rounds = log2_dimension(basis.l_vec_len());
     for (std::size_t j = 0; j < rounds; ++j) {
-        PURIFY_ASSIGN_OR_RETURN(auto gamma, FieldElement::try_from_bytes32(gammas[j]),
-                                "accumulation:norm_gamma");
+        PURIFY_ASSIGN_OR_RETURN(auto gamma, FieldElement::try_from_bytes32(gammas[j]));
         g.factors.push_back(gamma * rho_inv_power);
         if (j < h_rounds) h.factors.push_back(gamma);
         rho_inv_power = rho_inv_power * rho_inv_power;
@@ -1384,13 +1202,11 @@ Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,
     std::vector<FieldElement> coefficients;
     coefficients.reserve(proof.c_vec.size());
     for (const auto& encoded : proof.c_vec) {
-        PURIFY_ASSIGN_OR_RETURN(auto coefficient, FieldElement::try_from_bytes32(encoded),
-                                "accumulation:norm_coefficient");
+        PURIFY_ASSIGN_OR_RETURN(auto coefficient, FieldElement::try_from_bytes32(encoded));
         coefficients.push_back(coefficient);
     }
     const auto h_basis = std::span(basis.points()).subspan(basis.n_vec_len(), basis.l_vec_len());
-    PURIFY_ASSIGN_OR_RETURN(auto commitment, msm(h_basis, coefficients, context),
-                            "accumulation:coefficient_commitment");
+    PURIFY_ASSIGN_OR_RETURN(auto commitment, msm(h_basis, coefficients, context));
     Bytes encoded;
     append(encoded, basis.digest());
     append(encoded, proof.rho);
@@ -1410,25 +1226,17 @@ prepare_experimental_circuit_zk_norm_arg(
     purify_secp_context* context,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend* cache) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(context, "accumulation:circuit_context"),
-        "accumulation:circuit_context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis),
-                           "accumulation:circuit_basis");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     PURIFY_ASSIGN_OR_RETURN(
-        auto prepared,
-        detail::prepare_experimental_circuit_zk_norm_arg(
-            circuit, proof, context, statement_binding, cache),
-        "accumulation:circuit_prepare");
+        auto prepared, detail::prepare_experimental_circuit_zk_norm_arg(
+                           circuit, proof, context, statement_binding, cache));
     if (!prepared.has_value()) {
-        return unexpected_error(ErrorCode::EquationMismatch,
-                                "accumulation:circuit_zero_dlog");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto components,
-        prepare_circuit_norm_components(
-            basis, *prepared, proof, {}, context, statement_binding),
-        "accumulation:circuit_components");
+    PURIFY_ASSIGN_OR_RETURN(auto components, prepare_circuit_norm_components(
+                                                 basis, *prepared, proof, {},
+                                                 context, statement_binding));
     return PreparedNorm(
         basis.digest(), components.transcript_digest,
         std::move(components.c_vec), components.coefficient_commitment,
@@ -1443,27 +1251,21 @@ prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
     purify_secp_context* context,
     std::span<const unsigned char> statement_binding,
     ExperimentalCircuitBackend* cache) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(context, "accumulation:circuit_context"),
-        "accumulation:circuit_context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis),
-                           "accumulation:circuit_basis");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     PURIFY_ASSIGN_OR_RETURN(
         auto prepared,
-        detail::prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
-            circuit, proof, public_commitments, context, statement_binding,
-            cache),
-        "accumulation:circuit_prepare");
+        detail::
+            prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
+                circuit, proof, public_commitments, context, statement_binding,
+                cache));
     if (!prepared.has_value()) {
-        return unexpected_error(ErrorCode::EquationMismatch,
-                                "accumulation:circuit_public_dlog");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto components,
-        prepare_circuit_norm_components(
-            basis, *prepared, proof, public_commitments, context,
-            statement_binding),
-        "accumulation:circuit_components");
+    PURIFY_ASSIGN_OR_RETURN(auto components,
+                            prepare_circuit_norm_components(
+                                basis, *prepared, proof, public_commitments,
+                                context, statement_binding));
     return PreparedNorm(
         basis.digest(), components.transcript_digest,
         std::move(components.c_vec), components.coefficient_commitment,
@@ -1474,14 +1276,9 @@ Result<AlgebraicPreparedNorm>
 prepare_v4_circuit_norm_for_algebraic_reduction(
     const Basis& basis, candidate::PreparedCircuitZkNormArgV4 prepared,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(context, "accumulation:v4_context"),
-        "accumulation:v4_context");
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:v4_basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_dimension(basis.dimension()),
-        "accumulation:v4_dimension");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
 
     const auto& shape = prepared.shape();
     const auto& transcript_input = prepared.transcript_input();
@@ -1491,9 +1288,7 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
     std::size_t generator_count = 0;
     if (!checked_add_size(shape.n_vec_len(), shape.l_vec_len(),
                           generator_count)) {
-        return unexpected_error(
-            ErrorCode::Overflow,
-            "accumulation:v4_generator_count");
+        return unexpected_error(ErrorCode::Overflow);
     }
     // The V4 transcript binds this raw digest. Exact generator equality
     // bridges it to the purpose owner's selected semantic basis.
@@ -1501,17 +1296,13 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
         shape.l_vec_len() != basis.l_vec_len() ||
         prepared.raw_generators().size() != generator_count ||
         prepared.raw_generators() != basis.norm_generators()) {
-        return unexpected_error(
-            ErrorCode::BindingMismatch,
-            "accumulation:v4_raw_basis");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     const auto raw_generator_digest =
         generator_digest(prepared.raw_generators());
     if (transcript_input.raw_generator_digest != raw_generator_digest ||
         generator_digest(basis.norm_generators()) != raw_generator_digest) {
-        return unexpected_error(
-            ErrorCode::BindingMismatch,
-            "accumulation:v4_raw_basis_digest");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     if (norm.n_vec_len != shape.n_vec_len() ||
         norm.generators.size() != generator_count ||
@@ -1520,9 +1311,7 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
         norm.commitment != transcript_input.combined_commitment ||
         transcript_input.rounds.size() != rounds ||
         transcript.gammas.size() != rounds) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "accumulation:v4_prepared_shape");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
 
     if (transcript.rho.scalar.is_zero() ||
@@ -1534,14 +1323,10 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
             [](const candidate::CircuitChallengeV4& gamma) {
                 return gamma.scalar.is_zero();
             })) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "accumulation:v4_zero_challenge");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& sqrt_minus_one,
-        detail::canonical_sqrt_minus_one(),
-        "accumulation:v4_sqrt_minus_one");
+    PURIFY_ASSIGN_OR_RETURN(const auto& sqrt_minus_one,
+                            detail::canonical_sqrt_minus_one());
 
     // Reconstruct every transformed G generator rather than trusting the
     // prepared object's duplicate list. The H suffix stays exactly raw.
@@ -1557,14 +1342,10 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
         if (purify_bppp_scale_generator(
                 context, prepared.raw_generators()[i].data(),
                 encoded_scale.data(), expected_generator.data()) == 0) {
-            return unexpected_error(
-                ErrorCode::BackendRejectedInput,
-                "accumulation:v4_scale_generator");
+            return unexpected_error(ErrorCode::BackendRejectedInput);
         }
         if (norm.generators[i] != expected_generator) {
-            return unexpected_error(
-                ErrorCode::InternalMismatch,
-                "accumulation:v4_scaled_basis");
+            return unexpected_error(ErrorCode::InternalMismatch);
         }
         if (i % 2 == 1) {
             generator_term =
@@ -1578,9 +1359,7 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
             norm.generators.end(),
             prepared.raw_generators().begin() +
                 static_cast<std::ptrdiff_t>(shape.n_vec_len()))) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "accumulation:v4_linear_basis");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
 
     std::size_t round_bytes = 0;
@@ -1590,14 +1369,10 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
                           round_bytes) ||
         !checked_add_size(round_bytes, 2 * sizeof(ScalarBytes),
                           expected_proof_size)) {
-        return unexpected_error(
-            ErrorCode::Overflow,
-            "accumulation:v4_proof_size");
+        return unexpected_error(ErrorCode::Overflow);
     }
     if (norm.proof.size() != expected_proof_size) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "accumulation:v4_proof_size");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
     for (std::size_t i = 0; i < rounds; ++i) {
         const auto offset = i * sizeof(candidate::PackedPointPairV4);
@@ -1606,9 +1381,7 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
                 transcript_input.rounds[i].end(),
                 norm.proof.begin() +
                     static_cast<std::ptrdiff_t>(offset))) {
-            return unexpected_error(
-                ErrorCode::InternalMismatch,
-                "accumulation:v4_round_payload");
+            return unexpected_error(ErrorCode::InternalMismatch);
         }
     }
     if (!std::equal(
@@ -1621,9 +1394,7 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
             transcript_input.terminal_l.end(),
             norm.proof.begin() + static_cast<std::ptrdiff_t>(
                                      round_bytes + sizeof(ScalarBytes)))) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "accumulation:v4_terminal_payload");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
 
     std::vector<ScalarBytes> encoded_gammas;
@@ -1648,26 +1419,18 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
                 encoded_gammas.data()),
             encoded_gammas.size(), terminal_n_bytes.data(),
             terminal_l_bytes.data(), residual.data()) == 0) {
-        return unexpected_error(
-            ErrorCode::BackendRejectedInput,
-            "accumulation:v4_inner_norm");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     if (terminal_n_bytes != transcript_input.terminal_n ||
         terminal_l_bytes != transcript_input.terminal_l ||
         residual != prepared.pending_norm_residual()) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "accumulation:v4_prepared_norm");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
 
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& terminal_n,
-        FieldElement::try_from_bytes32(terminal_n_bytes),
-        "accumulation:v4_terminal_n");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& terminal_l,
-        FieldElement::try_from_bytes32(terminal_l_bytes),
-        "accumulation:v4_terminal_l");
+    PURIFY_ASSIGN_OR_RETURN(const auto& terminal_n,
+                            FieldElement::try_from_bytes32(terminal_n_bytes));
+    PURIFY_ASSIGN_OR_RETURN(const auto& terminal_l,
+                            FieldElement::try_from_bytes32(terminal_l_bytes));
     // These are the two compact terms installed by the constrained V4 leaf.
     PolynomialTerm g{
         terminal_n *
@@ -1695,24 +1458,18 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
     std::vector<FieldElement> coefficients;
     coefficients.reserve(norm.c_vec.size());
     for (const auto& encoded : norm.c_vec) {
-        PURIFY_ASSIGN_OR_RETURN(
-            auto coefficient,
-            FieldElement::try_from_bytes32(encoded),
-            "accumulation:v4_coefficient");
+        PURIFY_ASSIGN_OR_RETURN(auto coefficient,
+                                FieldElement::try_from_bytes32(encoded));
         coefficients.push_back(std::move(coefficient));
     }
     const auto coefficient_basis =
         std::span(basis.points())
             .subspan(basis.n_vec_len(), basis.l_vec_len());
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto coefficient_commitment,
-        msm(coefficient_basis, coefficients, context),
-        "accumulation:v4_coefficient_commitment");
+    PURIFY_ASSIGN_OR_RETURN(const auto coefficient_commitment,
+                            msm(coefficient_basis, coefficients, context));
     if (coefficient_commitment !=
         transcript_input.coefficient_commitment) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "accumulation:v4_coefficient_binding");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
 
     const auto prepared_binding =
@@ -1727,14 +1484,13 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
 
 Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const PreparedNorm& norm,
                                                purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"), "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(validate_prepared(basis, norm), "accumulation:prepared");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_prepared(basis, norm));
     std::vector<FieldElement> coefficients;
     coefficients.reserve(norm.c_vec().size());
     for (const auto& encoded : norm.c_vec()) {
-        PURIFY_ASSIGN_OR_RETURN(auto coefficient, FieldElement::try_from_bytes32(encoded),
-                                "accumulation:coefficient_scalar");
+        PURIFY_ASSIGN_OR_RETURN(auto coefficient, FieldElement::try_from_bytes32(encoded));
         coefficients.push_back(coefficient);
     }
     const PolynomialTerm weights{FieldElement::one(), 0, norm.polynomial()[1].factors};
@@ -1747,49 +1503,42 @@ Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const Prepar
     }
     NormReductionProof proof;
     proof.coefficient_evaluation = evaluation.to_bytes_be();
-    PURIFY_ASSIGN_OR_RETURN(auto state, make_norm_context(basis, norm, proof.coefficient_evaluation, context),
-                            "accumulation:prove_reduction_context");
+    PURIFY_ASSIGN_OR_RETURN(auto state, make_norm_context(basis, norm, proof.coefficient_evaluation, context));
     const auto h_basis = std::span(basis.points()).subspan(basis.n_vec_len(), basis.l_vec_len());
-    PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening,
-        prove_ipa(h_basis, std::move(coefficients), state.weights, state.opening_base,
-                  state.transcript, context), "accumulation:prove_coefficient_ipa");
+    PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening, prove_ipa(h_basis, std::move(coefficients), state.weights,
+                                                                 state.opening_base, state.transcript, context));
     // This checks only the short reduction, never accepts the original norm.
-    PURIFY_ASSIGN_OR_RETURN(auto pending, verify_norm_reduction(basis, norm, proof, context),
-                            "accumulation:prove_reduction_check");
+    PURIFY_ASSIGN_OR_RETURN(auto pending, verify_norm_reduction(basis, norm, proof, context));
     (void)pending;
     return proof;
 }
 
 Result<PendingClaim> verify_norm_reduction(const Basis& basis, const PreparedNorm& norm,
                                           const NormReductionProof& proof, purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(validate_prepared(basis, norm), "accumulation:prepared");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_prepared(basis, norm));
     const auto rounds = log2_dimension(basis.l_vec_len());
     const auto& opening = proof.coefficient_opening;
     if (opening.left.size() != rounds || opening.right.size() != rounds) {
-        return unexpected_error(ErrorCode::SizeMismatch, "accumulation:reduction_rounds");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(opening.terminal_scalar),
-                            "accumulation:reduction_terminal");
+    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(opening.terminal_scalar));
     (void)terminal;
-    PURIFY_ASSIGN_OR_RETURN(auto state, make_norm_context(basis, norm, proof.coefficient_evaluation, context),
-                            "accumulation:verify_reduction_context");
+    PURIFY_ASSIGN_OR_RETURN(auto state, make_norm_context(basis, norm, proof.coefficient_evaluation, context));
     PURIFY_ASSIGN_OR_RETURN(auto folded,
-        verify_ipa(basis.l_vec_len(), opening, state.weights, norm.coefficient_commitment(),
-                   state.evaluation, state.opening_base, state.transcript, context),
-        "accumulation:verify_coefficient_ipa");
+                            verify_ipa(basis.l_vec_len(), opening, state.weights, norm.coefficient_commitment(),
+                                       state.evaluation, state.opening_base, state.transcript, context));
     folded.offset = basis.n_vec_len();
 
     const auto generator_encoding = base_generator(context);
     PointBytes generator{};
     if (purify_bppp_generators_to_points(context, generator_encoding.data(), 1, generator.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, "accumulation:standard_generator");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     const std::array<PointBytes, 2> norm_points{norm.residual(), generator};
     const std::array<FieldElement, 2> norm_scalars{
         FieldElement::one(), (norm.polynomial()[1].scale * state.evaluation).negate()};
-    PURIFY_ASSIGN_OR_RETURN(auto norm_point, msm(norm_points, norm_scalars, context),
-                            "accumulation:unshifted_norm_claim");
+    PURIFY_ASSIGN_OR_RETURN(auto norm_point, msm(norm_points, norm_scalars, context));
 
     // Both equations and the complete opening transcript are fixed before chi.
     // Returning their random combination prevents dropping the opening side.
@@ -1804,11 +1553,10 @@ Result<PendingClaim> verify_norm_reduction(const Basis& basis, const PreparedNor
     append(encoded, opening.folded_generator);
     const std::array<PolynomialTerm, 1> folded_polynomial{folded};
     append_polynomial(encoded, folded_polynomial);
-    PURIFY_ASSIGN_OR_RETURN(auto chi, challenge(kNormFusionHash, encoded), "accumulation:reduction_fusion");
+    PURIFY_ASSIGN_OR_RETURN(auto chi, challenge(kNormFusionHash, encoded));
     const std::array<PointBytes, 2> fusion_points{norm_point, opening.folded_generator};
     const std::array<FieldElement, 2> fusion_scalars{FieldElement::one(), chi};
-    PURIFY_ASSIGN_OR_RETURN(auto combined_point, msm(fusion_points, fusion_scalars, context),
-                            "accumulation:combined_reduction_claim");
+    PURIFY_ASSIGN_OR_RETURN(auto combined_point, msm(fusion_points, fusion_scalars, context));
     std::vector<PolynomialTerm> polynomial(norm.polynomial().begin(), norm.polynomial().end());
     folded.scale = folded.scale * chi;
     polynomial.push_back(std::move(folded));
@@ -1819,22 +1567,15 @@ Result<AlgebraicNormReductionProof>
 prove_algebraic_norm_reduction(
     const Basis& basis, const AlgebraicPreparedNorm& norm,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(context, "accumulation:context"),
-        "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_prepared(basis, norm),
-        "accumulation:algebraic_prepared");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_prepared(basis, norm));
 
     std::vector<FieldElement> coefficients;
     coefficients.reserve(norm.c_vec().size());
     for (const auto& encoded : norm.c_vec()) {
-        PURIFY_ASSIGN_OR_RETURN(
-            auto coefficient,
-            FieldElement::try_from_bytes32(encoded),
-            "accumulation:algebraic_coefficient_scalar");
+        PURIFY_ASSIGN_OR_RETURN(auto coefficient,
+                                FieldElement::try_from_bytes32(encoded));
         coefficients.push_back(coefficient);
     }
     const PolynomialTerm weights{
@@ -1854,23 +1595,16 @@ prove_algebraic_norm_reduction(
     AlgebraicNormReductionProof proof;
     proof.coefficient_evaluation = evaluation.to_bytes_be();
     PURIFY_ASSIGN_OR_RETURN(
-        auto state,
-        make_algebraic_norm_context(
-            basis, norm, proof.coefficient_evaluation, context),
-        "accumulation:prove_algebraic_reduction_context");
+        auto state, make_algebraic_norm_context(
+                        basis, norm, proof.coefficient_evaluation, context));
     const auto h_basis = std::span(basis.points()).subspan(
         basis.n_vec_len(), basis.l_vec_len());
     PURIFY_ASSIGN_OR_RETURN(
         proof.coefficient_opening,
-        prove_algebraic_ipa(
-            h_basis, std::move(coefficients), state.weights,
-            state.opening_base, state.transcript, 0, context),
-        "accumulation:prove_algebraic_coefficient_ipa");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto pending,
-        verify_algebraic_norm_reduction(
-            basis, norm, proof, context),
-        "accumulation:prove_algebraic_reduction_check");
+        prove_algebraic_ipa(h_basis, std::move(coefficients), state.weights,
+                            state.opening_base, state.transcript, 0, context));
+    PURIFY_ASSIGN_OR_RETURN(auto pending, verify_algebraic_norm_reduction(
+                                              basis, norm, proof, context));
     (void)pending;
     return proof;
 }
@@ -1879,35 +1613,24 @@ Result<PendingClaim> verify_algebraic_norm_reduction(
     const Basis& basis, const AlgebraicPreparedNorm& norm,
     const AlgebraicNormReductionProof& proof,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(
-        validate_algebraic_prepared(basis, norm),
-        "accumulation:algebraic_prepared");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_prepared(basis, norm));
     const auto rounds = log2_dimension(basis.l_vec_len());
     const auto& opening = proof.coefficient_opening;
     if (opening.left.size() != rounds ||
         opening.right.size() != rounds) {
-        return unexpected_error(
-            ErrorCode::SizeMismatch,
-            "accumulation:algebraic_reduction_rounds");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
     PURIFY_ASSIGN_OR_RETURN(
-        auto terminal,
-        FieldElement::try_from_bytes32(opening.terminal_scalar),
-        "accumulation:algebraic_reduction_terminal");
+        auto terminal, FieldElement::try_from_bytes32(opening.terminal_scalar));
     PURIFY_ASSIGN_OR_RETURN(
-        auto state,
-        make_algebraic_norm_context(
-            basis, norm, proof.coefficient_evaluation, context),
-        "accumulation:verify_algebraic_reduction_context");
+        auto state, make_algebraic_norm_context(
+                        basis, norm, proof.coefficient_evaluation, context));
     PURIFY_ASSIGN_OR_RETURN(
         auto folded,
-        verify_algebraic_ipa(
-            basis.l_vec_len(), opening, state.weights,
-            norm.coefficient_commitment(), state.evaluation,
-            state.opening_base, state.transcript, 0, context),
-        "accumulation:verify_algebraic_coefficient_ipa");
+        verify_algebraic_ipa(basis.l_vec_len(), opening, state.weights,
+                             norm.coefficient_commitment(), state.evaluation,
+                             state.opening_base, state.transcript, 0, context));
     folded.offset = basis.n_vec_len();
 
     const auto generator_encoding = base_generator(context);
@@ -1915,53 +1638,38 @@ Result<PendingClaim> verify_algebraic_norm_reduction(
     if (purify_bppp_generators_to_points(
             context, generator_encoding.data(), 1,
             generator.data()) == 0) {
-        return unexpected_error(
-            ErrorCode::BackendRejectedInput,
-            "accumulation:algebraic_standard_generator");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     const std::array<PointBytes, 2> norm_points{
         norm.residual(), generator};
     const std::array<FieldElement, 2> norm_scalars{
         FieldElement::one(),
         (norm.polynomial()[1].scale * state.evaluation).negate()};
-    PURIFY_ASSIGN_OR_RETURN(
-        auto norm_point, msm(norm_points, norm_scalars, context),
-        "accumulation:algebraic_unshifted_norm_claim");
+    PURIFY_ASSIGN_OR_RETURN(auto norm_point,
+                            msm(norm_points, norm_scalars, context));
 
     // The fusion challenge follows the complete coefficient opening and
     // both pending equations. No field is encoded by untyped concatenation.
     state.transcript.append_scalar(terminal);
     PURIFY_RETURN_IF_ERROR(
-        append_algebraic_point(
-            state.transcript, opening.folded_generator),
-        "accumulation:algebraic_folded_generator");
+        append_algebraic_point(state.transcript, opening.folded_generator));
     PURIFY_RETURN_IF_ERROR(
-        append_algebraic_point(state.transcript, norm_point),
-        "accumulation:algebraic_norm_point");
+        append_algebraic_point(state.transcript, norm_point));
     PURIFY_RETURN_IF_ERROR(
-        append_algebraic_polynomial(
-            state.transcript, norm.polynomial()),
-        "accumulation:algebraic_norm_polynomial");
+        append_algebraic_polynomial(state.transcript, norm.polynomial()));
     const std::array<PolynomialTerm, 1> folded_polynomial{folded};
     PURIFY_RETURN_IF_ERROR(
-        append_algebraic_polynomial(
-            state.transcript, folded_polynomial),
-        "accumulation:algebraic_folded_polynomial");
+        append_algebraic_polynomial(state.transcript, folded_polynomial));
     PURIFY_ASSIGN_OR_RETURN(
-        auto chi,
-        append_algebraic_challenge(
-            state.transcript,
-            static_cast<std::uint64_t>(rounds)),
-        "accumulation:algebraic_reduction_fusion");
+        auto chi, append_algebraic_challenge(
+                      state.transcript, static_cast<std::uint64_t>(rounds)));
 
     const std::array<PointBytes, 2> fusion_points{
         norm_point, opening.folded_generator};
     const std::array<FieldElement, 2> fusion_scalars{
         FieldElement::one(), chi};
-    PURIFY_ASSIGN_OR_RETURN(
-        auto combined_point,
-        msm(fusion_points, fusion_scalars, context),
-        "accumulation:algebraic_combined_reduction_claim");
+    PURIFY_ASSIGN_OR_RETURN(auto combined_point,
+                            msm(fusion_points, fusion_scalars, context));
     std::vector<PolynomialTerm> polynomial(
         norm.polynomial().begin(), norm.polynomial().end());
     folded.scale = folded.scale * chi;
@@ -1972,8 +1680,7 @@ Result<PendingClaim> verify_algebraic_norm_reduction(
 
 Result<StepProof> prove_step(const Basis& basis, std::span<const PendingClaim> claims,
                              purify_secp_context* context) {
-    PURIFY_ASSIGN_OR_RETURN(auto state, make_step_context(basis, claims, context),
-                            "accumulation:prove_context");
+    PURIFY_ASSIGN_OR_RETURN(auto state, make_step_context(basis, claims, context));
     std::vector<FieldElement> a(basis.dimension(), FieldElement::zero());
     auto weight = FieldElement::one();
     for (const auto& claim : claims) {
@@ -1981,33 +1688,29 @@ Result<StepProof> prove_step(const Basis& basis, std::span<const PendingClaim> c
         weight = weight * state.beta;
     }
     const auto weights = geometric_tensor(state.x, basis.dimension());
-    PURIFY_ASSIGN_OR_RETURN(auto proof,
-        prove_ipa(basis.points(), std::move(a), weights, state.opening_base, state.transcript, context),
-        "accumulation:prove_ipa");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto proof, prove_ipa(basis.points(), std::move(a), weights, state.opening_base, state.transcript, context));
     // Check the aggregated short equation before returning a generated proof.
     // This needs no additional fixed-basis MSM; batching is probabilistic.
-    PURIFY_ASSIGN_OR_RETURN(auto pending, verify_step(basis, claims, proof, context),
-                            "accumulation:prove_check");
+    PURIFY_ASSIGN_OR_RETURN(auto pending, verify_step(basis, claims, proof, context));
     (void)pending;
     return proof;
 }
 
 Result<PendingClaim> verify_step(const Basis& basis, std::span<const PendingClaim> claims,
                                  const StepProof& proof, purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     const auto rounds = log2_dimension(basis.dimension());
     if (proof.left.size() != rounds || proof.right.size() != rounds) {
-        return unexpected_error(ErrorCode::SizeMismatch, "accumulation:step_proof_rounds");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar),
-                            "accumulation:step_terminal_scalar");
+    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar));
     (void)terminal;
-    PURIFY_ASSIGN_OR_RETURN(auto state, make_step_context(basis, claims, context),
-                            "accumulation:verify_context");
+    PURIFY_ASSIGN_OR_RETURN(auto state, make_step_context(basis, claims, context));
     const auto weights = geometric_tensor(state.x, basis.dimension());
     PURIFY_ASSIGN_OR_RETURN(auto folded,
-        verify_ipa(basis.dimension(), proof, weights, state.commitment, state.y,
-                   state.opening_base, state.transcript, context), "accumulation:verify_ipa");
+                            verify_ipa(basis.dimension(), proof, weights, state.commitment, state.y,
+                                       state.opening_base, state.transcript, context));
     return PendingClaim(basis.digest(), proof.folded_generator, {std::move(folded)});
 }
 
@@ -2015,9 +1718,7 @@ Result<AlgebraicStepProof> prove_algebraic_step(
     const Basis& basis, std::span<const PendingClaim> claims,
     purify_secp_context* context) {
     PURIFY_ASSIGN_OR_RETURN(
-        auto state,
-        make_algebraic_step_context(basis, claims, context),
-        "accumulation:prove_algebraic_context");
+        auto state, make_algebraic_step_context(basis, claims, context));
     std::vector<FieldElement> coefficients(
         basis.dimension(), FieldElement::zero());
     auto weight = FieldElement::one();
@@ -2030,14 +1731,10 @@ Result<AlgebraicStepProof> prove_algebraic_step(
         geometric_tensor(state.x, basis.dimension());
     PURIFY_ASSIGN_OR_RETURN(
         auto proof,
-        prove_algebraic_ipa(
-            basis.points(), std::move(coefficients), weights,
-            state.opening_base, state.transcript, 2, context),
-        "accumulation:prove_algebraic_ipa");
+        prove_algebraic_ipa(basis.points(), std::move(coefficients), weights,
+                            state.opening_base, state.transcript, 2, context));
     PURIFY_ASSIGN_OR_RETURN(
-        auto pending,
-        verify_algebraic_step(basis, claims, proof, context),
-        "accumulation:prove_algebraic_check");
+        auto pending, verify_algebraic_step(basis, claims, proof, context));
     (void)pending;
     return proof;
 }
@@ -2046,33 +1743,24 @@ Result<PendingClaim> verify_algebraic_step(
     const Basis& basis, std::span<const PendingClaim> claims,
     const AlgebraicStepProof& proof,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     const auto rounds = log2_dimension(basis.dimension());
     if (proof.left.size() != rounds ||
         proof.right.size() != rounds) {
-        return unexpected_error(
-            ErrorCode::SizeMismatch,
-            "accumulation:algebraic_step_rounds");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
     PURIFY_ASSIGN_OR_RETURN(
-        auto terminal,
-        FieldElement::try_from_bytes32(proof.terminal_scalar),
-        "accumulation:algebraic_step_terminal_scalar");
+        auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar));
     (void)terminal;
     PURIFY_ASSIGN_OR_RETURN(
-        auto state,
-        make_algebraic_step_context(basis, claims, context),
-        "accumulation:verify_algebraic_context");
+        auto state, make_algebraic_step_context(basis, claims, context));
     const auto weights =
         geometric_tensor(state.x, basis.dimension());
-    PURIFY_ASSIGN_OR_RETURN(
-        auto folded,
-        verify_algebraic_ipa(
-            basis.dimension(), proof, weights,
-            state.commitment, state.y, state.opening_base,
-            state.transcript, 2, context),
-        "accumulation:verify_algebraic_ipa");
+    PURIFY_ASSIGN_OR_RETURN(auto folded,
+                            verify_algebraic_ipa(basis.dimension(), proof,
+                                                 weights, state.commitment,
+                                                 state.y, state.opening_base,
+                                                 state.transcript, 2, context));
     return PendingClaim(
         basis.digest(), proof.folded_generator,
         {std::move(folded)});
@@ -2085,28 +1773,21 @@ Result<PointBytes> algebraic_step_equation_residual(
     const Basis& basis, std::span<const PendingClaim> claims,
     const AlgebraicStepProof& proof,
     purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(
-        validate_basis(basis), "accumulation:test_basis");
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     const auto rounds = log2_dimension(basis.dimension());
     if (proof.left.size() != rounds ||
         proof.right.size() != rounds) {
-        return unexpected_error(
-            ErrorCode::SizeMismatch,
-            "accumulation:test_step_rounds");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
     PURIFY_ASSIGN_OR_RETURN(
-        auto state,
-        make_algebraic_step_context(basis, claims, context),
-        "accumulation:test_step_context");
+        auto state, make_algebraic_step_context(basis, claims, context));
     const auto weights =
         geometric_tensor(state.x, basis.dimension());
     PURIFY_ASSIGN_OR_RETURN(
         auto evaluated,
-        evaluate_algebraic_ipa(
-            basis.dimension(), proof, weights,
-            state.commitment, state.y, state.opening_base,
-            state.transcript, 2, context),
-        "accumulation:test_step_evaluate");
+        evaluate_algebraic_ipa(basis.dimension(), proof, weights,
+                               state.commitment, state.y, state.opening_base,
+                               state.transcript, 2, context));
     return evaluated.residual;
 }
 
@@ -2114,16 +1795,14 @@ Result<PointBytes> algebraic_step_equation_residual(
 #endif
 
 Status decide(const Basis& basis, const PendingClaim& claim, purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context, "accumulation:context"),
-                            "accumulation:context");
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
-    PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim), "accumulation:claim");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim));
     std::vector<FieldElement> coefficients(basis.dimension(), FieldElement::zero());
     add_coefficients(coefficients, claim.polynomial(), FieldElement::one());
-    PURIFY_ASSIGN_OR_RETURN(auto expected, msm(basis.points(), coefficients, context),
-                            "accumulation:decide_msm");
+    PURIFY_ASSIGN_OR_RETURN(auto expected, msm(basis.points(), coefficients, context));
     if (expected != claim.point()) {
-        return unexpected_error(ErrorCode::EquationMismatch, "accumulation:final_decider");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
     return {};
 }

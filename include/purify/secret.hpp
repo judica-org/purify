@@ -107,7 +107,7 @@ public:
      * @return Owned secret key on success, or `ErrorCode::RangeViolation` if `packed` is invalid.
      */
     [[nodiscard]] static Result<SecretKey> from_packed(const UInt512& packed) {
-        PURIFY_RETURN_IF_ERROR(validate_secret_key(packed), "SecretKey::from_packed:validate_secret_key");
+        PURIFY_RETURN_IF_ERROR(validate_secret_key(packed));
         return SecretKey(std::unique_ptr<UInt512, detail::SecureUInt512Deleter>(new UInt512(packed)));
     }
 
@@ -117,7 +117,7 @@ public:
      * @return Owned secret key on success, or a parsing/validation error.
      */
     [[nodiscard]] static Result<SecretKey> from_hex(std::string_view hex) {
-        PURIFY_ASSIGN_OR_RETURN(const auto& packed, UInt512::try_from_hex(hex), "SecretKey::from_hex:try_from_hex");
+        PURIFY_ASSIGN_OR_RETURN(const auto& packed, UInt512::try_from_hex(hex));
         return from_packed(packed);
     }
 

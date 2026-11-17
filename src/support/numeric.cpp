@@ -55,7 +55,7 @@ Result<FieldElement> FieldElement::try_from_bytes32(const std::array<unsigned ch
     int overflow = 0;
     purify_scalar_set_b32(&out.value_, bytes.data(), &overflow);
     if (overflow != 0) {
-        return unexpected_error(ErrorCode::RangeViolation, "FieldElement::try_from_bytes32:out_of_range");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     return out;
 }

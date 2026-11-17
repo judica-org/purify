@@ -480,9 +480,22 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER OR
     set(PURIFY_CONSTRUCTION_PARENT_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/rust/construction-parent"
     )
-    file(GLOB_RECURSE PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES
+    # The Rust workspace keeps one build configuration per crate. The
+    # verifier backend is built from `statement` and `verifier` alone; the
+    # opt-in prover additionally needs `circuit` and `prover`.
+    file(GLOB_RECURSE PURIFY_CONSTRUCTION_PARENT_VERIFIER_RUST_SOURCES
         CONFIGURE_DEPENDS
-        "${PURIFY_CONSTRUCTION_PARENT_DIR}/src/*.rs"
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/statement/src/*.rs"
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/verifier/src/*.rs"
+    )
+    set(PURIFY_CONSTRUCTION_PARENT_VERIFIER_RUST_INPUTS
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.lock"
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.toml"
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/rust-toolchain.toml"
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/statement/Cargo.toml"
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/verifier/Cargo.toml"
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/verifier/build.rs"
+        ${PURIFY_CONSTRUCTION_PARENT_VERIFIER_RUST_SOURCES}
     )
 endif()
 
@@ -490,7 +503,12 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
     set(PURIFY_CONSTRUCTION_PARENT_TARGET_DIR
         "${CMAKE_CURRENT_BINARY_DIR}/construction-parent-target"
     )
-    set(PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS build --locked --release)
+    set(PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS
+        build
+        --locked
+        --release
+        --package purify-construction-parent
+    )
     set(PURIFY_CONSTRUCTION_PARENT_LIBRARY_DIR
         "${PURIFY_CONSTRUCTION_PARENT_TARGET_DIR}/release"
     )
@@ -584,11 +602,7 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
             "${PURIFY_CARGO_EXECUTABLE}" ${PURIFY_CONSTRUCTION_PARENT_CARGO_ARGS}
         ${PURIFY_CONSTRUCTION_PARENT_POST_BUILD}
         DEPENDS
-            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.lock"
-            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.toml"
-            "${PURIFY_CONSTRUCTION_PARENT_DIR}/build.rs"
-            "${PURIFY_CONSTRUCTION_PARENT_DIR}/rust-toolchain.toml"
-            ${PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES}
+            ${PURIFY_CONSTRUCTION_PARENT_VERIFIER_RUST_INPUTS}
         WORKING_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_DIR}"
         COMMENT "Building transparent construction-parent verifier backend"
         VERBATIM
@@ -639,7 +653,7 @@ endif()
 
 if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
     set(PURIFY_CONSTRUCTION_PARENT_PROVER_SOURCE
-        "${PURIFY_CONSTRUCTION_PARENT_DIR}/src/bin/purify-construction-parent-prover.rs"
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/prover/src/bin/purify-construction-parent-prover.rs"
     )
     if(NOT EXISTS "${PURIFY_CONSTRUCTION_PARENT_PROVER_SOURCE}")
         message(FATAL_ERROR
@@ -650,12 +664,16 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
     set(PURIFY_CONSTRUCTION_PARENT_PROVER_TARGET_DIR
         "${CMAKE_CURRENT_BINARY_DIR}/construction-parent-prover-target"
     )
+    file(GLOB_RECURSE PURIFY_CONSTRUCTION_PARENT_PROVER_RUST_SOURCES
+        CONFIGURE_DEPENDS
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/circuit/src/*.rs"
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/prover/src/*.rs"
+    )
     set(PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ARGS
         build
         --locked
         --release
-        --no-default-features
-        --features prover
+        --package purify-construction-prover
         --bin purify-construction-parent-prover
     )
     set(PURIFY_CONSTRUCTION_PARENT_PROVER_DIR
@@ -691,11 +709,10 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
             "${PURIFY_CARGO_EXECUTABLE}"
             ${PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ARGS}
         DEPENDS
-            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.lock"
-            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.toml"
-            "${PURIFY_CONSTRUCTION_PARENT_DIR}/build.rs"
-            "${PURIFY_CONSTRUCTION_PARENT_DIR}/rust-toolchain.toml"
-            ${PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES}
+            ${PURIFY_CONSTRUCTION_PARENT_VERIFIER_RUST_INPUTS}
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/circuit/Cargo.toml"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/prover/Cargo.toml"
+            ${PURIFY_CONSTRUCTION_PARENT_PROVER_RUST_SOURCES}
         WORKING_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_DIR}"
         COMMENT "Building purpose-specific construction-parent prover"
         VERBATIM

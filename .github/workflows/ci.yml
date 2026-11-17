@@ -79,39 +79,33 @@ jobs:
 
       - name: Check Rust formatting
         working-directory: rust/construction-parent
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
-      - name: Test Rust backend
+      # Every crate in the workspace has exactly one build configuration, so
+      # one test run and one lint run cover the verifier, circuit and prover.
+      - name: Test Rust workspace
         working-directory: rust/construction-parent
         run: >
-          cargo test --locked --release
+          cargo test --workspace --locked --release
           -- --test-threads=1
 
-      - name: Lint Rust backend
+      - name: Lint Rust workspace
         working-directory: rust/construction-parent
         run: >
-          cargo clippy --locked --release --all-targets
+          cargo clippy --workspace --locked --release --all-targets
           -- -D warnings
 
-      - name: Test Rust prover
+      # The shipped backend is built from the statement and verifier crates
+      # alone. It must never link relation or proving code.
+      - name: Check verifier backend dependency boundary
         working-directory: rust/construction-parent
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/build-construction-parent/construction-parent-prover-ci-target
-        run: >
-          cargo test --locked --release --no-default-features
-          --features prover --bin purify-construction-parent-prover
-          -- --test-threads=1
-
-      # The prover feature also compiles qualification/setup internals that
-      # the production binary does not call. Deny every other warning.
-      - name: Lint Rust prover
-        working-directory: rust/construction-parent
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/build-construction-parent/construction-parent-prover-ci-target
-        run: >
-          cargo clippy --locked --release --no-default-features
-          --features prover --bin purify-construction-parent-prover
-          -- -D warnings -A dead-code
+        run: |
+          dependencies=$(cargo tree --locked --package purify-construction-parent --edges normal --prefix none)
+          if printf '%s\n' "$dependencies" | grep -E '^purify-construction-(circuit|prover) '; then
+            echo "the verifier backend depends on relation or proving code" >&2
+            exit 1
+          fi
+          printf '%s\n' "$dependencies" | grep -q '^purify-construction-statement '
 
       - name: Initialize required submodule
         run: git submodule update --init --depth 1 third_party/secp256k1-zkp

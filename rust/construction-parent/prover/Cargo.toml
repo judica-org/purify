@@ -1,0 +1,28 @@
+[package]
+name = "purify-construction-prover"
+description = "Prover for Purify construction-parent proofs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "purify-construction-parent-prover"
+path = "src/bin/purify-construction-parent-prover.rs"
+
+[dependencies]
+statement.workspace = true
+verifier.workspace = true
+circuit.workspace = true
+bincode.workspace = true
+ff.workspace = true
+nova-snark.workspace = true
+num-bigint.workspace = true
+rayon.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+zstd.workspace = true

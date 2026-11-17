@@ -60,7 +60,7 @@ PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE=/path/to/nondeciding.wit4 
 PURIFY_CONSTRUCTION_PARENT_PROOF_OUT=/new/path/accepted.proof \
 PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROOF_OUT=/new/path/nondeciding.proof \
 PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT_OUT=/new/path/sha256-parent-verifier.nvk.zst \
-cargo test --release \
+cargo test --release --package purify-construction-prover \
   native_profile_sha_parent_qualification_is_exact -- --ignored --nocapture
 ```
 
@@ -73,7 +73,7 @@ PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE=/path/to/accepted.wit4 \
 PURIFY_CONSTRUCTION_PARENT_PROVER_ARTIFACT_OUT=/new/path/sha256-parent-prover.pk1.zst \
 PURIFY_CONSTRUCTION_PARENT_FRESH_PROOF_OUT=/new/path/fresh-accepted.proof \
 PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=/path/to/sha256-parent-verifier.nvk.zst \
-cargo test --release \
+cargo test --release --package purify-construction-prover \
   setup_only_qualification_persists_a_usable_prover -- --ignored --nocapture
 ```
 

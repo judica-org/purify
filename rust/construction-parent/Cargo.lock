@@ -703,6 +703,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "purify-construction-circuit"
+version = "0.1.0"
+dependencies = [
+ "ff",
+ "nova-snark",
+ "num-bigint 0.4.8",
+ "purify-construction-statement",
+ "sha2",
+]
+
+[[package]]
 name = "purify-construction-parent"
 version = "0.1.0"
 dependencies = [
@@ -710,12 +721,40 @@ dependencies = [
  "ff",
  "getrandom 0.2.17",
  "nova-snark",
- "num-bigint 0.4.8",
+ "purify-construction-statement",
  "rayon",
  "serde",
  "sha2",
  "thiserror",
  "zstd",
+]
+
+[[package]]
+name = "purify-construction-prover"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "ff",
+ "nova-snark",
+ "num-bigint 0.4.8",
+ "purify-construction-circuit",
+ "purify-construction-parent",
+ "purify-construction-statement",
+ "rayon",
+ "serde",
+ "sha2",
+ "thiserror",
+ "zstd",
+]
+
+[[package]]
+name = "purify-construction-statement"
+version = "0.1.0"
+dependencies = [
+ "ff",
+ "nova-snark",
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]

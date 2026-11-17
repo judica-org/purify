@@ -53,8 +53,7 @@ inline SecpContextPtr make_secp_context() noexcept {
     return SecpContextPtr(purify_secp_context_create());
 }
 
-inline Status require_secp_context(const purify_secp_context* context,
-                                   [[maybe_unused]] const char* error_context = nullptr) {
+inline Status require_secp_context(const purify_secp_context* context) {
     if (context == nullptr) {
         return unexpected_error(ErrorCode::MissingValue);
     }
@@ -85,8 +84,7 @@ inline Status require_secp_context(const purify_secp_context* context,
     return value <= static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max());
 }
 
-[[nodiscard]] inline Result<std::uint64_t> narrow_size_to_u64(std::size_t value,
-                                                              [[maybe_unused]] const char* context = nullptr) {
+[[nodiscard]] inline Result<std::uint64_t> narrow_size_to_u64(std::size_t value) {
     if (!size_fits_u64(value)) {
         return unexpected_error(ErrorCode::UnexpectedSize);
     }

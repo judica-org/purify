@@ -285,21 +285,13 @@ using Status = Expected<void, Error>;
     return "unknown error";
 }
 
-/**
- * @brief Constructs an unexpected Error value from a machine-readable code.
- *
- * `context` is reserved for future diagnostic plumbing and must have static lifetime.
- */
-[[nodiscard]] constexpr Unexpected<Error> unexpected_error(ErrorCode code, [[maybe_unused]] const char* context = nullptr) {
+/** @brief Constructs an unexpected Error value from a machine-readable code. */
+[[nodiscard]] constexpr Unexpected<Error> unexpected_error(ErrorCode code) {
     return Unexpected<Error>(Error{code});
 }
 
-/**
- * @brief Re-wraps an existing Error value for propagation through another Result.
- *
- * `context` is reserved for future diagnostic plumbing and must have static lifetime.
- */
-[[nodiscard]] constexpr Unexpected<Error> unexpected_error(Error error, [[maybe_unused]] const char* context = nullptr) {
+/** @brief Re-wraps an existing Error value for propagation through another Result. */
+[[nodiscard]] constexpr Unexpected<Error> unexpected_error(Error error) {
     return Unexpected<Error>(error);
 }
 
@@ -324,18 +316,17 @@ inline constexpr std::string_view Error::message() const noexcept {
  * @brief Evaluates an expected-like expression and returns the wrapped error on failure.
  *
  * This is intended for `Status`-style propagation and may also be used with `Result<T>` when the
- * value is intentionally discarded. `context` is forwarded to `unexpected_error()`.
+ * value is intentionally discarded.
  */
-#define PURIFY_RETURN_IF_ERROR(expr, ...) \
+#define PURIFY_RETURN_IF_ERROR(expr) \
     PURIFY_DETAIL_RETURN_IF_ERROR_IMPL(PURIFY_DETAIL_CONCAT(_purify_status_, __COUNTER__), expr)
 
 /**
  * @brief Evaluates an expected-like expression, binds the value to `lhs`, and propagates errors.
  *
- * Example: `PURIFY_ASSIGN_OR_RETURN(auto secret, SecretKey::from_hex(hex), "caller:from_hex");`
- * `context` is forwarded to `unexpected_error()`.
+ * Example: `PURIFY_ASSIGN_OR_RETURN(auto secret, SecretKey::from_hex(hex));`
  */
-#define PURIFY_ASSIGN_OR_RETURN(lhs, expr, ...) \
+#define PURIFY_ASSIGN_OR_RETURN(lhs, expr) \
     PURIFY_DETAIL_ASSIGN_OR_RETURN_IMPL(PURIFY_DETAIL_CONCAT(_purify_result_, __COUNTER__), lhs, expr)
 
 #define PURIFY_DETAIL_RETURN_IF_ERROR_IMPL(status_name, expr) \

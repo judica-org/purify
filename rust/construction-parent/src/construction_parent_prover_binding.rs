@@ -434,9 +434,7 @@ mod tests {
         let mut fields = *fixture.inputs.initial_state();
         fields[CONSTRUCTION_ROOT_STATE_ARITY + 1] = Scalar::ONE;
         assert_eq!(
-            recurrence_state_from_fields(fields, 0)
-                .err()
-                .expect("mismatched index rejects"),
+            recurrence_state_from_fields(fields, 0).expect_err("mismatched index rejects"),
             ConstructionParentWitnessBindingError::RecurrenceIndex { expected: 0 }
         );
     }

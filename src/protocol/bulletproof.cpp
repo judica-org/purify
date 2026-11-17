@@ -929,8 +929,7 @@ bool NativeBulletproofCircuit::evaluate(const BulletproofAssignmentData& assignm
         }
     }
 
-    std::vector<FieldElement> acc(c.size(), FieldElement::zero());
-    WipeOnDestruction acc_wiper(acc);
+    purify::detail::SecretVector<FieldElement> acc(c.size(), FieldElement::zero());
     auto accumulate = [&](const std::vector<NativeBulletproofCircuitRow>& rows,
                           std::span<const FieldElement> values,
                           bool negate_values = false) {
@@ -1332,7 +1331,7 @@ bool NativeBulletproofCircuit::PackedWithSlack::evaluate(const BulletproofAssign
         }
     }
 
-    std::vector<FieldElement> acc(constraint_size_, FieldElement::zero());
+    purify::detail::SecretVector<FieldElement> acc(constraint_size_, FieldElement::zero());
     const NativeBulletproofCircuitTerm* all_terms = term_data();
     auto accumulate = [&](RowFamily family, std::size_t row_count,
                           std::span<const FieldElement> values,
@@ -1343,6 +1342,7 @@ bool NativeBulletproofCircuit::PackedWithSlack::evaluate(const BulletproofAssign
         for (std::size_t i = 0; i < row_count; ++i) {
             const PackedRowHeader& header = row_header(family, i);
             FieldElement factor = negate_values ? values[i].negate() : values[i];
+            WipeOnDestruction factor_wiper(factor);
             if (header.size == 0) {
                 continue;
             }

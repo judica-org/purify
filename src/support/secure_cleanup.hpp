@@ -8,6 +8,7 @@
 #include <memory>
 #include <ranges>
 #include <type_traits>
+#include <vector>
 
 #include "purify/secret.hpp"
 
@@ -63,6 +64,15 @@ public:
 
     T value{};
 };
+
+/**
+ * Own a growable buffer whose every allocation is erased before release.
+ *
+ * Unlike a plain vector under a scope guard, growth cannot leave a stale
+ * copy behind: the superseded block is wiped when the vector frees it.
+ */
+template <typename T>
+using SecretVector = std::vector<T, SecureAllocator<T>>;
 
 /** Borrow a value and wipe it when the current scope exits. */
 template <SecureErasable T>

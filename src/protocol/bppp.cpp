@@ -281,18 +281,23 @@ ExperimentalCircuitCache::get_or_create_backend_resources_impl(
 
 namespace {
 
-struct SecretBytes {
-  Bytes value;
+using ::purify::detail::SecretVector;
 
-  SecretBytes() = default;
-  SecretBytes(const SecretBytes &) = delete;
-  SecretBytes &operator=(const SecretBytes &) = delete;
-  ~SecretBytes() {
-    ::purify::detail::secure_clear_bytes(value.data(), value.size());
+using SecretBytes = SecretVector<unsigned char>;
+using SecretScalarBytes = ::purify::detail::Secret<ScalarBytes>;
+
+/** Norm-argument inputs whose witness vectors are erased on destruction. */
+struct SecretNormArgInputs : NormArgInputs {
+  SecretNormArgInputs() = default;
+  SecretNormArgInputs(const SecretNormArgInputs &) = delete;
+  SecretNormArgInputs &operator=(const SecretNormArgInputs &) = delete;
+  SecretNormArgInputs(SecretNormArgInputs &&) noexcept = default;
+  SecretNormArgInputs &operator=(SecretNormArgInputs &&) = delete;
+  ~SecretNormArgInputs() {
+    ::purify::detail::secure_erase(n_vec);
+    ::purify::detail::secure_erase(l_vec);
   }
 };
-
-using SecretScalarBytes = ::purify::detail::Secret<ScalarBytes>;
 
 using ::purify::detail::CheckedSize;
 using ::purify::detail::WipeOnDestruction;
@@ -423,7 +428,9 @@ Result<std::size_t> round_up_power_of_two(std::size_t value) {
   return out;
 }
 
-void append_u64_le(Bytes &out, std::uint64_t value) {
+template <typename Allocator>
+void append_u64_le(std::vector<unsigned char, Allocator> &out,
+                   std::uint64_t value) {
   for (int i = 0; i < 8; ++i) {
     out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
   }
@@ -454,19 +461,19 @@ Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
                      const TaggedHash &tag, std::size_t index,
                      std::uint64_t attempt = 0) {
   SecretBytes prefix;
-  prefix.value.reserve(seed.size() + 2 * sizeof(std::uint64_t));
-  prefix.value.assign(seed.begin(), seed.end());
+  prefix.reserve(seed.size() + 2 * sizeof(std::uint64_t));
+  prefix.assign(seed.begin(), seed.end());
   PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index, narrow_size_to_u64(index));
-  append_u64_le(prefix.value, encoded_index);
-  append_u64_le(prefix.value, attempt);
+  append_u64_le(prefix, encoded_index);
+  append_u64_le(prefix, attempt);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
     SecretBytes input;
-    input.value.reserve(prefix.value.size() + sizeof(std::uint64_t));
-    input.value.assign(prefix.value.begin(), prefix.value.end());
-    append_u64_le(input.value, counter);
+    input.reserve(prefix.size() + sizeof(std::uint64_t));
+    input.assign(prefix.begin(), prefix.end());
+    append_u64_le(input, counter);
     SecretScalarBytes candidate_bytes;
-    ScalarBytes digest = tag.digest(std::span<const unsigned char>(
-        input.value.data(), input.value.size()));
+    ScalarBytes digest =
+        tag.digest(std::span<const unsigned char>(input.data(), input.size()));
     candidate_bytes.value = digest;
     ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
     Result<FieldElement> candidate =
@@ -485,18 +492,18 @@ Status derive_secret_nonzero_scalar(FieldElement &out,
                                     const TaggedHash &tag,
                                     std::size_t index) {
   SecretBytes prefix;
-  prefix.value.reserve(seed.size() + sizeof(std::uint64_t));
-  prefix.value.assign(seed.begin(), seed.end());
+  prefix.reserve(seed.size() + sizeof(std::uint64_t));
+  prefix.assign(seed.begin(), seed.end());
   PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index, narrow_size_to_u64(index));
-  append_u64_le(prefix.value, encoded_index);
+  append_u64_le(prefix, encoded_index);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
     SecretBytes input;
-    input.value.reserve(prefix.value.size() + sizeof(std::uint64_t));
-    input.value.assign(prefix.value.begin(), prefix.value.end());
-    append_u64_le(input.value, counter);
+    input.reserve(prefix.size() + sizeof(std::uint64_t));
+    input.assign(prefix.begin(), prefix.end());
+    append_u64_le(input, counter);
     SecretScalarBytes candidate_bytes;
-    ScalarBytes digest = tag.digest(std::span<const unsigned char>(
-        input.value.data(), input.value.size()));
+    ScalarBytes digest =
+        tag.digest(std::span<const unsigned char>(input.data(), input.size()));
     candidate_bytes.value = digest;
     ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
     Result<FieldElement> candidate =
@@ -554,8 +561,8 @@ using CircuitNormArgPublicDataPtr =
 
 struct CircuitNormArgReduction {
   CircuitNormArgPublicDataPtr public_data;
-  std::vector<FieldElement> n_vec;
-  std::vector<FieldElement> l_vec;
+  SecretVector<FieldElement> n_vec;
+  SecretVector<FieldElement> l_vec;
 };
 
 struct CircuitNormArgChallenges {
@@ -616,12 +623,12 @@ Result<CircuitNormArgDimensions> circuit_norm_arg_dimensions(
   return out;
 }
 
-Result<NormArgInputs> build_raw_circuit_norm_arg_inputs(
-    const NativeBulletproofCircuit &circuit,
-    const BulletproofAssignmentData &assignment,
-    std::span<const FieldElement> padding,
-    bool externalize_commitments,
-    purify_secp_context *secp_context) {
+Result<SecretNormArgInputs>
+build_raw_circuit_norm_arg_inputs(const NativeBulletproofCircuit &circuit,
+                                  const BulletproofAssignmentData &assignment,
+                                  std::span<const FieldElement> padding,
+                                  bool externalize_commitments,
+                                  purify_secp_context *secp_context) {
   if (assignment.left.size() != circuit.n_gates ||
       assignment.right.size() != circuit.n_gates ||
       assignment.output.size() != circuit.n_gates ||
@@ -642,15 +649,11 @@ Result<NormArgInputs> build_raw_circuit_norm_arg_inputs(
     return unexpected_error(ErrorCode::Overflow);
   }
 
-  NormArgInputs out;
+  SecretNormArgInputs out;
   PURIFY_ASSIGN_OR_RETURN(out.generators,
                           create_generators(generator_count, secp_context));
-  std::vector<FieldElement> raw_n(dimensions.n_vec_len,
-                                  FieldElement::zero());
-  std::vector<FieldElement> raw_l(dimensions.l_vec_len,
-                                  FieldElement::zero());
-  WipeOnDestruction raw_n_wiper(raw_n);
-  WipeOnDestruction raw_l_wiper(raw_l);
+  SecretVector<FieldElement> raw_n(dimensions.n_vec_len, FieldElement::zero());
+  SecretVector<FieldElement> raw_l(dimensions.l_vec_len, FieldElement::zero());
   for (std::size_t i = 0; i < circuit.n_gates; ++i) {
     raw_n[2 * i] = assignment.left[i] + assignment.right[i];
     raw_n[2 * i + 1] = assignment.left[i] - assignment.right[i];
@@ -937,8 +940,9 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
   return out;
 }
 
-NormArgInputs build_norm_arg_inputs(const CircuitNormArgReduction &reduction) {
-  NormArgInputs inputs;
+SecretNormArgInputs
+build_norm_arg_inputs(const CircuitNormArgReduction &reduction) {
+  SecretNormArgInputs inputs;
   inputs.rho = reduction.public_data->rho_bytes;
   inputs.generators = reduction.public_data->generators;
   inputs.n_vec = scalar_bytes(reduction.n_vec);
@@ -1182,18 +1186,18 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog(
       value_bytes.value.data(),
       &::purify::detail::FieldElementAccess::raw(value));
   SecretBytes nonce_seed;
-  nonce_seed.value.reserve(secret_prover_seed.size() + value_bytes.value.size() +
-                           challenge_digest.size());
-  nonce_seed.value.insert(nonce_seed.value.end(), secret_prover_seed.begin(),
-                          secret_prover_seed.end());
-  nonce_seed.value.insert(nonce_seed.value.end(), value_bytes.value.begin(),
-                          value_bytes.value.end());
-  nonce_seed.value.insert(nonce_seed.value.end(), challenge_digest.begin(),
-                          challenge_digest.end());
+  nonce_seed.reserve(secret_prover_seed.size() + value_bytes.value.size() +
+                     challenge_digest.size());
+  nonce_seed.insert(nonce_seed.end(), secret_prover_seed.begin(),
+                    secret_prover_seed.end());
+  nonce_seed.insert(nonce_seed.end(), value_bytes.value.begin(),
+                    value_bytes.value.end());
+  nonce_seed.insert(nonce_seed.end(), challenge_digest.begin(),
+                    challenge_digest.end());
   FieldElement nonce = FieldElement::zero();
   WipeOnDestruction nonce_wiper(nonce);
   PURIFY_RETURN_IF_ERROR(derive_secret_nonzero_scalar(
-      nonce, nonce_seed.value, kCircuitDlogNonceTaggedHash, 0));
+      nonce, nonce_seed, kCircuitDlogNonceTaggedHash, 0));
   PURIFY_ASSIGN_OR_RETURN(const auto &nonce_point,
                           point_from_scalar_base(nonce, secp_context));
 
@@ -1246,18 +1250,18 @@ Result<PublicCommitmentDlogProof> prove_public_commitment_dlog_v4(
       value_bytes.value.data(),
       &::purify::detail::FieldElementAccess::raw(value));
   SecretBytes nonce_seed;
-  nonce_seed.value.reserve(secret_prover_seed.size() +
-                           value_bytes.value.size() + nonce_binding.size());
-  nonce_seed.value.insert(nonce_seed.value.end(), secret_prover_seed.begin(),
-                          secret_prover_seed.end());
-  nonce_seed.value.insert(nonce_seed.value.end(), value_bytes.value.begin(),
-                          value_bytes.value.end());
-  nonce_seed.value.insert(nonce_seed.value.end(), nonce_binding.begin(),
-                          nonce_binding.end());
+  nonce_seed.reserve(secret_prover_seed.size() + value_bytes.value.size() +
+                     nonce_binding.size());
+  nonce_seed.insert(nonce_seed.end(), secret_prover_seed.begin(),
+                    secret_prover_seed.end());
+  nonce_seed.insert(nonce_seed.end(), value_bytes.value.begin(),
+                    value_bytes.value.end());
+  nonce_seed.insert(nonce_seed.end(), nonce_binding.begin(),
+                    nonce_binding.end());
   FieldElement nonce = FieldElement::zero();
   WipeOnDestruction nonce_wiper(nonce);
   PURIFY_RETURN_IF_ERROR(derive_secret_nonzero_scalar(
-      nonce, nonce_seed.value, kCircuitDlogNonceV4TaggedHash, 0));
+      nonce, nonce_seed, kCircuitDlogNonceV4TaggedHash, 0));
   PURIFY_ASSIGN_OR_RETURN(const auto &nonce_point,
                           point_from_scalar_base(nonce, secp_context));
 
@@ -1947,8 +1951,6 @@ Result<PointBytes> commit_experimental_circuit_witness(
   PURIFY_ASSIGN_OR_RETURN(auto raw_inputs,
                           build_raw_circuit_norm_arg_inputs(
                               circuit, assignment, {}, false, secp_context));
-  WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
-  WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
   return commit_norm_arg_witness_only(raw_inputs, secp_context, cache);
 }
 
@@ -1979,8 +1981,6 @@ prove_experimental_circuit_norm_arg_to_commitment(
   PURIFY_ASSIGN_OR_RETURN(auto raw_inputs,
                           build_raw_circuit_norm_arg_inputs(
                               circuit, assignment, {}, false, secp_context));
-  WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
-  WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
   PURIFY_ASSIGN_OR_RETURN(
       const auto &computed_witness_commitment,
       commit_norm_arg_witness_only(raw_inputs, secp_context, cache));
@@ -1992,12 +1992,8 @@ prove_experimental_circuit_norm_arg_to_commitment(
                           reduce_experimental_circuit_to_norm_arg(
                               circuit, assignment, witness_commitment,
                               secp_context, statement_binding, false, cache));
-  WipeOnDestruction reduction_n_wiper(reduction.n_vec);
-  WipeOnDestruction reduction_l_wiper(reduction.l_vec);
 
-  NormArgInputs inputs = build_norm_arg_inputs(reduction);
-  WipeOnDestruction input_n_wiper(inputs.n_vec);
-  WipeOnDestruction input_l_wiper(inputs.l_vec);
+  SecretNormArgInputs inputs = build_norm_arg_inputs(reduction);
 
   PURIFY_ASSIGN_OR_RETURN(const auto &anchored_commitment,
                           anchor_zk_a_commitment(witness_commitment,
@@ -2110,31 +2106,26 @@ prove_experimental_circuit_zk_norm_arg_impl(
       const auto &binding_digest,
       experimental_circuit_binding_digest(circuit, bound_statement_binding));
   SecretBytes seed;
-  seed.value.reserve(binding_digest.size() + secret_prover_seed.size());
-  seed.value.insert(seed.value.end(), binding_digest.begin(),
-                    binding_digest.end());
-  seed.value.insert(seed.value.end(), secret_prover_seed.begin(),
-                    secret_prover_seed.end());
+  seed.reserve(binding_digest.size() + secret_prover_seed.size());
+  seed.insert(seed.end(), binding_digest.begin(), binding_digest.end());
+  seed.insert(seed.end(), secret_prover_seed.begin(), secret_prover_seed.end());
   PURIFY_ASSIGN_OR_RETURN(
       const auto &dimensions,
       circuit_norm_arg_dimensions(circuit, externalize_commitments));
   std::optional<Error> masked_failure;
 
   for (std::uint64_t attempt = 0; attempt < 32; ++attempt) {
-    std::vector<FieldElement> padding(
-        dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
-    WipeOnDestruction padding_wiper(padding);
+    SecretVector<FieldElement> padding(dimensions.l_vec_len - dimensions.used_l,
+                                       FieldElement::zero());
     for (std::size_t i = 0; i < padding.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(derive_scalar(
-          padding[i], seed.value, kCircuitZkBlindTaggedHash, i, attempt));
+          padding[i], seed, kCircuitZkBlindTaggedHash, i, attempt));
     }
 
     PURIFY_ASSIGN_OR_RETURN(auto raw_inputs,
                             build_raw_circuit_norm_arg_inputs(
                                 circuit, assignment, padding,
                                 externalize_commitments, secp_context));
-    WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
-    WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
     Result<PointBytes> raw_commitment =
         commit_norm_arg_witness_only(raw_inputs, secp_context, cache);
     if (!raw_commitment.has_value()) {
@@ -2149,8 +2140,6 @@ prove_experimental_circuit_zk_norm_arg_impl(
                                 circuit, assignment, *raw_commitment,
                                 secp_context, bound_statement_binding,
                                 externalize_commitments, cache));
-    WipeOnDestruction hidden_n_wiper(hidden.n_vec);
-    WipeOnDestruction hidden_l_wiper(hidden.l_vec);
     std::copy(padding.begin(), padding.end(),
               hidden.l_vec.begin() + dimensions.used_l);
 
@@ -2179,18 +2168,18 @@ prove_experimental_circuit_zk_norm_arg_impl(
       dlog_proof = *dlog;
     }
 
-    std::vector<FieldElement> mask_n(hidden.n_vec.size(), FieldElement::zero());
-    WipeOnDestruction mask_n_wiper(mask_n);
+    SecretVector<FieldElement> mask_n(hidden.n_vec.size(),
+                                      FieldElement::zero());
     for (std::size_t i = 0; i < mask_n.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(derive_scalar(
-          mask_n[i], seed.value, kCircuitZkMaskNTaggedHash, i, attempt));
+          mask_n[i], seed, kCircuitZkMaskNTaggedHash, i, attempt));
     }
 
-    std::vector<FieldElement> mask_l(hidden.l_vec.size(), FieldElement::zero());
-    WipeOnDestruction mask_l_wiper(mask_l);
+    SecretVector<FieldElement> mask_l(hidden.l_vec.size(),
+                                      FieldElement::zero());
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(derive_scalar(
-          mask_l[i], seed.value, kCircuitZkMaskLTaggedHash, i, attempt));
+          mask_l[i], seed, kCircuitZkMaskLTaggedHash, i, attempt));
     }
 
     FieldElement t2 =
@@ -2207,14 +2196,12 @@ prove_experimental_circuit_zk_norm_arg_impl(
       t1 = t1 + (mask_l[i] * hidden.public_data->c_vec[i]);
     }
 
-    NormArgInputs mask_inputs;
+    SecretNormArgInputs mask_inputs;
     mask_inputs.rho = hidden.public_data->rho_bytes;
     mask_inputs.generators = hidden.public_data->generators;
     mask_inputs.n_vec = scalar_bytes(mask_n);
     mask_inputs.l_vec = scalar_bytes(mask_l);
     mask_inputs.c_vec = hidden.public_data->c_vec_bytes;
-    WipeOnDestruction mask_input_n_wiper(mask_inputs.n_vec);
-    WipeOnDestruction mask_input_l_wiper(mask_inputs.l_vec);
 
     Result<PointBytes> a_commitment = anchor_zk_a_commitment(
         *raw_commitment, *hidden.public_data, public_commitments, secp_context);
@@ -2238,17 +2225,13 @@ prove_experimental_circuit_zk_norm_arg_impl(
                             *s_commitment, t2));
 
     CircuitNormArgReduction masked = hidden;
-    WipeOnDestruction masked_n_wiper(masked.n_vec);
-    WipeOnDestruction masked_l_wiper(masked.l_vec);
     for (std::size_t i = 0; i < masked.n_vec.size(); ++i) {
       masked.n_vec[i] = masked.n_vec[i] + (challenge * mask_n[i]);
     }
     for (std::size_t i = 0; i < masked.l_vec.size(); ++i) {
       masked.l_vec[i] = masked.l_vec[i] + (challenge * mask_l[i]);
     }
-    NormArgInputs masked_inputs = build_norm_arg_inputs(masked);
-    WipeOnDestruction masked_input_n_wiper(masked_inputs.n_vec);
-    WipeOnDestruction masked_input_l_wiper(masked_inputs.l_vec);
+    SecretNormArgInputs masked_inputs = build_norm_arg_inputs(masked);
 
     Result<PointBytes> combined_commitment =
         combine_zk_commitments(*a_commitment, *s_commitment, challenge, t2, secp_context);
@@ -2652,8 +2635,6 @@ prove_circuit_zk_norm_arg_v4_impl(
   PURIFY_ASSIGN_OR_RETURN(const auto shape,
                           circuit_shape_v4(circuit, externalize_commitments));
 
-  // The exact size matters: the seed buffer must never reallocate, because a
-  // superseded block would be freed without being wiped.
   const CheckedSize assignment_scalar_count =
       CheckedSize(assignment.left.size()) + assignment.right.size() +
       assignment.output.size() + assignment.commitments.size();
@@ -2666,27 +2647,24 @@ prove_circuit_zk_norm_arg_v4_impl(
     return unexpected_error(ErrorCode::Overflow);
   }
   SecretBytes seed;
-  seed.value.reserve(seed_size);
-  seed.value.insert(seed.value.end(), binding_digest.begin(),
-                    binding_digest.end());
-  seed.value.insert(seed.value.end(), secret_prover_seed.begin(),
-                    secret_prover_seed.end());
-  seed.value.push_back(externalize_commitments ? 1 : 0);
+  seed.reserve(seed_size);
+  seed.insert(seed.end(), binding_digest.begin(), binding_digest.end());
+  seed.insert(seed.end(), secret_prover_seed.begin(), secret_prover_seed.end());
+  seed.push_back(externalize_commitments ? 1 : 0);
   for (const auto &point : public_commitments) {
-    seed.value.insert(seed.value.end(), point.begin(), point.end());
+    seed.insert(seed.end(), point.begin(), point.end());
   }
   const auto append_assignment_values =
       [&](std::span<const FieldElement> values) -> Status {
     PURIFY_ASSIGN_OR_RETURN(const auto &count,
                             narrow_size_to_u64(values.size()));
-    append_u64_le(seed.value, count);
+    append_u64_le(seed, count);
     for (const auto &value : values) {
       SecretScalarBytes encoded;
       purify_scalar_get_b32(
           encoded.value.data(),
           &::purify::detail::FieldElementAccess::raw(value));
-      seed.value.insert(seed.value.end(), encoded.value.begin(),
-                        encoded.value.end());
+      seed.insert(seed.end(), encoded.value.begin(), encoded.value.end());
     }
     return {};
   };
@@ -2694,24 +2672,21 @@ prove_circuit_zk_norm_arg_v4_impl(
   PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.right));
   PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.output));
   PURIFY_RETURN_IF_ERROR(append_assignment_values(assignment.commitments));
-  assert(seed.value.size() == seed_size);
+  assert(seed.size() == seed_size);
 
   std::optional<Error> masked_failure;
   for (std::uint64_t attempt = 0; attempt < 32; ++attempt) {
-    std::vector<FieldElement> padding(
-        dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
-    WipeOnDestruction padding_wiper(padding);
+    SecretVector<FieldElement> padding(dimensions.l_vec_len - dimensions.used_l,
+                                       FieldElement::zero());
     for (std::size_t i = 0; i < padding.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(derive_scalar(
-          padding[i], seed.value, kCircuitZkBlindV4TaggedHash, i, attempt));
+          padding[i], seed, kCircuitZkBlindV4TaggedHash, i, attempt));
     }
 
     PURIFY_ASSIGN_OR_RETURN(auto raw_inputs,
                             build_raw_circuit_norm_arg_inputs(
                                 circuit, assignment, padding,
                                 externalize_commitments, secp_context));
-    WipeOnDestruction raw_n_wiper(raw_inputs.n_vec);
-    WipeOnDestruction raw_l_wiper(raw_inputs.l_vec);
     auto raw_commitment =
         commit_norm_arg_witness_only(raw_inputs, secp_context, cache);
     if (!raw_commitment.has_value()) {
@@ -2741,8 +2716,6 @@ prove_circuit_zk_norm_arg_v4_impl(
         raw_generator_digest) {
       return unexpected_error(ErrorCode::InternalMismatch);
     }
-    WipeOnDestruction hidden_n_wiper(hidden.n_vec);
-    WipeOnDestruction hidden_l_wiper(hidden.l_vec);
     std::copy(padding.begin(), padding.end(),
               hidden.l_vec.begin() + dimensions.used_l);
 
@@ -2800,30 +2773,27 @@ prove_circuit_zk_norm_arg_v4_impl(
 
     const ScalarBytes precommitment_bytes = precommitment.digest.bytes();
     std::size_t mask_seed_size = 0;
-    if (!(CheckedSize(seed.value.size()) + precommitment_bytes.size())
+    if (!(CheckedSize(seed.size()) + precommitment_bytes.size())
              .store(mask_seed_size)) {
       return unexpected_error(ErrorCode::Overflow);
     }
     SecretBytes mask_seed;
-    mask_seed.value.reserve(mask_seed_size);
-    mask_seed.value.insert(mask_seed.value.end(), seed.value.begin(),
-                           seed.value.end());
-    mask_seed.value.insert(mask_seed.value.end(), precommitment_bytes.begin(),
-                           precommitment_bytes.end());
-    assert(mask_seed.value.size() == mask_seed_size);
-    std::vector<FieldElement> mask_n(hidden.n_vec.size(),
-                                     FieldElement::zero());
-    WipeOnDestruction mask_n_wiper(mask_n);
+    mask_seed.reserve(mask_seed_size);
+    mask_seed.insert(mask_seed.end(), seed.begin(), seed.end());
+    mask_seed.insert(mask_seed.end(), precommitment_bytes.begin(),
+                     precommitment_bytes.end());
+    assert(mask_seed.size() == mask_seed_size);
+    SecretVector<FieldElement> mask_n(hidden.n_vec.size(),
+                                      FieldElement::zero());
     for (std::size_t i = 0; i < mask_n.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(derive_scalar(
-          mask_n[i], mask_seed.value, kCircuitZkMaskNV4TaggedHash, i, attempt));
+          mask_n[i], mask_seed, kCircuitZkMaskNV4TaggedHash, i, attempt));
     }
-    std::vector<FieldElement> mask_l(hidden.l_vec.size(),
-                                     FieldElement::zero());
-    WipeOnDestruction mask_l_wiper(mask_l);
+    SecretVector<FieldElement> mask_l(hidden.l_vec.size(),
+                                      FieldElement::zero());
     for (std::size_t i = 0; i < mask_l.size(); ++i) {
       PURIFY_RETURN_IF_ERROR(derive_scalar(
-          mask_l[i], mask_seed.value, kCircuitZkMaskLV4TaggedHash, i, attempt));
+          mask_l[i], mask_seed, kCircuitZkMaskLV4TaggedHash, i, attempt));
     }
 
     FieldElement t2 = weighted_bppp_inner_product(
@@ -2839,14 +2809,12 @@ prove_circuit_zk_norm_arg_v4_impl(
       t1 = t1 + mask_l[i] * hidden.public_data->c_vec[i];
     }
 
-    NormArgInputs mask_inputs;
+    SecretNormArgInputs mask_inputs;
     mask_inputs.rho = hidden.public_data->rho_bytes;
     mask_inputs.generators = hidden.public_data->generators;
     mask_inputs.n_vec = scalar_bytes(mask_n);
     mask_inputs.l_vec = scalar_bytes(mask_l);
     mask_inputs.c_vec = hidden.public_data->c_vec_bytes;
-    WipeOnDestruction mask_input_n_wiper(mask_inputs.n_vec);
-    WipeOnDestruction mask_input_l_wiper(mask_inputs.l_vec);
     auto mask_commitment =
         commit_explicit_norm_arg(mask_inputs, t1, secp_context, nullptr);
     if (!mask_commitment.has_value()) {
@@ -2860,17 +2828,13 @@ prove_circuit_zk_norm_arg_v4_impl(
         transcript.append_mask(*mask_commitment, t2, secp_context));
 
     CircuitNormArgReduction masked = hidden;
-    WipeOnDestruction masked_n_wiper(masked.n_vec);
-    WipeOnDestruction masked_l_wiper(masked.l_vec);
     for (std::size_t i = 0; i < masked.n_vec.size(); ++i) {
       masked.n_vec[i] = masked.n_vec[i] + alpha.scalar * mask_n[i];
     }
     for (std::size_t i = 0; i < masked.l_vec.size(); ++i) {
       masked.l_vec[i] = masked.l_vec[i] + alpha.scalar * mask_l[i];
     }
-    NormArgInputs masked_inputs = build_norm_arg_inputs(masked);
-    WipeOnDestruction masked_input_n_wiper(masked_inputs.n_vec);
-    WipeOnDestruction masked_input_l_wiper(masked_inputs.l_vec);
+    SecretNormArgInputs masked_inputs = build_norm_arg_inputs(masked);
     auto combined_commitment = combine_zk_commitments(
         anchored_commitment, *mask_commitment, alpha.scalar, t2,
         secp_context);

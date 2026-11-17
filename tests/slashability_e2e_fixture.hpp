@@ -10,6 +10,7 @@
 
 #include "purify/puresign/accountable_responses.hpp"
 #include "purify/puresign/construction_leaf_accumulation.hpp"
+#include "purify/puresign/construction_parent_prover_input.hpp"
 #include "purify/puresign/construction_receipt_accumulation.hpp"
 #include "purify/puresign/recovery_root.hpp"
 
@@ -35,8 +36,8 @@ struct RecoverySetupLeafFixture {
     purify::bppp::ScalarBytes circuit_precommitment;
     purify::accountable::ConstructionLeafParentConstants parent_constants;
     purify::bppp::PointBytes weighted_member_key;
-    purify::Bytes reduction_proof;
-    purify::Bytes parent_step_proof;
+    purify::bppp::accumulation::AlgebraicNormReductionProof reduction;
+    purify::bppp::accumulation::AlgebraicStepProof parent_step;
 };
 
 struct EscrowedAnchorFixture {
@@ -47,8 +48,8 @@ struct EscrowedAnchorFixture {
     purify::accountable::AnchorReference reference;
     purify::bppp::ScalarBytes circuit_precommitment;
     purify::accountable::ConstructionLeafParentConstants parent_constants;
-    purify::Bytes reduction_proof;
-    purify::Bytes parent_step_proof;
+    purify::bppp::accumulation::AlgebraicNormReductionProof reduction;
+    purify::bppp::accumulation::AlgebraicStepProof parent_step;
 };
 
 /**
@@ -73,10 +74,11 @@ struct NativeAccumulationReferenceFixture {
     std::vector<RecoverySetupLeafFixture> setup_leaves;
     std::vector<EscrowedAnchorFixture> anchors;
     purify::accountable::ConstructionReceiptStatementDigest statement;
-    std::array<unsigned char,
-               purify::accountable::ConstructionReceiptAccumulator::
-                   kRootClaimSerializedSize>
-        decided_reference_root;
+};
+
+struct NondecidingParentProverFixture {
+    purify::Bytes encoded;
+    purify::ErrorCode production_rejection;
 };
 
 [[nodiscard]] purify::Result<CoalitionFixture> make_all_evil_coalition(
@@ -96,6 +98,8 @@ make_native_accumulation_reference(
  */
 [[nodiscard]] purify::Result<purify::Bytes>
 serialize_parent_prover_fixture(
+    const purify::accountable::VerifiedDistributedRecoverySetup&
+        verified_setup,
     const NativeAccumulationReferenceFixture& fixture,
     purify_secp_context* secp_context);
 
@@ -105,7 +109,7 @@ serialize_parent_prover_fixture(
  * The recurrence witness is valid, but its authenticated final root fails the
  * native decision. Public header and descriptor bytes are unchanged.
  */
-[[nodiscard]] purify::Result<purify::Bytes>
+[[nodiscard]] purify::Result<NondecidingParentProverFixture>
 serialize_nondeciding_parent_prover_fixture(
     const CoalitionFixture& coalition,
     const NativeAccumulationReferenceFixture& fixture,

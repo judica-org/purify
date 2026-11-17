@@ -212,8 +212,16 @@ The qualified mixed parent proof is 15,076 bytes:
 
 At 100 setup members and 100 anchors this is 37,749 bytes. Payload v4,
 statement v5, manifest v3, the checked mixed fixtures, proof length, suite,
-and external verifier identity are qualified together. The stale centralized
-artifact is not accepted.
+and external VK2 verifier identity are qualified together. The standalone
+prover additionally authenticates the selected external PK1 prover identity
+and that same VK2 before returning proof bytes. PK1 is transparent public
+setup material and is neither part of the receipt nor included in its size.
+The stale centralized artifact is not accepted.
+
+Recursive verification inside the prover authenticates the claimed final
+state but is not receipt acceptance. Applications must still run the C++
+construction verifier and native final accumulation decision before using a
+proof to admit a coalition or recover punishment keys.
 
 ## Security boundary
 

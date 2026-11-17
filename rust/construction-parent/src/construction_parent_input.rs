@@ -35,9 +35,9 @@ pub(crate) struct ConstructionParentInputs {
     initial_state: [Scalar; CONSTRUCTION_STATE_ARITY],
     expected_suffix: [Scalar; 2],
     step_count: usize,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     seed: ConstructionManifestSeed,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     leaves: Vec<ConstructionManifestLeaf>,
 }
 
@@ -86,12 +86,12 @@ impl ConstructionParentInputs {
         let (descriptors, remainder) =
             leaf_descriptors.as_chunks::<CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES>();
         debug_assert!(remainder.is_empty());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "prover"))]
         let mut leaves = Vec::with_capacity(leaf_count_usize);
         for descriptor in descriptors {
             let leaf = parse_leaf_descriptor(descriptor)?;
             expected_final = expected_final.advance(leaf)?;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "prover"))]
             leaves.push(leaf);
         }
         let expected_suffix = expected_final.state_suffix_fields()?;
@@ -99,9 +99,9 @@ impl ConstructionParentInputs {
             initial_state,
             expected_suffix,
             step_count: leaf_count_usize,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "prover"))]
             seed,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "prover"))]
             leaves,
         })
     }
@@ -118,12 +118,12 @@ impl ConstructionParentInputs {
         self.step_count
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) fn seed(&self) -> &ConstructionManifestSeed {
         &self.seed
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) fn leaves(&self) -> &[ConstructionManifestLeaf] {
         &self.leaves
     }

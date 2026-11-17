@@ -35,6 +35,7 @@ typedef enum purify_construction_parent_status {
     PURIFY_CONSTRUCTION_PARENT_ARTIFACT_OPEN_FAILED = 4,
     PURIFY_CONSTRUCTION_PARENT_ARTIFACT_REJECTED = 5,
     PURIFY_CONSTRUCTION_PARENT_INTERNAL_ERROR = 6,
+    PURIFY_CONSTRUCTION_PARENT_ARTIFACT_SNAPSHOT_FAILED = 7,
 } purify_construction_parent_status;
 
 typedef struct purify_construction_parent_verifier

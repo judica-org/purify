@@ -72,13 +72,18 @@ The scalar-only cutover is a new protocol suite. Old records are not accepted.
 | Escrow binding domain | `Purify/Accountable/AnchorEscrow/v4` |
 | Construction statement domain | `Purify/Accountable/ConstructionReceiptStatement/v5` |
 | Accumulation domain | `Purify/Accountable/ConstructionLeafAccumulation/v1` |
-| Parent-prover fixture frame | `Purify/Nova/Wit3` |
+| Parent-prover fixture frame | `Purify/Nova/Wit4` |
 
 The randomness-statement, randomness-master, ephemeral, and proof-seed tags
 also use their corresponding `/v4` domains. The proof suite requires the
 modern tagged field-hash mode. A legacy-field-hash build may parse transport
 syntax but rejects v4 proof construction, verification, preparation, and
 recovery.
+
+The Wit4 parent input validates each full typed setup or escrow record before
+serializing only its type version and 1,136-byte proof transcript. Its leaf
+descriptor and construction statement already bind the omitted recovery
+share or ciphertext, eliminating an unparsed duplicate prefix.
 
 ## Circuit and wire size
 

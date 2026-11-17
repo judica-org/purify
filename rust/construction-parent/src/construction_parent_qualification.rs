@@ -1,9 +1,4 @@
-use ff::Field;
 use nova_snark::{
-    frontend::{
-        gadgets::num::AllocatedNum, ConstraintSystem, Index, LinearCombination, SynthesisError,
-        Variable,
-    },
     nova::{PublicParams, PublicParamsShapeMetrics, R1CSShapeMetrics},
     traits::circuit::StepCircuit,
 };
@@ -17,13 +12,14 @@ use crate::circuit_transcript::{
     CircuitCommitmentModeV4, CircuitPointPairWitnessV4, CircuitProofTranscriptWitnessV4,
     CircuitTranscriptShapeV4,
 };
-use crate::construction_manifest::ConstructionRoot;
+use crate::construction_parent_prover_binding::BoundConstructionParentWitness;
 use crate::construction_parent_prover_fixture::ConstructionParentProverFixture;
+use crate::construction_parent_verifier::load_qualified_construction_parent_verifier;
 use crate::construction_profile::{
     CONSTRUCTION_LEAF_GATE_COUNT, CONSTRUCTION_LEAF_NORM_LENGTH, CONSTRUCTION_LEAF_ROUNDS,
     CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_ROUNDS,
-    CONSTRUCTION_ROOT_STATE_ARITY,
+    CONSTRUCTION_PARENT_RELATION_AUXILIARY, CONSTRUCTION_PARENT_RELATION_CONSTRAINTS,
+    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_ROUNDS,
 };
 use crate::construction_recurrence::{
     validate_production_shape, ConstructionRecurrenceStateWitness,
@@ -34,130 +30,19 @@ use crate::nova_construction_recurrence::{
 };
 use crate::nova_relation_identity::direct_step_relation_shape;
 use crate::nova_session::{
-    NovaSessionStep, NovaSessionSuite, SelectedNovaSessionSuite,
-    QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH, QUALIFIED_CONSTRUCTION_VERSIONS,
+    NovaSessionStep, NovaSessionSuite, SelectedNovaProver, SelectedNovaSessionSuite,
+    QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
+    QUALIFIED_CONSTRUCTION_VERSIONS,
 };
 use crate::nova_types::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine};
+use crate::prover::ConstructionParentWitness;
 use crate::secp_native::{standard_generator, SecpEncodedPointWitness, SecpScalarWitness};
-use crate::{scalar_to_canonical, Scalar};
-
-const DIRECT_PARENT_AUXILIARY: usize = 7_609_014;
-const DIRECT_PARENT_CONSTRAINTS: usize = 7_653_553;
-
 type ConstructionParentNovaSuite =
     SelectedNovaSessionSuite<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>;
-
-struct BoundQualificationFixture {
-    initial_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
-    final_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
-    steps: Vec<ConstructionParentStep>,
-}
-
-struct CheckingWitnessCS {
-    inputs: Vec<Scalar>,
-    auxiliary: Vec<Scalar>,
-    constraints: usize,
-    first_unsatisfied: Option<usize>,
-}
-
-impl CheckingWitnessCS {
-    fn new() -> Self {
-        Self::with_auxiliary_capacity(0)
-    }
-
-    fn with_auxiliary_capacity(capacity: usize) -> Self {
-        Self {
-            inputs: vec![Scalar::ONE],
-            auxiliary: Vec::with_capacity(capacity),
-            constraints: 0,
-            first_unsatisfied: None,
-        }
-    }
-
-    fn value(&self, variable: Variable) -> Scalar {
-        match variable.get_unchecked() {
-            Index::Input(index) => self.inputs[index],
-            Index::Aux(index) => self.auxiliary[index],
-        }
-    }
-
-    fn evaluate(&self, linear: &LinearCombination<Scalar>) -> Scalar {
-        linear
-            .iter()
-            .fold(Scalar::ZERO, |value, (variable, coefficient)| {
-                value + self.value(variable) * coefficient
-            })
-    }
-
-    fn assert_satisfied(&self) {
-        assert_eq!(
-            self.first_unsatisfied,
-            None,
-            "constraint {} is unsatisfied",
-            self.first_unsatisfied.unwrap_or_default()
-        );
-    }
-}
-
-impl ConstraintSystem<Scalar> for CheckingWitnessCS {
-    type Root = Self;
-
-    fn alloc<F, A, AR>(&mut self, _annotation: A, value: F) -> Result<Variable, SynthesisError>
-    where
-        F: FnOnce() -> Result<Scalar, SynthesisError>,
-        A: FnOnce() -> AR,
-        AR: Into<String>,
-    {
-        let index = self.auxiliary.len();
-        self.auxiliary.push(value()?);
-        Ok(Variable::new_unchecked(Index::Aux(index)))
-    }
-
-    fn alloc_input<F, A, AR>(
-        &mut self,
-        _annotation: A,
-        value: F,
-    ) -> Result<Variable, SynthesisError>
-    where
-        F: FnOnce() -> Result<Scalar, SynthesisError>,
-        A: FnOnce() -> AR,
-        AR: Into<String>,
-    {
-        let index = self.inputs.len();
-        self.inputs.push(value()?);
-        Ok(Variable::new_unchecked(Index::Input(index)))
-    }
-
-    fn enforce<A, AR, LA, LB, LC>(&mut self, _annotation: A, a: LA, b: LB, c: LC)
-    where
-        A: FnOnce() -> AR,
-        AR: Into<String>,
-        LA: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
-        LB: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
-        LC: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
-    {
-        let a = self.evaluate(&a(LinearCombination::zero()));
-        let b = self.evaluate(&b(LinearCombination::zero()));
-        let c = self.evaluate(&c(LinearCombination::zero()));
-        if self.first_unsatisfied.is_none() && a * b != c {
-            self.first_unsatisfied = Some(self.constraints);
-        }
-        self.constraints = self.constraints.checked_add(1).expect("constraint count");
-    }
-
-    fn push_namespace<NR, N>(&mut self, _name: N)
-    where
-        NR: Into<String>,
-        N: FnOnce() -> NR,
-    {
-    }
-
-    fn pop_namespace(&mut self) {}
-
-    fn get_root(&mut self) -> &mut Self::Root {
-        self
-    }
-}
+const QUALIFIED_ACCEPTED_WIT4_SHA256: [u8; 32] = [
+    0x77, 0xb7, 0x33, 0x1e, 0x92, 0xa5, 0x38, 0xeb, 0xd1, 0xbf, 0xe9, 0x04, 0x80, 0x16, 0x6b, 0x29,
+    0x81, 0x96, 0xff, 0x4d, 0xd9, 0xa3, 0xd8, 0xf7, 0x55, 0x7c, 0x20, 0x2a, 0x3b, 0xab, 0x34, 0x18,
+];
 
 fn fixed_bincode_shape_length(metrics: R1CSShapeMetrics) -> u64 {
     let padded_dimension = metrics
@@ -263,41 +148,6 @@ fn prior_state(manifest_byte: u8) -> ConstructionRecurrenceStateWitness {
     }
 }
 
-fn candidate_root(root: &CandidateRootClaim) -> ConstructionRoot {
-    assert_eq!(root.factors.len(), CONSTRUCTION_ROOT_ROUNDS);
-    let mut encoded = [0; CONSTRUCTION_ROOT_BYTES];
-    encoded[..33].copy_from_slice(&root.point.encoded);
-    encoded[33..65].copy_from_slice(&root.scale.bytes);
-    for (index, factor) in root.factors.iter().enumerate() {
-        let offset = 65 + 32 * index;
-        encoded[offset..offset + 32].copy_from_slice(&factor.bytes);
-    }
-    ConstructionRoot::parse(&encoded).expect("canonical construction root")
-}
-
-fn recurrence_state_from_fields(
-    fields: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
-    expected_index: u32,
-) -> ConstructionRecurrenceStateWitness {
-    let root_fields = fields[..CONSTRUCTION_ROOT_STATE_ARITY]
-        .try_into()
-        .expect("fixed construction root state");
-    let root = ConstructionRoot::from_state_fields(root_fields)
-        .expect("authenticated construction root fields");
-    let manifest_field = fields[CONSTRUCTION_ROOT_STATE_ARITY];
-    let mut manifest = scalar_to_canonical(&manifest_field);
-    manifest.reverse();
-    assert_eq!(
-        fields[CONSTRUCTION_ROOT_STATE_ARITY + 1],
-        Scalar::from(u64::from(expected_index))
-    );
-    ConstructionRecurrenceStateWitness {
-        root: root.claim(),
-        manifest,
-        index: expected_index,
-    }
-}
-
 fn production_direct_step(binding_byte: u8, manifest_byte: u8) -> ConstructionParentStep {
     let shape = production_leaf_shape();
     ConstructionParentStep::new(
@@ -313,31 +163,6 @@ fn production_direct_step(binding_byte: u8, manifest_byte: u8) -> ConstructionPa
         zero_candidate_step(),
     )
     .expect("production direct step")
-}
-
-fn synthesize_output(
-    step: &ConstructionParentStep,
-) -> [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {
-    let mut cs = CheckingWitnessCS::with_auxiliary_capacity(DIRECT_PARENT_AUXILIARY);
-    let inputs = step
-        .input_state()
-        .iter()
-        .enumerate()
-        .map(|(index, value)| {
-            AllocatedNum::alloc_input(cs.namespace(|| format!("state {index}")), || Ok(*value))
-                .expect("state input")
-        })
-        .collect::<Vec<_>>();
-    let outputs = step
-        .synthesize(&mut cs, &inputs)
-        .expect("construction recurrence");
-    assert_eq!(outputs.len(), CONSTRUCTION_RECURRENCE_STATE_ARITY);
-    let values =
-        std::array::from_fn(|index| outputs[index].get_value().expect("recurrence output"));
-    cs.assert_satisfied();
-    assert_eq!(cs.auxiliary.len(), DIRECT_PARENT_AUXILIARY);
-    assert_eq!(cs.constraints, DIRECT_PARENT_CONSTRAINTS);
-    values
 }
 
 #[test]
@@ -357,20 +182,6 @@ fn production_shape_is_exact() {
         &zero_candidate_step(),
     )
     .expect("production shape");
-}
-
-#[test]
-fn checking_witness_cs_rejects_a_false_equation() {
-    let mut cs = CheckingWitnessCS::new();
-    let value =
-        AllocatedNum::alloc(cs.namespace(|| "value"), || Ok(Scalar::from(2u64))).expect("value");
-    cs.enforce(
-        || "false equation",
-        |linear| linear + value.get_variable(),
-        |linear| linear + CheckingWitnessCS::one(),
-        |linear| linear + CheckingWitnessCS::one(),
-    );
-    assert_eq!(cs.first_unsatisfied, Some(0));
 }
 
 #[test]
@@ -448,8 +259,11 @@ fn direct_construction_step_relation_shape_is_deterministic() {
 
     assert_eq!(first, second);
     assert_eq!(first.inputs(), 21);
-    assert_eq!(first.auxiliary(), DIRECT_PARENT_AUXILIARY);
-    assert_eq!(first.constraints(), DIRECT_PARENT_CONSTRAINTS);
+    assert_eq!(first.auxiliary(), CONSTRUCTION_PARENT_RELATION_AUXILIARY);
+    assert_eq!(
+        first.constraints(),
+        CONSTRUCTION_PARENT_RELATION_CONSTRAINTS
+    );
     eprintln!(
         "qualified relation_id={} inputs={} auxiliary={} constraints={}",
         hex(first.relation_id().bytes()),
@@ -528,17 +342,25 @@ fn production_relation_digests_match_the_native_leaf_profile() {
     );
 }
 
-fn read_qualification_fixture(environment: &str) -> ConstructionParentProverFixture {
+fn read_qualification_wit4(environment: &str) -> Vec<u8> {
     let path = std::env::var_os(environment)
         .unwrap_or_else(|| panic!("set {environment} before qualification"));
     let bytes = std::fs::read(path).expect("read construction parent prover fixture");
     eprintln!(
-        "unqualified_wit3_fixture={environment} bytes={} sha256={}",
+        "unqualified_wit4_fixture={environment} bytes={} sha256={}",
         bytes.len(),
         hex(&Sha256::digest(&bytes)),
     );
-    ConstructionParentProverFixture::parse(&bytes)
+    bytes
+}
+
+fn read_qualification_fixture(environment: &str) -> ConstructionParentProverFixture {
+    ConstructionParentProverFixture::parse(&read_qualification_wit4(environment))
         .expect("parse construction parent prover fixture")
+}
+
+fn is_qualified_accepted_wit4(bytes: &[u8]) -> bool {
+    <[u8; 32]>::from(Sha256::digest(bytes)) == QUALIFIED_ACCEPTED_WIT4_SHA256
 }
 
 fn assert_matching_public_fixtures(
@@ -576,92 +398,34 @@ fn assert_matching_public_fixtures(
     );
 }
 
-fn bind_qualification_fixture(
-    fixture: &ConstructionParentProverFixture,
-) -> BoundQualificationFixture {
-    let initial_state = fixture
-        .inputs
-        .seed()
-        .initial_state_fields()
-        .expect("verifier-derived qualification z0");
-    let expected_suffix = fixture
-        .inputs
-        .seed()
-        .derive_expected_final(fixture.inputs.leaves())
-        .expect("independent final construction manifest")
-        .state_suffix_fields()
-        .expect("final construction manifest fields");
-    let mut state = fixture
-        .inputs
-        .seed()
-        .initial_recurrence_witness()
-        .expect("initial qualification recurrence witness");
-    assert_eq!(
-        state.state_fields().expect("initial recurrence state"),
-        initial_state
-    );
-
-    let mut expected_input = initial_state;
-    let mut steps = Vec::with_capacity(fixture.leaves.len());
-    for (index, leaf) in fixture.leaves.iter().enumerate() {
-        let step = ConstructionParentStep::new(
-            state,
-            leaf.statement,
-            leaf.transcript.clone(),
-            leaf.reduction.clone(),
-            leaf.step.clone(),
-        )
-        .expect("qualification recurrence");
-        assert_eq!(*step.input_state(), expected_input);
-        assert_eq!(
-            NovaSessionStep::relation_id(&step),
-            QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
-        );
-        let output = synthesize_output(&step);
-        state = recurrence_state_from_fields(
-            output,
-            u32::try_from(index + 1).expect("qualification leaf index fits u32"),
-        );
-        expected_input = output;
-        steps.push(step);
-    }
-
-    assert_eq!(
-        &expected_input[CONSTRUCTION_ROOT_STATE_ARITY..],
-        expected_suffix.as_slice()
-    );
-    assert_eq!(
-        candidate_root(&state.root).canonical_bytes(),
-        fixture.expected_root.canonical_bytes()
-    );
-    BoundQualificationFixture {
-        initial_state,
-        final_state: expected_input,
-        steps,
-    }
-}
-
 fn bind_both_qualification_fixtures(
-    accepted: &ConstructionParentProverFixture,
-    nondeciding: &ConstructionParentProverFixture,
+    accepted: ConstructionParentProverFixture,
+    nondeciding: ConstructionParentProverFixture,
 ) -> (
     ConstructionParentStep,
-    BoundQualificationFixture,
-    BoundQualificationFixture,
+    BoundConstructionParentWitness,
+    BoundConstructionParentWitness,
 ) {
-    assert_matching_public_fixtures(accepted, nondeciding);
-    let accepted_bound = bind_qualification_fixture(accepted);
-    let nondeciding_bound = bind_qualification_fixture(nondeciding);
+    assert_matching_public_fixtures(&accepted, &nondeciding);
+    let accepted_bound = accepted
+        .bind()
+        .expect("bind accepted qualification witness");
+    let nondeciding_bound = nondeciding
+        .bind()
+        .expect("bind nondeciding qualification witness");
     assert_eq!(
-        accepted_bound.initial_state,
-        nondeciding_bound.initial_state
+        accepted_bound.initial_state(),
+        nondeciding_bound.initial_state()
     );
-    assert_ne!(accepted_bound.final_state, nondeciding_bound.final_state);
-    let trusted_step = accepted_bound.steps[0].clone();
+    assert_ne!(
+        accepted_bound.final_state(),
+        nondeciding_bound.final_state()
+    );
+    let trusted_step = accepted_bound.steps()[0].clone();
     assert!(accepted_bound
-        .steps
+        .steps()
         .iter()
-        .chain(&nondeciding_bound.steps)
+        .chain(nondeciding_bound.steps())
         .all(|step| {
             NovaSessionStep::relation_id(step) == QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
         }));
@@ -702,6 +466,34 @@ fn qualification_output_path(environment: &str) -> std::path::PathBuf {
     path
 }
 
+fn qualification_input_path(environment: &str) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(
+        std::env::var_os(environment)
+            .unwrap_or_else(|| panic!("set {environment} before qualification")),
+    );
+    assert!(!path.as_os_str().is_empty(), "{environment} is empty");
+    assert!(path.is_file(), "{environment} is not a regular file");
+    path
+}
+
+fn qualification_file_sha256(path: &std::path::Path) -> [u8; 32] {
+    use std::io::Read;
+
+    let mut input = std::fs::File::open(path).expect("open qualification output for hashing");
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .expect("read qualification output for hashing");
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    digest.finalize().into()
+}
+
 fn write_new_qualification_output(path: &std::path::Path, bytes: &[u8]) {
     use std::io::Write;
 
@@ -732,13 +524,30 @@ fn exported_sha_parent_fixtures_reconstruct_one_shape() {
     let nondeciding =
         read_qualification_fixture("PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE");
     let (trusted_step, accepted_bound, nondeciding_bound) =
-        bind_both_qualification_fixtures(&accepted, &nondeciding);
-    assert_eq!(accepted_bound.steps.len(), accepted.leaves.len());
-    assert_eq!(nondeciding_bound.steps.len(), nondeciding.leaves.len());
+        bind_both_qualification_fixtures(accepted, nondeciding);
+    assert_eq!(
+        accepted_bound.steps().len(),
+        nondeciding_bound.steps().len()
+    );
+    assert!(!accepted_bound.steps().is_empty());
     assert_eq!(
         NovaSessionStep::relation_id(&trusted_step),
         QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
     );
+}
+
+#[test]
+fn setup_only_qualification_selects_the_accepted_wit4() {
+    let accepted =
+        include_bytes!("../../../tests/vectors/construction_parent_sha256_accepted.wit4");
+    let nondeciding =
+        include_bytes!("../../../tests/vectors/construction_parent_sha256_nondeciding.wit4");
+    assert!(is_qualified_accepted_wit4(accepted));
+    assert!(!is_qualified_accepted_wit4(nondeciding));
+
+    let mut changed = accepted.to_vec();
+    changed[0] ^= 1;
+    assert!(!is_qualified_accepted_wit4(&changed));
 }
 
 #[test]
@@ -754,9 +563,7 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let nondeciding =
         read_qualification_fixture("PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE");
     let (mut trusted_step, mut accepted_bound, mut nondeciding_bound) =
-        bind_both_qualification_fixtures(&accepted, &nondeciding);
-    drop(accepted);
-    drop(nondeciding);
+        bind_both_qualification_fixtures(accepted, nondeciding);
 
     let relation_shape =
         direct_step_relation_shape::<CONSTRUCTION_RECURRENCE_STATE_ARITY, _>(&trusted_step)
@@ -764,16 +571,16 @@ fn native_profile_sha_parent_qualification_is_exact() {
     let relation_id = relation_shape.relation_id();
     trusted_step.set_qualification_relation_id(relation_id);
     for step in accepted_bound
-        .steps
+        .steps_mut()
         .iter_mut()
-        .chain(&mut nondeciding_bound.steps)
+        .chain(nondeciding_bound.steps_mut())
     {
         step.set_qualification_relation_id(relation_id);
     }
     assert!(accepted_bound
-        .steps
+        .steps()
         .iter()
-        .chain(&nondeciding_bound.steps)
+        .chain(nondeciding_bound.steps())
         .all(|step| NovaSessionStep::relation_id(step) == relation_id));
     eprintln!(
         "sha_parent_qualification: relation_id={} relation_inputs={} \
@@ -813,14 +620,14 @@ fn native_profile_sha_parent_qualification_is_exact() {
         selected.expected(),
     );
 
-    let z0 = accepted_bound.initial_state;
-    let accepted_final = accepted_bound.final_state;
-    let nondeciding_final = nondeciding_bound.final_state;
-    let step_count = accepted_bound.steps.len();
-    assert_eq!(nondeciding_bound.steps.len(), step_count);
+    let (z0, accepted_final, accepted_steps) = accepted_bound.into_parts();
+    let (nondeciding_z0, nondeciding_final, nondeciding_steps) = nondeciding_bound.into_parts();
+    assert_eq!(nondeciding_z0, z0);
+    let step_count = accepted_steps.len();
+    assert_eq!(nondeciding_steps.len(), step_count);
 
-    let accepted_proof = produce_qualification_proof(&selected, z0, accepted_bound.steps);
-    let nondeciding_proof = produce_qualification_proof(&selected, z0, nondeciding_bound.steps);
+    let accepted_proof = produce_qualification_proof(&selected, z0, accepted_steps);
+    let nondeciding_proof = produce_qualification_proof(&selected, z0, nondeciding_steps);
     assert_eq!(accepted_proof.len(), metadata.proof_length);
     assert_eq!(nondeciding_proof.len(), metadata.proof_length);
     eprintln!(
@@ -878,5 +685,125 @@ fn native_profile_sha_parent_qualification_is_exact() {
     eprintln!(
         "sha_parent_qualification: total_seconds={:.3}",
         total_started.elapsed().as_secs_f64()
+    );
+}
+
+/// Persist and reload qualified prover state, then produce one fresh proof.
+///
+/// Recursive verification here is necessary but not receipt acceptance. The
+/// emitted proof must subsequently pass the C++ ConstructionParentVerifier,
+/// including its native final accumulation decision, before the PK1 identity
+/// can be promoted into production constants.
+#[test]
+#[ignore = "performs production setup, PK1 persistence, and fresh proving"]
+fn setup_only_qualification_persists_a_usable_prover() {
+    let total_started = std::time::Instant::now();
+    let prover_artifact_path =
+        qualification_output_path("PURIFY_CONSTRUCTION_PARENT_PROVER_ARTIFACT_OUT");
+    let fresh_proof_path = qualification_output_path("PURIFY_CONSTRUCTION_PARENT_FRESH_PROOF_OUT");
+    let verifier_artifact_path =
+        qualification_input_path("PURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT");
+
+    let wit4 = read_qualification_wit4("PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE");
+    assert!(
+        is_qualified_accepted_wit4(&wit4),
+        "setup-only qualification requires the frozen accepted Wit4"
+    );
+    let witness = ConstructionParentWitness::decode(&wit4)
+        .expect("decode accepted construction parent Wit4")
+        .bind()
+        .expect("bind accepted construction parent witness");
+    let trusted_step = witness
+        .trusted_setup_step()
+        .expect("accepted construction parent has a setup step");
+
+    let setup_started = std::time::Instant::now();
+    let selected = NovaSessionSuite::<
+        CONSTRUCTION_RECURRENCE_STATE_ARITY,
+        ConstructionParentStep,
+    >::setup_exact(trusted_step, &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE)
+    .expect("setup exact qualified construction parent prover");
+    let setup_seconds = setup_started.elapsed().as_secs_f64();
+
+    let artifact_started = std::time::Instant::now();
+    let mut artifact = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&prover_artifact_path)
+        .expect("create new qualification prover artifact");
+    let descriptor = selected
+        .into_prover()
+        .write_artifact(&mut artifact)
+        .expect("write qualification prover artifact");
+    artifact
+        .sync_all()
+        .expect("sync qualification prover artifact");
+    drop(artifact);
+    let artifact_sha256 = qualification_file_sha256(&prover_artifact_path);
+    let artifact_seconds = artifact_started.elapsed().as_secs_f64();
+
+    eprintln!(
+        "setup_only_qualification: prover_artifact={} encoded_bytes={} \
+         decoded_bytes={} tagged_digest={} sha256={} setup_seconds={:.3} \
+         artifact_seconds={:.3}",
+        prover_artifact_path.display(),
+        descriptor.encoded_length(),
+        descriptor.decoded_payload_length(),
+        hex(&descriptor.digest()),
+        hex(&artifact_sha256),
+        setup_seconds,
+        artifact_seconds,
+    );
+
+    let reload_started = std::time::Instant::now();
+    let mut artifact = std::fs::File::open(&prover_artifact_path)
+        .expect("open qualification prover artifact read-only");
+    let prover = SelectedNovaProver::<
+        CONSTRUCTION_RECURRENCE_STATE_ARITY,
+        ConstructionParentStep,
+    >::from_artifact_reader(
+        &mut artifact,
+        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+        &descriptor,
+    )
+    .expect("reload qualification prover artifact");
+    drop(artifact);
+    let reload_seconds = reload_started.elapsed().as_secs_f64();
+
+    let proving_started = std::time::Instant::now();
+    let unverified = witness
+        .prove_with(prover)
+        .expect("produce fresh construction parent proof");
+    let proving_seconds = proving_started.elapsed().as_secs_f64();
+
+    // `prove_with` has dropped all PP/PK state before this independently
+    // pinned verifier artifact is opened.
+    let verification_started = std::time::Instant::now();
+    let mut verifier_artifact = std::fs::File::open(&verifier_artifact_path)
+        .expect("open qualified verifier artifact read-only");
+    let verifier = load_qualified_construction_parent_verifier(&mut verifier_artifact)
+        .expect("load qualified construction parent verifier");
+    drop(verifier_artifact);
+    let proof = unverified
+        .verify_with(verifier)
+        .expect("verify exact fresh construction parent state")
+        .into_bytes();
+    let verification_seconds = verification_started.elapsed().as_secs_f64();
+    let proof_sha256: [u8; 32] = Sha256::digest(&proof).into();
+
+    write_new_qualification_output(&fresh_proof_path, &proof);
+    eprintln!(
+        "setup_only_qualification: fresh_proof={} proof_bytes={} \
+         proof_sha256={} reload_seconds={:.3} proving_seconds={:.3} \
+         verification_seconds={:.3} total_seconds={:.3} \
+         cpp_native_decide_required=true",
+        fresh_proof_path.display(),
+        proof.len(),
+        hex(&proof_sha256),
+        reload_seconds,
+        proving_seconds,
+        verification_seconds,
+        total_started.elapsed().as_secs_f64(),
     );
 }

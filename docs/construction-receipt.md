@@ -149,12 +149,22 @@ The scalar-only protocol is an incompatible cutover:
 | Construction statement | `/v5` |
 | Construction leaf basis | `Purify/Accountable/ConstructionLeafAccumulation/v1` |
 | Construction manifest | `Purify/Accountable/ConstructionParentManifest/v3/{init,leaf}` |
-| Parent-prover witness frame | `Purify/Nova/Wit3` |
+| Parent-prover witness frame | `Purify/Nova/Wit4` |
 
 Old payloads, statement digests, accumulation parameters, centralized seeds,
-and `Wit1`/`Wit2` parent fixtures are not compatibility inputs. The qualified
-artifact and checked `Wit3` vectors bind this exact version set; old artifacts
-cannot qualify the new statement.
+and `Wit1` through `Wit3` parent fixtures are not compatibility inputs. The
+checked `Wit4` vectors bind the exact frame. This framing cutover removes only
+redundant transport bytes; it does not change the decoded relation, public
+state, qualified artifact, or proof format.
+
+Each Wit4 leaf carries its 130-byte descriptor, 33-byte public point, and a
+1,137-byte typed transcript record. The record is its original type version
+followed by the 1,136-byte proof transcript. Recovery shares and anchor
+ciphertexts remain bound by the descriptor and construction statement, so
+Wit4 does not repeat their 66-byte and 96-byte typed-record prefixes.
+Including the native reduction and accumulation-step proofs, the out-of-band
+prover input is `697 + 3,378*(N+A)` bytes. The 100-setup plus 100-anchor
+deployment maximum is 676,297 bytes.
 
 ## Size accounting
 

@@ -1,9 +1,12 @@
-//! Strict test-tool decoder for the native construction prover fixture.
+//! Strict decoder for the native construction prover witness.
 //!
 //! The C++ slashability fixture exports only public proof data. This decoder
 //! fixes the production suite locally, derives every affine point opening,
 //! and reconstructs transcript-dependent points rather than trusting extra
-//! witness data from the file.
+//! witness data from the file. Wit4 typed records contain one version byte
+//! followed directly by the transcript already validated by the C++
+//! accepted-only formatter; registry shares and ciphertexts are bound by the
+//! leaf descriptors instead of being repeated here.
 
 use num_bigint::BigUint;
 use thiserror::Error;
@@ -33,31 +36,27 @@ use crate::secp_native::{
 };
 use crate::RelationError;
 
-const MAGIC: &[u8; 16] = b"Purify/Nova/Wit3";
+const MAGIC: &[u8; 16] = b"Purify/Nova/Wit4";
 const RECOVERY_ROOT_BYTES: usize = 64;
 const HEADER_BYTES: usize = MAGIC.len() + 32 + 32 + RECOVERY_ROOT_BYTES + 4 + 4;
 const PUBLIC_COMMITMENT_BYTES: usize = 33;
-const SETUP_RECORD_BYTES: usize = 1_203;
-const ANCHOR_RECORD_BYTES: usize = 1_233;
+const TRANSCRIPT_RECORD_BYTES: usize = 1_137;
 const REDUCTION_PROOF_BYTES: usize = 1_022;
 const STEP_PROOF_BYTES: usize = 1_056;
 const SETUP_BYTES: usize = CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES
     + PUBLIC_COMMITMENT_BYTES
-    + SETUP_RECORD_BYTES
+    + TRANSCRIPT_RECORD_BYTES
     + REDUCTION_PROOF_BYTES
     + STEP_PROOF_BYTES;
 const ANCHOR_BYTES: usize = CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES
     + PUBLIC_COMMITMENT_BYTES
-    + ANCHOR_RECORD_BYTES
+    + TRANSCRIPT_RECORD_BYTES
     + REDUCTION_PROOF_BYTES
     + STEP_PROOF_BYTES;
 const SETUP_RECORD_VERSION: u8 = 1;
 const ANCHOR_RECORD_VERSION: u8 = 4;
 const REDUCTION_VERSION: u8 = 2;
 const STEP_VERSION: u8 = 2;
-
-const SETUP_RECORD_RAW_OFFSET: usize = 67;
-const ANCHOR_RECORD_RAW_OFFSET: usize = 97;
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub(crate) enum ConstructionParentProverFixtureError {
@@ -134,17 +133,14 @@ impl ConstructionParentProverFixture {
             let descriptor = cursor.array::<CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES>()?;
             descriptor_bytes.extend_from_slice(&descriptor);
             let output = parse_finite_point(cursor.array::<PUBLIC_COMMITMENT_BYTES>()?)?;
-            let record = cursor.array::<SETUP_RECORD_BYTES>()?;
+            let record = cursor.array::<TRANSCRIPT_RECORD_BYTES>()?;
             let reduction = parse_reduction(cursor.array::<REDUCTION_PROOF_BYTES>()?)?;
             let step = parse_step(cursor.array::<STEP_PROOF_BYTES>()?)?;
             leaves.push(parse_leaf(
                 descriptor,
                 output,
                 &record,
-                RecordLayout {
-                    version: SETUP_RECORD_VERSION,
-                    raw_offset: SETUP_RECORD_RAW_OFFSET,
-                },
+                SETUP_RECORD_VERSION,
                 reduction,
                 step,
             )?);
@@ -153,17 +149,14 @@ impl ConstructionParentProverFixture {
             let descriptor = cursor.array::<CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES>()?;
             descriptor_bytes.extend_from_slice(&descriptor);
             let punishment = parse_even_finite_point(cursor.array::<PUBLIC_COMMITMENT_BYTES>()?)?;
-            let record = cursor.array::<ANCHOR_RECORD_BYTES>()?;
+            let record = cursor.array::<TRANSCRIPT_RECORD_BYTES>()?;
             let reduction = parse_reduction(cursor.array::<REDUCTION_PROOF_BYTES>()?)?;
             let step = parse_step(cursor.array::<STEP_PROOF_BYTES>()?)?;
             leaves.push(parse_leaf(
                 descriptor,
                 punishment,
                 &record,
-                RecordLayout {
-                    version: ANCHOR_RECORD_VERSION,
-                    raw_offset: ANCHOR_RECORD_RAW_OFFSET,
-                },
+                ANCHOR_RECORD_VERSION,
                 reduction,
                 step,
             )?);
@@ -212,7 +205,7 @@ fn parse_leaf(
     descriptor: [u8; CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES],
     public_commitment: SecpEncodedPointWitness,
     record: &[u8],
-    layout: RecordLayout,
+    expected_version: u8,
     reduction: CandidateNormReductionProofWitness,
     step: CandidateStepProofWitness,
 ) -> Result<ConstructionParentProverLeaf, RelationError> {
@@ -243,7 +236,7 @@ fn parse_leaf(
     let transcript = parse_record(
         record,
         public_commitment,
-        layout,
+        expected_version,
         coefficient_commitment,
         anchored_offset,
         precommitment,
@@ -258,25 +251,20 @@ fn parse_leaf(
     })
 }
 
-#[derive(Clone, Copy)]
-struct RecordLayout {
-    version: u8,
-    raw_offset: usize,
-}
-
 fn parse_record(
     record: &[u8],
     public_commitment: SecpEncodedPointWitness,
-    layout: RecordLayout,
+    expected_version: u8,
     coefficient_commitment: SecpEncodedPointWitness,
     anchored_offset: SecpEncodedPointWitness,
     expected_precommitment: SecpScalarWitness,
     statement: ManifestBoundConstructionLeafStatementV4,
 ) -> Result<CircuitProofTranscriptWitnessV4, RelationError> {
-    if record.first().copied() != Some(layout.version) {
+    if record.first().copied() != Some(expected_version) {
         return Err(RelationError::Malformed("construction leaf record version"));
     }
-    let mask_offset = layout.raw_offset + 33;
+    let raw_offset = 1;
+    let mask_offset = raw_offset + 33;
     let t2_offset = mask_offset + 33;
     let nonce_offset = t2_offset + 32;
     let response_offset = nonce_offset + 32;
@@ -287,7 +275,7 @@ fn parse_record(
         return Err(RelationError::Malformed("construction leaf record length"));
     }
     let raw_commitment = parse_finite_point(
-        record[layout.raw_offset..mask_offset]
+        record[raw_offset..mask_offset]
             .try_into()
             .expect("fixed raw commitment"),
     )?;
@@ -604,12 +592,21 @@ mod tests {
                 "construction prover fixture magic"
             ))
         );
+        assert_eq!(
+            ConstructionParentProverFixture::parse(b"Purify/Nova/Wit3")
+                .err()
+                .expect("previous fixture magic rejects"),
+            ConstructionParentProverFixtureError::State(RelationError::Malformed(
+                "construction prover fixture magic"
+            ))
+        );
     }
 
     #[test]
     fn fixture_frame_requires_both_typed_leaf_counts() {
-        assert_eq!(SETUP_BYTES, 3_444);
-        assert_eq!(ANCHOR_BYTES, 3_474);
+        assert_eq!(TRANSCRIPT_RECORD_BYTES, 1_137);
+        assert_eq!(SETUP_BYTES, 3_378);
+        assert_eq!(ANCHOR_BYTES, 3_378);
         assert_eq!(HEADER_BYTES, 152);
 
         let mut encoded = vec![0; HEADER_BYTES];
@@ -637,13 +634,65 @@ mod tests {
     }
 
     #[test]
+    fn wit4_rejects_redundant_typed_record_prefixes() {
+        let accepted =
+            include_bytes!("../../../tests/vectors/construction_parent_sha256_accepted.wit4");
+        let setup_record =
+            HEADER_BYTES + CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES + PUBLIC_COMMITMENT_BYTES;
+        let first_anchor_record = HEADER_BYTES
+            + 3 * SETUP_BYTES
+            + CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES
+            + PUBLIC_COMMITMENT_BYTES;
+
+        for (record_offset, prefix_bytes) in
+            [(setup_record, 66usize), (first_anchor_record, 96usize)]
+        {
+            let mut prefixed = accepted.to_vec();
+            prefixed.splice(record_offset + 1..record_offset + 1, vec![0; prefix_bytes]);
+            assert_eq!(
+                ConstructionParentProverFixture::parse(&prefixed)
+                    .err()
+                    .expect("redundant typed prefix rejects"),
+                ConstructionParentProverFixtureError::State(RelationError::Malformed(
+                    "construction prover fixture length"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn wit4_keeps_each_typed_record_version() {
+        let accepted =
+            include_bytes!("../../../tests/vectors/construction_parent_sha256_accepted.wit4");
+        let setup_record =
+            HEADER_BYTES + CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES + PUBLIC_COMMITMENT_BYTES;
+        let first_anchor_record = HEADER_BYTES
+            + 3 * SETUP_BYTES
+            + CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES
+            + PUBLIC_COMMITMENT_BYTES;
+
+        for record_offset in [setup_record, first_anchor_record] {
+            let mut wrong_version = accepted.to_vec();
+            wrong_version[record_offset] ^= 0x80;
+            assert_eq!(
+                ConstructionParentProverFixture::parse(&wrong_version)
+                    .err()
+                    .expect("wrong typed version rejects"),
+                ConstructionParentProverFixtureError::State(RelationError::Malformed(
+                    "construction leaf record version"
+                ))
+            );
+        }
+    }
+
+    #[test]
     fn checked_fixtures_parse_without_private_openings() {
         let accepted = ConstructionParentProverFixture::parse(include_bytes!(
-            "../../../tests/vectors/construction_parent_sha256_accepted.wit3"
+            "../../../tests/vectors/construction_parent_sha256_accepted.wit4"
         ))
         .expect("parse accepted construction prover fixture");
         let nondeciding = ConstructionParentProverFixture::parse(include_bytes!(
-            "../../../tests/vectors/construction_parent_sha256_nondeciding.wit3"
+            "../../../tests/vectors/construction_parent_sha256_nondeciding.wit4"
         ))
         .expect("parse nondeciding construction prover fixture");
         assert_ne!(accepted.setup_leaf_count, 0);

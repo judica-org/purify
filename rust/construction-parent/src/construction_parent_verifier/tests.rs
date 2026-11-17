@@ -115,8 +115,8 @@ fn authenticated_final_state_rejects_malformed_pending_roots() {
 fn qualified_loader_authenticates_before_decoding() {
     let mut artifact = Cursor::new(vec![0xa5; 16]);
     assert!(matches!(
-        load_qualified_construction_parent_verifier(&mut artifact),
-        Err(DirectNovaVerifierArtifactError::Length)
+        ConstructionParentVerifier::load(&mut artifact),
+        Err(LoadError::Length)
     ));
     assert_eq!(artifact.position(), 16);
 }

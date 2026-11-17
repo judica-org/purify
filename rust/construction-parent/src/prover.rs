@@ -16,18 +16,16 @@ pub use crate::construction_parent_prover_binding::ConstructionParentWitnessBind
 use crate::artifact_snapshot::PrivateArtifactSnapshot;
 use crate::construction_parent_prover_binding::BoundConstructionParentWitness;
 use crate::construction_parent_prover_fixture::ConstructionParentProverFixture;
-#[cfg(feature = "prover")]
-use crate::construction_parent_verifier::load_qualified_construction_parent_verifier;
+use crate::construction_parent_verifier::ConstructionParentVerifier;
 use crate::construction_profile::CONSTRUCTION_RECURRENCE_STATE_ARITY;
+use crate::nova::VerifyError;
+#[cfg(feature = "prover")]
+use crate::nova::QUALIFIED_VERIFIER_ARTIFACT;
 use crate::nova_construction_recurrence::ConstructionParentStep;
 #[cfg(feature = "prover")]
-use crate::nova_session::prover_artifact::QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT;
-#[cfg(feature = "prover")]
-use crate::nova_session::verifier_artifact::QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT;
-use crate::nova_session::{
-    DirectNovaSessionError, SelectedDirectNovaVerifier, SelectedNovaProver,
-    QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
-};
+use crate::session::prover_artifact::QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT;
+use crate::session::{DirectNovaSessionError, SelectedNovaProver};
+use crate::suite::{QUALIFIED, QUALIFIED_PROOF_LENGTH};
 use crate::Scalar;
 
 /// Failure while decoding the canonical Wit4 framing or native proof values.
@@ -99,7 +97,7 @@ impl CheckedConstructionParentWitness {
         self,
         prover: SelectedConstructionParentProver,
     ) -> Result<UnverifiedConstructionParentProof, ConstructionParentProvingError> {
-        if prover.expected() != &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE {
+        if prover.expected() != &QUALIFIED {
             return Err(ConstructionParentProvingError::Suite);
         }
 
@@ -131,9 +129,12 @@ pub(crate) enum ConstructionParentProvingError {
     /// The caller supplied a locally selected suite other than qualification.
     #[error("construction parent selected an unexpected Nova suite")]
     Suite,
-    /// Nova setup, folding, compression, or verification failed.
+    /// Nova folding or compression failed.
     #[error(transparent)]
     Nova(#[from] DirectNovaSessionError),
+    /// The separate verifier rejected the compressed proof.
+    #[error(transparent)]
+    Verify(#[from] VerifyError),
     /// The compressed proof differs from the frozen receipt wire length.
     #[error("construction parent proof length mismatch: expected {expected}, actual {actual}")]
     ProofLength { expected: usize, actual: usize },
@@ -157,14 +158,12 @@ impl UnverifiedConstructionParentProof {
     /// Recheck the exact initial state, step count, and final state.
     ///
     /// The separately loaded verifier is consumed and dropped before the
-    /// verified proof bytes become available to an output boundary.
+    /// verified proof bytes become available to an output boundary. Its type
+    /// already fixes the qualified suite.
     pub(crate) fn verify_with(
         self,
-        verifier: SelectedDirectNovaVerifier<CONSTRUCTION_RECURRENCE_STATE_ARITY>,
+        verifier: ConstructionParentVerifier,
     ) -> Result<VerifiedConstructionParentProof, ConstructionParentProvingError> {
-        if verifier.expected() != &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE {
-            return Err(ConstructionParentProvingError::Suite);
-        }
         let authenticated =
             verifier.verify_final(&self.initial_state, self.step_count, &self.proof)?;
         require_exact_final_state(&self.final_state, &authenticated)?;
@@ -259,7 +258,7 @@ pub fn prove_qualified_construction_parent(
     drop(prover_source);
     let prover = SelectedConstructionParentProver::from_artifact_reader(
         prover_artifact.reader(),
-        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+        &QUALIFIED,
         &QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT,
     )
     .map_err(
@@ -282,18 +281,18 @@ pub fn prove_qualified_construction_parent(
     })?;
     let mut verifier_artifact = PrivateArtifactSnapshot::copy_from(
         &mut verifier_source,
-        QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT.encoded_length(),
+        QUALIFIED_VERIFIER_ARTIFACT.encoded_length(),
     )
     .map_err(
         |source| QualifiedConstructionParentProvingError::SnapshotVerifierArtifact { source },
     )?;
     drop(verifier_source);
-    let verifier = load_qualified_construction_parent_verifier(verifier_artifact.reader())
-        .map_err(
-            |error| QualifiedConstructionParentProvingError::LoadVerifierArtifact {
+    let verifier =
+        ConstructionParentVerifier::load(verifier_artifact.reader()).map_err(|error| {
+            QualifiedConstructionParentProvingError::LoadVerifierArtifact {
                 detail: error.to_string(),
-            },
-        )?;
+            }
+        })?;
     drop(verifier_artifact);
 
     unverified
@@ -305,9 +304,9 @@ pub fn prove_qualified_construction_parent(
 }
 
 fn require_frozen_proof_length(proof: &[u8]) -> Result<(), ConstructionParentProvingError> {
-    if proof.len() != QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH {
+    if proof.len() != QUALIFIED_PROOF_LENGTH {
         return Err(ConstructionParentProvingError::ProofLength {
-            expected: QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
+            expected: QUALIFIED_PROOF_LENGTH,
             actual: proof.len(),
         });
     }
@@ -349,15 +348,15 @@ mod tests {
 
     #[test]
     fn one_shot_boundary_requires_the_frozen_proof_length() {
-        let short = vec![0; QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH - 1];
+        let short = vec![0; QUALIFIED_PROOF_LENGTH - 1];
         assert!(matches!(
             require_frozen_proof_length(&short),
             Err(ConstructionParentProvingError::ProofLength {
-                expected: QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
+                expected: QUALIFIED_PROOF_LENGTH,
                 actual
             }) if actual == short.len()
         ));
-        let exact = vec![0; QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH];
+        let exact = vec![0; QUALIFIED_PROOF_LENGTH];
         require_frozen_proof_length(&exact).expect("frozen proof length");
     }
 

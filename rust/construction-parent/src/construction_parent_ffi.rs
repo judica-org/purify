@@ -13,12 +13,11 @@ use crate::construction_parent_input::{
     ConstructionParentInputs, CONSTRUCTION_PARENT_LEAF_DESCRIPTOR_BYTES,
 };
 use crate::construction_parent_verifier::{
-    load_qualified_construction_parent_verifier, verify_construction_parent,
-    ConstructionParentVerifierError,
+    ConstructionParentVerifier, ConstructionParentVerifierError,
 };
-use crate::construction_profile::{CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES};
-use crate::nova_session::verifier_artifact::QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT;
-use crate::nova_session::{SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH};
+use crate::construction_profile::CONSTRUCTION_ROOT_BYTES;
+use crate::nova::QUALIFIED_VERIFIER_ARTIFACT;
+use crate::suite::QUALIFIED_PROOF_LENGTH;
 
 /// Stable values mirrored by the private construction-parent bridge header.
 #[repr(C)]
@@ -30,15 +29,15 @@ pub(crate) enum PurifyConstructionParentStatus {
     BufferTooSmall = 3,
     ArtifactOpenFailed = 4,
     ArtifactRejected = 5,
+    /// Reserved. No Rust path currently produces it, but the value is part of
+    /// the status contract mirrored by the bridge header.
+    #[allow(dead_code)]
     InternalError = 6,
     ArtifactSnapshotFailed = 7,
 }
 
 /// Opaque owner of the locally configured construction verifier.
-#[repr(C)]
-pub(crate) struct PurifyConstructionParentVerifier {
-    verifier: SelectedDirectNovaVerifier<CONSTRUCTION_RECURRENCE_STATE_ARITY>,
-}
+pub(crate) type PurifyConstructionParentVerifier = ConstructionParentVerifier;
 
 struct RootOutput {
     data: *mut u8,
@@ -101,7 +100,6 @@ unsafe fn read_array<const N: usize>(
 
 fn verifier_status(error: ConstructionParentVerifierError) -> PurifyConstructionParentStatus {
     match error {
-        ConstructionParentVerifierError::Suite => PurifyConstructionParentStatus::InternalError,
         ConstructionParentVerifierError::State(_)
         | ConstructionParentVerifierError::Nova(_)
         | ConstructionParentVerifierError::FinalManifest
@@ -154,17 +152,17 @@ pub(crate) unsafe extern "C" fn purify_construction_parent_verifier_load(
     };
     let mut artifact = match PrivateArtifactSnapshot::copy_from(
         &mut artifact_source,
-        QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT.encoded_length(),
+        QUALIFIED_VERIFIER_ARTIFACT.encoded_length(),
     ) {
         Ok(value) => value,
         Err(error) => return artifact_snapshot_status(&error),
     };
     drop(artifact_source);
-    let verifier = match load_qualified_construction_parent_verifier(artifact.reader()) {
+    let verifier = match ConstructionParentVerifier::load(artifact.reader()) {
         Ok(value) => value,
         Err(_) => return PurifyConstructionParentStatus::ArtifactRejected,
     };
-    let verifier = Box::into_raw(Box::new(PurifyConstructionParentVerifier { verifier }));
+    let verifier = Box::into_raw(Box::new(verifier));
     // SAFETY: output validation established one writable pointer, and the Box
     // is transferred exactly once to the caller.
     unsafe { verifier_output.write(verifier) };
@@ -203,9 +201,7 @@ unsafe fn verify_inner(
             Some(value) => value,
             None => return PurifyConstructionParentStatus::Malformed,
         };
-    if leaf_descriptors_length != expected_descriptors
-        || proof_length != QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
-    {
+    if leaf_descriptors_length != expected_descriptors || proof_length != QUALIFIED_PROOF_LENGTH {
         return PurifyConstructionParentStatus::Malformed;
     }
 
@@ -255,7 +251,7 @@ unsafe fn verify_inner(
         Ok(value) => value,
         Err(_) => return PurifyConstructionParentStatus::Malformed,
     };
-    let authenticated = match verify_construction_parent(&verifier.verifier, &inputs, proof) {
+    let authenticated = match verifier.authenticate(&inputs, proof) {
         Ok(value) => value,
         Err(error) => return verifier_status(error),
     };

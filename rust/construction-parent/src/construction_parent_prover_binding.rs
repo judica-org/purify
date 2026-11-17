@@ -22,10 +22,7 @@ use crate::construction_profile::{
     CONSTRUCTION_ROOT_STATE_ARITY,
 };
 use crate::construction_recurrence::ConstructionRecurrenceStateWitness;
-use crate::nova_construction_recurrence::{
-    ConstructionParentStep, QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
-};
-use crate::nova_session::NovaSessionStep;
+use crate::nova_construction_recurrence::ConstructionParentStep;
 use crate::{scalar_to_canonical, RelationError, Scalar};
 
 /// Failure while binding canonical Wit4 data to the qualified relation.
@@ -43,9 +40,6 @@ pub enum ConstructionParentWitnessBindingError {
     /// One step does not consume the state produced by its predecessor.
     #[error("construction parent witness state chain mismatch at step {step}")]
     StateChain { step: usize },
-    /// One step selects a relation other than the qualified relation.
-    #[error("construction parent witness relation mismatch at step {step}")]
-    Relation { step: usize },
     /// Constraint synthesis failed before producing a complete assignment.
     #[error("construction parent witness synthesis failed at step {step}: {stage}")]
     Synthesis { step: usize, stage: &'static str },
@@ -162,9 +156,6 @@ impl ConstructionParentProverFixture {
                 return Err(ConstructionParentWitnessBindingError::StateChain {
                     step: step_number,
                 });
-            }
-            if NovaSessionStep::relation_id(&step) != QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID {
-                return Err(ConstructionParentWitnessBindingError::Relation { step: step_number });
             }
 
             let output = synthesize_output(step_number, &step)?;

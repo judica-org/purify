@@ -34,9 +34,9 @@ use crate::nova_protocol_transcript::{
 };
 use crate::nova_secp::{allocate_encoded_point, DirectEncodedSecpPoint};
 use crate::nova_secp_scalar::{allocate_canonical_scalar, CanonicalSecpScalar};
-use crate::nova_session::NovaSessionStep;
 use crate::nova_sha256_transcript::{NovaByte, NovaTranscript};
 use crate::nova_types::DirectRelationId;
+use crate::session::NovaSessionStep;
 use crate::Scalar;
 
 const FIELD_BITS: usize = 256;
@@ -64,7 +64,6 @@ pub(crate) struct ConstructionParentStep {
     reduction: CandidateNormReductionProofWitness,
     proof: CandidateStepProofWitness,
     input_state: [Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
-    #[cfg(test)]
     relation_id: DirectRelationId,
 }
 
@@ -114,7 +113,6 @@ impl ConstructionParentStep {
             reduction,
             proof,
             input_state,
-            #[cfg(test)]
             relation_id: QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
         })
     }
@@ -123,9 +121,17 @@ impl ConstructionParentStep {
         &self.input_state
     }
 
-    /// Rebinds only the resource-gated qualification copy to the relation ID
-    /// streamed from its exact matrix. Production construction remains pinned
-    /// to the reviewed constant below.
+    /// The relation ID this step declares to a proving session.
+    ///
+    /// Every constructor declares the reviewed qualified constant. Only
+    /// resource-gated requalification replaces it, with the ID it streamed
+    /// from this exact matrix.
+    pub(crate) const fn declared_relation_id(&self) -> DirectRelationId {
+        self.relation_id
+    }
+
+    /// Rebinds a requalification copy to the relation ID streamed from its
+    /// exact matrix. Production code never calls this.
     #[cfg(test)]
     pub(crate) fn set_qualification_relation_id(&mut self, relation_id: DirectRelationId) {
         self.relation_id = relation_id;
@@ -207,14 +213,7 @@ impl StepCircuit<Scalar> for ConstructionParentStep {
 
 impl NovaSessionStep<CONSTRUCTION_RECURRENCE_STATE_ARITY> for ConstructionParentStep {
     fn relation_id(&self) -> DirectRelationId {
-        #[cfg(test)]
-        {
-            self.relation_id
-        }
-        #[cfg(not(test))]
-        {
-            QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID
-        }
+        self.declared_relation_id()
     }
 
     fn input_state(&self) -> &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY] {

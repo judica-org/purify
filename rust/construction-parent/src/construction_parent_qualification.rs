@@ -14,7 +14,7 @@ use crate::circuit_transcript::{
 };
 use crate::construction_parent_prover_binding::BoundConstructionParentWitness;
 use crate::construction_parent_prover_fixture::ConstructionParentProverFixture;
-use crate::construction_parent_verifier::load_qualified_construction_parent_verifier;
+use crate::construction_parent_verifier::ConstructionParentVerifier;
 use crate::construction_profile::{
     CONSTRUCTION_LEAF_GATE_COUNT, CONSTRUCTION_LEAF_NORM_LENGTH, CONSTRUCTION_LEAF_ROUNDS,
     CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
@@ -25,18 +25,17 @@ use crate::construction_recurrence::{
     validate_production_shape, ConstructionRecurrenceStateWitness,
 };
 use crate::fixed_serde::{NovaCompressedProofShape, NovaR1csDimensions};
+use crate::nova::Verifier;
 use crate::nova_construction_recurrence::{
     ConstructionParentStep, TestConstructionParentStep, QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
 };
 use crate::nova_relation_identity::direct_step_relation_shape;
-use crate::nova_session::{
-    NovaSessionStep, NovaSessionSuite, SelectedNovaProver, SelectedNovaSessionSuite,
-    QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
-    QUALIFIED_CONSTRUCTION_VERSIONS,
-};
 use crate::nova_types::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine};
 use crate::prover::ConstructionParentWitness;
 use crate::secp_native::{standard_generator, SecpEncodedPointWitness, SecpScalarWitness};
+use crate::session::setup::{NovaSessionSuite, SelectedNovaSessionSuite};
+use crate::session::{NovaSessionStep, SelectedNovaProver};
+use crate::suite::{QUALIFIED, QUALIFIED_PROOF_LENGTH};
 type ConstructionParentNovaSuite =
     SelectedNovaSessionSuite<CONSTRUCTION_RECURRENCE_STATE_ARITY, ConstructionParentStep>;
 const QUALIFIED_ACCEPTED_WIT4_SHA256: [u8; 32] = [
@@ -311,10 +310,7 @@ fn direct_construction_step_augmented_shape_matches_qualified_profile() {
     assert_eq!(augmented.secondary.b_terms, 736_338);
     assert_eq!(augmented.secondary.c_terms, 1_568_376);
     assert_eq!(verifier_payload_length, 3_206_736_424);
-    assert_eq!(
-        proof_shape.encoded_len(),
-        QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
-    );
+    assert_eq!(proof_shape.encoded_len(), QUALIFIED_PROOF_LENGTH);
     assert_eq!(proof_shape.sequence_count(), 152);
 }
 
@@ -599,10 +595,10 @@ fn native_profile_sha_parent_qualification_is_exact() {
         )
         .expect("unselected mixed qualification suite");
     let selected = unselected
-        .select_generated_for_qualification(QUALIFIED_CONSTRUCTION_VERSIONS)
+        .select_generated_for_qualification(QUALIFIED.parameters.versions)
         .expect("select generated mixed qualification suite");
     let metadata = selected.metadata();
-    let versions = QUALIFIED_CONSTRUCTION_VERSIONS.values();
+    let versions = QUALIFIED.parameters.versions;
     eprintln!(
         "sha_parent_qualification: setup_seconds={:.3}\n\
          payload_version={} statement_version={} manifest_version={} \
@@ -610,13 +606,13 @@ fn native_profile_sha_parent_qualification_is_exact() {
          public_parameter_digest={}\nsuite_id={}\nmetadata={metadata:#?}\n\
          expected_suite={:#?}",
         setup_started.elapsed().as_secs_f64(),
-        versions.0,
-        versions.1,
-        versions.2,
-        versions.3,
+        versions.payload,
+        versions.statement,
+        versions.manifest,
+        versions.native_decision,
         hex(metadata.relation_id.bytes()),
         hex(&metadata.public_parameter_digest),
-        hex(selected.expected().suite_id().bytes()),
+        hex(&selected.expected().suite_id),
         selected.expected(),
     );
 
@@ -669,17 +665,22 @@ fn native_profile_sha_parent_qualification_is_exact() {
 
     let mut artifact = std::fs::File::open(&artifact_path)
         .expect("open qualification verifier artifact for reload");
-    let loaded = crate::nova_session::SelectedNovaVerifier::<
-        CONSTRUCTION_RECURRENCE_STATE_ARITY,
-        ConstructionParentStep,
-    >::from_artifact_reader(&mut artifact, expected_suite, &descriptor)
-    .expect("reload qualification verifier artifact");
-    loaded
-        .verify_exact(&z0, step_count, &accepted_final, &accepted_proof)
-        .expect("reloaded verifier accepts qualification proof");
-    loaded
-        .verify_exact(&z0, step_count, &nondeciding_final, &nondeciding_proof)
-        .expect("reloaded verifier accepts nondeciding proof");
+    // The reload goes through the shipped verifier, which decodes the same
+    // key bytes under its uninhabited circuit marker.
+    let loaded = Verifier::load(&mut artifact, expected_suite, &descriptor)
+        .expect("reload qualification verifier artifact");
+    assert_eq!(
+        loaded
+            .verify_final(&z0, step_count, &accepted_proof)
+            .expect("reloaded verifier accepts qualification proof"),
+        accepted_final
+    );
+    assert_eq!(
+        loaded
+            .verify_final(&z0, step_count, &nondeciding_proof)
+            .expect("reloaded verifier accepts nondeciding proof"),
+        nondeciding_final
+    );
     write_new_qualification_output(&accepted_proof_path, &accepted_proof);
     write_new_qualification_output(&nondeciding_proof_path, &nondeciding_proof);
     eprintln!(
@@ -721,7 +722,7 @@ fn setup_only_qualification_persists_a_usable_prover() {
     let selected = NovaSessionSuite::<
         CONSTRUCTION_RECURRENCE_STATE_ARITY,
         ConstructionParentStep,
-    >::setup_exact(trusted_step, &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE)
+    >::setup_exact(trusted_step, &QUALIFIED)
     .expect("setup exact qualified construction parent prover");
     let setup_seconds = setup_started.elapsed().as_secs_f64();
 
@@ -764,7 +765,7 @@ fn setup_only_qualification_persists_a_usable_prover() {
         ConstructionParentStep,
     >::from_artifact_reader(
         &mut artifact,
-        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+        &QUALIFIED,
         &descriptor,
     )
     .expect("reload qualification prover artifact");
@@ -782,7 +783,7 @@ fn setup_only_qualification_persists_a_usable_prover() {
     let verification_started = std::time::Instant::now();
     let mut verifier_artifact = std::fs::File::open(&verifier_artifact_path)
         .expect("open qualified verifier artifact read-only");
-    let verifier = load_qualified_construction_parent_verifier(&mut verifier_artifact)
+    let verifier = ConstructionParentVerifier::load(&mut verifier_artifact)
         .expect("load qualified construction parent verifier");
     drop(verifier_artifact);
     let proof = unverified

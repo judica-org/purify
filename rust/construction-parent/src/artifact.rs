@@ -2,10 +2,8 @@
 //!
 //! Artifact users provide a frozen format and identity. The complete source
 //! is authenticated before header parsing or Serde, and every byte consumed
-//! during decoding is hashed again.
+//! during decoding is hashed again. This module only reads artifacts.
 
-#[cfg(any(test, feature = "prover"))]
-use std::io::Write;
 use std::io::{self, Read, Seek, SeekFrom};
 
 use sha2::{Digest, Sha256};
@@ -13,42 +11,20 @@ use thiserror::Error;
 
 pub(crate) const ARTIFACT_HEADER_LENGTH: usize = 72;
 
-const VERSION_OFFSET: usize = 16;
-const SUITE_ID_OFFSET: usize = 20;
-const ARITY_OFFSET: usize = 52;
-const COMPRESSED_LENGTH_OFFSET: usize = 56;
-const DECODED_LENGTH_OFFSET: usize = 64;
-#[cfg(any(test, feature = "prover"))]
-const ZSTD_COMPRESSION_LEVEL: i32 = 3;
+pub(crate) const VERSION_OFFSET: usize = 16;
+pub(crate) const SUITE_ID_OFFSET: usize = 20;
+pub(crate) const ARITY_OFFSET: usize = 52;
+pub(crate) const COMPRESSED_LENGTH_OFFSET: usize = 56;
+pub(crate) const DECODED_LENGTH_OFFSET: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ArtifactFormat {
-    magic: [u8; 16],
-    encoding_version: u32,
-    digest_tag: &'static [u8],
-    window_log: u32,
-    max_compressed_payload_length: usize,
-    max_decoded_payload_length: usize,
-}
-
-impl ArtifactFormat {
-    pub(crate) const fn new(
-        magic: [u8; 16],
-        encoding_version: u32,
-        digest_tag: &'static [u8],
-        window_log: u32,
-        max_compressed_payload_length: usize,
-        max_decoded_payload_length: usize,
-    ) -> Self {
-        Self {
-            magic,
-            encoding_version,
-            digest_tag,
-            window_log,
-            max_compressed_payload_length,
-            max_decoded_payload_length,
-        }
-    }
+    pub(crate) magic: [u8; 16],
+    pub(crate) encoding_version: u32,
+    pub(crate) digest_tag: &'static [u8],
+    pub(crate) window_log: u32,
+    pub(crate) max_compressed_payload_length: usize,
+    pub(crate) max_decoded_payload_length: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,26 +60,10 @@ impl ArtifactIdentity {
     pub(crate) const fn digest(self) -> [u8; 32] {
         self.digest
     }
-
-    #[cfg(test)]
-    pub(crate) fn for_test_bytes(
-        format: &ArtifactFormat,
-        encoded: &[u8],
-        decoded_payload_length: u64,
-    ) -> Self {
-        Self::new(
-            encoded.len() as u64,
-            decoded_payload_length,
-            tagged_artifact_digest(format, encoded),
-        )
-    }
 }
 
 #[derive(Debug, Error)]
 pub(crate) enum ArtifactCodecError {
-    #[cfg(any(test, feature = "prover"))]
-    #[error("direct Nova artifact destination is not empty")]
-    DestinationNotEmpty,
     #[error("direct Nova artifact length is invalid")]
     Length,
     #[error("direct Nova artifact digest mismatch")]
@@ -112,60 +72,26 @@ pub(crate) enum ArtifactCodecError {
     Header(&'static str),
     #[error("direct Nova artifact I/O failed: {0}")]
     Io(#[from] io::Error),
-    #[cfg(any(test, feature = "prover"))]
-    #[error("direct Nova artifact encoding failed: {0}")]
-    Encode(#[from] bincode::error::EncodeError),
     #[error("direct Nova artifact decoding failed: {0}")]
     Decode(#[from] bincode::error::DecodeError),
 }
 
+/// Fixed 72-byte artifact header: magic, big-endian encoding version, suite
+/// ID, big-endian state arity, and big-endian compressed and decoded payload
+/// lengths.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ArtifactHeader {
-    suite_id: [u8; 32],
-    arity: u32,
-    compressed_payload_length: u64,
-    decoded_payload_length: u64,
+pub(crate) struct ArtifactHeader {
+    pub(crate) suite_id: [u8; 32],
+    pub(crate) arity: u32,
+    pub(crate) compressed_payload_length: u64,
+    pub(crate) decoded_payload_length: u64,
 }
 
 impl ArtifactHeader {
-    #[cfg(any(test, feature = "prover"))]
-    fn new(
+    pub(crate) fn decode(
         format: &ArtifactFormat,
-        suite_id: [u8; 32],
-        arity: usize,
-        compressed_payload_length: u64,
-        decoded_payload_length: u64,
+        encoded: &[u8],
     ) -> Result<Self, ArtifactCodecError> {
-        let arity = u32::try_from(arity).map_err(|_| ArtifactCodecError::Header("state arity"))?;
-        if compressed_payload_length > format.max_compressed_payload_length as u64
-            || decoded_payload_length > format.max_decoded_payload_length as u64
-        {
-            return Err(ArtifactCodecError::Length);
-        }
-        Ok(Self {
-            suite_id,
-            arity,
-            compressed_payload_length,
-            decoded_payload_length,
-        })
-    }
-
-    #[cfg(any(test, feature = "prover"))]
-    fn encode(self, format: &ArtifactFormat) -> [u8; ARTIFACT_HEADER_LENGTH] {
-        let mut encoded = [0u8; ARTIFACT_HEADER_LENGTH];
-        encoded[..VERSION_OFFSET].copy_from_slice(&format.magic);
-        encoded[VERSION_OFFSET..SUITE_ID_OFFSET]
-            .copy_from_slice(&format.encoding_version.to_be_bytes());
-        encoded[SUITE_ID_OFFSET..ARITY_OFFSET].copy_from_slice(&self.suite_id);
-        encoded[ARITY_OFFSET..COMPRESSED_LENGTH_OFFSET].copy_from_slice(&self.arity.to_be_bytes());
-        encoded[COMPRESSED_LENGTH_OFFSET..DECODED_LENGTH_OFFSET]
-            .copy_from_slice(&self.compressed_payload_length.to_be_bytes());
-        encoded[DECODED_LENGTH_OFFSET..]
-            .copy_from_slice(&self.decoded_payload_length.to_be_bytes());
-        encoded
-    }
-
-    fn decode(format: &ArtifactFormat, encoded: &[u8]) -> Result<Self, ArtifactCodecError> {
         if encoded.len() < ARTIFACT_HEADER_LENGTH {
             return Err(ArtifactCodecError::Length);
         }
@@ -186,82 +112,6 @@ impl ArtifactHeader {
             decoded_payload_length: read_u64(encoded, DECODED_LENGTH_OFFSET),
         })
     }
-}
-
-#[cfg(any(test, feature = "prover"))]
-pub(crate) fn write_artifact_payload<T, W>(
-    destination: &mut W,
-    format: &ArtifactFormat,
-    suite_id: [u8; 32],
-    arity: usize,
-    payload: &T,
-) -> Result<ArtifactIdentity, ArtifactCodecError>
-where
-    T: serde::Serialize,
-    W: Read + Write + Seek,
-{
-    let initial_position = destination.stream_position()?;
-    let initial_length = destination.seek(SeekFrom::End(0))?;
-    if initial_position != 0 || initial_length != 0 {
-        return Err(ArtifactCodecError::DestinationNotEmpty);
-    }
-    destination.seek(SeekFrom::Start(0))?;
-    destination.write_all(&[0u8; ARTIFACT_HEADER_LENGTH])?;
-
-    let (decoded_payload_length, compressed_payload_length) = {
-        let bounded = PayloadWriter::new(destination, format.max_compressed_payload_length);
-        let mut encoder = zstd::stream::write::Encoder::new(bounded, ZSTD_COMPRESSION_LEVEL)?;
-        encoder.include_checksum(true)?;
-        encoder.window_log(format.window_log)?;
-        let decoded_payload_length = {
-            let mut decoded = PayloadWriter::new(&mut encoder, format.max_decoded_payload_length);
-            let decoded_payload_length = bincode::serde::encode_into_std_write(
-                payload,
-                &mut decoded,
-                bincode::config::legacy()
-                    .with_little_endian()
-                    .with_fixed_int_encoding(),
-            )?;
-            if decoded_payload_length != decoded.written() {
-                return Err(ArtifactCodecError::Length);
-            }
-            decoded_payload_length
-        };
-        let bounded = encoder.finish()?;
-        (decoded_payload_length, bounded.written())
-    };
-    let compressed_payload_length =
-        u64::try_from(compressed_payload_length).map_err(|_| ArtifactCodecError::Length)?;
-    let decoded_payload_length =
-        u64::try_from(decoded_payload_length).map_err(|_| ArtifactCodecError::Length)?;
-    let header = ArtifactHeader::new(
-        format,
-        suite_id,
-        arity,
-        compressed_payload_length,
-        decoded_payload_length,
-    )?;
-    let encoded_length = (ARTIFACT_HEADER_LENGTH as u64)
-        .checked_add(compressed_payload_length)
-        .ok_or(ArtifactCodecError::Length)?;
-    if destination.stream_position()? != encoded_length {
-        return Err(ArtifactCodecError::Length);
-    }
-
-    destination.seek(SeekFrom::Start(0))?;
-    destination.write_all(&header.encode(format))?;
-    destination.flush()?;
-    if destination.seek(SeekFrom::End(0))? != encoded_length {
-        return Err(ArtifactCodecError::Length);
-    }
-    destination.seek(SeekFrom::Start(0))?;
-    let digest = tagged_artifact_digest_reader(format, destination, encoded_length)?;
-    destination.seek(SeekFrom::Start(encoded_length))?;
-    Ok(ArtifactIdentity::new(
-        encoded_length,
-        decoded_payload_length,
-        digest,
-    ))
 }
 
 pub(crate) fn read_artifact_payload<T, R, const MAX_DECODED_PAYLOAD_LENGTH: usize>(
@@ -404,48 +254,6 @@ fn tagged_artifact_hasher(tag: &[u8]) -> Sha256 {
     digest
 }
 
-#[cfg(any(test, feature = "prover"))]
-struct PayloadWriter<'a, W> {
-    destination: &'a mut W,
-    remaining: usize,
-    written: usize,
-}
-
-#[cfg(any(test, feature = "prover"))]
-impl<'a, W> PayloadWriter<'a, W> {
-    fn new(destination: &'a mut W, limit: usize) -> Self {
-        Self {
-            destination,
-            remaining: limit,
-            written: 0,
-        }
-    }
-
-    fn written(&self) -> usize {
-        self.written
-    }
-}
-
-#[cfg(any(test, feature = "prover"))]
-impl<W: Write> Write for PayloadWriter<'_, W> {
-    fn write(&mut self, buffer: &[u8]) -> Result<usize, io::Error> {
-        if buffer.len() > self.remaining {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "direct Nova artifact exceeds payload limit",
-            ));
-        }
-        let written = self.destination.write(buffer)?;
-        self.remaining -= written;
-        self.written += written;
-        Ok(written)
-    }
-
-    fn flush(&mut self) -> Result<(), io::Error> {
-        self.destination.flush()
-    }
-}
-
 struct ArtifactDigestingReader<R> {
     source: R,
     digest: Sha256,
@@ -472,14 +280,7 @@ impl<R: Read> Read for ArtifactDigestingReader<R> {
     }
 }
 
-#[cfg(test)]
-fn tagged_artifact_digest(format: &ArtifactFormat, encoded: &[u8]) -> [u8; 32] {
-    let mut digest = tagged_artifact_hasher(format.digest_tag);
-    digest.update(encoded);
-    digest.finalize().into()
-}
-
-fn tagged_artifact_digest_reader<R: Read>(
+pub(crate) fn tagged_artifact_digest_reader<R: Read>(
     format: &ArtifactFormat,
     source: &mut R,
     encoded_length: u64,
@@ -502,18 +303,21 @@ fn tagged_artifact_digest_reader<R: Read>(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use serde::{Deserialize, Serialize};
 
     use super::*;
 
-    const TEST_FORMAT: ArtifactFormat = ArtifactFormat::new(
-        *b"Purify/Nova/VK2\0",
-        2,
-        b"Purify/Accountable/DirectNovaVerifierArtifact/v2",
-        23,
-        2_000_000_000,
-        4_000_000_000,
-    );
+    const TEST_FORMAT: ArtifactFormat = ArtifactFormat {
+        magic: *b"Purify/Nova/VK2\0",
+        encoding_version: 2,
+        digest_tag: b"Purify/Accountable/DirectNovaVerifierArtifact/v2",
+        window_log: 23,
+        max_compressed_payload_length: 2_000_000_000,
+        max_decoded_payload_length: 4_000_000_000,
+    };
+    const ZSTD_COMPRESSION_LEVEL: i32 = 3;
     // Generated by the pre-refactor verifier artifact codec at e410181.
     const PRE_REFACTOR_GOLDEN_ARTIFACT: [u8; 110] = [
         80, 117, 114, 105, 102, 121, 47, 78, 111, 118, 97, 47, 86, 75, 50, 0, 0, 0, 0, 2, 90, 90,
@@ -522,10 +326,14 @@ mod tests {
         40, 181, 47, 253, 4, 104, 205, 0, 0, 144, 5, 0, 2, 0, 3, 0, 5, 0, 7, 0, 11, 0, 0, 0, 0, 0,
         0, 0, 5, 84, 2, 0, 3, 1, 78, 193, 86, 178,
     ];
-    const PRE_REFACTOR_GOLDEN_DIGEST: [u8; 32] = [
-        104, 10, 165, 116, 156, 202, 179, 68, 244, 27, 130, 58, 194, 118, 217, 58, 198, 33, 161,
-        187, 63, 105, 97, 222, 163, 209, 73, 38, 109, 214, 154, 235,
-    ];
+    const PRE_REFACTOR_GOLDEN_IDENTITY: ArtifactIdentity = ArtifactIdentity::new(
+        110,
+        48,
+        [
+            104, 10, 165, 116, 156, 202, 179, 68, 244, 27, 130, 58, 194, 118, 217, 58, 198, 33,
+            161, 187, 63, 105, 97, 222, 163, 209, 73, 38, 109, 214, 154, 235,
+        ],
+    );
 
     #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
     struct TestPayload {
@@ -568,104 +376,103 @@ mod tests {
         )
     }
 
-    #[test]
-    fn artifact_header_is_exact_and_big_endian() {
-        let suite_id = [0xa5; 32];
-        let header = ArtifactHeader::new(&TEST_FORMAT, suite_id, 20, 0x0102_0304, 0x0506_0708)
-            .expect("valid artifact header");
-        let encoded = header.encode(&TEST_FORMAT);
-        assert_eq!(encoded.len(), 72);
-        assert_eq!(&encoded[..16], b"Purify/Nova/VK2\0");
-        assert_eq!(&encoded[16..20], &[0, 0, 0, 2]);
-        assert_eq!(&encoded[20..52], &suite_id);
-        assert_eq!(&encoded[52..56], &[0, 0, 0, 20]);
-        assert_eq!(&encoded[56..64], &[0, 0, 0, 0, 1, 2, 3, 4]);
-        assert_eq!(&encoded[64..72], &[0, 0, 0, 0, 5, 6, 7, 8]);
-        assert_eq!(
-            ArtifactHeader::decode(&TEST_FORMAT, &encoded).expect("decode exact header"),
-            header
-        );
-        assert!(ArtifactHeader::new(
-            &TEST_FORMAT,
-            suite_id,
-            20,
-            TEST_FORMAT.max_compressed_payload_length as u64 + 1,
-            1,
-        )
-        .is_err());
-        assert!(ArtifactHeader::new(
-            &TEST_FORMAT,
-            suite_id,
-            20,
-            1,
-            TEST_FORMAT.max_decoded_payload_length as u64 + 1,
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn payload_writer_rejects_before_crossing_limit() {
-        let mut encoded = Vec::new();
-        {
-            let mut writer = PayloadWriter::new(&mut encoded, 4);
-            writer.write_all(&[1, 2, 3]).expect("write within limit");
-            let error = writer
-                .write_all(&[4, 5])
-                .expect_err("reject write crossing limit");
-            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-            assert_eq!(writer.destination.as_slice(), [1, 2, 3]);
-            assert_eq!(writer.written(), 3);
-            writer.write_all(&[4]).expect("write exactly to limit");
-            assert_eq!(writer.written(), 4);
-        }
-        assert_eq!(encoded, [1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn artifact_roundtrip_is_deterministic_and_authenticated() {
-        let payload = TestPayload {
-            values: vec![2, 3, 5, 7, 11],
-        };
-        let suite_id = [0x5a; 32];
-        let mut first = io::Cursor::new(Vec::new());
-        let first_identity =
-            write_artifact_payload(&mut first, &TEST_FORMAT, suite_id, 20, &payload)
-                .expect("write first artifact");
-        let first = first.into_inner();
-        assert_eq!(first_identity.encoded_length(), first.len() as u64);
-        assert_eq!(first.as_slice(), PRE_REFACTOR_GOLDEN_ARTIFACT);
-        assert_eq!(first_identity.digest(), PRE_REFACTOR_GOLDEN_DIGEST);
-
-        let mut second = io::Cursor::new(Vec::new());
-        let second_identity =
-            write_artifact_payload(&mut second, &TEST_FORMAT, suite_id, 20, &payload)
-                .expect("write second artifact");
-        assert_eq!(first_identity, second_identity);
-        assert_eq!(first, second.into_inner());
-
-        let mut reader = io::Cursor::new(first.as_slice());
-        let decoded = read_artifact_payload::<TestPayload, _, 4_000_000_000>(
+    fn read_golden(
+        encoded: &[u8],
+        suite_id: [u8; 32],
+        arity: usize,
+        identity: ArtifactIdentity,
+    ) -> Result<TestPayload, ArtifactCodecError> {
+        let mut reader = io::Cursor::new(encoded);
+        read_artifact_payload::<TestPayload, _, 4_000_000_000>(
             &mut reader,
             &TEST_FORMAT,
             suite_id,
-            20,
-            first_identity,
+            arity,
+            identity,
         )
-        .expect("read authenticated artifact");
-        assert_eq!(decoded, payload);
+    }
 
-        let mut corrupted = first;
-        corrupted[ARTIFACT_HEADER_LENGTH] ^= 1;
-        let mut reader = io::Cursor::new(corrupted);
+    #[test]
+    fn golden_artifact_header_is_exact_and_big_endian() {
+        let header = ArtifactHeader::decode(&TEST_FORMAT, &PRE_REFACTOR_GOLDEN_ARTIFACT[..72])
+            .expect("decode golden header");
+        assert_eq!(
+            header,
+            ArtifactHeader {
+                suite_id: [0x5a; 32],
+                arity: 20,
+                compressed_payload_length: 38,
+                decoded_payload_length: 48,
+            }
+        );
         assert!(matches!(
-            read_artifact_payload::<TestPayload, _, 4_000_000_000>(
-                &mut reader,
-                &TEST_FORMAT,
+            ArtifactHeader::decode(&TEST_FORMAT, &PRE_REFACTOR_GOLDEN_ARTIFACT[..71]),
+            Err(ArtifactCodecError::Length)
+        ));
+    }
+
+    #[test]
+    fn golden_artifact_reads_only_under_its_exact_identity() {
+        let suite_id = [0x5a; 32];
+        assert_eq!(
+            read_golden(
+                &PRE_REFACTOR_GOLDEN_ARTIFACT,
                 suite_id,
                 20,
-                first_identity,
-            ),
+                PRE_REFACTOR_GOLDEN_IDENTITY
+            )
+            .expect("read authenticated golden artifact"),
+            TestPayload {
+                values: vec![2, 3, 5, 7, 11],
+            }
+        );
+
+        let mut corrupted = PRE_REFACTOR_GOLDEN_ARTIFACT;
+        corrupted[ARTIFACT_HEADER_LENGTH] ^= 1;
+        assert!(matches!(
+            read_golden(&corrupted, suite_id, 20, PRE_REFACTOR_GOLDEN_IDENTITY),
             Err(ArtifactCodecError::Digest)
+        ));
+        assert!(matches!(
+            read_golden(
+                &PRE_REFACTOR_GOLDEN_ARTIFACT,
+                [0xa5; 32],
+                20,
+                PRE_REFACTOR_GOLDEN_IDENTITY
+            ),
+            Err(ArtifactCodecError::Header("suite ID"))
+        ));
+        assert!(matches!(
+            read_golden(
+                &PRE_REFACTOR_GOLDEN_ARTIFACT,
+                suite_id,
+                21,
+                PRE_REFACTOR_GOLDEN_IDENTITY
+            ),
+            Err(ArtifactCodecError::Header("state arity"))
+        ));
+        assert!(matches!(
+            read_golden(
+                &PRE_REFACTOR_GOLDEN_ARTIFACT[..109],
+                suite_id,
+                20,
+                PRE_REFACTOR_GOLDEN_IDENTITY
+            ),
+            Err(ArtifactCodecError::Length)
+        ));
+        let wrong_decoded_length = ArtifactIdentity::new(
+            PRE_REFACTOR_GOLDEN_IDENTITY.encoded_length(),
+            PRE_REFACTOR_GOLDEN_IDENTITY.decoded_payload_length() + 1,
+            PRE_REFACTOR_GOLDEN_IDENTITY.digest(),
+        );
+        assert!(matches!(
+            read_golden(
+                &PRE_REFACTOR_GOLDEN_ARTIFACT,
+                suite_id,
+                20,
+                wrong_decoded_length
+            ),
+            Err(ArtifactCodecError::Header("decoded payload length"))
         ));
     }
 

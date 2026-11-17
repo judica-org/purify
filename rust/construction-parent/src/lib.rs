@@ -9,7 +9,12 @@ use ff::PrimeField;
 use nova_snark::{provider::Secq256k1Sha256Engine, traits::Engine};
 use thiserror::Error;
 
+// Authenticated framing shared by verifier and prover deployment artifacts.
+mod artifact;
 mod artifact_snapshot;
+// Qualification output only; production code never writes an artifact.
+#[cfg(test)]
+mod artifact_writer;
 #[cfg(any(test, feature = "prover"))]
 mod candidate;
 #[cfg(any(test, feature = "prover"))]
@@ -35,8 +40,8 @@ mod construction_parent_ffi;
 mod construction_parent_verifier;
 // This is an internal proof-codec foundation, not a receipt parser.
 mod fixed_serde;
-// This is an internal fixed-template integration layer, not a receipt API.
-mod nova_session;
+// Verification-only Nova state for one locally pinned suite.
+mod nova;
 mod nova_types;
 // Production candidate accumulation constraints for qualification.
 #[cfg(any(test, feature = "prover"))]
@@ -77,7 +82,12 @@ mod opening_generators;
 pub mod prover;
 mod secp_constants;
 mod secp_native;
+// Proving sessions over authenticated prover state.
+#[cfg(any(test, feature = "prover"))]
+mod session;
 mod sha256_transcript;
+// The one locally pinned proof-suite profile.
+mod suite;
 
 pub(crate) type Scalar = <Secq256k1Sha256Engine as Engine>::Scalar;
 

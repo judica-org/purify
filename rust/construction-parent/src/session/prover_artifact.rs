@@ -5,35 +5,33 @@
 //! bytes. It never carries a verifier key, suite metadata, proof shape, or
 //! cached padded R1CS shape.
 
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, Read, Seek};
 use std::sync::Mutex;
 
-use ff::PrimeField;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::artifact_codec::{
-    read_artifact_payload, write_artifact_payload, ArtifactCodecError, ArtifactFormat,
-    ArtifactIdentity,
-};
 use super::{
-    direct_nova_thread_pool, DirectNovaSessionError, DirectNovaSuiteMetadata,
-    ExpectedDirectNovaSuite, NovaProver, NovaProverKey, NovaPublicParams, NovaSessionStep,
-    SelectedNovaProver,
+    DirectNovaSessionError, DirectNovaSuiteMetadata, NovaProver, NovaProverKey, NovaPublicParams,
+    NovaSessionStep, SelectedNovaProver,
 };
+use crate::artifact::{
+    read_artifact_payload, ArtifactCodecError, ArtifactFormat, ArtifactIdentity,
+};
+use crate::nova::one_thread_pool;
 use crate::nova_types::DirectRelationId;
+use crate::suite::Suite;
 
-const ZSTD_WINDOW_LOG: u32 = 23;
 const MAX_COMPRESSED_PAYLOAD_LENGTH: usize = 1_000_000_000;
 const MAX_DECODED_PAYLOAD_LENGTH: usize = 4_000_000_000;
-const PROVER_ARTIFACT_FORMAT: ArtifactFormat = ArtifactFormat::new(
-    *b"Purify/Nova/PK1\0",
-    1,
-    b"Purify/Accountable/DirectNovaProverArtifact/v1",
-    ZSTD_WINDOW_LOG,
-    MAX_COMPRESSED_PAYLOAD_LENGTH,
-    MAX_DECODED_PAYLOAD_LENGTH,
-);
+const PROVER_ARTIFACT_FORMAT: ArtifactFormat = ArtifactFormat {
+    magic: *b"Purify/Nova/PK1\0",
+    encoding_version: 1,
+    digest_tag: b"Purify/Accountable/DirectNovaProverArtifact/v1",
+    window_log: 23,
+    max_compressed_payload_length: MAX_COMPRESSED_PAYLOAD_LENGTH,
+    max_decoded_payload_length: MAX_DECODED_PAYLOAD_LENGTH,
+};
 
 /// Public parameters and the compression prover key are the entire payload.
 ///
@@ -46,60 +44,14 @@ struct NovaProverArtifactPayload<C: NovaSessionStep<ARITY>, const ARITY: usize> 
     prover_key: NovaProverKey<C>,
 }
 
-/// One reviewed byte identity for a selected local prover artifact.
-///
-/// This identity is deliberately distinct from the semantic suite ID. No
-/// file-derived or caller-selected identity can reach production loading.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ExpectedDirectNovaProverArtifact {
-    identity: ArtifactIdentity,
-}
-
-impl ExpectedDirectNovaProverArtifact {
-    pub(crate) const fn new(
-        encoded_length: u64,
-        decoded_payload_length: u64,
-        digest: [u8; 32],
-    ) -> Self {
-        Self {
-            identity: ArtifactIdentity::new(encoded_length, decoded_payload_length, digest),
-        }
-    }
-
-    pub(crate) const fn encoded_length(self) -> u64 {
-        self.identity.encoded_length()
-    }
-
-    pub(crate) const fn decoded_payload_length(self) -> u64 {
-        self.identity.decoded_payload_length()
-    }
-
-    pub(crate) const fn digest(self) -> [u8; 32] {
-        self.identity.digest()
-    }
-
-    #[cfg(test)]
-    fn for_test_bytes(encoded: &[u8], decoded_payload_length: u64) -> Self {
-        Self {
-            identity: ArtifactIdentity::for_test_bytes(
-                &PROVER_ARTIFACT_FORMAT,
-                encoded,
-                decoded_payload_length,
-            ),
-        }
-    }
-
-    const fn identity(self) -> ArtifactIdentity {
-        self.identity
-    }
-}
-
 /// Exact prover state emitted by setup-only qualification.
 ///
+/// This byte identity is deliberately distinct from the semantic suite ID.
+/// No file-derived or caller-selected identity can reach production loading.
 /// The ordinary artifact SHA-256 is
 /// `cd4bece27897e8634e837a4acb85ed091f2175df62d8c38e65497ef07066f816`.
-pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT: ExpectedDirectNovaProverArtifact =
-    ExpectedDirectNovaProverArtifact::new(
+pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT: ArtifactIdentity =
+    ArtifactIdentity::new(
         693_582_375,
         3_022_457_782,
         [
@@ -109,11 +61,9 @@ pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT: ExpectedDirectNo
         ],
     );
 
-/// Failure while writing or loading a selected prover artifact.
+/// Failure while loading a selected prover artifact.
 #[derive(Debug, Error)]
 pub(crate) enum DirectNovaProverArtifactError {
-    #[error("direct Nova prover artifact destination is not empty")]
-    DestinationNotEmpty,
     #[error("direct Nova prover artifact length is invalid")]
     Length,
     #[error("direct Nova prover artifact digest mismatch")]
@@ -122,8 +72,6 @@ pub(crate) enum DirectNovaProverArtifactError {
     Header(&'static str),
     #[error("direct Nova prover artifact I/O failed: {0}")]
     Io(#[from] io::Error),
-    #[error("direct Nova prover artifact encoding failed: {0}")]
-    Encode(#[from] bincode::error::EncodeError),
     #[error("direct Nova prover artifact decoding failed: {0}")]
     Decode(#[from] bincode::error::DecodeError),
     #[error(transparent)]
@@ -133,62 +81,16 @@ pub(crate) enum DirectNovaProverArtifactError {
 impl From<ArtifactCodecError> for DirectNovaProverArtifactError {
     fn from(error: ArtifactCodecError) -> Self {
         match error {
-            ArtifactCodecError::DestinationNotEmpty => Self::DestinationNotEmpty,
             ArtifactCodecError::Length => Self::Length,
             ArtifactCodecError::Digest => Self::Digest,
             ArtifactCodecError::Header(context) => Self::Header(context),
             ArtifactCodecError::Io(error) => Self::Io(error),
-            ArtifactCodecError::Encode(error) => Self::Encode(error),
             ArtifactCodecError::Decode(error) => Self::Decode(error),
         }
     }
 }
 
 impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaProver<ARITY, C> {
-    /// Consume and stream this selected prover into a new empty destination.
-    ///
-    /// Consuming the prover ensures qualification must reload the exact
-    /// persisted state before using it. The returned descriptor is setup
-    /// output and must be reviewed and compiled into the production tool.
-    pub(crate) fn write_artifact<W>(
-        self,
-        destination: &mut W,
-    ) -> Result<ExpectedDirectNovaProverArtifact, DirectNovaProverArtifactError>
-    where
-        W: Read + Write + Seek,
-    {
-        let expected = self.expected;
-        let NovaProver {
-            public_params,
-            prover_key,
-            proof_shape: _,
-            pool: _,
-            operation: _,
-        } = self.inner;
-        let payload = NovaProverArtifactPayload::<C, ARITY> {
-            public_params,
-            prover_key,
-        };
-        let identity = write_artifact_payload(
-            destination,
-            &PROVER_ARTIFACT_FORMAT,
-            *expected.suite_id().bytes(),
-            ARITY,
-            &payload,
-        )?;
-        Ok(ExpectedDirectNovaProverArtifact { identity })
-    }
-
-    /// Load one immutable, locally authenticated artifact byte slice.
-    pub(crate) fn from_artifact(
-        artifact: &[u8],
-        expected_suite: &'static ExpectedDirectNovaSuite,
-        expected_artifact: &ExpectedDirectNovaProverArtifact,
-    ) -> Result<Self, DirectNovaProverArtifactError> {
-        let mut source = io::Cursor::new(artifact);
-        Self::from_artifact_reader(&mut source, expected_suite, expected_artifact)
-    }
-
     /// Load a selected prover from its complete authenticated byte source.
     ///
     /// The complete file is hashed before header parsing or Serde and every
@@ -196,13 +98,15 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaProver<ARITY, C>
     /// as an immutable read-only snapshot for both passes.
     pub(crate) fn from_artifact_reader<R>(
         source: &mut R,
-        expected_suite: &'static ExpectedDirectNovaSuite,
-        expected_artifact: &ExpectedDirectNovaProverArtifact,
+        expected_suite: &'static Suite,
+        expected_artifact: &ArtifactIdentity,
     ) -> Result<Self, DirectNovaProverArtifactError>
     where
         R: Read + Seek,
     {
-        let (_, proof_shape) = expected_suite.local_verifier_components::<ARITY>()?;
+        let proof_shape = expected_suite
+            .proof_shape()
+            .map_err(DirectNovaSessionError::from)?;
         let payload = read_artifact_payload::<
             NovaProverArtifactPayload<C, ARITY>,
             _,
@@ -210,53 +114,31 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaProver<ARITY, C>
         >(
             source,
             &PROVER_ARTIFACT_FORMAT,
-            *expected_suite.suite_id().bytes(),
+            expected_suite.suite_id,
             ARITY,
-            expected_artifact.identity(),
+            *expected_artifact,
         )?;
 
-        validate_public_parameters::<ARITY, C>(
+        // Public parameters do not carry a relation ID, so the selected
+        // profile's ID is recorded as declared and only the measured digest
+        // and dimensions are compared.
+        DirectNovaSuiteMetadata::measure::<ARITY, C>(
+            DirectRelationId::from_frozen_bytes(expected_suite.parameters.relation_id),
             &payload.public_params,
-            expected_suite,
             &proof_shape,
-        )?;
+        )?
+        .validate_parameters::<ARITY>(expected_suite)?;
         Ok(Self {
             expected: expected_suite,
             inner: NovaProver {
                 public_params: payload.public_params,
                 prover_key: payload.prover_key,
                 proof_shape,
-                pool: direct_nova_thread_pool()?,
+                pool: one_thread_pool().map_err(DirectNovaSessionError::Setup)?,
                 operation: Mutex::new(()),
             },
         })
     }
-}
-
-fn validate_public_parameters<const ARITY: usize, C: NovaSessionStep<ARITY>>(
-    public_params: &NovaPublicParams<C>,
-    expected_suite: &ExpectedDirectNovaSuite,
-    proof_shape: &crate::fixed_serde::NovaCompressedProofShape,
-) -> Result<(), DirectNovaSessionError> {
-    let digest: [u8; 32] = public_params
-        .digest()
-        .to_repr()
-        .as_ref()
-        .try_into()
-        .map_err(|_| DirectNovaSessionError::Setup("public-parameter digest width"))?;
-    let (primary_constraints, secondary_constraints) = public_params.num_constraints();
-    let (primary_variables, secondary_variables) = public_params.num_variables();
-    let metadata = DirectNovaSuiteMetadata {
-        relation_id: DirectRelationId::from_frozen_bytes(expected_suite.relation_id),
-        public_parameter_digest: digest,
-        primary_constraints,
-        secondary_constraints,
-        primary_variables,
-        secondary_variables,
-        proof_length: proof_shape.encoded_len(),
-        codec_sequence_count: proof_shape.sequence_count(),
-    };
-    expected_suite.validate::<ARITY>(&metadata, proof_shape)
 }
 
 #[cfg(test)]
@@ -266,12 +148,58 @@ mod tests {
     use ff::Field;
     use nova_snark::frontend::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
 
+    use std::io::Write;
+
     use super::*;
-    use crate::nova_session::{
-        ConstructionManifestVersion, ConstructionNativeDecisionVersion, ConstructionPayloadVersion,
-        ConstructionStatementVersion, DirectNovaConstructionVersions, NovaSessionSuite,
-    };
+    use crate::artifact_writer::{identity_of_bytes, write_artifact_payload, ArtifactWriteError};
+    use crate::session::setup::NovaSessionSuite;
+    use crate::suite::ConstructionVersions;
     use crate::Scalar;
+
+    impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaProver<ARITY, C> {
+        /// Consume and stream this selected prover into a new empty destination.
+        ///
+        /// Consuming the prover ensures qualification must reload the exact
+        /// persisted state before using it. The returned identity is setup
+        /// output and must be reviewed and compiled into the production tool.
+        pub(crate) fn write_artifact<W>(
+            self,
+            destination: &mut W,
+        ) -> Result<ArtifactIdentity, ArtifactWriteError>
+        where
+            W: Read + Write + Seek,
+        {
+            let expected = self.expected;
+            let NovaProver {
+                public_params,
+                prover_key,
+                proof_shape: _,
+                pool: _,
+                operation: _,
+            } = self.inner;
+            let payload = NovaProverArtifactPayload::<C, ARITY> {
+                public_params,
+                prover_key,
+            };
+            write_artifact_payload(
+                destination,
+                &PROVER_ARTIFACT_FORMAT,
+                expected.suite_id,
+                ARITY,
+                &payload,
+            )
+        }
+
+        /// Load one immutable, locally authenticated artifact byte slice.
+        pub(crate) fn from_artifact(
+            artifact: &[u8],
+            expected_suite: &'static Suite,
+            expected_artifact: &ArtifactIdentity,
+        ) -> Result<Self, DirectNovaProverArtifactError> {
+            let mut source = io::Cursor::new(artifact);
+            Self::from_artifact_reader(&mut source, expected_suite, expected_artifact)
+        }
+    }
 
     #[test]
     fn qualified_pk1_identity_is_frozen() {
@@ -309,10 +237,7 @@ mod tests {
         prover_key: Vec<u64>,
     }
 
-    fn encode_small_payload(
-        suite_id: [u8; 32],
-        arity: usize,
-    ) -> (Vec<u8>, ExpectedDirectNovaProverArtifact) {
+    fn encode_small_payload(suite_id: [u8; 32], arity: usize) -> (Vec<u8>, ArtifactIdentity) {
         let payload = SmallPayload {
             public_params: vec![3, 5, 8],
             prover_key: vec![13, 21],
@@ -326,21 +251,14 @@ mod tests {
             &payload,
         )
         .expect("encode small prover artifact");
-        (
-            encoded.into_inner(),
-            ExpectedDirectNovaProverArtifact::new(
-                identity.encoded_length(),
-                identity.decoded_payload_length(),
-                identity.digest(),
-            ),
-        )
+        (encoded.into_inner(), identity)
     }
 
     fn decode_small_payload(
         encoded: &[u8],
         suite_id: [u8; 32],
         arity: usize,
-        descriptor: ExpectedDirectNovaProverArtifact,
+        descriptor: ArtifactIdentity,
     ) -> Result<SmallPayload, DirectNovaProverArtifactError> {
         let mut source = Cursor::new(encoded);
         Ok(read_artifact_payload::<
@@ -352,7 +270,7 @@ mod tests {
             &PROVER_ARTIFACT_FORMAT,
             suite_id,
             arity,
-            descriptor.identity(),
+            descriptor,
         )?)
     }
 
@@ -411,7 +329,8 @@ mod tests {
 
         let mut changed_suite = encoded.clone();
         changed_suite[20] ^= 1;
-        let changed_suite_descriptor = ExpectedDirectNovaProverArtifact::for_test_bytes(
+        let changed_suite_descriptor = identity_of_bytes(
+            &PROVER_ARTIFACT_FORMAT,
             &changed_suite,
             descriptor.decoded_payload_length(),
         );
@@ -422,7 +341,8 @@ mod tests {
 
         let mut changed_arity = encoded.clone();
         changed_arity[55] ^= 1;
-        let changed_arity_descriptor = ExpectedDirectNovaProverArtifact::for_test_bytes(
+        let changed_arity_descriptor = identity_of_bytes(
+            &PROVER_ARTIFACT_FORMAT,
             &changed_arity,
             descriptor.decoded_payload_length(),
         );
@@ -433,7 +353,8 @@ mod tests {
 
         let mut changed_magic = encoded.clone();
         changed_magic[0] ^= 1;
-        let changed_magic_descriptor = ExpectedDirectNovaProverArtifact::for_test_bytes(
+        let changed_magic_descriptor = identity_of_bytes(
+            &PROVER_ARTIFACT_FORMAT,
             &changed_magic,
             descriptor.decoded_payload_length(),
         );
@@ -444,7 +365,8 @@ mod tests {
 
         let mut changed_version = encoded;
         changed_version[19] = 2;
-        let changed_version_descriptor = ExpectedDirectNovaProverArtifact::for_test_bytes(
+        let changed_version_descriptor = identity_of_bytes(
+            &PROVER_ARTIFACT_FORMAT,
             &changed_version,
             descriptor.decoded_payload_length(),
         );
@@ -460,12 +382,12 @@ mod tests {
     }
 
     const TINY_ARITY: usize = 1;
-    const TINY_VERSIONS: DirectNovaConstructionVersions = DirectNovaConstructionVersions::new(
-        ConstructionPayloadVersion::new(1),
-        ConstructionStatementVersion::new(1),
-        ConstructionManifestVersion::new(1),
-        ConstructionNativeDecisionVersion::new(1),
-    );
+    const TINY_VERSIONS: ConstructionVersions = ConstructionVersions {
+        payload: 1,
+        statement: 1,
+        manifest: 1,
+        native_decision: 1,
+    };
     const TINY_RELATION: DirectRelationId = DirectRelationId::from_frozen_bytes([0x42; 32]);
 
     #[derive(Clone)]

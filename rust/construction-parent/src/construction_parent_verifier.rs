@@ -13,32 +13,59 @@ use crate::construction_parent_input::ConstructionParentInputs;
 use crate::construction_profile::{
     CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_BYTES, CONSTRUCTION_ROOT_STATE_ARITY,
 };
-use crate::nova_session::verifier_artifact::{
-    DirectNovaVerifierArtifactError, QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
-};
-use crate::nova_session::{
-    DirectNovaSessionError, SelectedDirectNovaVerifier, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
-};
+use crate::nova::{LoadError, Verifier, VerifyError, QUALIFIED_VERIFIER_ARTIFACT};
+use crate::suite::QUALIFIED;
 use crate::{RelationError, Scalar};
 
-/// Loads the sole production verifier from one seekable artifact snapshot.
+/// The sole production verifier: Nova verification under the qualified suite.
 ///
-/// Authentication of the complete encoding precedes all Serde work. A second
-/// digest over the bytes actually consumed rejects a changed snapshot.
-pub(crate) fn load_qualified_construction_parent_verifier<R>(
-    artifact: &mut R,
-) -> Result<
-    SelectedDirectNovaVerifier<CONSTRUCTION_RECURRENCE_STATE_ARITY>,
-    DirectNovaVerifierArtifactError,
->
-where
-    R: Read + Seek,
-{
-    SelectedDirectNovaVerifier::from_artifact_reader(
-        artifact,
-        &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
-        &QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT,
-    )
+/// The only constructor loads the compiled-in suite and artifact identity, so
+/// holding this type is proof that verification runs under that suite.
+pub(crate) struct ConstructionParentVerifier {
+    nova: Verifier,
+}
+
+impl ConstructionParentVerifier {
+    /// Loads the qualified verifier from one seekable artifact snapshot.
+    ///
+    /// Authentication of the complete encoding precedes all Serde work. A
+    /// second digest over the bytes actually consumed rejects a changed
+    /// snapshot.
+    pub(crate) fn load<R>(artifact: &mut R) -> Result<Self, LoadError>
+    where
+        R: Read + Seek,
+    {
+        Ok(Self {
+            nova: Verifier::load(artifact, &QUALIFIED, &QUALIFIED_VERIFIER_ARTIFACT)?,
+        })
+    }
+
+    /// Verifies one profile-checked recursive parent and returns its pending
+    /// root.
+    ///
+    /// The typed input is the only path into this boundary, so proof
+    /// verification cannot bypass the native basis and raw-generator identity
+    /// checks.
+    pub(crate) fn authenticate(
+        &self,
+        inputs: &ConstructionParentInputs,
+        proof: &[u8],
+    ) -> Result<AuthenticatedConstructionParentOutput, ConstructionParentVerifierError> {
+        let authenticated_final =
+            self.verify_final(inputs.initial_state(), inputs.step_count(), proof)?;
+        validated_output_from_authenticated_state(authenticated_final, inputs.expected_suffix())
+    }
+
+    /// Authenticates the raw recurrence output for an exact initial state and
+    /// step count. The returned state is not receipt acceptance.
+    pub(crate) fn verify_final(
+        &self,
+        initial_state: &[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY],
+        expected_steps: usize,
+        proof: &[u8],
+    ) -> Result<[Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY], VerifyError> {
+        self.nova.verify_final(initial_state, expected_steps, proof)
+    }
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -46,9 +73,7 @@ pub(crate) enum ConstructionParentVerifierError {
     #[error(transparent)]
     State(#[from] RelationError),
     #[error(transparent)]
-    Nova(#[from] DirectNovaSessionError),
-    #[error("construction parent selected an unexpected Nova suite")]
-    Suite,
+    Nova(#[from] VerifyError),
     #[error("construction parent final manifest mismatch")]
     FinalManifest,
     #[error("construction parent final index mismatch")]
@@ -68,24 +93,6 @@ impl AuthenticatedConstructionParentOutput {
     pub(crate) fn canonical_root_bytes(&self) -> &[u8; CONSTRUCTION_ROOT_BYTES] {
         &self.canonical_root
     }
-}
-
-/// Verifies one profile-checked recursive parent and returns its pending root.
-///
-/// The typed input is the only path into this boundary, so proof verification
-/// cannot bypass the native basis and raw-generator identity checks.
-pub(crate) fn verify_construction_parent(
-    verifier: &SelectedDirectNovaVerifier<CONSTRUCTION_RECURRENCE_STATE_ARITY>,
-    inputs: &ConstructionParentInputs,
-    proof: &[u8],
-) -> Result<AuthenticatedConstructionParentOutput, ConstructionParentVerifierError> {
-    if verifier.expected() != &QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE {
-        return Err(ConstructionParentVerifierError::Suite);
-    }
-
-    let authenticated_final =
-        verifier.verify_final(inputs.initial_state(), inputs.step_count(), proof)?;
-    validated_output_from_authenticated_state(authenticated_final, inputs.expected_suffix())
 }
 
 fn validated_output_from_authenticated_state(

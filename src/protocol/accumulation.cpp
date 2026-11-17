@@ -7,6 +7,7 @@
 #include "algebraic_circuit_accumulation.hpp"
 #include "bppp_bridge.h"
 #include "bppp_internal.hpp"
+#include "checked_size.hpp"
 #include "sha256_transcript.hpp"
 #if defined(PURIFY_INTERNAL_TEST_SUPPORT)
 #include "accumulation_test_support.hpp"
@@ -15,6 +16,8 @@
 namespace purify::bppp::accumulation {
 
 namespace {
+
+using ::purify::detail::CheckedSize;
 
 const TaggedHash kBasisHash("Purify/BPPP/NormAccumBasisV2");
 const TaggedHash kClaimsHash("Purify/BPPP/AccumClaimsV1");
@@ -102,8 +105,8 @@ Status validate_basis(const Basis& basis) {
     if (!is_power_of_two_size(basis.n_vec_len()) ||
         !is_power_of_two_size(basis.l_vec_len()) ||
         basis.l_vec_len() > basis.n_vec_len() ||
-        !checked_mul_size(basis.n_vec_len(), 2, dimension) ||
-        !checked_add_size(basis.n_vec_len(), basis.l_vec_len(), generators) ||
+        !(CheckedSize(basis.n_vec_len()) * 2).store(dimension) ||
+        !(CheckedSize(basis.n_vec_len()) + basis.l_vec_len()).store(generators) ||
         basis.dimension() != dimension || basis.norm_generators().size() != generators) {
         return unexpected_error(ErrorCode::InvalidDimensions);
     }
@@ -949,7 +952,7 @@ Result<Basis> Basis::create(std::size_t n_vec_len, std::size_t l_vec_len,
     PURIFY_RETURN_IF_ERROR(require_secp_context(context));
     std::size_t dimension = 0;
     if (!is_power_of_two_size(n_vec_len) || !is_power_of_two_size(l_vec_len) ||
-        l_vec_len > n_vec_len || !checked_mul_size(n_vec_len, 2, dimension)) {
+        l_vec_len > n_vec_len || !(CheckedSize(n_vec_len) * 2).store(dimension)) {
         return unexpected_error(ErrorCode::InvalidDimensions);
     }
     if (semantic_domain.empty()) {
@@ -1286,8 +1289,7 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
     const auto& norm = prepared.norm();
     const auto rounds = shape.round_count();
     std::size_t generator_count = 0;
-    if (!checked_add_size(shape.n_vec_len(), shape.l_vec_len(),
-                          generator_count)) {
+    if (!(CheckedSize(shape.n_vec_len()) + shape.l_vec_len()).store(generator_count)) {
         return unexpected_error(ErrorCode::Overflow);
     }
     // The V4 transcript binds this raw digest. Exact generator equality
@@ -1364,11 +1366,10 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
 
     std::size_t round_bytes = 0;
     std::size_t expected_proof_size = 0;
-    if (!checked_mul_size(rounds,
-                          sizeof(candidate::PackedPointPairV4),
-                          round_bytes) ||
-        !checked_add_size(round_bytes, 2 * sizeof(ScalarBytes),
-                          expected_proof_size)) {
+    const CheckedSize checked_round_bytes =
+        CheckedSize(rounds) * sizeof(candidate::PackedPointPairV4);
+    if (!checked_round_bytes.store(round_bytes) ||
+        !(checked_round_bytes + 2 * sizeof(ScalarBytes)).store(expected_proof_size)) {
         return unexpected_error(ErrorCode::Overflow);
     }
     if (norm.proof.size() != expected_proof_size) {

@@ -26,6 +26,7 @@
 #include "algebraic_circuit_proof.hpp"
 #include "bppp_internal.hpp"
 #include "bulletproof_internal.hpp"
+#include "checked_size.hpp"
 #include "purify/secp_bridge.h"
 #include "secure_cleanup.hpp"
 
@@ -293,6 +294,7 @@ struct SecretBytes {
 
 using SecretScalarBytes = ::purify::detail::Secret<ScalarBytes>;
 
+using ::purify::detail::CheckedSize;
 using ::purify::detail::WipeOnDestruction;
 
 void secure_clear_field_element(FieldElement &value) noexcept {
@@ -598,16 +600,14 @@ Result<CircuitNormArgDimensions> circuit_norm_arg_dimensions(
   const std::size_t committed_values =
       externalize_commitments ? 0 : circuit.n_commitments;
   std::size_t minimum_gate_count = 0;
-  if (!checked_add_size(committed_values, 1, minimum_gate_count)) {
+  if (!(CheckedSize(committed_values) + 1).store(minimum_gate_count)) {
     return unexpected_error(ErrorCode::Overflow);
   }
   PURIFY_ASSIGN_OR_RETURN(
       out.gate_count,
       round_up_power_of_two(std::max(circuit.n_gates, minimum_gate_count)));
-  if (!checked_add_size(out.gate_count, committed_values, out.used_l)) {
-    return unexpected_error(ErrorCode::Overflow);
-  }
-  if (!checked_mul_size(out.gate_count, 2, out.n_vec_len)) {
+  if (!(CheckedSize(out.gate_count) + committed_values).store(out.used_l) ||
+      !(CheckedSize(out.gate_count) * 2).store(out.n_vec_len)) {
     return unexpected_error(ErrorCode::Overflow);
   }
   out.l_vec_len = out.n_vec_len;
@@ -637,8 +637,8 @@ Result<NormArgInputs> build_raw_circuit_norm_arg_inputs(
   }
 
   std::size_t generator_count = 0;
-  if (!checked_add_size(dimensions.n_vec_len, dimensions.l_vec_len,
-                        generator_count)) {
+  if (!(CheckedSize(dimensions.n_vec_len) + dimensions.l_vec_len)
+           .store(generator_count)) {
     return unexpected_error(ErrorCode::Overflow);
   }
 
@@ -823,12 +823,10 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
   out->c_vec_bytes = scalar_bytes(out->c_vec);
 
   std::size_t raw_n_value_count = 0;
-  if (!checked_mul_size(dimensions.gate_count, 2, raw_n_value_count)) {
-    return unexpected_error(ErrorCode::Overflow);
-  }
   std::size_t generator_count = 0;
-  if (!checked_add_size(out->n_vec_len, out->c_vec.size(),
-                        generator_count)) {
+  if (!(CheckedSize(dimensions.gate_count) * 2).store(raw_n_value_count) ||
+      !(CheckedSize(out->n_vec_len) + out->c_vec.size())
+           .store(generator_count)) {
     return unexpected_error(ErrorCode::Overflow);
   }
   PURIFY_ASSIGN_OR_RETURN(auto generators,
@@ -1328,15 +1326,12 @@ Result<Bytes> bind_public_commitments(
   PURIFY_ASSIGN_OR_RETURN(const auto &encoded_binding_size,
                           narrow_size_to_u64(statement_binding.size()));
 
-  std::size_t point_bytes = 0;
   std::size_t total_size = 0;
   Bytes out = bytes_from_ascii(kCircuitNormArgPublicCommitmentTag);
-  if (!checked_mul_size(public_commitments.size(), sizeof(PointBytes),
-                        point_bytes) ||
-      !checked_add_size(out.size(), 8, total_size) ||
-      !checked_add_size(total_size, point_bytes, total_size) ||
-      !checked_add_size(total_size, 8, total_size) ||
-      !checked_add_size(total_size, statement_binding.size(), total_size)) {
+  if (!(CheckedSize(out.size()) + 8 +
+        CheckedSize(public_commitments.size()) * sizeof(PointBytes) + 8 +
+        statement_binding.size())
+           .store(total_size)) {
     return unexpected_error(ErrorCode::Overflow);
   }
   out.reserve(total_size);
@@ -1858,9 +1853,10 @@ parse_norm_rounds_v4(const Bytes &proof, std::size_t round_count,
                      ScalarBytes &terminal_n, ScalarBytes &terminal_l) {
   std::size_t pair_bytes = 0;
   std::size_t expected_size = 0;
-  if (!checked_mul_size(round_count,
-                        sizeof(candidate::PackedPointPairV4), pair_bytes) ||
-      !checked_add_size(pair_bytes, 2 * sizeof(ScalarBytes), expected_size) ||
+  const CheckedSize checked_pair_bytes =
+      CheckedSize(round_count) * sizeof(candidate::PackedPointPairV4);
+  if (!checked_pair_bytes.store(pair_bytes) ||
+      !(checked_pair_bytes + 2 * sizeof(ScalarBytes)).store(expected_size) ||
       proof.size() != expected_size) {
     return unexpected_error(ErrorCode::InvalidDimensions);
   }
@@ -2480,8 +2476,8 @@ Result<candidate::TranscriptDigest> raw_generator_digest_v4(
     const candidate::CircuitTranscriptShapeV4 &shape,
     purify_secp_context *secp_context) {
   std::size_t generator_count = 0;
-  if (!checked_add_size(shape.n_vec_len(), shape.l_vec_len(),
-                        generator_count)) {
+  if (!(CheckedSize(shape.n_vec_len()) + shape.l_vec_len())
+           .store(generator_count)) {
     return unexpected_error(ErrorCode::Overflow);
   }
   PURIFY_ASSIGN_OR_RETURN(const auto &generators,
@@ -2656,29 +2652,17 @@ prove_circuit_zk_norm_arg_v4_impl(
   PURIFY_ASSIGN_OR_RETURN(const auto shape,
                           circuit_shape_v4(circuit, externalize_commitments));
 
-  std::size_t public_point_bytes = 0;
-  std::size_t assignment_scalar_count = 0;
-  std::size_t assignment_bytes = 0;
-  std::size_t seed_prefix_size = 0;
+  // The exact size matters: the seed buffer must never reallocate, because a
+  // superseded block would be freed without being wiped.
+  const CheckedSize assignment_scalar_count =
+      CheckedSize(assignment.left.size()) + assignment.right.size() +
+      assignment.output.size() + assignment.commitments.size();
   std::size_t seed_size = 0;
-  if (!checked_mul_size(public_commitments.size(), sizeof(PointBytes),
-                        public_point_bytes) ||
-      !checked_add_size(assignment.left.size(), assignment.right.size(),
-                        assignment_scalar_count) ||
-      !checked_add_size(assignment_scalar_count, assignment.output.size(),
-                        assignment_scalar_count) ||
-      !checked_add_size(assignment_scalar_count,
-                        assignment.commitments.size(),
-                        assignment_scalar_count) ||
-      !checked_mul_size(assignment_scalar_count, sizeof(ScalarBytes),
-                        assignment_bytes) ||
-      !checked_add_size(assignment_bytes, 4 * sizeof(std::uint64_t),
-                        assignment_bytes) ||
-      !checked_add_size(binding_digest.size(), secret_prover_seed.size(),
-                        seed_prefix_size) ||
-      !checked_add_size(seed_prefix_size, 1, seed_prefix_size) ||
-      !checked_add_size(seed_prefix_size, public_point_bytes, seed_size) ||
-      !checked_add_size(seed_size, assignment_bytes, seed_size)) {
+  if (!(CheckedSize(binding_digest.size()) + secret_prover_seed.size() + 1 +
+        CheckedSize(public_commitments.size()) * sizeof(PointBytes) +
+        assignment_scalar_count * sizeof(ScalarBytes) +
+        4 * sizeof(std::uint64_t))
+           .store(seed_size)) {
     return unexpected_error(ErrorCode::Overflow);
   }
   SecretBytes seed;
@@ -2816,8 +2800,8 @@ prove_circuit_zk_norm_arg_v4_impl(
 
     const ScalarBytes precommitment_bytes = precommitment.digest.bytes();
     std::size_t mask_seed_size = 0;
-    if (!checked_add_size(seed.value.size(), precommitment_bytes.size(),
-                          mask_seed_size)) {
+    if (!(CheckedSize(seed.value.size()) + precommitment_bytes.size())
+             .store(mask_seed_size)) {
       return unexpected_error(ErrorCode::Overflow);
     }
     SecretBytes mask_seed;

@@ -11,6 +11,7 @@
 #include "purify/secret.hpp"
 #include "bulletproof_internal.hpp"
 #include "bppp_bridge.h"
+#include "checked_size.hpp"
 #include "secure_cleanup.hpp"
 
 #include <algorithm>
@@ -121,8 +122,7 @@ using purify::SymbolKind;
 using purify::WitnessAssignments;
 using purify::Bytes;
 using purify::best_effort_reserve_mul;
-using purify::checked_add_size;
-using purify::checked_mul_size;
+using purify::detail::CheckedSize;
 using purify::is_power_of_two_size;
 using purify::narrow_size_to_u64;
 using purify::size_fits_u32;
@@ -239,19 +239,8 @@ Result<FieldElement> evaluate_known(const Expr& expr, const ResolvedValues& valu
     return out;
 }
 
-bool checked_align_up(std::size_t value, std::size_t alignment, std::size_t& out) {
-    assert(alignment != 0 && "alignment must be non-zero");
-    const std::size_t remainder = value % alignment;
-    if (remainder == 0) {
-        out = value;
-        return true;
-    }
-    return checked_add_size(value, alignment - remainder, out);
-}
-
 bool packed_row_count(std::size_t n_gates, std::size_t n_commitments, std::size_t& out) {
-    std::size_t gate_rows = 0;
-    return checked_mul_size(n_gates, 3, gate_rows) && checked_add_size(gate_rows, n_commitments, out);
+    return (CheckedSize(n_gates) * 3 + n_commitments).store(out);
 }
 
 void append_u32_le(Bytes& out, std::uint32_t value) {
@@ -333,8 +322,7 @@ Result<Bytes> circuit_binding_digest(const purify::NativeBulletproofCircuit& cir
         return unexpected_error(ErrorCode::InvalidDimensions);
     }
     std::size_t reserve_size = 0;
-    if (!checked_mul_size(circuit.c.size(), 32, reserve_size)
-        || !checked_add_size(64, reserve_size, reserve_size)) {
+    if (!(CheckedSize(circuit.c.size()) * 32 + 64).store(reserve_size)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 
@@ -378,8 +366,7 @@ Result<Bytes> circuit_binding_digest(const PackedCircuit& circuit, std::span<con
         return unexpected_error(ErrorCode::InvalidDimensions);
     }
     std::size_t reserve_size = 0;
-    if (!checked_mul_size(circuit.constraint_count(), 32, reserve_size)
-        || !checked_add_size(64, reserve_size, reserve_size)) {
+    if (!(CheckedSize(circuit.constraint_count()) * 32 + 64).store(reserve_size)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 
@@ -449,12 +436,12 @@ Result<std::size_t> sum_circuit_gate_count(const PackedCircuit& base,
         return unexpected_error(ErrorCode::InvalidDimensions);
     }
     std::size_t used_gates = 0;
-    if (!checked_mul_size(base.n_gates(), public_keys.size(), used_gates)) {
+    if (!(CheckedSize(base.n_gates()) * public_keys.size()).store(used_gates)) {
         return unexpected_error(ErrorCode::Overflow);
     }
     std::size_t padded_gates = 1;
     while (padded_gates < used_gates) {
-        if (!checked_mul_size(padded_gates, 2, padded_gates)) {
+        if (!(CheckedSize(padded_gates) * 2).store(padded_gates)) {
             return unexpected_error(ErrorCode::Overflow);
         }
     }
@@ -825,12 +812,8 @@ Result<Bytes> BulletproofAssignmentData::serialize() const {
         return unexpected_error(ErrorCode::UnexpectedSize);
     }
 
-    std::size_t scalar_count = 0;
     std::size_t serialized_size = 0;
-    if (!checked_mul_size(left.size(), 3, scalar_count)
-        || !checked_add_size(scalar_count, commitments.size(), scalar_count)
-        || !checked_mul_size(scalar_count, 33, serialized_size)
-        || !checked_add_size(16, serialized_size, serialized_size)) {
+    if (!((CheckedSize(left.size()) * 3 + commitments.size()) * 33 + 16).store(serialized_size)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 
@@ -1070,25 +1053,14 @@ bool NativeBulletproofCircuit::PackedWithSlack::compute_storage_layout(std::size
                                                                       std::size_t& term_bytes_offset,
                                                                       std::size_t& constant_bytes_offset,
                                                                       std::size_t& storage_bytes) noexcept {
-    std::size_t row_headers_bytes = 0;
-    if (!checked_mul_size(row_count, sizeof(PackedRowHeader), row_headers_bytes)
-        || !checked_align_up(row_headers_bytes, alignof(NativeBulletproofCircuitTerm), term_bytes_offset)) {
-        return false;
-    }
-    std::size_t terms_bytes = 0;
-    if (!checked_mul_size(term_capacity, sizeof(NativeBulletproofCircuitTerm), terms_bytes)) {
-        return false;
-    }
-    std::size_t term_region_end = 0;
-    if (!checked_add_size(term_bytes_offset, terms_bytes, term_region_end)
-        || !checked_align_up(term_region_end, alignof(FieldElement), constant_bytes_offset)) {
-        return false;
-    }
-    std::size_t constants_bytes = 0;
-    if (!checked_mul_size(constraint_capacity, sizeof(FieldElement), constants_bytes)) {
-        return false;
-    }
-    return checked_add_size(constant_bytes_offset, constants_bytes, storage_bytes);
+    const CheckedSize term_offset =
+        (CheckedSize(row_count) * sizeof(PackedRowHeader)).aligned_up(alignof(NativeBulletproofCircuitTerm));
+    const CheckedSize constant_offset =
+        (term_offset + CheckedSize(term_capacity) * sizeof(NativeBulletproofCircuitTerm))
+            .aligned_up(alignof(FieldElement));
+    const CheckedSize storage = constant_offset + CheckedSize(constraint_capacity) * sizeof(FieldElement);
+    return term_offset.store(term_bytes_offset) && constant_offset.store(constant_bytes_offset) &&
+           storage.store(storage_bytes);
 }
 
 void NativeBulletproofCircuit::PackedWithSlack::reset_to_empty() noexcept {
@@ -1450,7 +1422,7 @@ Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::Pack
     packed.n_bits_ = circuit.n_bits;
     packed.constraint_size_ = circuit.c.size();
     packed.constraint_base_size_ = circuit.c.size();
-    if (!checked_add_size(circuit.c.size(), slack.constraint_slack, packed.constraint_capacity_)) {
+    if (!(CheckedSize(circuit.c.size()) + slack.constraint_slack).store(packed.constraint_capacity_)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 
@@ -1463,9 +1435,7 @@ Result<NativeBulletproofCircuit::PackedWithSlack> NativeBulletproofCircuit::Pack
                             const std::vector<std::size_t>& family_slack) -> bool {
         for (std::size_t i = 0; i < rows.size(); ++i) {
             const std::size_t extra = family_slack.empty() ? 0 : family_slack[i];
-            std::size_t row_capacity = 0;
-            if (!checked_add_size(rows[i].entries.size(), extra, row_capacity)
-                || !checked_add_size(total_term_capacity, row_capacity, total_term_capacity)) {
+            if (!(CheckedSize(total_term_capacity) + rows[i].entries.size() + extra).store(total_term_capacity)) {
                 return false;
             }
         }
@@ -1535,11 +1505,8 @@ Result<Bytes> ExperimentalBulletproofProof::serialize() const {
     if (!size_fits_u32(proof.size()) || !size_fits_u32(commitments.size())) {
         return unexpected_error(ErrorCode::UnexpectedSize);
     }
-    std::size_t commitment_bytes = 0;
     std::size_t serialized_size = 0;
-    if (!checked_mul_size(commitments.size(), 33, commitment_bytes)
-        || !checked_add_size(9, commitment_bytes, serialized_size)
-        || !checked_add_size(serialized_size, proof.size(), serialized_size)) {
+    if (!(CheckedSize(commitments.size()) * 33 + 9 + proof.size()).store(serialized_size)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 
@@ -1786,8 +1753,7 @@ Status BulletproofTranscript::from_transcript(
     }
 
     std::size_t total_gates = 0;
-    if (!checked_add_size(source_muls, unmapped_transcript_vars.size(),
-                          total_gates)) {
+    if (!(CheckedSize(source_muls) + unmapped_transcript_vars.size()).store(total_gates)) {
         return unexpected_error(ErrorCode::Overflow);
     }
     if (total_gates >
@@ -2108,11 +2074,8 @@ Result<NativeBulletproofCircuit> NativeBulletproofCircuitTemplate::instantiate(c
 Result<NativeBulletproofCircuit> NativeBulletproofCircuitTemplate::instantiate_sum(
     std::span<const UInt512> public_keys) const {
     PURIFY_ASSIGN_OR_RETURN(const auto& gates, sum_circuit_gate_count(base_packed_, public_keys));
-    std::size_t member_constraints = 0;
     std::size_t total_constraints = 0;
-    if (!checked_add_size(base_packed_.constraint_count(), 2, member_constraints)
-        || !checked_mul_size(member_constraints, public_keys.size(), total_constraints)
-        || !checked_add_size(total_constraints, 1, total_constraints)) {
+    if (!((CheckedSize(base_packed_.constraint_count()) + 2) * public_keys.size() + 1).store(total_constraints)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 

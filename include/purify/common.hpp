@@ -60,7 +60,7 @@ inline Status require_secp_context(const purify_secp_context* context) {
     return {};
 }
 
-[[nodiscard]] inline bool checked_add_size(std::size_t lhs, std::size_t rhs, std::size_t& out) noexcept {
+[[nodiscard]] constexpr bool checked_add_size(std::size_t lhs, std::size_t rhs, std::size_t& out) noexcept {
     if (rhs > std::numeric_limits<std::size_t>::max() - lhs) {
         return false;
     }
@@ -68,7 +68,7 @@ inline Status require_secp_context(const purify_secp_context* context) {
     return true;
 }
 
-[[nodiscard]] inline bool checked_mul_size(std::size_t lhs, std::size_t rhs, std::size_t& out) noexcept {
+[[nodiscard]] constexpr bool checked_mul_size(std::size_t lhs, std::size_t rhs, std::size_t& out) noexcept {
     if (lhs != 0 && rhs > std::numeric_limits<std::size_t>::max() / lhs) {
         return false;
     }

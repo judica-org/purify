@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -783,6 +784,23 @@ void test_construction_parent_profile_digest(TestContext& ctx) {
         0xf1, 0xb3, 0x72, 0x08, 0xad, 0x9e, 0xb5, 0x94};
     ctx.expect(digest == kRecursiveProfileDigest,
                "native basis matches the recursive profile digest");
+
+    // SHA256 of the raw norm generator encodings, as the recursive relation
+    // pins it in rust/construction-parent/statement/src/profile.rs.
+    constexpr std::array<unsigned char, 32> kRecursiveProfileRawGenerators{
+        0x10, 0x1c, 0xdb, 0x8d, 0x99, 0x28, 0x00, 0xb0,
+        0x3c, 0x39, 0x24, 0x6e, 0xb9, 0x20, 0xc8, 0x37,
+        0xa8, 0x04, 0x0c, 0x5a, 0x36, 0xa0, 0x97, 0x0f,
+        0x0e, 0xbf, 0x85, 0x51, 0x11, 0x21, 0xca, 0x8a};
+    const auto raw_generators = std::as_bytes(
+        std::span(accumulator->leaves().basis().norm_generators()));
+    std::array<unsigned char, 32> raw_generator_digest{};
+    purify_sha256(
+        raw_generator_digest.data(),
+        reinterpret_cast<const unsigned char*>(raw_generators.data()),
+        raw_generators.size());
+    ctx.expect(raw_generator_digest == kRecursiveProfileRawGenerators,
+               "native raw generators match the recursive profile digest");
 
     std::array<unsigned char,
                purify::accountable::ConstructionReceiptAccumulator::

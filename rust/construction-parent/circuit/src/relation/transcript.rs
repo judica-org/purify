@@ -1,8 +1,9 @@
-//! Direct Nova replay of the V4 circuit-proof transcript.
+//! The V4 circuit-proof transcript inside the relation.
 //!
-//! Protocol bytes are shared with the native transcript. Nova supplies the
-//! SHA-256 and curve gadgets; this module only orders typed fields and applies
-//! the V4 hidden/public branch constraints.
+//! The schedule is `native::circuit_transcript::replay_v4`, shared with the
+//! native replay. This module supplies its constrained backend: each witness
+//! value is allocated where the schedule first names it, the hidden/public
+//! mode rules become constraints, and Nova supplies SHA-256 and the curve.
 
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
@@ -15,129 +16,137 @@ use crate::gadgets::transcript::{
     append_bytes, append_constant_bytes, append_point, append_scalar,
 };
 use crate::native::circuit_transcript::{
-    CircuitCommitmentModeV4, CircuitPointPairWitnessV4, CircuitProofTranscriptWitnessV4,
-    CircuitTranscriptShapeV4, CIRCUIT_NORM_PRECOMMIT_DOMAIN_V4, CIRCUIT_NORM_PROOF_DOMAIN_V4,
+    replay_v4, CircuitPointPair, CircuitProofTranscriptWitnessV4, CircuitTranscriptShapeV4,
+    CircuitTranscriptV4, TranscriptBackend,
 };
-use crate::native::secp::SecpEncodedPointWitness;
-use statement::Scalar;
+use crate::native::secp::{SecpEncodedPointWitness, SecpScalarWitness};
+use statement::{RelationError, Scalar};
 
-pub(crate) struct CircuitPointPairV4 {
-    pub(crate) first: EncodedPoint,
-    pub(crate) second: EncodedPoint,
+pub(crate) type CircuitPointPairV4 = CircuitPointPair<EncodedPoint>;
+pub(crate) type CircuitTranscriptResultV4 = CircuitTranscriptV4<EncodedPoint, CanonicalScalar>;
+
+/// The constrained backend of the V4 schedule.
+struct Constrained<CS> {
+    ops: Ops<CS>,
 }
 
-pub(crate) struct CircuitTranscriptResultV4 {
-    pub(crate) public_commitments: Vec<EncodedPoint>,
-    pub(crate) raw_commitment: EncodedPoint,
-    pub(crate) coefficient_commitment: EncodedPoint,
-    pub(crate) anchored_offset: EncodedPoint,
-    pub(crate) anchored_commitment: EncodedPoint,
-    pub(crate) batched_public_commitment: EncodedPoint,
-    pub(crate) dlog_nonce: EncodedPoint,
-    pub(crate) dlog_response: CanonicalScalar,
-    pub(crate) mask_commitment: EncodedPoint,
-    pub(crate) t2: CanonicalScalar,
-    pub(crate) combined_commitment: EncodedPoint,
-    pub(crate) rounds: Vec<CircuitPointPairV4>,
-    pub(crate) terminal_n: CanonicalScalar,
-    pub(crate) terminal_l: CanonicalScalar,
-    pub(crate) precommitment: CanonicalScalar,
-    pub(crate) rho: CanonicalScalar,
-    pub(crate) mul_scale: CanonicalScalar,
-    pub(crate) mul_ratio: CanonicalScalar,
-    // Deriving it advances the transcript, but no later constraint consumes
-    // it; only the native-vector tests read it back.
-    #[allow(dead_code)]
-    pub(crate) row_ratio: CanonicalScalar,
-    pub(crate) eta: CanonicalScalar,
-    pub(crate) dlog_challenge: CanonicalScalar,
-    pub(crate) alpha: CanonicalScalar,
-    pub(crate) gammas: Vec<CanonicalScalar>,
-    pub(crate) prepared_binding: CanonicalScalar,
-}
+impl<CS: ConstraintSystem<Scalar>> TranscriptBackend for Constrained<CS> {
+    type Transcript = Transcript;
+    type Digest = [Byte; 32];
+    type Point = EncodedPoint;
+    type Scalar = CanonicalScalar;
+    type Error = SynthesisError;
 
-fn append_shape(
-    transcript: &mut Transcript,
-    shape: CircuitTranscriptShapeV4,
-) -> Result<(), SynthesisError> {
-    transcript.append_u64(shape.mode.as_u64());
-    for value in [
-        shape.gate_count,
-        shape.commitment_count,
-        shape.n_vec_len,
-        shape.l_vec_len,
-        shape.public_commitment_count(),
-    ] {
-        transcript.append_u64(
-            u64::try_from(value).map_err(|_| synthesis_error("V4 transcript shape size"))?,
-        );
+    fn malformed(error: RelationError) -> SynthesisError {
+        let RelationError::Malformed(label) = error;
+        synthesis_error(label)
     }
-    Ok(())
+
+    fn new_transcript() -> Transcript {
+        Transcript::new()
+    }
+
+    #[track_caller]
+    fn point(&mut self, witness: SecpEncodedPointWitness) -> Result<EncodedPoint, SynthesisError> {
+        self.ops.point(witness)
+    }
+
+    #[track_caller]
+    fn scalar(&mut self, witness: SecpScalarWitness) -> Result<CanonicalScalar, SynthesisError> {
+        self.ops.scalar(witness)
+    }
+
+    #[track_caller]
+    fn challenge(
+        &mut self,
+        transcript: &mut Transcript,
+        round: u64,
+    ) -> Result<CanonicalScalar, SynthesisError> {
+        self.ops.challenge(transcript, round)
+    }
+
+    fn append_constant(transcript: &mut Transcript, bytes: &[u8]) -> Result<(), SynthesisError> {
+        append_constant_bytes(transcript, bytes)
+    }
+
+    fn append_digest(
+        transcript: &mut Transcript,
+        digest: &[Byte; 32],
+    ) -> Result<(), SynthesisError> {
+        append_bytes(transcript, digest)
+    }
+
+    fn append_u64(transcript: &mut Transcript, value: u64) {
+        transcript.append_u64(value);
+    }
+
+    fn append_scalar(
+        transcript: &mut Transcript,
+        scalar: &CanonicalScalar,
+    ) -> Result<(), SynthesisError> {
+        append_scalar(transcript, scalar)
+    }
+
+    fn append_point(
+        transcript: &mut Transcript,
+        point: &EncodedPoint,
+    ) -> Result<(), SynthesisError> {
+        append_point(transcript, point);
+        Ok(())
+    }
+
+    fn append_point_x(
+        transcript: &mut Transcript,
+        point: &EncodedPoint,
+    ) -> Result<(), SynthesisError> {
+        append_bytes(transcript, point.x_bytes())
+    }
+
+    fn append_point_pair(
+        transcript: &mut Transcript,
+        pair: &CircuitPointPairV4,
+    ) -> Result<(), SynthesisError> {
+        let parity = Byte::from_constrained_bits_le([
+            pair.second.odd().clone(),
+            pair.first.odd().clone(),
+            Boolean::constant(false),
+            Boolean::constant(false),
+            Boolean::constant(false),
+            Boolean::constant(false),
+            Boolean::constant(false),
+            Boolean::constant(false),
+        ]);
+        transcript.append_point_pair(&parity, pair.first.x_bytes(), pair.second.x_bytes());
+        Ok(())
+    }
+
+    #[track_caller]
+    fn require_identity(&mut self, point: &EncodedPoint) -> Result<(), SynthesisError> {
+        self.ops.require_identity(point.point())
+    }
+
+    #[track_caller]
+    fn require_finite_even(&mut self, point: &EncodedPoint) -> Result<(), SynthesisError> {
+        self.ops.require_finite(point.point())?;
+        self.ops.require_even(point)
+    }
+
+    #[track_caller]
+    fn require_zero(&mut self, scalar: &CanonicalScalar) -> Result<(), SynthesisError> {
+        self.ops.require_zero(scalar);
+        Ok(())
+    }
 }
 
-fn pair_point(
-    pair: &CircuitPointPairWitnessV4,
-    index: usize,
-) -> Result<SecpEncodedPointWitness, SynthesisError> {
-    if pair.encoded[0] > 3 || index > 1 {
-        return Err(synthesis_error("V4 point pair"));
-    }
-    let offset = 1 + 32 * index;
-    let x = &pair.encoded[offset..offset + 32];
-    let mask = 2u8 >> index;
-    let y = if index == 0 {
-        pair.first_y
-    } else {
-        pair.second_y
-    };
-    if x.iter().all(|byte| *byte == 0) {
-        if pair.encoded[0] & mask != 0 {
-            return Err(synthesis_error("V4 signed pair identity"));
-        }
-        return Ok(SecpEncodedPointWitness {
-            encoded: [0; 33],
-            y,
-        });
-    }
-    let mut encoded = [0; 33];
-    encoded[0] = 2 + u8::from(pair.encoded[0] & mask != 0);
-    encoded[1..].copy_from_slice(x);
-    Ok(SecpEncodedPointWitness { encoded, y })
-}
-
-fn append_pair<CS: ConstraintSystem<Scalar>>(
+/// Replays the V4 transcript inside the relation, bound to a constrained
+/// statement digest.
+pub(crate) fn install_transcript_with_constrained_binding<CS: ConstraintSystem<Scalar>>(
     cs: CS,
-    transcript: &mut Transcript,
-    witness: &CircuitPointPairWitnessV4,
-) -> Result<CircuitPointPairV4, SynthesisError> {
-    let mut ops = Ops::new(cs);
-    let first = ops.point(pair_point(witness, 0)?)?;
-    let second = ops.point(pair_point(witness, 1)?)?;
-    let parity = Byte::from_constrained_bits_le([
-        second.odd().clone(),
-        first.odd().clone(),
-        Boolean::constant(false),
-        Boolean::constant(false),
-        Boolean::constant(false),
-        Boolean::constant(false),
-        Boolean::constant(false),
-        Boolean::constant(false),
-    ]);
-    transcript.append_point_pair(&parity, first.x_bytes(), second.x_bytes());
-    Ok(CircuitPointPairV4 { first, second })
-}
-
-fn install_transcript_with_binding<CS, F>(
-    cs: CS,
     shape: CircuitTranscriptShapeV4,
+    circuit_binding_digest: &[Byte; 32],
     raw_generator_digest: [u8; 32],
     witness: &CircuitProofTranscriptWitnessV4,
-    append_binding: F,
-) -> Result<CircuitTranscriptResultV4, SynthesisError>
-where
-    CS: ConstraintSystem<Scalar>,
-    F: FnOnce(&mut Transcript) -> Result<(), SynthesisError>,
-{
+) -> Result<CircuitTranscriptResultV4, SynthesisError> {
     shape
         .validate()
         .map_err(|_| synthesis_error("V4 transcript shape"))?;
@@ -146,121 +155,13 @@ where
     {
         return Err(synthesis_error("V4 transcript witness shape"));
     }
-    let mut ops = Ops::new(cs);
-
-    let mut precommit = Transcript::new();
-    append_constant_bytes(&mut precommit, CIRCUIT_NORM_PRECOMMIT_DOMAIN_V4)?;
-    append_binding(&mut precommit)?;
-    append_shape(&mut precommit, shape)?;
-    let mut public_commitments = Vec::with_capacity(witness.public_commitments.len());
-    for point in witness.public_commitments.iter().copied() {
-        let point = ops.point(point)?;
-        append_point(&mut precommit, &point);
-        public_commitments.push(point);
-    }
-    let raw_commitment = ops.point(witness.raw_commitment)?;
-    append_point(&mut precommit, &raw_commitment);
-    let precommitment = ops.challenge(&mut precommit, 0)?;
-
-    let mut proof = Transcript::new();
-    append_constant_bytes(&mut proof, CIRCUIT_NORM_PROOF_DOMAIN_V4)?;
-    append_scalar(&mut proof, &precommitment)?;
-    append_constant_bytes(&mut proof, &raw_generator_digest)?;
-    append_shape(&mut proof, shape)?;
-    let rho = ops.challenge(&mut proof, 0)?;
-    let mul_scale = ops.challenge(&mut proof, 1)?;
-    let mul_ratio = ops.challenge(&mut proof, 2)?;
-    let row_ratio = ops.challenge(&mut proof, 3)?;
-
-    let coefficient_commitment = ops.point(witness.coefficient_commitment)?;
-    append_point(&mut proof, &coefficient_commitment);
-    let anchored_offset = ops.point(witness.anchored_offset)?;
-    append_point(&mut proof, &anchored_offset);
-    let anchored_commitment = ops.point(witness.anchored_commitment)?;
-    append_point(&mut proof, &anchored_commitment);
-    let eta = ops.challenge(&mut proof, 4)?;
-    let batched_public_commitment = ops.point(witness.batched_public_commitment)?;
-    append_point(&mut proof, &batched_public_commitment);
-    let dlog_nonce = ops.point(witness.dlog_nonce)?;
-    match shape.mode {
-        CircuitCommitmentModeV4::Hidden => {
-            ops.require_identity(batched_public_commitment.point())?;
-            ops.require_identity(dlog_nonce.point())?;
-        }
-        CircuitCommitmentModeV4::Public => {
-            ops.require_finite(dlog_nonce.point())?;
-            ops.require_even(&dlog_nonce)?;
-        }
-    }
-    append_bytes(&mut proof, dlog_nonce.x_bytes())?;
-    let dlog_challenge = ops.challenge(&mut proof, 5)?;
-    let dlog_response = ops.scalar(witness.dlog_response)?;
-    if shape.mode == CircuitCommitmentModeV4::Hidden {
-        ops.require_zero(&dlog_response);
-    }
-    append_scalar(&mut proof, &dlog_response)?;
-
-    let mask_commitment = ops.point(witness.mask_commitment)?;
-    append_point(&mut proof, &mask_commitment);
-    let t2 = ops.scalar(witness.t2)?;
-    append_scalar(&mut proof, &t2)?;
-    let alpha = ops.challenge(&mut proof, 6)?;
-    let combined_commitment = ops.point(witness.combined_commitment)?;
-    append_point(&mut proof, &combined_commitment);
-
-    let mut rounds = Vec::with_capacity(witness.rounds.len());
-    let mut gammas = Vec::with_capacity(witness.rounds.len());
-    for (round, pair) in witness.rounds.iter().enumerate() {
-        rounds.push(append_pair(ops.scope("round pair"), &mut proof, pair)?);
-        let round = u64::try_from(round).map_err(|_| synthesis_error("V4 round"))?;
-        gammas.push(ops.challenge(&mut proof, 7 + round)?);
-    }
-    let terminal_n = ops.scalar(witness.terminal_n)?;
-    let terminal_l = ops.scalar(witness.terminal_l)?;
-    append_scalar(&mut proof, &terminal_n)?;
-    append_scalar(&mut proof, &terminal_l)?;
-    let prepared_round = 7 + u64::try_from(witness.rounds.len())
-        .map_err(|_| synthesis_error("V4 transcript rounds"))?;
-    let prepared_binding = ops.challenge(&mut proof, prepared_round)?;
-
-    Ok(CircuitTranscriptResultV4 {
-        public_commitments,
-        raw_commitment,
-        coefficient_commitment,
-        anchored_offset,
-        anchored_commitment,
-        batched_public_commitment,
-        dlog_nonce,
-        dlog_response,
-        mask_commitment,
-        t2,
-        combined_commitment,
-        rounds,
-        terminal_n,
-        terminal_l,
-        precommitment,
-        rho,
-        mul_scale,
-        mul_ratio,
-        row_ratio,
-        eta,
-        dlog_challenge,
-        alpha,
-        gammas,
-        prepared_binding,
-    })
-}
-
-pub(crate) fn install_transcript_with_constrained_binding<CS: ConstraintSystem<Scalar>>(
-    cs: CS,
-    shape: CircuitTranscriptShapeV4,
-    circuit_binding_digest: &[Byte; 32],
-    raw_generator_digest: [u8; 32],
-    witness: &CircuitProofTranscriptWitnessV4,
-) -> Result<CircuitTranscriptResultV4, SynthesisError> {
-    install_transcript_with_binding(cs, shape, raw_generator_digest, witness, |transcript| {
-        append_bytes(transcript, circuit_binding_digest)
-    })
+    replay_v4(
+        &mut Constrained { ops: Ops::new(cs) },
+        shape,
+        circuit_binding_digest,
+        raw_generator_digest,
+        witness,
+    )
 }
 
 #[cfg(test)]
@@ -274,7 +175,9 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
-    use crate::native::circuit_transcript::replay_circuit_transcript_v4;
+    use crate::native::circuit_transcript::{
+        replay_circuit_transcript_v4, CircuitCommitmentModeV4, CircuitPointPairWitnessV4,
+    };
     use crate::native::secp::SecpScalarWitness;
     use statement::PrimaryEngine;
 
@@ -285,9 +188,13 @@ mod tests {
         raw_generator_digest: [u8; 32],
         witness: &CircuitProofTranscriptWitnessV4,
     ) -> Result<CircuitTranscriptResultV4, SynthesisError> {
-        install_transcript_with_binding(cs, shape, raw_generator_digest, witness, |transcript| {
-            append_constant_bytes(transcript, &circuit_binding_digest)
-        })
+        install_transcript_with_constrained_binding(
+            cs,
+            shape,
+            &circuit_binding_digest.map(Byte::constant),
+            raw_generator_digest,
+            witness,
+        )
     }
 
     const BINDING_DIGEST: [u8; 32] = [0x31; 32];

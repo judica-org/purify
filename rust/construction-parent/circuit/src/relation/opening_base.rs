@@ -2,9 +2,9 @@
 
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::{add_points, allocate_constant_point, scale_point, SecpPoint};
+use crate::gadgets::point::{add_points, allocate_constant_point, scale_point, Point};
 use crate::gadgets::scalar::nonzero_scalar_from_sha255;
-use crate::gadgets::sha256::NovaTranscript;
+use crate::gadgets::sha256::Transcript;
 use crate::gadgets::synthesis_error;
 use crate::native::opening_generators::opening_generator_pair;
 use statement::Scalar;
@@ -16,10 +16,10 @@ use statement::Scalar;
 /// linear combination.
 pub(crate) fn constrain_transcript_opening_base<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    transcript: &NovaTranscript,
+    transcript: &Transcript,
     basis_digest: [u8; 32],
     role: u64,
-) -> Result<SecpPoint, SynthesisError> {
+) -> Result<Point, SynthesisError> {
     let challenge = transcript
         .opening_base_scalar(
             cs.namespace(|| "opening-base challenge"),
@@ -56,7 +56,7 @@ mod tests {
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::gadgets::sha256::NovaByte;
+    use crate::gadgets::sha256::Byte;
     use crate::native::opening_generators::{
         opening_generator_pair, ACCUMULATION_OPENING_BASE_ROLE,
     };
@@ -73,14 +73,14 @@ mod tests {
     fn transcript<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
         fields: [Scalar; 2],
-    ) -> Result<NovaTranscript, SynthesisError> {
-        let mut transcript = NovaTranscript::new();
+    ) -> Result<Transcript, SynthesisError> {
+        let mut transcript = Transcript::new();
         for (index, field) in fields.into_iter().enumerate() {
             let bytes = field_bytes(field)
                 .iter()
                 .enumerate()
                 .map(|(byte, value)| {
-                    NovaByte::allocate(
+                    Byte::allocate(
                         cs.namespace(|| format!("field {index} byte {byte}")),
                         *value,
                     )

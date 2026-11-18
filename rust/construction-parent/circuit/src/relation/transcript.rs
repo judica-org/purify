@@ -6,9 +6,9 @@
 
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::{allocate_encoded_point, EncodedSecpPoint};
-use crate::gadgets::scalar::{allocate_canonical_scalar, CanonicalSecpScalar};
-use crate::gadgets::sha256::{NovaByte, NovaTranscript};
+use crate::gadgets::point::{allocate_encoded_point, EncodedPoint};
+use crate::gadgets::scalar::{allocate_canonical_scalar, CanonicalScalar};
+use crate::gadgets::sha256::{Byte, Transcript};
 use crate::gadgets::synthesis_error;
 use crate::gadgets::transcript::{
     append_bytes, append_constant_bytes, append_point, append_scalar, challenge,
@@ -21,42 +21,42 @@ use crate::native::secp::SecpEncodedPointWitness;
 use statement::Scalar;
 
 pub(crate) struct CircuitPointPairV4 {
-    pub(crate) first: EncodedSecpPoint,
-    pub(crate) second: EncodedSecpPoint,
+    pub(crate) first: EncodedPoint,
+    pub(crate) second: EncodedPoint,
 }
 
 pub(crate) struct CircuitTranscriptResultV4 {
-    pub(crate) public_commitments: Vec<EncodedSecpPoint>,
-    pub(crate) raw_commitment: EncodedSecpPoint,
-    pub(crate) coefficient_commitment: EncodedSecpPoint,
-    pub(crate) anchored_offset: EncodedSecpPoint,
-    pub(crate) anchored_commitment: EncodedSecpPoint,
-    pub(crate) batched_public_commitment: EncodedSecpPoint,
-    pub(crate) dlog_nonce: EncodedSecpPoint,
-    pub(crate) dlog_response: CanonicalSecpScalar,
-    pub(crate) mask_commitment: EncodedSecpPoint,
-    pub(crate) t2: CanonicalSecpScalar,
-    pub(crate) combined_commitment: EncodedSecpPoint,
+    pub(crate) public_commitments: Vec<EncodedPoint>,
+    pub(crate) raw_commitment: EncodedPoint,
+    pub(crate) coefficient_commitment: EncodedPoint,
+    pub(crate) anchored_offset: EncodedPoint,
+    pub(crate) anchored_commitment: EncodedPoint,
+    pub(crate) batched_public_commitment: EncodedPoint,
+    pub(crate) dlog_nonce: EncodedPoint,
+    pub(crate) dlog_response: CanonicalScalar,
+    pub(crate) mask_commitment: EncodedPoint,
+    pub(crate) t2: CanonicalScalar,
+    pub(crate) combined_commitment: EncodedPoint,
     pub(crate) rounds: Vec<CircuitPointPairV4>,
-    pub(crate) terminal_n: CanonicalSecpScalar,
-    pub(crate) terminal_l: CanonicalSecpScalar,
-    pub(crate) precommitment: CanonicalSecpScalar,
-    pub(crate) rho: CanonicalSecpScalar,
-    pub(crate) mul_scale: CanonicalSecpScalar,
-    pub(crate) mul_ratio: CanonicalSecpScalar,
+    pub(crate) terminal_n: CanonicalScalar,
+    pub(crate) terminal_l: CanonicalScalar,
+    pub(crate) precommitment: CanonicalScalar,
+    pub(crate) rho: CanonicalScalar,
+    pub(crate) mul_scale: CanonicalScalar,
+    pub(crate) mul_ratio: CanonicalScalar,
     // Deriving it advances the transcript, but no later constraint consumes
     // it; only the native-vector tests read it back.
     #[allow(dead_code)]
-    pub(crate) row_ratio: CanonicalSecpScalar,
-    pub(crate) eta: CanonicalSecpScalar,
-    pub(crate) dlog_challenge: CanonicalSecpScalar,
-    pub(crate) alpha: CanonicalSecpScalar,
-    pub(crate) gammas: Vec<CanonicalSecpScalar>,
-    pub(crate) prepared_binding: CanonicalSecpScalar,
+    pub(crate) row_ratio: CanonicalScalar,
+    pub(crate) eta: CanonicalScalar,
+    pub(crate) dlog_challenge: CanonicalScalar,
+    pub(crate) alpha: CanonicalScalar,
+    pub(crate) gammas: Vec<CanonicalScalar>,
+    pub(crate) prepared_binding: CanonicalScalar,
 }
 
 fn append_shape(
-    transcript: &mut NovaTranscript,
+    transcript: &mut Transcript,
     shape: CircuitTranscriptShapeV4,
 ) -> Result<(), SynthesisError> {
     transcript.append_u64(shape.mode.as_u64());
@@ -106,12 +106,12 @@ fn pair_point(
 
 fn append_pair<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    transcript: &mut NovaTranscript,
+    transcript: &mut Transcript,
     witness: &CircuitPointPairWitnessV4,
 ) -> Result<CircuitPointPairV4, SynthesisError> {
     let first = allocate_encoded_point(cs.namespace(|| "first point"), pair_point(witness, 0)?)?;
     let second = allocate_encoded_point(cs.namespace(|| "second point"), pair_point(witness, 1)?)?;
-    let parity = NovaByte::from_constrained_bits_le([
+    let parity = Byte::from_constrained_bits_le([
         second.odd().clone(),
         first.odd().clone(),
         Boolean::constant(false),
@@ -127,14 +127,14 @@ fn append_pair<CS: ConstraintSystem<Scalar>>(
 
 fn require_identity<CS: ConstraintSystem<Scalar>>(
     cs: CS,
-    point: &EncodedSecpPoint,
+    point: &EncodedPoint,
 ) -> Result<(), SynthesisError> {
     Boolean::enforce_equal(cs, &point.point().is_identity(), &Boolean::constant(true))
 }
 
 fn require_finite_even<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    point: &EncodedSecpPoint,
+    point: &EncodedPoint,
 ) -> Result<(), SynthesisError> {
     Boolean::enforce_equal(
         cs.namespace(|| "finite"),
@@ -148,7 +148,7 @@ fn require_finite_even<CS: ConstraintSystem<Scalar>>(
     )
 }
 
-fn require_zero_scalar<CS: ConstraintSystem<Scalar>>(mut cs: CS, value: &CanonicalSecpScalar) {
+fn require_zero_scalar<CS: ConstraintSystem<Scalar>>(mut cs: CS, value: &CanonicalScalar) {
     let embedded = value.embedded();
     cs.enforce(|| "zero scalar", |_| embedded, |lc| lc + CS::one(), |lc| lc);
 }
@@ -162,7 +162,7 @@ fn install_transcript_with_binding<CS, F>(
 ) -> Result<CircuitTranscriptResultV4, SynthesisError>
 where
     CS: ConstraintSystem<Scalar>,
-    F: FnOnce(&mut NovaTranscript) -> Result<(), SynthesisError>,
+    F: FnOnce(&mut Transcript) -> Result<(), SynthesisError>,
 {
     shape
         .validate()
@@ -173,7 +173,7 @@ where
         return Err(synthesis_error("V4 transcript witness shape"));
     }
 
-    let mut precommit = NovaTranscript::new();
+    let mut precommit = Transcript::new();
     append_constant_bytes(&mut precommit, CIRCUIT_NORM_PRECOMMIT_DOMAIN_V4)?;
     append_binding(&mut precommit)?;
     append_shape(&mut precommit, shape)?;
@@ -189,7 +189,7 @@ where
     append_point(&mut precommit, &raw_commitment);
     let precommitment = challenge(cs.namespace(|| "precommitment"), &mut precommit, 0)?;
 
-    let mut proof = NovaTranscript::new();
+    let mut proof = Transcript::new();
     append_constant_bytes(&mut proof, CIRCUIT_NORM_PROOF_DOMAIN_V4)?;
     append_scalar(&mut proof, &precommitment)?;
     append_constant_bytes(&mut proof, &raw_generator_digest)?;
@@ -310,7 +310,7 @@ where
 pub(crate) fn install_transcript_with_constrained_binding<CS: ConstraintSystem<Scalar>>(
     cs: CS,
     shape: CircuitTranscriptShapeV4,
-    circuit_binding_digest: &[NovaByte; 32],
+    circuit_binding_digest: &[Byte; 32],
     raw_generator_digest: [u8; 32],
     witness: &CircuitProofTranscriptWitnessV4,
 ) -> Result<CircuitTranscriptResultV4, SynthesisError> {
@@ -430,7 +430,7 @@ mod tests {
         }
     }
 
-    fn constrained_integer(value: &CanonicalSecpScalar) -> BigInt {
+    fn constrained_integer(value: &CanonicalScalar) -> BigInt {
         value.integer().expect("direct scalar witness").clone()
     }
 
@@ -605,7 +605,7 @@ mod tests {
 
         let mut constrained_cs = TestConstraintSystem::<Scalar>::new();
         let constrained_binding = array::from_fn(|index| {
-            NovaByte::allocate(
+            Byte::allocate(
                 constrained_cs.namespace(|| format!("binding byte {index}")),
                 BINDING_DIGEST[index],
             )

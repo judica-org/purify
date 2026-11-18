@@ -7,14 +7,13 @@
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
 use crate::gadgets::point::{
-    add_points, allocate_constant_point, encode_computed_point, scale_point, EncodedSecpPoint,
-    SecpPoint,
+    add_points, allocate_constant_point, encode_computed_point, scale_point, EncodedPoint, Point,
 };
 use crate::gadgets::scalar::{
     constant_scalar, constant_u64, invert_scalar, multiply_scalars, subtract_scalars,
-    CanonicalSecpScalar,
+    CanonicalScalar,
 };
-use crate::gadgets::sha256::NovaByte;
+use crate::gadgets::sha256::Byte;
 use crate::gadgets::synthesis_error;
 use crate::native::circuit_norm::{
     CandidateNormReductionProofWitness, ManifestBoundConstructionLeafStatementV4,
@@ -38,41 +37,41 @@ const SQRT_MINUS_ONE_INVERSE: SecpScalarWitness = SecpScalarWitness::from_bytes_
 ]);
 
 pub(crate) struct PreparedNorm {
-    pub(crate) prepared_binding: CanonicalSecpScalar,
-    pub(crate) coefficient_commitment: EncodedSecpPoint,
-    pub(crate) residual: EncodedSecpPoint,
+    pub(crate) prepared_binding: CanonicalScalar,
+    pub(crate) coefficient_commitment: EncodedPoint,
+    pub(crate) residual: EncodedPoint,
     pub(crate) polynomial: Vec<PolynomialTerm>,
 }
 
 pub(crate) struct ManifestBoundConstructionLeaf {
     pub(crate) claim: PendingClaim,
-    pub(crate) circuit_binding_digest: [NovaByte; 32],
-    pub(crate) precommitment: CanonicalSecpScalar,
-    pub(crate) coefficient_commitment: EncodedSecpPoint,
-    pub(crate) anchored_offset: EncodedSecpPoint,
+    pub(crate) circuit_binding_digest: [Byte; 32],
+    pub(crate) precommitment: CanonicalScalar,
+    pub(crate) coefficient_commitment: EncodedPoint,
+    pub(crate) anchored_offset: EncodedPoint,
 }
 
 fn require_finite<CS: ConstraintSystem<Scalar>>(
     cs: CS,
-    point: &SecpPoint,
+    point: &Point,
 ) -> Result<(), SynthesisError> {
     Boolean::enforce_equal(cs, &point.is_identity(), &Boolean::constant(false))
 }
 
 fn scale<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    point: &SecpPoint,
-    scalar: &CanonicalSecpScalar,
-) -> Result<SecpPoint, SynthesisError> {
+    point: &Point,
+    scalar: &CanonicalScalar,
+) -> Result<Point, SynthesisError> {
     let bits = scalar.allocated_bits_le(cs.namespace(|| "scalar bits"))?;
     scale_point(cs.namespace(|| "scalar multiplication"), point, &bits)
 }
 
 fn square_repeatedly<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    value: &CanonicalSecpScalar,
+    value: &CanonicalScalar,
     count: usize,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+) -> Result<CanonicalScalar, SynthesisError> {
     let mut result = value.clone();
     for round in 0..count {
         result = multiply_scalars(cs.namespace(|| format!("square {round}")), &result, &result)?;
@@ -83,7 +82,7 @@ fn square_repeatedly<CS: ConstraintSystem<Scalar>>(
 fn constrain_anchor_and_mask<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     transcript: &CircuitTranscriptResultV4,
-    generator: &SecpPoint,
+    generator: &Point,
 ) -> Result<(), SynthesisError> {
     require_finite(
         cs.namespace(|| "raw commitment is finite"),
@@ -177,7 +176,7 @@ fn constrain_public_commitment_batch<CS: ConstraintSystem<Scalar>>(
 pub(crate) fn constrain_manifest_bound_public_dlog<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     transcript: &CircuitTranscriptResultV4,
-    generator: &SecpPoint,
+    generator: &Point,
 ) -> Result<(), SynthesisError> {
     if transcript.public_commitments.len() != 1 {
         return Err(synthesis_error(
@@ -212,7 +211,7 @@ pub(crate) fn prepare_norm<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     shape: CircuitTranscriptShapeV4,
     transcript: &CircuitTranscriptResultV4,
-    generator: &SecpPoint,
+    generator: &Point,
 ) -> Result<PreparedNorm, SynthesisError> {
     if transcript.rounds.len() != shape.round_count()
         || transcript.gammas.len() != shape.round_count()
@@ -333,7 +332,7 @@ pub(crate) fn prepare_norm<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn allocate_standard_generator<CS: ConstraintSystem<Scalar>>(
     cs: CS,
-) -> Result<SecpPoint, SynthesisError> {
+) -> Result<Point, SynthesisError> {
     allocate_constant_point(cs, standard_generator())
 }
 
@@ -354,7 +353,7 @@ pub(crate) fn constrain_manifest_bound_construction_leaf<CS: ConstraintSystem<Sc
         .into_iter()
         .enumerate()
         .map(|(index, byte)| {
-            NovaByte::allocate(
+            Byte::allocate(
                 cs.namespace(|| format!("circuit binding byte {index}")),
                 byte,
             )
@@ -422,22 +421,22 @@ mod tests {
     fn scalar<CS: ConstraintSystem<Scalar>>(
         cs: CS,
         value: u64,
-    ) -> Result<CanonicalSecpScalar, SynthesisError> {
+    ) -> Result<CanonicalScalar, SynthesisError> {
         allocate_canonical_scalar(cs, SecpScalarWitness::from_u64(value))
     }
 
     fn point<CS: ConstraintSystem<Scalar>>(
         cs: CS,
         value: crate::native::secp::PointValue,
-    ) -> Result<EncodedSecpPoint, SynthesisError> {
+    ) -> Result<EncodedPoint, SynthesisError> {
         allocate_encoded_point(cs, SecpEncodedPointWitness::from_point_value(value))
     }
 
-    fn scalar_value(value: &CanonicalSecpScalar) -> BigInt {
+    fn scalar_value(value: &CanonicalScalar) -> BigInt {
         value.integer().cloned().expect("scalar witness")
     }
 
-    fn assert_point_value(actual: &EncodedSecpPoint, expected: crate::native::secp::PointValue) {
+    fn assert_point_value(actual: &EncodedPoint, expected: crate::native::secp::PointValue) {
         assert_eq!(actual.point().x().get_value(), Some(expected.x));
         assert_eq!(actual.point().y().get_value(), Some(expected.y));
         assert_eq!(
@@ -652,10 +651,7 @@ mod tests {
         witness: &CircuitProofTranscriptWitnessV4,
     ) {
         assert_eq!(
-            direct
-                .circuit_binding_digest
-                .each_ref()
-                .map(NovaByte::value),
+            direct.circuit_binding_digest.each_ref().map(Byte::value),
             TEST_BINDING
         );
         let transcript =

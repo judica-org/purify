@@ -8,9 +8,9 @@ use nova_snark::{
     traits::circuit::StepCircuit,
 };
 
-use crate::gadgets::point::{allocate_encoded_point, EncodedSecpPoint};
-use crate::gadgets::scalar::{allocate_canonical_scalar, CanonicalSecpScalar};
-use crate::gadgets::sha256::{NovaByte, NovaTranscript};
+use crate::gadgets::point::{allocate_encoded_point, EncodedPoint};
+use crate::gadgets::scalar::{allocate_canonical_scalar, CanonicalScalar};
+use crate::gadgets::sha256::{Byte, Transcript};
 use crate::gadgets::synthesis_error;
 use crate::gadgets::transcript::{
     append_bytes, append_constant_bytes, append_point, append_scalar, challenge,
@@ -43,9 +43,9 @@ pub const QUALIFIED_RELATION_ID: RelationId = RelationId::from_frozen_bytes([
 
 pub(crate) struct PriorState {
     pub(crate) root_claim: PendingClaim,
-    manifest: [NovaByte; 32],
+    manifest: [Byte; 32],
     index: AllocatedNum<Scalar>,
-    index_bytes: [NovaByte; 32],
+    index_bytes: [Byte; 32],
 }
 
 #[derive(Clone)]
@@ -179,18 +179,18 @@ impl StepCircuit<Scalar> for ConstructionParentStep {
 /// This is the only seam between the direct norm leaf and the recurrence.
 /// It deliberately carries constrained values, not a second witness model.
 pub(crate) struct ConstrainedManifestLeaf<'a> {
-    binding_digest: &'a [NovaByte; 32],
-    precommitment: &'a CanonicalSecpScalar,
-    coefficient_commitment: &'a EncodedSecpPoint,
-    anchored_offset: &'a EncodedSecpPoint,
+    binding_digest: &'a [Byte; 32],
+    precommitment: &'a CanonicalScalar,
+    coefficient_commitment: &'a EncodedPoint,
+    anchored_offset: &'a EncodedPoint,
 }
 
 impl<'a> ConstrainedManifestLeaf<'a> {
     pub(crate) fn new(
-        binding_digest: &'a [NovaByte; 32],
-        precommitment: &'a CanonicalSecpScalar,
-        coefficient_commitment: &'a EncodedSecpPoint,
-        anchored_offset: &'a EncodedSecpPoint,
+        binding_digest: &'a [Byte; 32],
+        precommitment: &'a CanonicalScalar,
+        coefficient_commitment: &'a EncodedPoint,
+        anchored_offset: &'a EncodedPoint,
     ) -> Self {
         Self {
             binding_digest,
@@ -223,14 +223,14 @@ fn enforce_equal<CS: ConstraintSystem<Scalar>>(
 fn field_bytes_be<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     value: &AllocatedNum<Scalar>,
-) -> Result<[NovaByte; 32], SynthesisError> {
+) -> Result<[Byte; 32], SynthesisError> {
     let bits = value.to_bits_le_strict(cs.namespace(|| "canonical field bits"))?;
     if bits.len() != FIELD_BITS {
         return Err(synthesis_error("construction state field width"));
     }
     Ok(array::from_fn(|byte| {
         let offset = (31 - byte) * 8;
-        NovaByte::from_constrained_bits_le(array::from_fn(|bit| bits[offset + bit].clone()))
+        Byte::from_constrained_bits_le(array::from_fn(|bit| bits[offset + bit].clone()))
     }))
 }
 
@@ -238,7 +238,7 @@ fn bind_scalar<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     state: &AllocatedNum<Scalar>,
     witness: crate::native::secp::SecpScalarWitness,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+) -> Result<CanonicalScalar, SynthesisError> {
     let scalar = allocate_canonical_scalar(cs.namespace(|| "canonical scalar"), witness)?;
     enforce_equal(cs.namespace(|| "embedded scalar"), state, scalar.embedded());
     Ok(scalar)
@@ -305,8 +305,8 @@ pub(crate) fn install_manifest_transition<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     state: &PriorState,
     leaf: ConstrainedManifestLeaf<'_>,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
-    let mut transcript = NovaTranscript::new();
+) -> Result<CanonicalScalar, SynthesisError> {
+    let mut transcript = Transcript::new();
     append_constant_bytes(&mut transcript, STEP_MANIFEST_DOMAIN)?;
     transcript.append_field(&state.manifest);
     transcript.append_field(&state.index_bytes);
@@ -317,7 +317,7 @@ pub(crate) fn install_manifest_transition<CS: ConstraintSystem<Scalar>>(
     challenge(cs.namespace(|| "next manifest"), &mut transcript, 0)
 }
 
-fn scalar_assignment(value: &CanonicalSecpScalar) -> Result<Option<Scalar>, SynthesisError> {
+fn scalar_assignment(value: &CanonicalScalar) -> Result<Option<Scalar>, SynthesisError> {
     value
         .integer()
         .map(|value| {
@@ -329,7 +329,7 @@ fn scalar_assignment(value: &CanonicalSecpScalar) -> Result<Option<Scalar>, Synt
 
 fn materialize_scalar<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    value: &CanonicalSecpScalar,
+    value: &CanonicalScalar,
 ) -> Result<AllocatedNum<Scalar>, SynthesisError> {
     let output = AllocatedNum::alloc(cs.namespace(|| "state output"), || {
         scalar_assignment(value)?.ok_or(SynthesisError::AssignmentMissing)
@@ -365,7 +365,7 @@ pub(crate) fn expose_output_state<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     prior: &PriorState,
     root: &CandidateRoot,
-    manifest: &CanonicalSecpScalar,
+    manifest: &CanonicalScalar,
 ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
     if root.factors.len() != ROOT_ROUNDS {
         return Err(synthesis_error("construction output root shape"));
@@ -577,14 +577,13 @@ mod tests {
             .collect()
     }
 
-    fn allocate_bytes<CS: ConstraintSystem<Scalar>>(mut cs: CS, value: [u8; 32]) -> [NovaByte; 32] {
+    fn allocate_bytes<CS: ConstraintSystem<Scalar>>(mut cs: CS, value: [u8; 32]) -> [Byte; 32] {
         array::from_fn(|index| {
-            NovaByte::allocate(cs.namespace(|| format!("byte {index}")), value[index])
-                .expect("byte")
+            Byte::allocate(cs.namespace(|| format!("byte {index}")), value[index]).expect("byte")
         })
     }
 
-    fn constrained_scalar_bytes(value: &CanonicalSecpScalar) -> [u8; 32] {
+    fn constrained_scalar_bytes(value: &CanonicalScalar) -> [u8; 32] {
         let (_, encoded) = value.integer().expect("scalar witness").to_bytes_be();
         let mut bytes = [0; 32];
         bytes[32 - encoded.len()..].copy_from_slice(&encoded);
@@ -660,7 +659,7 @@ mod tests {
             assert_eq!(constrained_scalar_bytes(actual), expected.bytes);
         }
         assert_eq!(
-            state.manifest.each_ref().map(NovaByte::value),
+            state.manifest.each_ref().map(Byte::value),
             state_witness.manifest
         );
         let binding_vars = allocate_bytes(cs.namespace(|| "binding digest"), binding);

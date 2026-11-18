@@ -23,11 +23,11 @@ use statement::transcript::{
 use statement::{RelationError, Scalar};
 
 #[derive(Clone, Debug)]
-pub(crate) struct NovaByte {
+pub(crate) struct Byte {
     bits_le: [Boolean; 8],
 }
 
-impl NovaByte {
+impl Byte {
     pub(crate) fn constant(value: u8) -> Self {
         Self {
             bits_le: array::from_fn(|bit| Boolean::constant((value >> bit) & 1 == 1)),
@@ -68,20 +68,20 @@ impl NovaByte {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct NovaChallenge {
+pub(crate) struct Challenge {
     // The digest and packed scalar are constrained here and consumed through
     // `scalar_bits_le`; only the native-vector tests read them back.
     #[allow(dead_code)]
-    digest: [NovaByte; 32],
+    digest: [Byte; 32],
     scalar_bits_le: [Boolean; 255],
     #[allow(dead_code)]
     scalar: Num<Scalar>,
 }
 
-impl NovaChallenge {
+impl Challenge {
     #[cfg(test)]
     pub(crate) fn digest_value(&self) -> [u8; 32] {
-        self.digest.each_ref().map(NovaByte::value)
+        self.digest.each_ref().map(Byte::value)
     }
 
     #[cfg(test)]
@@ -95,16 +95,16 @@ impl NovaChallenge {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct NovaTranscript {
-    state: [NovaByte; 32],
-    pending: Vec<NovaByte>,
+pub(crate) struct Transcript {
+    state: [Byte; 32],
+    pending: Vec<Byte>,
 }
 
-fn constrained_header(item_type: u32, auxiliary: u64) -> [NovaByte; HEADER_SIZE] {
-    header(item_type, auxiliary).map(NovaByte::constant)
+fn constrained_header(item_type: u32, auxiliary: u64) -> [Byte; HEADER_SIZE] {
+    header(item_type, auxiliary).map(Byte::constant)
 }
 
-fn constrained_byte_header(item_type: u32, auxiliary: &NovaByte) -> [NovaByte; HEADER_SIZE] {
+fn constrained_byte_header(item_type: u32, auxiliary: &Byte) -> [Byte; HEADER_SIZE] {
     let mut encoded = constrained_header(item_type, 0);
     encoded[HEADER_SIZE - 1] = auxiliary.clone();
     encoded
@@ -112,8 +112,8 @@ fn constrained_byte_header(item_type: u32, auxiliary: &NovaByte) -> [NovaByte; H
 
 fn hash<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    message: &[NovaByte],
-) -> Result<[NovaByte; 32], SynthesisError> {
+    message: &[Byte],
+) -> Result<[Byte; 32], SynthesisError> {
     let input = message
         .iter()
         .flat_map(|byte| byte.bits_le.iter().rev().cloned())
@@ -123,7 +123,7 @@ fn hash<CS: ConstraintSystem<Scalar>>(
         .as_chunks::<8>()
         .0
         .iter()
-        .map(|bits_be| NovaByte {
+        .map(|bits_be| Byte {
             bits_le: bits_be
                 .iter()
                 .rev()
@@ -137,9 +137,7 @@ fn hash<CS: ConstraintSystem<Scalar>>(
         .expect("SHA-256 output digest"))
 }
 
-fn scalar_255<CS: ConstraintSystem<Scalar>>(
-    digest: &[NovaByte; 32],
-) -> ([Boolean; 255], Num<Scalar>) {
+fn scalar_255<CS: ConstraintSystem<Scalar>>(digest: &[Byte; 32]) -> ([Boolean; 255], Num<Scalar>) {
     let bits_le: [Boolean; 255] = digest
         .iter()
         .rev()
@@ -157,11 +155,11 @@ fn scalar_255<CS: ConstraintSystem<Scalar>>(
     (bits_le, scalar)
 }
 
-impl NovaTranscript {
+impl Transcript {
     pub(crate) fn new() -> Self {
         let state: [u8; 32] = Sha256::digest(SUITE_ID).into();
         Self {
-            state: state.map(NovaByte::constant),
+            state: state.map(Byte::constant),
             pending: Vec::new(),
         }
     }
@@ -171,17 +169,17 @@ impl NovaTranscript {
             .extend(constrained_header(item_type, auxiliary));
     }
 
-    pub(crate) fn append_field(&mut self, value: &[NovaByte; 32]) {
+    pub(crate) fn append_field(&mut self, value: &[Byte; 32]) {
         self.append_header(FIELD_ITEM, 0);
         self.pending.extend_from_slice(value);
     }
 
-    pub(crate) fn append_scalar(&mut self, value: &[NovaByte; 32]) {
+    pub(crate) fn append_scalar(&mut self, value: &[Byte; 32]) {
         self.append_header(SCALAR_ITEM, 0);
         self.pending.extend_from_slice(value);
     }
 
-    pub(crate) fn append_point(&mut self, prefix: &NovaByte, x: &[NovaByte; 32]) {
+    pub(crate) fn append_point(&mut self, prefix: &Byte, x: &[Byte; 32]) {
         self.pending
             .extend(constrained_byte_header(POINT_ITEM, prefix));
         self.pending.extend_from_slice(x);
@@ -189,9 +187,9 @@ impl NovaTranscript {
 
     pub(crate) fn append_point_pair(
         &mut self,
-        parity: &NovaByte,
-        first_x: &[NovaByte; 32],
-        second_x: &[NovaByte; 32],
+        parity: &Byte,
+        first_x: &[Byte; 32],
+        second_x: &[Byte; 32],
     ) {
         self.pending
             .extend(constrained_byte_header(POINT_PAIR_ITEM, parity));
@@ -199,7 +197,7 @@ impl NovaTranscript {
         self.pending.extend_from_slice(second_x);
     }
 
-    pub(crate) fn append_bytes(&mut self, value: &[NovaByte]) -> Result<(), RelationError> {
+    pub(crate) fn append_bytes(&mut self, value: &[Byte]) -> Result<(), RelationError> {
         let length = u64::try_from(value.len())
             .map_err(|_| RelationError::Malformed("SHA transcript byte length"))?;
         self.append_header(BYTES_ITEM, length);
@@ -215,7 +213,7 @@ impl NovaTranscript {
         &mut self,
         mut cs: CS,
         round: u64,
-    ) -> Result<NovaChallenge, RelationError> {
+    ) -> Result<Challenge, RelationError> {
         let mut message = Vec::with_capacity(
             self.state
                 .len()
@@ -231,7 +229,7 @@ impl NovaTranscript {
         let (scalar_bits_le, scalar) = scalar_255::<CS::Root>(&digest);
         self.state = digest.clone();
         self.pending.clear();
-        Ok(NovaChallenge {
+        Ok(Challenge {
             digest,
             scalar_bits_le,
             scalar,
@@ -243,9 +241,9 @@ impl NovaTranscript {
         mut cs: CS,
         basis_digest: [u8; 32],
         role: u64,
-    ) -> Result<NovaChallenge, RelationError> {
+    ) -> Result<Challenge, RelationError> {
         let mut fork = self.clone();
-        let basis = basis_digest.map(NovaByte::constant);
+        let basis = basis_digest.map(Byte::constant);
         fork.append_bytes(&basis)?;
         fork.pending
             .extend(constrained_header(OPENING_BASE_ITEM, role));
@@ -260,7 +258,7 @@ impl NovaTranscript {
         let digest = hash(cs.namespace(|| format!("opening base {role}")), &message)
             .map_err(|_| RelationError::Malformed("Nova SHA-256 synthesis"))?;
         let (scalar_bits_le, scalar) = scalar_255::<CS::Root>(&digest);
-        Ok(NovaChallenge {
+        Ok(Challenge {
             digest,
             scalar_bits_le,
             scalar,
@@ -284,23 +282,23 @@ mod tests {
         encoded
     }
 
-    fn allocate_bytes<CS: ConstraintSystem<Scalar>>(mut cs: CS, value: &[u8]) -> Vec<NovaByte> {
+    fn allocate_bytes<CS: ConstraintSystem<Scalar>>(mut cs: CS, value: &[u8]) -> Vec<Byte> {
         value
             .iter()
             .enumerate()
             .map(|(index, value)| {
-                NovaByte::allocate(cs.namespace(|| format!("byte {index}")), *value)
+                Byte::allocate(cs.namespace(|| format!("byte {index}")), *value)
                     .expect("byte allocation")
             })
             .collect()
     }
 
-    fn allocate_array<CS: ConstraintSystem<Scalar>>(cs: CS, value: &[u8; 32]) -> [NovaByte; 32] {
+    fn allocate_array<CS: ConstraintSystem<Scalar>>(cs: CS, value: &[u8; 32]) -> [Byte; 32] {
         allocate_bytes(cs, value).try_into().expect("32 bytes")
     }
 
-    fn constrained_vector<CS: ConstraintSystem<Scalar>>(mut cs: CS, seed: u64) -> NovaTranscript {
-        let mut transcript = NovaTranscript::new();
+    fn constrained_vector<CS: ConstraintSystem<Scalar>>(mut cs: CS, seed: u64) -> Transcript {
+        let mut transcript = Transcript::new();
         transcript.append_field(&allocate_array(
             cs.namespace(|| "field"),
             &bytes32_from_u64(seed + 1),
@@ -309,14 +307,14 @@ mod tests {
             cs.namespace(|| "scalar"),
             &bytes32_from_u64(seed + 2),
         ));
-        let prefix = NovaByte::allocate(cs.namespace(|| "point prefix"), 2 + (seed & 1) as u8)
-            .expect("prefix");
+        let prefix =
+            Byte::allocate(cs.namespace(|| "point prefix"), 2 + (seed & 1) as u8).expect("prefix");
         transcript.append_point(
             &prefix,
             &allocate_array(cs.namespace(|| "point x"), &bytes32_from_u64(seed + 3)),
         );
         let parity =
-            NovaByte::allocate(cs.namespace(|| "pair parity"), (seed & 3) as u8).expect("parity");
+            Byte::allocate(cs.namespace(|| "pair parity"), (seed & 3) as u8).expect("parity");
         transcript.append_point_pair(
             &parity,
             &allocate_array(cs.namespace(|| "first x"), &bytes32_from_u64(seed + 4)),
@@ -392,7 +390,7 @@ mod tests {
         let message = allocate_bytes(cs.namespace(|| "input"), b"input bit");
         let digest = hash(cs.namespace(|| "hash"), &message).expect("SHA-256");
         assert_eq!(
-            digest.each_ref().map(NovaByte::value),
+            digest.each_ref().map(Byte::value),
             Sha256::digest(b"input bit")[..]
         );
         assert!(cs.is_satisfied());

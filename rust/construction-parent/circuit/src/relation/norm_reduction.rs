@@ -6,13 +6,13 @@
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
 use crate::gadgets::point::{
-    add_points, allocate_encoded_point, encode_computed_point, scale_point, SecpPoint,
+    add_points, allocate_encoded_point, encode_computed_point, scale_point, Point,
 };
 use crate::gadgets::scalar::{
     add_scalars, allocate_canonical_scalar, constant_u64, invert_scalar, multiply_scalars,
-    subtract_scalars, CanonicalSecpScalar,
+    subtract_scalars, CanonicalScalar,
 };
-use crate::gadgets::sha256::NovaTranscript;
+use crate::gadgets::sha256::Transcript;
 use crate::gadgets::synthesis_error;
 use crate::gadgets::transcript::{append_constant_bytes, append_point, append_scalar, challenge};
 use crate::native::circuit_norm::CandidateNormReductionProofWitness;
@@ -27,19 +27,19 @@ const MAX_REDUCTION_ROUNDS: usize = 24;
 
 fn scale<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    point: &SecpPoint,
-    scalar: &CanonicalSecpScalar,
-) -> Result<SecpPoint, SynthesisError> {
+    point: &Point,
+    scalar: &CanonicalScalar,
+) -> Result<Point, SynthesisError> {
     let bits = scalar.allocated_bits_le(cs.namespace(|| "scalar bits"))?;
     scale_point(cs.namespace(|| "scalar multiplication"), point, &bits)
 }
 
 fn add_scaled<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    sum: &SecpPoint,
-    point: &SecpPoint,
-    scalar: &CanonicalSecpScalar,
-) -> Result<SecpPoint, SynthesisError> {
+    sum: &Point,
+    point: &Point,
+    scalar: &CanonicalScalar,
+) -> Result<Point, SynthesisError> {
     let term = scale(cs.namespace(|| "scaled term"), point, scalar)?;
     add_points(cs.namespace(|| "term sum"), sum, &term)
 }
@@ -82,12 +82,12 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
     n_vec_len: usize,
     prepared: &PreparedNorm,
     proof: &CandidateNormReductionProofWitness,
-    generator: &SecpPoint,
+    generator: &Point,
 ) -> Result<PendingClaim, SynthesisError> {
     let rounds = validate_shape(n_vec_len, prepared, proof)?;
     let zero = constant_u64::<CS::Root>(0)?;
     let one = constant_u64::<CS::Root>(1)?;
-    let mut transcript = NovaTranscript::new();
+    let mut transcript = Transcript::new();
     append_constant_bytes(&mut transcript, NORM_REDUCTION_DOMAIN)?;
     append_constant_bytes(&mut transcript, &basis_digest)?;
     transcript.append_u64(rounds as u64);
@@ -290,9 +290,7 @@ mod tests {
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::gadgets::point::{
-        allocate_encoded_point as allocate_direct_point, EncodedSecpPoint,
-    };
+    use crate::gadgets::point::{allocate_encoded_point as allocate_direct_point, EncodedPoint};
     use crate::gadgets::scalar::allocate_canonical_scalar as allocate_test_scalar;
     use crate::native::secp::SecpScalarWitness;
     use crate::native::secp::{encoded_point_value, standard_generator, SecpEncodedPointWitness};
@@ -305,7 +303,7 @@ mod tests {
     fn allocate_direct_test_scalar<CS: ConstraintSystem<Scalar>>(
         cs: CS,
         value: u64,
-    ) -> Result<CanonicalSecpScalar, SynthesisError> {
+    ) -> Result<CanonicalScalar, SynthesisError> {
         allocate_test_scalar(cs, SecpScalarWitness::from_u64(value))
     }
 
@@ -365,7 +363,7 @@ mod tests {
         )
     }
 
-    fn scalar_value(value: &CanonicalSecpScalar) -> BigUint {
+    fn scalar_value(value: &CanonicalScalar) -> BigUint {
         let value = value.integer().cloned().expect("direct scalar witness");
         let (_, bytes) = value.to_bytes_be();
         BigUint::from_bytes_be(&bytes)
@@ -375,7 +373,7 @@ mod tests {
         BigUint::parse_bytes(value.as_bytes(), 10).expect("decimal scalar")
     }
 
-    fn assert_point_value(direct: &EncodedSecpPoint, expected: SecpEncodedPointWitness) {
+    fn assert_point_value(direct: &EncodedPoint, expected: SecpEncodedPointWitness) {
         let point = encoded_point_value(expected).expect("fixed point");
         assert_eq!(direct.point().x().get_value(), Some(point.x));
         assert_eq!(direct.point().y().get_value(), Some(point.y));

@@ -29,12 +29,12 @@ const SCALAR_BITS: usize = LIMB_BITS * LIMB_COUNT;
 const SHA_CHALLENGE_BITS: usize = SCALAR_BITS - 1;
 
 #[derive(Clone)]
-pub(crate) struct CanonicalSecpScalar {
+pub(crate) struct CanonicalScalar {
     value: BigNat<Scalar>,
     bits_le: Vec<Boolean>,
 }
 
-impl CanonicalSecpScalar {
+impl CanonicalScalar {
     pub(crate) fn bits_le(&self) -> &[Boolean] {
         &self.bits_le
     }
@@ -142,7 +142,7 @@ fn constant_bignat<CS: ConstraintSystem<Scalar>>(value: &BigInt) -> BigNat<Scala
 /// Represent one small relation constant without allocating a witness.
 pub(crate) fn constant_u64<CS: ConstraintSystem<Scalar>>(
     value: u64,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+) -> Result<CanonicalScalar, SynthesisError> {
     constant_scalar::<CS>(SecpScalarWitness::from_u64(value))
 }
 
@@ -152,7 +152,7 @@ pub(crate) fn constant_u64<CS: ConstraintSystem<Scalar>>(
 /// per-step data whose value belongs in the assignment.
 pub(crate) fn constant_scalar<CS: ConstraintSystem<Scalar>>(
     value: SecpScalarWitness,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+) -> Result<CanonicalScalar, SynthesisError> {
     let value = integer(value.bytes);
     if value >= scalar_order() {
         return Err(synthesis_error("noncanonical constant scalar"));
@@ -160,7 +160,7 @@ pub(crate) fn constant_scalar<CS: ConstraintSystem<Scalar>>(
     let bits_le = (0..SCALAR_BITS)
         .map(|index| Boolean::constant(order_bit(&value, index)))
         .collect();
-    Ok(CanonicalSecpScalar {
+    Ok(CanonicalScalar {
         value: constant_bignat::<CS>(&value),
         bits_le,
     })
@@ -219,20 +219,20 @@ fn enforce_less_than_order<CS: ConstraintSystem<Scalar>>(
 fn canonicalize<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     value: BigNat<Scalar>,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+) -> Result<CanonicalScalar, SynthesisError> {
     let bits_le = value
         .decompose_allocated(cs.namespace(|| "scalar bits"))?
         .into_iter()
         .map(Boolean::from)
         .collect::<Vec<_>>();
     enforce_less_than_order(cs.namespace(|| "less than order"), &bits_le)?;
-    Ok(CanonicalSecpScalar { value, bits_le })
+    Ok(CanonicalScalar { value, bits_le })
 }
 
 fn allocate_integer<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     value: Option<BigInt>,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+) -> Result<CanonicalScalar, SynthesisError> {
     let value = BigNat::alloc_from_nat(
         cs.namespace(|| "scalar"),
         || value.ok_or(SynthesisError::AssignmentMissing),
@@ -245,15 +245,15 @@ fn allocate_integer<CS: ConstraintSystem<Scalar>>(
 pub(crate) fn allocate_canonical_scalar<CS: ConstraintSystem<Scalar>>(
     cs: CS,
     value: SecpScalarWitness,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+) -> Result<CanonicalScalar, SynthesisError> {
     allocate_integer(cs, Some(integer(value.bytes)))
 }
 
 pub(crate) fn multiply_scalars<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    left: &CanonicalSecpScalar,
-    right: &CanonicalSecpScalar,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+    left: &CanonicalScalar,
+    right: &CanonicalScalar,
+) -> Result<CanonicalScalar, SynthesisError> {
     let modulus = constant_bignat::<CS::Root>(&scalar_order());
     let (_, remainder) = left.value.mult_mod(
         cs.namespace(|| "multiply modulo order"),
@@ -265,9 +265,9 @@ pub(crate) fn multiply_scalars<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn add_scalars<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    left: &CanonicalSecpScalar,
-    right: &CanonicalSecpScalar,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+    left: &CanonicalScalar,
+    right: &CanonicalScalar,
+) -> Result<CanonicalScalar, SynthesisError> {
     let modulus = constant_bignat::<CS::Root>(&scalar_order());
     let sum = left.value.add(&right.value)?;
     let remainder = sum.red_mod(cs.namespace(|| "add modulo order"), &modulus)?;
@@ -276,9 +276,9 @@ pub(crate) fn add_scalars<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn subtract_scalars<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    left: &CanonicalSecpScalar,
-    right: &CanonicalSecpScalar,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+    left: &CanonicalScalar,
+    right: &CanonicalScalar,
+) -> Result<CanonicalScalar, SynthesisError> {
     let modulus = constant_bignat::<CS::Root>(&scalar_order());
     let remainder = left.value.sub_mod(
         cs.namespace(|| "subtract modulo order"),
@@ -290,8 +290,8 @@ pub(crate) fn subtract_scalars<CS: ConstraintSystem<Scalar>>(
 
 pub(crate) fn invert_scalar<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    value: &CanonicalSecpScalar,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+    value: &CanonicalScalar,
+) -> Result<CanonicalScalar, SynthesisError> {
     let order = scalar_order();
     let exponent = &order - 2;
     let inverse_value = value.integer().map(|value| value.modpow(&exponent, &order));
@@ -366,7 +366,7 @@ fn bignat_from_bits<CS: ConstraintSystem<Scalar>>(
 pub(crate) fn nonzero_scalar_from_sha255<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     bits_le: &[Boolean],
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+) -> Result<CanonicalScalar, SynthesisError> {
     if bits_le.len() != SHA_CHALLENGE_BITS {
         return Err(synthesis_error("SHA challenge bit length"));
     }
@@ -398,7 +398,7 @@ pub(crate) fn nonzero_scalar_from_sha255<CS: ConstraintSystem<Scalar>>(
         |lc| lc + inverse,
         |lc| lc + CS::one(),
     );
-    Ok(CanonicalSecpScalar {
+    Ok(CanonicalScalar {
         value,
         bits_le: scalar_bits,
     })
@@ -520,7 +520,7 @@ mod tests {
         Ok(())
     }
 
-    fn assert_integer(value: &CanonicalSecpScalar, expected: &BigInt) {
+    fn assert_integer(value: &CanonicalScalar, expected: &BigInt) {
         assert_eq!(value.integer(), Some(expected));
         assert_eq!(value.bits_le().len(), SCALAR_BITS);
         assert!(!value.embedded().is_empty());

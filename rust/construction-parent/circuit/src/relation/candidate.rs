@@ -3,14 +3,13 @@
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
 use crate::gadgets::point::{
-    add_points, allocate_encoded_point, encode_computed_point, scale_point, EncodedSecpPoint,
-    SecpPoint,
+    add_points, allocate_encoded_point, encode_computed_point, scale_point, EncodedPoint, Point,
 };
 use crate::gadgets::scalar::{
     add_scalars, allocate_canonical_scalar, constant_scalar, constant_u64, invert_scalar,
-    multiply_scalars, subtract_scalars, CanonicalSecpScalar,
+    multiply_scalars, subtract_scalars, CanonicalScalar,
 };
-use crate::gadgets::sha256::NovaTranscript;
+use crate::gadgets::sha256::Transcript;
 use crate::gadgets::synthesis_error;
 use crate::gadgets::transcript::{append_constant_bytes, append_point, append_scalar, challenge};
 use crate::native::candidate::{
@@ -25,28 +24,28 @@ const CANDIDATE_STEP_DOMAIN: &[u8] = b"Purify/BPPP/CandidateAccumStep/v1";
 
 #[derive(Clone)]
 pub(crate) struct PolynomialTerm {
-    pub(crate) scale: CanonicalSecpScalar,
+    pub(crate) scale: CanonicalScalar,
     pub(crate) offset: usize,
-    pub(crate) factors: Vec<CanonicalSecpScalar>,
+    pub(crate) factors: Vec<CanonicalScalar>,
 }
 
 #[derive(Clone)]
 pub(crate) struct PendingClaim {
-    pub(crate) point: EncodedSecpPoint,
+    pub(crate) point: EncodedPoint,
     pub(crate) polynomial: Vec<PolynomialTerm>,
 }
 
 pub(crate) struct CandidateRoot {
-    pub(crate) point: EncodedSecpPoint,
-    pub(crate) scale: CanonicalSecpScalar,
-    pub(crate) factors: Vec<CanonicalSecpScalar>,
+    pub(crate) point: EncodedPoint,
+    pub(crate) scale: CanonicalScalar,
+    pub(crate) factors: Vec<CanonicalScalar>,
 }
 
 pub(crate) fn candidate_power_ladder<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    value: &CanonicalSecpScalar,
+    value: &CanonicalScalar,
     rounds: usize,
-) -> Result<Vec<CanonicalSecpScalar>, SynthesisError> {
+) -> Result<Vec<CanonicalScalar>, SynthesisError> {
     if rounds == 0 {
         return Err(synthesis_error("candidate power ladder"));
     }
@@ -65,9 +64,9 @@ pub(crate) fn candidate_power_ladder<CS: ConstraintSystem<Scalar>>(
 
 fn candidate_offset_power<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    powers: &[CanonicalSecpScalar],
+    powers: &[CanonicalScalar],
     offset: usize,
-) -> Result<Option<CanonicalSecpScalar>, SynthesisError> {
+) -> Result<Option<CanonicalScalar>, SynthesisError> {
     if offset == 0 {
         return Ok(None);
     }
@@ -93,8 +92,8 @@ fn candidate_offset_power<CS: ConstraintSystem<Scalar>>(
 pub(crate) fn evaluate_candidate_term<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     term: &PolynomialTerm,
-    powers: &[CanonicalSecpScalar],
-) -> Result<CanonicalSecpScalar, SynthesisError> {
+    powers: &[CanonicalScalar],
+) -> Result<CanonicalScalar, SynthesisError> {
     if term.factors.len() > powers.len() {
         return Err(synthesis_error("candidate term factors"));
     }
@@ -124,7 +123,7 @@ pub(crate) fn evaluate_candidate_term<CS: ConstraintSystem<Scalar>>(
 }
 
 pub(crate) fn append_polynomial(
-    transcript: &mut NovaTranscript,
+    transcript: &mut Transcript,
     polynomial: &[PolynomialTerm],
 ) -> Result<(), SynthesisError> {
     transcript.append_u64(polynomial.len() as u64);
@@ -140,7 +139,7 @@ pub(crate) fn append_polynomial(
 }
 
 fn append_claims(
-    transcript: &mut NovaTranscript,
+    transcript: &mut Transcript,
     claims: &[PendingClaim],
 ) -> Result<(), SynthesisError> {
     transcript.append_u64(claims.len() as u64);
@@ -153,9 +152,9 @@ fn append_claims(
 
 fn append_computed_point<CS: ConstraintSystem<Scalar>>(
     cs: CS,
-    transcript: &mut NovaTranscript,
-    point: SecpPoint,
-) -> Result<EncodedSecpPoint, SynthesisError> {
+    transcript: &mut Transcript,
+    point: Point,
+) -> Result<EncodedPoint, SynthesisError> {
     let encoded = encode_computed_point(cs, point)?;
     append_point(transcript, &encoded);
     Ok(encoded)
@@ -163,10 +162,10 @@ fn append_computed_point<CS: ConstraintSystem<Scalar>>(
 
 fn add_scaled<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    accumulator: &SecpPoint,
-    point: &SecpPoint,
-    scalar: &CanonicalSecpScalar,
-) -> Result<SecpPoint, SynthesisError> {
+    accumulator: &Point,
+    point: &Point,
+    scalar: &CanonicalScalar,
+) -> Result<Point, SynthesisError> {
     let bits = scalar.allocated_bits_le(cs.namespace(|| "scalar bits"))?;
     let term = scale_point(cs.namespace(|| "scaled point"), point, &bits)?;
     add_points(cs.namespace(|| "point sum"), accumulator, &term)
@@ -214,7 +213,7 @@ pub(crate) fn install_constrained_candidate_step<CS: ConstraintSystem<Scalar>>(
     proof: &CandidateStepProofWitness,
 ) -> Result<CandidateRoot, SynthesisError> {
     let rounds = validate_constrained_shape(claims, proof)?;
-    let mut transcript = NovaTranscript::new();
+    let mut transcript = Transcript::new();
     append_constant_bytes(&mut transcript, CANDIDATE_STEP_DOMAIN)?;
     append_constant_bytes(&mut transcript, &basis_digest)?;
     transcript.append_u64(rounds as u64);

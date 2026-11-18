@@ -997,7 +997,7 @@ if(PURIFY_BUILD_TESTS)
                 "-DTEST_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}"
                 "-DTEST_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}"
                 "-DTEST_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/construction_parent_prover_package/run.cmake"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/parent_prover_package/run.cmake"
         )
         set_tests_properties(
             purify.tests.construction_parent_prover_package

@@ -135,23 +135,21 @@ build_raw_circuit_norm_arg_inputs(const NativeBulletproofCircuit &circuit,
 
 namespace {
 
-Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
+/** The reduction challenges and, when they were derived here, the digest they come from. */
+struct ReductionChallenges {
+  CircuitNormArgChallenges values;
+  Bytes digest;
+};
+
+/**
+ * Takes the challenges the caller supplies, or derives them from the circuit
+ * binding and the raw witness commitment.
+ */
+Result<ReductionChallenges> reduction_challenges(
     const NativeBulletproofCircuit &circuit,
     std::span<const unsigned char> statement_binding,
     const PointBytes *raw_commitment,
-    purify_secp_context *secp_context,
-    bool externalize_commitments = false,
-    ExperimentalCircuitBackend *cache = nullptr,
-    const CircuitNormArgChallenges *explicit_challenges = nullptr) {
-  (void)cache;
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-  if (!circuit.has_valid_shape()) {
-    return unexpected_error(ErrorCode::InvalidDimensions);
-  }
-  if (!is_power_of_two_size(circuit.n_gates)) {
-    return unexpected_error(ErrorCode::InvalidDimensions);
-  }
-
+    const CircuitNormArgChallenges *explicit_challenges) {
   Bytes challenge_digest;
   FieldElement rho = FieldElement::zero();
   FieldElement mul_scale = FieldElement::zero();
@@ -188,11 +186,26 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
                                 kCircuitNormArgConstraintTaggedHash, 0));
     }
   }
-  PURIFY_ASSIGN_OR_RETURN(
-      const auto &dimensions,
-      circuit_norm_arg_dimensions(circuit, externalize_commitments));
-  PURIFY_ASSIGN_OR_RETURN(const auto &sqrt_minus_one,
-                          detail::canonical_sqrt_minus_one());
+  return ReductionChallenges{
+      CircuitNormArgChallenges{rho, mul_scale, mul_ratio, row_ratio},
+      std::move(challenge_digest)};
+}
+
+/**
+ * Folds the circuit's constraint rows into one weighted equation and
+ * completes the square on each gate: the per-gate terms and shifts, the
+ * coefficient vector and the target constant.
+ */
+std::shared_ptr<CircuitNormArgPublicData> fold_circuit_constraints(
+    const NativeBulletproofCircuit &circuit,
+    const CircuitNormArgDimensions &dimensions,
+    const ReductionChallenges &challenges, const FieldElement &sqrt_minus_one,
+    bool externalize_commitments) {
+  const FieldElement &rho = challenges.values.rho;
+  const FieldElement &mul_scale = challenges.values.mul_scale;
+  const FieldElement &mul_ratio = challenges.values.mul_ratio;
+  const FieldElement &row_ratio = challenges.values.row_ratio;
+  const Bytes &challenge_digest = challenges.digest;
 
   const FieldElement zero = FieldElement::zero();
   const FieldElement two = FieldElement::from_int(2);
@@ -286,6 +299,20 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
   }
   out->target = constant.negate();
   out->c_vec_bytes = scalar_bytes(out->c_vec);
+  return out;
+}
+
+/**
+ * Creates the raw generators and scales the i-th G generator by rho^(i+1)
+ * over its multiplication term; the H generators stay raw.
+ */
+Status scale_reduction_generators(
+    const std::shared_ptr<CircuitNormArgPublicData> &out,
+    const CircuitNormArgDimensions &dimensions,
+    const FieldElement &sqrt_minus_one, purify_secp_context *secp_context) {
+  const FieldElement &rho = out->rho;
+  const FieldElement &mul_scale = out->mul_scale;
+  const FieldElement &mul_ratio = out->mul_ratio;
 
   std::size_t raw_n_value_count = 0;
   std::size_t generator_count = 0;
@@ -319,6 +346,40 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
     }
     rho_power = rho_power * rho;
   }
+  return {};
+}
+
+Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
+    const NativeBulletproofCircuit &circuit,
+    std::span<const unsigned char> statement_binding,
+    const PointBytes *raw_commitment,
+    purify_secp_context *secp_context,
+    bool externalize_commitments = false,
+    ExperimentalCircuitBackend *cache = nullptr,
+    const CircuitNormArgChallenges *explicit_challenges = nullptr) {
+  (void)cache;
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
+  if (!circuit.has_valid_shape()) {
+    return unexpected_error(ErrorCode::InvalidDimensions);
+  }
+  if (!is_power_of_two_size(circuit.n_gates)) {
+    return unexpected_error(ErrorCode::InvalidDimensions);
+  }
+
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &challenges,
+      reduction_challenges(circuit, statement_binding, raw_commitment,
+                           explicit_challenges));
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &dimensions,
+      circuit_norm_arg_dimensions(circuit, externalize_commitments));
+  PURIFY_ASSIGN_OR_RETURN(const auto &sqrt_minus_one,
+                          detail::canonical_sqrt_minus_one());
+
+  auto out = fold_circuit_constraints(circuit, dimensions, challenges,
+                                      sqrt_minus_one, externalize_commitments);
+  PURIFY_RETURN_IF_ERROR(scale_reduction_generators(out, dimensions,
+                                                    sqrt_minus_one, secp_context));
   CircuitNormArgPublicDataPtr shared = out;
   return shared;
 }

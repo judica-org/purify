@@ -526,9 +526,9 @@ private:
  * complete ordered public inputs and prepared leaves are still required by
  * verify_native_receipt(), which replays every transition and calls the final
  * native decision. Its header pins the native basis and every response record
- * carries the exact statement digest. Those fields form the handoff to a
- * future, separately qualified certificate-Nova relation; they do not make
- * the current transport recursively verified.
+ * carries the exact statement digest. Those fields can feed the separately
+ * qualified certificate-parent relation, but do not make this native
+ * transport a recursively verified proof.
  */
 class CertificateNonceNativeReceipt
 {

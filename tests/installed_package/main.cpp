@@ -8,6 +8,10 @@
 #error "installed Purify target did not export construction parent support"
 #endif
 
+#if !defined(PURIFY_HAS_CERTIFICATE_PARENT_VERIFIER)
+#error "installed Purify target did not export certificate parent support"
+#endif
+
 int main() {
     purify::accountable::BitcoinGenesisHash genesis_hash{};
     purify::accountable::CoalitionDeploymentId deployment_id{};
@@ -33,7 +37,17 @@ int main() {
     if (verifier.has_value()) {
         return 1;
     }
-    return verifier.error().code == purify::ErrorCode::RangeViolation
+    if (verifier.error().code != purify::ErrorCode::RangeViolation) {
+        return 1;
+    }
+
+    const auto certificate_verifier = purify::puresign_plusplus::
+        CertificateParentVerifier::load({});
+    if (certificate_verifier.has_value()) {
+        return 1;
+    }
+    return certificate_verifier.error().code ==
+            purify::ErrorCode::RangeViolation
         ? 0
         : 1;
 }

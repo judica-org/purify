@@ -13,6 +13,7 @@
 #include <cassert>
 
 #include "../detail/common.hpp"
+#include "../../protocol/algebraic_circuit_proof.hpp"
 #include "purify/secp_bridge.h"
 
 namespace purify::puresign_plusplus {
@@ -33,47 +34,39 @@ Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof, purify_sec
 }
 
 Status validate_circuit_proof_encoding(
-    const bppp::ExperimentalCircuitZkNormArgProof& proof,
+    const NonceProof& nonce_proof,
     purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context,
-                             "NonceProof:circuit_proof:secp_context"),
-        "NonceProof:circuit_proof:secp_context");
-    if (proof.proof.size() != NonceProof::kInnerProofSize) {
-        return unexpected_error(ErrorCode::InvalidFixedSize,
-                                "NonceProof:circuit_proof:proof_size");
-    }
-    for (const auto* point : {&proof.a_commitment, &proof.s_commitment}) {
-        XOnly32 xonly{};
-        int parity = 0;
-        if (purify_bip340_xonly_from_point(
-                secp_context, point->data(), xonly.data(), &parity) == 0) {
-            return unexpected_error(ErrorCode::BackendRejectedInput,
-                                    "NonceProof:circuit_proof:point");
-        }
-    }
-    PURIFY_ASSIGN_OR_RETURN(const auto& t2,
-                            FieldElement::try_from_bytes32(proof.t2),
-                            "NonceProof:circuit_proof:t2");
-    (void)t2;
-    if (purify_bip340_validate_xonly_pubkey(
-            secp_context, proof.public_commitment_dlog_nonce.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput,
-                                "NonceProof:circuit_proof:dlog_nonce");
-    }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& dlog_response,
-        FieldElement::try_from_bytes32(
-            proof.public_commitment_dlog_response),
-        "NonceProof:circuit_proof:dlog_response");
-    if (dlog_response.is_zero()) {
-        return unexpected_error(ErrorCode::BackendRejectedInput,
-                                "NonceProof:circuit_proof:dlog_response");
-    }
-    return {};
+    static constexpr std::size_t kRoundCount = 12;
+    static_assert(NonceProof::kNormProofSize == 65 * kRoundCount + 64);
+    const bppp::candidate::CircuitZkNormArgProofV4 proof{
+        nonce_proof.raw_commitment,
+        nonce_proof.mask_commitment,
+        nonce_proof.t2,
+        nonce_proof.public_commitment_dlog_nonce,
+        nonce_proof.public_commitment_dlog_response,
+        nonce_proof.norm_proof,
+    };
+    return bppp::candidate::
+        validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
+            proof, bppp::candidate::CircuitCommitmentModeV4::Public,
+            kRoundCount, secp_context);
 }
 
 }  // namespace
+
+Result<NonceHost> NonceHost::deserialize(
+    std::span<const unsigned char> serialized) {
+    if (serialized.size() != kSerializedSize) {
+        return unexpected_error(
+            ErrorCode::InvalidFixedSize, "NonceHost::deserialize:size");
+    }
+    auto public_key = UInt512::from_bytes_be(
+        serialized.data(), serialized.size());
+    PURIFY_RETURN_IF_ERROR(
+        validate_public_key(public_key),
+        "NonceHost::deserialize:public_key");
+    return NonceHost(std::move(public_key));
+}
 
 Bytes PublicKey::serialize() const {
     Bytes out;
@@ -159,7 +152,7 @@ Result<Bytes> NonceProof::serialize(purify_secp_context* secp_context) const {
         return unexpected_error(ErrorCode::BindingMismatch, "NonceProof::serialize:nonce_mismatch");
     }
     PURIFY_RETURN_IF_ERROR(
-        validate_circuit_proof_encoding(proof, secp_context),
+        validate_circuit_proof_encoding(*this, secp_context),
         "NonceProof::serialize:circuit_proof");
 
     Bytes out;
@@ -167,14 +160,14 @@ Result<Bytes> NonceProof::serialize(purify_secp_context* secp_context) const {
     out.push_back(kSerializationVersion);
     out.insert(out.end(), nonce.xonly.begin(), nonce.xonly.end());
     out.insert(out.end(), commitment_point.begin(), commitment_point.end());
-    out.insert(out.end(), proof.a_commitment.begin(), proof.a_commitment.end());
-    out.insert(out.end(), proof.s_commitment.begin(), proof.s_commitment.end());
-    out.insert(out.end(), proof.t2.begin(), proof.t2.end());
-    out.insert(out.end(), proof.public_commitment_dlog_nonce.begin(),
-               proof.public_commitment_dlog_nonce.end());
-    out.insert(out.end(), proof.public_commitment_dlog_response.begin(),
-               proof.public_commitment_dlog_response.end());
-    out.insert(out.end(), proof.proof.begin(), proof.proof.end());
+    out.insert(out.end(), raw_commitment.begin(), raw_commitment.end());
+    out.insert(out.end(), mask_commitment.begin(), mask_commitment.end());
+    out.insert(out.end(), t2.begin(), t2.end());
+    out.insert(out.end(), public_commitment_dlog_nonce.begin(),
+               public_commitment_dlog_nonce.end());
+    out.insert(out.end(), public_commitment_dlog_response.begin(),
+               public_commitment_dlog_response.end());
+    out.insert(out.end(), norm_proof.begin(), norm_proof.end());
     assert(out.size() == kSerializedSize);
     return out;
 }
@@ -183,7 +176,7 @@ Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serial
                                            purify_secp_context* secp_context) {
     constexpr std::size_t kHeaderSize =
         1 + 32 + 33 + 33 + 33 + 32 + 32 + 32;
-    static_assert(kHeaderSize + kInnerProofSize == kSerializedSize);
+    static_assert(kHeaderSize + kNormProofSize == kSerializedSize);
     if (serialized.size() != kSerializedSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:header");
     }
@@ -198,17 +191,17 @@ Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serial
         return unexpected_error(ErrorCode::BackendRejectedInput, "NonceProof::deserialize:nonce");
     }
     std::copy_n(serialized.begin() + 33, 33, out.commitment_point.begin());
-    std::copy_n(serialized.begin() + 66, 33, out.proof.a_commitment.begin());
-    std::copy_n(serialized.begin() + 99, 33, out.proof.s_commitment.begin());
-    std::copy_n(serialized.begin() + 132, 32, out.proof.t2.begin());
+    std::copy_n(serialized.begin() + 66, 33, out.raw_commitment.begin());
+    std::copy_n(serialized.begin() + 99, 33, out.mask_commitment.begin());
+    std::copy_n(serialized.begin() + 132, 32, out.t2.begin());
     std::copy_n(serialized.begin() + 164, 32,
-                out.proof.public_commitment_dlog_nonce.begin());
+                out.public_commitment_dlog_nonce.begin());
     std::copy_n(serialized.begin() + 196, 32,
-                out.proof.public_commitment_dlog_response.begin());
-    out.proof.proof.assign(serialized.begin() + kHeaderSize,
-                           serialized.end());
+                out.public_commitment_dlog_response.begin());
+    out.norm_proof.assign(serialized.begin() + kHeaderSize,
+                          serialized.end());
     PURIFY_RETURN_IF_ERROR(
-        validate_circuit_proof_encoding(out.proof, secp_context),
+        validate_circuit_proof_encoding(out, secp_context),
         "NonceProof::deserialize:circuit_proof");
 
     PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(out, secp_context),

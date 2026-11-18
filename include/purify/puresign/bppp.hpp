@@ -32,6 +32,43 @@ class PreparedNonce;
 struct NonceProof;
 struct ProvenSignature;
 
+/**
+ * Public Purify nonce host, independent from an application's signing key.
+ *
+ * A nonce proof binds this host and its exact topic. It deliberately does not
+ * bind a BIP340 key; accountable applications authenticate that separate key
+ * through their registered roster and response equation.
+ */
+class NonceHost {
+public:
+    static constexpr std::size_t kSerializedSize = 64;
+
+    [[nodiscard]] static Result<NonceHost> deserialize(
+        std::span<const unsigned char> serialized);
+
+    [[nodiscard]] const UInt512& public_key() const noexcept {
+        return public_key_;
+    }
+
+    [[nodiscard]] Result<bool> verify_topic_nonce_proof(
+        std::span<const unsigned char> topic,
+        const NonceProof& nonce_proof,
+        purify_secp_context* secp_context,
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
+
+    [[nodiscard]] Result<bool> verify_topic_nonce_proof(
+        const TopicProofCache& cache,
+        const NonceProof& nonce_proof,
+        purify_secp_context* secp_context,
+        bppp::ExperimentalCircuitBackend* circuit_cache = nullptr) const;
+
+private:
+    explicit NonceHost(UInt512 public_key)
+        : public_key_(std::move(public_key)) {}
+
+    UInt512 public_key_;
+};
+
 struct PublicKey {
     static constexpr std::size_t kSerializedSize = 96;
 
@@ -254,14 +291,20 @@ struct TopicProofCache {
 };
 
 struct NonceProof {
-    // Version 3 commits raw circuit coordinates before deriving fold weights.
-    static constexpr unsigned char kSerializationVersion = 3;
-    static constexpr std::size_t kInnerProofSize = 844;
-    static constexpr std::size_t kSerializedSize = 228 + kInnerProofSize;
+    // V4 uses the typed-SHA-256 algebraic transcript accepted by recursive
+    // certificate leaves. V3 proofs are intentionally not accepted.
+    static constexpr unsigned char kSerializationVersion = 4;
+    static constexpr std::size_t kNormProofSize = 844;
+    static constexpr std::size_t kSerializedSize = 228 + kNormProofSize;
 
     Nonce nonce;
     bppp::PointBytes commitment_point{};
-    bppp::ExperimentalCircuitZkNormArgProof proof;
+    bppp::PointBytes raw_commitment{};
+    bppp::PointBytes mask_commitment{};
+    bppp::ScalarBytes t2{};
+    XOnly32 public_commitment_dlog_nonce{};
+    bppp::ScalarBytes public_commitment_dlog_response{};
+    Bytes norm_proof;
 
     [[nodiscard]] Result<Bytes> serialize(purify_secp_context* secp_context) const;
     [[nodiscard]] static Result<NonceProof> deserialize(std::span<const unsigned char> serialized,
@@ -269,7 +312,7 @@ struct NonceProof {
 };
 
 struct ProvenSignature {
-    static constexpr unsigned char kSerializationVersion = 2;
+    static constexpr unsigned char kSerializationVersion = 3;
     static constexpr std::size_t kSerializedSize =
         1 + NonceProof::kSerializedSize + Signature::kSerializedSize;
 

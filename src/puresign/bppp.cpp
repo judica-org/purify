@@ -8,6 +8,7 @@
  */
 
 #include "purify/puresign/bppp.hpp"
+#include "purify/puresign/certificate_nonce_leaf_accumulation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,6 +18,8 @@
 #include <vector>
 
 #include "detail/common.hpp"
+#include "../protocol/algebraic_circuit_accumulation.hpp"
+#include "../protocol/algebraic_circuit_proof.hpp"
 #include "purify/secp_bridge.h"
 #include "secure_cleanup.hpp"
 
@@ -37,8 +40,12 @@ constexpr std::string_view kMessageNonceTag = "PureSign/Nonce/Message/";
 constexpr std::string_view kTopicNonceTag = "PureSign/Nonce/Topic/";
 constexpr std::string_view kMessageBindingTag = "PureSign/Binding/Message";
 constexpr std::string_view kTopicBindingTag = "PureSign/Binding/Topic";
-constexpr std::string_view kMessageProofTag = "PureSign/BPPP/Proof/Message/V1";
-constexpr std::string_view kTopicProofTag = "PureSign/BPPP/Proof/Topic/V1";
+constexpr std::string_view kMessageProofTag = "PureSign/BPPP/Proof/Message/V4";
+constexpr std::string_view kTopicProofTag = "PureSign/BPPP/Proof/Topic/V4";
+const TaggedHash kCertificateNonceProofHash(
+    "Purify/Accountable/CertificateNonceProof/v1");
+const TaggedHash kCertificateNonceLeafHash(
+    "Purify/Accountable/CertificateNonceLeaf/v1");
 
 using Scope = PreparedNonce::Scope;
 using ::purify::detail::WipeOnDestruction;
@@ -270,16 +277,24 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret,
     Bytes statement_binding = proof_statement_binding(scope);
     std::array<bppp::PointBytes, 1> public_commitments{commitment_point};
     PURIFY_ASSIGN_OR_RETURN(
-        auto proof,
-        bppp::prove_experimental_circuit_zk_norm_arg_with_public_commitments(
+        auto publication,
+        bppp::candidate::
+            prove_circuit_zk_norm_arg_v4_with_public_commitments(
             circuit, witness.assignment, secret_prover_seed.value,
             public_commitments, secp_context, statement_binding, circuit_cache),
-        "build_nonce_proof_from_template:prove_experimental_circuit_zk_norm_arg_with_public_commitments");
+        "build_nonce_proof_from_template:prove_circuit_zk_norm_arg_v4_with_public_commitments");
 
     NonceProof out{};
     out.nonce = expected_nonce;
     out.commitment_point = commitment_point;
-    out.proof = std::move(proof);
+    out.raw_commitment = publication.proof.raw_commitment;
+    out.mask_commitment = publication.proof.mask_commitment;
+    out.t2 = publication.proof.t2;
+    out.public_commitment_dlog_nonce =
+        publication.proof.public_commitment_dlog_nonce;
+    out.public_commitment_dlog_response =
+        publication.proof.public_commitment_dlog_response;
+    out.norm_proof = std::move(publication.proof.norm_proof);
     PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(out, secp_context),
                             "build_nonce_proof_from_template:nonce_proof_matches_nonce");
     if (!match) {
@@ -302,14 +317,16 @@ Result<NonceProof> build_nonce_proof(const SecretKey& secret,
                                            circuit_cache);
 }
 
-Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
-                                             const NativeBulletproofCircuit& circuit,
-                                             const NonceProof& nonce_proof,
-                                             Scope scope,
-                                             purify_secp_context* secp_context,
-                                             const char* context,
-                                             bppp::ExperimentalCircuitBackend* circuit_cache) {
-    PURIFY_RETURN_IF_ERROR(validate_public_key_bundle(public_key, secp_context), context);
+Result<bool> verify_nonce_proof_with_circuit_impl(
+    const UInt512& nonce_host_public_key,
+    const NativeBulletproofCircuit& circuit,
+    const NonceProof& nonce_proof,
+    Scope scope,
+    purify_secp_context* secp_context,
+    const char* context,
+    bppp::ExperimentalCircuitBackend* circuit_cache) {
+    PURIFY_RETURN_IF_ERROR(
+        validate_public_key(nonce_host_public_key), context);
     PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit, context), context);
     PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(nonce_proof, secp_context), context);
     if (!match) {
@@ -317,8 +334,40 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
     }
     Bytes statement_binding = proof_statement_binding(scope);
     std::array<bppp::PointBytes, 1> public_commitments{nonce_proof.commitment_point};
-    return bppp::verify_experimental_circuit_zk_norm_arg_with_public_commitments(
-        circuit, nonce_proof.proof, public_commitments, secp_context, statement_binding, circuit_cache);
+    bppp::candidate::CircuitZkNormArgProofV4 proof{
+        nonce_proof.raw_commitment,
+        nonce_proof.mask_commitment,
+        nonce_proof.t2,
+        nonce_proof.public_commitment_dlog_nonce,
+        nonce_proof.public_commitment_dlog_response,
+        nonce_proof.norm_proof,
+    };
+    PURIFY_ASSIGN_OR_RETURN(
+        auto publication,
+        bppp::candidate::
+            reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+                circuit, std::move(proof), public_commitments, secp_context,
+                statement_binding),
+        context);
+    return bppp::candidate::
+        verify_circuit_zk_norm_arg_v4_with_public_commitments(
+            circuit, publication, public_commitments, secp_context,
+            statement_binding, circuit_cache);
+}
+
+Result<bool> verify_nonce_proof_with_circuit(
+    const PublicKey& public_key,
+    const NativeBulletproofCircuit& circuit,
+    const NonceProof& nonce_proof,
+    Scope scope,
+    purify_secp_context* secp_context,
+    const char* context,
+    bppp::ExperimentalCircuitBackend* circuit_cache) {
+    PURIFY_RETURN_IF_ERROR(
+        validate_public_key_bundle(public_key, secp_context), context);
+    return verify_nonce_proof_with_circuit_impl(
+        public_key.purify_pubkey, circuit, nonce_proof, scope,
+        secp_context, context, circuit_cache);
 }
 
 }  // namespace
@@ -1023,6 +1072,191 @@ Result<ProvenSignature> KeyPair::sign_with_topic_proof(std::span<const unsigned 
     PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce_with_proof(cache, secp_context, circuit_cache),
                             "KeyPair::sign_with_topic_proof:prepare_topic_nonce_with_proof");
     return sign_with_prepared_topic_proof(message, std::move(prepared), secp_context);
+}
+
+Result<bool> NonceHost::verify_topic_nonce_proof(
+    std::span<const unsigned char> topic,
+    const NonceProof& nonce_proof,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* circuit_cache) const {
+    if (topic.empty()) {
+        return unexpected_error(
+            ErrorCode::EmptyInput, "NonceHost::verify_topic:empty_topic");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto circuit,
+        verifier_circuit(
+            detail::tagged_eval_input(kTopicNonceTag, topic), public_key_),
+        "NonceHost::verify_topic:circuit");
+    return verify_nonce_proof_with_circuit_impl(
+        public_key_, circuit, nonce_proof, Scope::Topic, secp_context,
+        "NonceHost::verify_topic:proof", circuit_cache);
+}
+
+Result<bool> NonceHost::verify_topic_nonce_proof(
+    const TopicProofCache& cache,
+    const NonceProof& nonce_proof,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* circuit_cache) const {
+    PURIFY_RETURN_IF_ERROR(
+        validate_topic_proof_cache(cache),
+        "NonceHost::verify_topic:cache");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto circuit,
+        cache.circuit_template.instantiate(public_key_),
+        "NonceHost::verify_topic:circuit");
+    return verify_nonce_proof_with_circuit_impl(
+        public_key_, circuit, nonce_proof, Scope::Topic, secp_context,
+        "NonceHost::verify_topic:proof",
+        circuit_cache != nullptr ? circuit_cache : &cache.backend_cache);
+}
+
+Result<CertificateNonceLeafAccumulator>
+CertificateNonceLeafAccumulator::create(
+    purify_secp_context* secp_context) {
+    static_assert(NonceProof::kNormProofSize == 65 * 12 + 64);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto basis,
+        bppp::accumulation::Basis::create(
+            kNormVectorLength, kNormVectorLength,
+            "Purify/Accountable/CertificateNonceLeafAccumulation/v1",
+            secp_context),
+        "certificate_nonce_leaf_accumulation:basis");
+    return CertificateNonceLeafAccumulator(std::move(basis));
+}
+
+Result<CertificateNonceLeafParentConstants>
+CertificateNonceLeafAccumulator::derive_parent_constants(
+    const PublicKey& public_key,
+    const TopicProofCache& cache,
+    const NonceProof& proof,
+    const bppp::ScalarBytes& circuit_precommitment,
+    purify_secp_context* secp_context) const {
+    PURIFY_RETURN_IF_ERROR(
+        validate_public_key_bundle(public_key, secp_context),
+        "certificate_nonce_leaf_parent:public_key");
+    PURIFY_RETURN_IF_ERROR(
+        validate_topic_proof_cache(cache),
+        "certificate_nonce_leaf_parent:cache");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto matches, nonce_proof_matches_nonce(proof, secp_context),
+        "certificate_nonce_leaf_parent:nonce");
+    if (!matches) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "certificate_nonce_leaf_parent:nonce");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto circuit,
+        cache.circuit_template.instantiate(public_key.purify_pubkey),
+        "certificate_nonce_leaf_parent:circuit");
+    PURIFY_RETURN_IF_ERROR(
+        detail::validate_proof_cache_circuit(
+            circuit, "certificate_nonce_leaf_parent:circuit_shape"),
+        "certificate_nonce_leaf_parent:circuit_shape");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto precommitment,
+        bppp::candidate::CircuitPrecommitmentDigestV4::parse(
+            circuit_precommitment),
+        "certificate_nonce_leaf_parent:precommitment");
+    const Bytes statement_binding = proof_statement_binding(Scope::Topic);
+    const std::array<bppp::PointBytes, 1> public_commitments{
+        proof.commitment_point};
+    PURIFY_ASSIGN_OR_RETURN(
+        auto constants,
+        bppp::candidate::
+            derive_circuit_norm_parent_constants_v4_with_public_commitments(
+                circuit, precommitment, public_commitments, secp_context,
+                statement_binding),
+        "certificate_nonce_leaf_parent:derive");
+    return CertificateNonceLeafParentConstants{
+        std::move(constants.circuit_binding_digest),
+        std::move(constants.raw_generator_digest),
+        std::move(constants.coefficient_commitment),
+        std::move(constants.anchored_offset),
+    };
+}
+
+Result<PreparedCertificateNonceLeaf>
+CertificateNonceLeafAccumulator::prepare(
+    const PublicKey& public_key,
+    const TopicProofCache& cache,
+    const NonceProof& proof,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* circuit_cache) const {
+    PURIFY_RETURN_IF_ERROR(
+        validate_public_key_bundle(public_key, secp_context),
+        "certificate_nonce_leaf:public_key");
+    PURIFY_RETURN_IF_ERROR(
+        validate_topic_proof_cache(cache),
+        "certificate_nonce_leaf:cache");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto matches, nonce_proof_matches_nonce(proof, secp_context),
+        "certificate_nonce_leaf:nonce");
+    if (!matches) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch, "certificate_nonce_leaf:nonce");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto circuit,
+        cache.circuit_template.instantiate(public_key.purify_pubkey),
+        "certificate_nonce_leaf:circuit");
+    PURIFY_RETURN_IF_ERROR(
+        detail::validate_proof_cache_circuit(
+            circuit, "certificate_nonce_leaf:circuit_shape"),
+        "certificate_nonce_leaf:circuit_shape");
+    const Bytes statement_binding = proof_statement_binding(Scope::Topic);
+    const std::array<bppp::PointBytes, 1> public_commitments{
+        proof.commitment_point};
+    bppp::candidate::CircuitZkNormArgProofV4 circuit_proof{
+        proof.raw_commitment,
+        proof.mask_commitment,
+        proof.t2,
+        proof.public_commitment_dlog_nonce,
+        proof.public_commitment_dlog_response,
+        proof.norm_proof,
+    };
+    PURIFY_ASSIGN_OR_RETURN(
+        auto publication,
+        bppp::candidate::
+            reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+                circuit, std::move(circuit_proof), public_commitments,
+                secp_context, statement_binding),
+        "certificate_nonce_leaf:publication");
+    const auto circuit_precommitment = publication.precommitment.bytes();
+    PURIFY_ASSIGN_OR_RETURN(
+        auto prepared,
+        bppp::candidate::
+            prepare_circuit_zk_norm_arg_v4_with_public_commitments(
+                circuit, publication, public_commitments, secp_context,
+                statement_binding,
+                circuit_cache != nullptr ? circuit_cache
+                                         : &cache.backend_cache),
+        "certificate_nonce_leaf:outer");
+    if (!prepared.has_value()) {
+        return unexpected_error(
+            ErrorCode::EquationMismatch, "certificate_nonce_leaf:outer");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto norm,
+        bppp::accumulation::
+            prepare_v4_circuit_norm_for_algebraic_reduction(
+                basis_, std::move(*prepared), secp_context),
+        "certificate_nonce_leaf:norm");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto proof_bytes, proof.serialize(secp_context),
+        "certificate_nonce_leaf:proof_bytes");
+    const auto proof_digest =
+        kCertificateNonceProofHash.digest(proof_bytes);
+    const auto nonce_host = public_key.purify_pubkey.to_bytes_be();
+    const auto prepared_binding = norm.prepared_binding().to_bytes_be();
+    const auto binding_digest = kCertificateNonceLeafHash.digest_many<6>({
+        nonce_host, cache.topic, proof_digest, circuit_precommitment,
+        proof.commitment_point, prepared_binding,
+    });
+    return PreparedCertificateNonceLeaf(
+        circuit_precommitment, proof.commitment_point, nonce_host,
+        cache.topic, proof_digest, binding_digest, std::move(norm));
 }
 
 }  // namespace purify::puresign_plusplus

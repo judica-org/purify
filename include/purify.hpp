@@ -12,6 +12,8 @@
 #include "purify/api.hpp"
 #include "purify/puresign/legacy.hpp"
 #include "purify/puresign/bppp.hpp"
+#include "purify/puresign/certificate_nonce_leaf_accumulation.hpp"
+#include "purify/puresign/certificate_nonce_parent_accumulation.hpp"
 #include "purify/puresign/accountable.hpp"
 #include "purify/puresign/coalition_formation.hpp"
 #include "purify/puresign/accountable_roster.hpp"

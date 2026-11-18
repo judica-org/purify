@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <span>
 
+#include "byte_io.hpp"
 #include "purify/detail/circuit_zk_norm_arg_proof_v4.hpp"
 
 namespace purify::bppp::candidate {
@@ -31,17 +31,14 @@ CircuitZkNormArgProofV4 read_circuit_proof_body_v4(
     std::span<const unsigned char, Size> body) {
     static_assert(Size != std::dynamic_extent &&
                   Size >= CircuitZkNormArgProofV4::kPrefixSize);
+    using ::purify::detail::take_bytes;
     CircuitZkNormArgProofV4 proof;
     std::span<const unsigned char> remaining = body;
-    const auto read = [&](auto& field) {
-        std::copy_n(remaining.begin(), field.size(), field.begin());
-        remaining = remaining.subspan(field.size());
-    };
-    read(proof.raw_commitment);
-    read(proof.mask_commitment);
-    read(proof.t2);
-    read(proof.public_commitment_dlog_nonce);
-    read(proof.public_commitment_dlog_response);
+    take_bytes(remaining, proof.raw_commitment);
+    take_bytes(remaining, proof.mask_commitment);
+    take_bytes(remaining, proof.t2);
+    take_bytes(remaining, proof.public_commitment_dlog_nonce);
+    take_bytes(remaining, proof.public_commitment_dlog_response);
     proof.norm_proof.assign(remaining.begin(), remaining.end());
     return proof;
 }

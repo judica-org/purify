@@ -16,6 +16,7 @@
 #include <array>
 #include <cassert>
 
+#include "byte_io.hpp"
 #include "detail/core_impl.hpp"
 #include "purify/secp_bridge.h"
 
@@ -111,9 +112,7 @@ Status validate_circuit_proof_encoding(
             return unexpected_error(ErrorCode::BackendRejectedInput);
         }
     }
-    PURIFY_ASSIGN_OR_RETURN(const auto& t2,
-                            FieldElement::try_from_bytes32(proof.t2));
-    (void)t2;
+    PURIFY_RETURN_IF_ERROR(FieldElement::try_from_bytes32(proof.t2));
     if (purify_bip340_validate_xonly_pubkey(
             secp_context, proof.public_commitment_dlog_nonce.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput);
@@ -164,22 +163,21 @@ Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serial
     if (serialized[0] != kSerializationVersion) {
         return unexpected_error(ErrorCode::BackendRejectedInput);
     }
+    using ::purify::detail::take_bytes;
     NonceProof out{};
-    std::copy_n(serialized.begin() + 1, 32, out.nonce.xonly.begin());
+    auto remaining = serialized.subspan(1);
+    take_bytes(remaining, out.nonce.xonly);
     PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
     if (purify_bip340_validate_xonly_pubkey(secp_context, out.nonce.xonly.data()) == 0) {
         return unexpected_error(ErrorCode::BackendRejectedInput);
     }
-    std::copy_n(serialized.begin() + 33, 33, out.commitment_point.begin());
-    std::copy_n(serialized.begin() + 66, 33, out.proof.a_commitment.begin());
-    std::copy_n(serialized.begin() + 99, 33, out.proof.s_commitment.begin());
-    std::copy_n(serialized.begin() + 132, 32, out.proof.t2.begin());
-    std::copy_n(serialized.begin() + 164, 32,
-                out.proof.public_commitment_dlog_nonce.begin());
-    std::copy_n(serialized.begin() + 196, 32,
-                out.proof.public_commitment_dlog_response.begin());
-    out.proof.proof.assign(serialized.begin() + kHeaderSize,
-                           serialized.end());
+    take_bytes(remaining, out.commitment_point);
+    take_bytes(remaining, out.proof.a_commitment);
+    take_bytes(remaining, out.proof.s_commitment);
+    take_bytes(remaining, out.proof.t2);
+    take_bytes(remaining, out.proof.public_commitment_dlog_nonce);
+    take_bytes(remaining, out.proof.public_commitment_dlog_response);
+    out.proof.proof.assign(remaining.begin(), remaining.end());
     PURIFY_RETURN_IF_ERROR(validate_circuit_proof_encoding(out.proof, secp_context));
 
     PURIFY_ASSIGN_OR_RETURN(auto match, Backend::Ops::matches_nonce(out, secp_context));

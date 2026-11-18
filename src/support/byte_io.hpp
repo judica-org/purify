@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -11,6 +14,15 @@
 #include <vector>
 
 namespace purify::detail {
+
+/** Consume one fixed-width field from a length-checked encoding. */
+template <std::size_t Size>
+void take_bytes(std::span<const unsigned char>& remaining,
+                std::array<unsigned char, Size>& field) {
+    assert(remaining.size() >= Size);
+    std::copy_n(remaining.begin(), Size, field.begin());
+    remaining = remaining.subspan(Size);
+}
 
 inline void append_u32_be(std::vector<unsigned char>& out, std::uint32_t value) {
     for (unsigned int i = 0; i < 4; ++i) {

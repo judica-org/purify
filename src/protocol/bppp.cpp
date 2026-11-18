@@ -22,6 +22,7 @@
 #include "bppp_bridge.h"
 #include "bppp_norm_arg.hpp"
 #include "bppp_support.hpp"
+#include "byte_io.hpp"
 #include "purify/secp_bridge.h"
 
 namespace purify::bppp {
@@ -396,24 +397,22 @@ bool verify_norm_arg_with_cache(const NormArgProof &proof,
 Result<std::vector<candidate::PackedPointPairV4>>
 parse_norm_rounds_v4(const Bytes &proof, std::size_t round_count,
                      ScalarBytes &terminal_n, ScalarBytes &terminal_l) {
-  std::size_t pair_bytes = 0;
   std::size_t expected_size = 0;
-  const CheckedSize checked_pair_bytes =
-      CheckedSize(round_count) * sizeof(candidate::PackedPointPairV4);
-  if (!checked_pair_bytes.store(pair_bytes) ||
-      !(checked_pair_bytes + 2 * sizeof(ScalarBytes)).store(expected_size) ||
+  const auto checked_size =
+      CheckedSize(round_count) * sizeof(candidate::PackedPointPairV4) +
+      2 * sizeof(ScalarBytes);
+  if (!checked_size.store(expected_size) ||
       proof.size() != expected_size) {
     return unexpected_error(ErrorCode::InvalidDimensions);
   }
+  using ::purify::detail::take_bytes;
   std::vector<candidate::PackedPointPairV4> rounds(round_count);
-  for (std::size_t i = 0; i < rounds.size(); ++i) {
-    std::copy_n(proof.begin() + i * rounds[i].size(), rounds[i].size(),
-                rounds[i].begin());
+  std::span<const unsigned char> remaining = proof;
+  for (auto &round : rounds) {
+    take_bytes(remaining, round);
   }
-  std::copy_n(proof.begin() + pair_bytes, terminal_n.size(),
-              terminal_n.begin());
-  std::copy_n(proof.begin() + pair_bytes + terminal_n.size(),
-              terminal_l.size(), terminal_l.begin());
+  take_bytes(remaining, terminal_n);
+  take_bytes(remaining, terminal_l);
   return rounds;
 }
 

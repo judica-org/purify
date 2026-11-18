@@ -9,7 +9,6 @@
 
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -17,6 +16,7 @@
 
 #include "accumulation_support.hpp"
 #include "bppp_bridge.h"
+#include "byte_io.hpp"
 #include "purify/accumulation.hpp"
 #include "sha256_transcript.hpp"
 
@@ -35,8 +35,7 @@ inline Status validate_ipa_encoding(std::size_t dimension,
     if (proof.left.size() != rounds || proof.right.size() != rounds) {
         return unexpected_error(ErrorCode::SizeMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar));
-    (void)terminal;
+    PURIFY_RETURN_IF_ERROR(FieldElement::try_from_bytes32(proof.terminal_scalar));
     const auto is_canonical_point = [](const PointBytes& point) {
         return purify_bppp_public_point_validate(point.data()) != 0;
     };
@@ -71,16 +70,13 @@ inline Result<AlgebraicStepProof> parse_ipa(
     AlgebraicStepProof proof;
     proof.left.resize(rounds);
     proof.right.resize(rounds);
-    std::size_t offset = 0;
+    using ::purify::detail::take_bytes;
     for (std::size_t round = 0; round < rounds; ++round) {
-        std::copy_n(encoded.data() + offset, 33, proof.left[round].begin());
-        offset += 33;
-        std::copy_n(encoded.data() + offset, 33, proof.right[round].begin());
-        offset += 33;
+        take_bytes(encoded, proof.left[round]);
+        take_bytes(encoded, proof.right[round]);
     }
-    std::copy_n(encoded.data() + offset, 32, proof.terminal_scalar.begin());
-    offset += 32;
-    std::copy_n(encoded.data() + offset, 33, proof.folded_generator.begin());
+    take_bytes(encoded, proof.terminal_scalar);
+    take_bytes(encoded, proof.folded_generator);
     PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(dimension, proof, context));
     return proof;
 }

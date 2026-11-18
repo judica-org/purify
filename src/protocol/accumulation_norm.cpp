@@ -131,6 +131,86 @@ struct CircuitPreparedNorm {
     std::array<PolynomialTerm, 2> polynomial;
 };
 
+/**
+ * The two compact polynomial terms a folded norm opening leaves behind: g over
+ * the first `n_vec_len` basis points and h over the rest.
+ *
+ * The i-th g factor is gamma_i divided by sqrt(-1) for i = 0 and by
+ * mul_ratio^(2^(i-1)) after that. The first `h_factor_count` gammas are the
+ * h factors.
+ */
+std::array<PolynomialTerm, 2> folded_norm_terms(
+    const FieldElement& g_scale, const FieldElement& terminal_l,
+    std::size_t n_vec_len, const FieldElement& mul_ratio,
+    const FieldElement& sqrt_minus_one, std::span<const FieldElement> gammas,
+    std::size_t h_factor_count) {
+    PolynomialTerm g{g_scale, 0, {}};
+    PolynomialTerm h{terminal_l, n_vec_len, {}};
+    g.factors.reserve(gammas.size());
+    h.factors.reserve(std::min(h_factor_count, gammas.size()));
+    auto ratio_inverse_power = mul_ratio.inverse();
+    for (std::size_t i = 0; i < gammas.size(); ++i) {
+        const auto& gamma = gammas[i];
+        if (i == 0) {
+            g.factors.push_back(gamma * sqrt_minus_one.inverse());
+        } else {
+            g.factors.push_back(gamma * ratio_inverse_power);
+            ratio_inverse_power = ratio_inverse_power * ratio_inverse_power;
+        }
+        if (i < h_factor_count) h.factors.push_back(gamma);
+    }
+    return {std::move(g), std::move(h)};
+}
+
+/** Commits to a norm proof's public coefficients over the basis's coefficient generators. */
+Result<PointBytes> commit_public_coefficients(
+    const Basis& basis, std::span<const ScalarBytes> c_vec,
+    purify_secp_context* context) {
+    std::vector<FieldElement> coefficients;
+    coefficients.reserve(c_vec.size());
+    for (const auto& encoded : c_vec) {
+        PURIFY_ASSIGN_OR_RETURN(const auto& coefficient,
+                                FieldElement::try_from_bytes32(encoded));
+        coefficients.push_back(coefficient);
+    }
+    const auto coefficient_basis =
+        std::span(basis.points()).subspan(basis.n_vec_len(), basis.l_vec_len());
+    return msm(coefficient_basis, coefficients, context);
+}
+
+/** Binds a prepared V3 circuit norm to its basis, statement, outer proof and coefficient commitment. */
+Digest circuit_norm_binding_digest(
+    const Basis& basis,
+    const detail::PreparedExperimentalCircuitZkNormArg& prepared,
+    const ExperimentalCircuitZkNormArgProof& proof,
+    std::span<const PointBytes> public_commitments,
+    std::span<const unsigned char> statement_binding,
+    const PointBytes& coefficient_commitment) {
+    const auto& norm = prepared.norm;
+    Bytes encoded;
+    append(encoded, basis.digest());
+    append(encoded, prepared.raw_generator_digest);
+    append(encoded, prepared.challenge_digest);
+    append(encoded, norm.rho);
+    append(encoded, prepared.mul_scale.to_bytes_be());
+    append(encoded, prepared.mul_ratio.to_bytes_be());
+    append_size(encoded, statement_binding.size());
+    append(encoded, statement_binding);
+    append_size(encoded, public_commitments.size());
+    for (const auto& point : public_commitments) append(encoded, point);
+    append(encoded, proof.a_commitment);
+    append(encoded, proof.s_commitment);
+    append(encoded, proof.t2);
+    append(encoded, proof.public_commitment_dlog_nonce);
+    append(encoded, proof.public_commitment_dlog_response);
+    append(encoded, norm.commitment);
+    for (const auto& coefficient : norm.c_vec) append(encoded, coefficient);
+    append(encoded, coefficient_commitment);
+    append_size(encoded, norm.proof.size());
+    append(encoded, norm.proof);
+    return kCircuitNormBindingHash.digest(encoded);
+}
+
 Result<CircuitPreparedNorm> prepare_circuit_norm_components(
     const Basis& basis,
     const detail::PreparedExperimentalCircuitZkNormArg& prepared,
@@ -174,65 +254,26 @@ Result<CircuitPreparedNorm> prepare_circuit_norm_components(
     PURIFY_ASSIGN_OR_RETURN(const auto& sqrt_minus_one,
                             detail::canonical_sqrt_minus_one());
 
-    PolynomialTerm g{
-        n * pow_size(rho, basis.n_vec_len()) *
-            prepared.mul_scale.inverse(),
-        0,
-        {}};
-    PolynomialTerm h{l, basis.n_vec_len(), {}};
-    const auto h_rounds = log2_dimension(basis.l_vec_len());
-    auto ratio_inv_power = prepared.mul_ratio.inverse();
-    for (std::size_t j = 0; j < rounds; ++j) {
+    std::vector<FieldElement> gamma_scalars;
+    gamma_scalars.reserve(rounds);
+    for (const auto& encoded_gamma : gammas) {
         PURIFY_ASSIGN_OR_RETURN(const auto& gamma,
-                                FieldElement::try_from_bytes32(gammas[j]));
-        if (j == 0) {
-            g.factors.push_back(gamma * sqrt_minus_one.inverse());
-        } else {
-            g.factors.push_back(gamma * ratio_inv_power);
-            ratio_inv_power = ratio_inv_power * ratio_inv_power;
-        }
-        if (j < h_rounds) h.factors.push_back(gamma);
+                                FieldElement::try_from_bytes32(encoded_gamma));
+        gamma_scalars.push_back(gamma);
     }
+    auto polynomial = folded_norm_terms(
+        n * pow_size(rho, basis.n_vec_len()) * prepared.mul_scale.inverse(), l,
+        basis.n_vec_len(), prepared.mul_ratio, sqrt_minus_one, gamma_scalars,
+        log2_dimension(basis.l_vec_len()));
 
-    std::vector<FieldElement> coefficients;
-    coefficients.reserve(norm.c_vec.size());
-    for (const auto& encoded : norm.c_vec) {
-        PURIFY_ASSIGN_OR_RETURN(const auto& coefficient,
-                                FieldElement::try_from_bytes32(encoded));
-        coefficients.push_back(coefficient);
-    }
-    const auto h_basis = std::span(basis.points())
-                             .subspan(basis.n_vec_len(),
-                                      basis.l_vec_len());
-    PURIFY_ASSIGN_OR_RETURN(auto coefficient_commitment,
-                            msm(h_basis, coefficients, context));
-
-    Bytes encoded;
-    append(encoded, basis.digest());
-    append(encoded, prepared.raw_generator_digest);
-    append(encoded, prepared.challenge_digest);
-    append(encoded, norm.rho);
-    append(encoded, prepared.mul_scale.to_bytes_be());
-    append(encoded, prepared.mul_ratio.to_bytes_be());
-    append_size(encoded, statement_binding.size());
-    append(encoded, statement_binding);
-    append_size(encoded, public_commitments.size());
-    for (const auto& point : public_commitments) append(encoded, point);
-    append(encoded, proof.a_commitment);
-    append(encoded, proof.s_commitment);
-    append(encoded, proof.t2);
-    append(encoded, proof.public_commitment_dlog_nonce);
-    append(encoded, proof.public_commitment_dlog_response);
-    append(encoded, norm.commitment);
-    for (const auto& coefficient : norm.c_vec) append(encoded, coefficient);
-    append(encoded, coefficient_commitment);
-    append_size(encoded, norm.proof.size());
-    append(encoded, norm.proof);
+    PURIFY_ASSIGN_OR_RETURN(
+        auto coefficient_commitment,
+        commit_public_coefficients(basis, norm.c_vec, context));
 
     return CircuitPreparedNorm{
-        kCircuitNormBindingHash.digest(encoded), norm.c_vec,
-        coefficient_commitment, residual,
-        {std::move(g), std::move(h)}};
+        circuit_norm_binding_digest(basis, prepared, proof, public_commitments,
+                                    statement_binding, coefficient_commitment),
+        norm.c_vec, coefficient_commitment, residual, std::move(polynomial)};
 }
 
 } // namespace
@@ -343,14 +384,11 @@ prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
         components.residual, std::move(components.polynomial));
 }
 
-Result<AlgebraicPreparedNorm>
-prepare_v4_circuit_norm_for_algebraic_reduction(
-    const Basis& basis, candidate::PreparedCircuitZkNormArgV4 prepared,
-    purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
+namespace {
 
+/** Checks that a prepared V4 statement is over exactly this basis and is internally consistent. */
+Status check_v4_statement_matches_basis(
+    const Basis& basis, const candidate::PreparedCircuitZkNormArgV4& prepared) {
     const auto& shape = prepared.shape();
     const auto& transcript_input = prepared.transcript_input();
     const auto& transcript = prepared.transcript();
@@ -395,9 +433,16 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
             })) {
         return unexpected_error(ErrorCode::InternalMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(const auto& sqrt_minus_one,
-                            detail::canonical_sqrt_minus_one());
+    return {};
+}
 
+/** Checks the prepared norm's generators: G scaled as the transcript dictates, H exactly raw. */
+Status check_v4_norm_generators(
+    const candidate::PreparedCircuitZkNormArgV4& prepared,
+    const FieldElement& sqrt_minus_one, purify_secp_context* context) {
+    const auto& shape = prepared.shape();
+    const auto& transcript = prepared.transcript();
+    const auto& norm = prepared.norm();
     // Reconstruct every transformed G generator rather than trusting the
     // prepared object's duplicate list. The H suffix stays exactly raw.
     auto rho_power = transcript.rho.scalar;
@@ -431,7 +476,16 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
                 static_cast<std::ptrdiff_t>(shape.n_vec_len()))) {
         return unexpected_error(ErrorCode::InternalMismatch);
     }
+    return {};
+}
 
+/** Checks that the norm proof bytes are exactly the rounds and terminal scalars the transcript absorbed. */
+Status check_v4_norm_proof_layout(
+    const candidate::PreparedCircuitZkNormArgV4& prepared) {
+    const auto& shape = prepared.shape();
+    const auto& transcript_input = prepared.transcript_input();
+    const auto& norm = prepared.norm();
+    const auto rounds = shape.round_count();
     std::size_t round_bytes = 0;
     std::size_t expected_proof_size = 0;
     const CheckedSize checked_round_bytes =
@@ -465,7 +519,25 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
                                      round_bytes + sizeof(ScalarBytes)))) {
         return unexpected_error(ErrorCode::InternalMismatch);
     }
+    return {};
+}
 
+/** The pending short norm equation of a prepared V4 proof. */
+struct PendingNormClaimV4 {
+    FieldElement terminal_n;
+    FieldElement terminal_l;
+    PointBytes residual{};
+};
+
+/** Reconstructs the pending norm claim under the authenticated V4 challenges and checks it against the prepared one. */
+Result<PendingNormClaimV4> reconstruct_v4_norm_claim(
+    const candidate::PreparedCircuitZkNormArgV4& prepared,
+    purify_secp_context* context) {
+    const auto& shape = prepared.shape();
+    const auto& transcript_input = prepared.transcript_input();
+    const auto& transcript = prepared.transcript();
+    const auto& norm = prepared.norm();
+    const auto rounds = shape.round_count();
     std::vector<ScalarBytes> encoded_gammas;
     encoded_gammas.reserve(rounds);
     for (const auto& gamma : transcript.gammas) {
@@ -500,55 +572,56 @@ prepare_v4_circuit_norm_for_algebraic_reduction(
                             FieldElement::try_from_bytes32(terminal_n_bytes));
     PURIFY_ASSIGN_OR_RETURN(const auto& terminal_l,
                             FieldElement::try_from_bytes32(terminal_l_bytes));
-    // These are the two compact terms installed by the constrained V4 leaf.
-    PolynomialTerm g{
-        terminal_n *
-            pow_size(transcript.rho.scalar, shape.n_vec_len()) *
-            transcript.mul_scale.scalar.inverse(),
-        0,
-        {}};
-    PolynomialTerm h{terminal_l, shape.n_vec_len(), {}};
-    g.factors.reserve(rounds);
-    h.factors.reserve(rounds);
-    auto ratio_inverse_power =
-        transcript.mul_ratio.scalar.inverse();
-    for (std::size_t i = 0; i < rounds; ++i) {
-        const auto& gamma = transcript.gammas[i].scalar;
-        if (i == 0) {
-            g.factors.push_back(gamma * sqrt_minus_one.inverse());
-        } else {
-            g.factors.push_back(gamma * ratio_inverse_power);
-            ratio_inverse_power =
-                ratio_inverse_power * ratio_inverse_power;
-        }
-        h.factors.push_back(gamma);
-    }
+    return PendingNormClaimV4{terminal_n, terminal_l, residual};
+}
 
-    std::vector<FieldElement> coefficients;
-    coefficients.reserve(norm.c_vec.size());
-    for (const auto& encoded : norm.c_vec) {
-        PURIFY_ASSIGN_OR_RETURN(auto coefficient,
-                                FieldElement::try_from_bytes32(encoded));
-        coefficients.push_back(std::move(coefficient));
+} // namespace
+
+Result<AlgebraicPreparedNorm>
+prepare_v4_circuit_norm_for_algebraic_reduction(
+    const Basis& basis, candidate::PreparedCircuitZkNormArgV4 prepared,
+    purify_secp_context* context) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
+    PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
+
+    PURIFY_RETURN_IF_ERROR(check_v4_statement_matches_basis(basis, prepared));
+    PURIFY_ASSIGN_OR_RETURN(const auto& sqrt_minus_one,
+                            detail::canonical_sqrt_minus_one());
+    PURIFY_RETURN_IF_ERROR(
+        check_v4_norm_generators(prepared, sqrt_minus_one, context));
+    PURIFY_RETURN_IF_ERROR(check_v4_norm_proof_layout(prepared));
+    PURIFY_ASSIGN_OR_RETURN(const auto& claim,
+                            reconstruct_v4_norm_claim(prepared, context));
+
+    const auto& shape = prepared.shape();
+    const auto& transcript = prepared.transcript();
+    std::vector<FieldElement> gammas;
+    gammas.reserve(transcript.gammas.size());
+    for (const auto& gamma : transcript.gammas) {
+        gammas.push_back(gamma.scalar);
     }
-    const auto coefficient_basis =
-        std::span(basis.points())
-            .subspan(basis.n_vec_len(), basis.l_vec_len());
-    PURIFY_ASSIGN_OR_RETURN(const auto coefficient_commitment,
-                            msm(coefficient_basis, coefficients, context));
+    // These are the two compact terms installed by the constrained V4 leaf.
+    auto polynomial = folded_norm_terms(
+        claim.terminal_n * pow_size(transcript.rho.scalar, shape.n_vec_len()) *
+            transcript.mul_scale.scalar.inverse(),
+        claim.terminal_l, shape.n_vec_len(), transcript.mul_ratio.scalar,
+        sqrt_minus_one, gammas, gammas.size());
+
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto coefficient_commitment,
+        commit_public_coefficients(basis, prepared.norm().c_vec, context));
     if (coefficient_commitment !=
-        transcript_input.coefficient_commitment) {
+        prepared.transcript_input().coefficient_commitment) {
         return unexpected_error(ErrorCode::InternalMismatch);
     }
 
-    const auto prepared_binding =
-        transcript.prepared_binding.scalar;
+    const auto prepared_binding = transcript.prepared_binding.scalar;
     auto norm_data = std::move(prepared).take_norm();
     auto c_vec = std::move(norm_data.c_vec);
     return AlgebraicPreparedNorm(
         basis.digest(), prepared_binding, std::move(c_vec),
-        coefficient_commitment, residual,
-        std::array<PolynomialTerm, 2>{std::move(g), std::move(h)});
+        coefficient_commitment, claim.residual, std::move(polynomial));
 }
 
 Result<NormReductionProof> prove_norm_reduction(const Basis& basis, const PreparedNorm& norm,

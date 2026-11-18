@@ -12,11 +12,8 @@
 #include <vector>
 
 #include "purify/numeric.hpp"
+#include "purify/puresign/bppp.hpp"
 #include "purify/puresign/coalition_formation.hpp"
-
-namespace purify::puresign_plusplus {
-struct PublicKey;
-}
 
 namespace purify::accountable {
 

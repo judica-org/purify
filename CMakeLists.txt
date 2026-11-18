@@ -382,10 +382,9 @@ add_library(purify
     src/protocol/expr.cpp
     src/legacy_bulletproof/scratch_frames.c
     src/support/numeric.cpp
+    src/puresign/core.cpp
     src/puresign/legacy.cpp
-    src/puresign/codecs/legacy.cpp
     src/puresign/bppp.cpp
-    src/puresign/codecs/bppp.cpp
     src/puresign/accountable.cpp
     src/puresign/coalition_formation.cpp
     src/puresign/accountable_roster.cpp
@@ -803,10 +802,9 @@ if(PURIFY_BUILD_BENCH)
         src/protocol/expr.cpp
         src/legacy_bulletproof/scratch_frames.c
         src/support/numeric.cpp
+        src/puresign/core.cpp
         src/puresign/legacy.cpp
-        src/puresign/codecs/legacy.cpp
         src/puresign/bppp.cpp
-        src/puresign/codecs/bppp.cpp
         src/puresign/accountable.cpp
         src/puresign/coalition_formation.cpp
         src/puresign/accountable_roster.cpp

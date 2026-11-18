@@ -4,846 +4,188 @@
 
 /**
  * @file puresign/legacy.cpp
- * @brief Purify-derived BIP340 signing helpers with prepared nonces and wire-format artifacts.
+ * @brief The legacy Bulletproof backend of PureSign: its proof operations and wire formats.
+ *
+ * Everything that does not depend on the proof system lives in `core.cpp` and
+ * `detail/core_impl.hpp`.
  */
 
 #include "purify/puresign/legacy.hpp"
 
 #include <algorithm>
-#include <cstring>
+#include <cassert>
+#include <cstdint>
+#include <limits>
+#include <optional>
 
 #include "bulletproof_internal.hpp"
-#include "detail/common.hpp"
+#include "checked_size.hpp"
+#include "detail/core_impl.hpp"
 #include "purify/bppp.hpp"
-#include "purify/curve.hpp"
-#include "secure_cleanup.hpp"
 
 namespace purify::puresign {
 
-namespace api_impl {
+struct Backend::Ops {
+    static constexpr std::string_view kMessageProofTag = "PureSign/Proof/Message/V1";
+    static constexpr std::string_view kTopicProofTag = "PureSign/Proof/Topic/V1";
 
-Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
-                                             PreparedNonce prepared, purify_secp_context* secp_context);
-Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
-                                           PreparedNonce prepared, purify_secp_context* secp_context);
+    /** Proofs are produced, and cached verification runs, over the packed circuit form. */
+    static Result<NativeBulletproofCircuit::PackedWithSlack> instantiate(
+        const NativeBulletproofCircuitTemplate& circuit_template, const UInt512& purify_pubkey) {
+        return circuit_template.instantiate_packed(purify_pubkey);
+    }
 
-}  // namespace api_impl
+    static Result<NonceProof> prove(const NativeBulletproofCircuit::PackedWithSlack& circuit,
+                                    const BulletproofAssignmentData& assignment, const Scalar32& prover_seed,
+                                    const Nonce& nonce, std::span<const unsigned char> statement_binding,
+                                    purify_secp_context* secp_context, CircuitCache* circuit_cache) {
+        PURIFY_ASSIGN_OR_RETURN(auto proof,
+                                prove_experimental_circuit_assume_valid(circuit, assignment, prover_seed,
+                                                                        bppp::base_generator(secp_context),
+                                                                        secp_context, statement_binding, {},
+                                                                        circuit_cache));
+        return NonceProof{nonce, std::move(proof)};
+    }
+
+    /** `CircuitLike` is the packed form under a proof cache and the plain form otherwise. */
+    template <typename CircuitLike>
+    static Result<bool> verify(const CircuitLike& circuit, const NonceProof& nonce_proof,
+                               std::span<const unsigned char> statement_binding,
+                               purify_secp_context* secp_context, CircuitCache* circuit_cache) {
+        return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(secp_context),
+                                           secp_context, statement_binding, circuit_cache);
+    }
+
+    /** The proof's single commitment is the nonce point. */
+    static Result<bool> matches_nonce(const NonceProof& nonce_proof, purify_secp_context* secp_context) {
+        PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
+        if (nonce_proof.proof.commitments.size() != 1) {
+            return unexpected_error(ErrorCode::SizeMismatch);
+        }
+        return puresign_core::detail::nonce_matches_point(nonce_proof.nonce, nonce_proof.proof.commitments.front(),
+                                                          secp_context);
+    }
+};
 
 namespace {
 
-using ::purify::detail::WipeOnDestruction;
-
-constexpr std::string_view kMessageNonceTag = "PureSign/Nonce/Message/";
-constexpr std::string_view kTopicNonceTag = "PureSign/Nonce/Topic/";
-constexpr std::string_view kMessageBindingTag = "PureSign/Binding/Message";
-constexpr std::string_view kTopicBindingTag = "PureSign/Binding/Topic";
-constexpr std::string_view kMessageProofTag = "PureSign/Proof/Message/V1";
-constexpr std::string_view kTopicProofTag = "PureSign/Proof/Topic/V1";
-const TaggedHash kMessageBindingTaggedHash(kMessageBindingTag);
-const TaggedHash kTopicBindingTaggedHash(kTopicBindingTag);
-const TaggedHash kMessageProofTaggedHash(kMessageProofTag);
-const TaggedHash kTopicProofTaggedHash(kTopicProofTag);
-
-const TaggedHash& binding_tagged_hash(PreparedNonce::Scope scope) {
-    return scope == PreparedNonce::Scope::Message ? kMessageBindingTaggedHash : kTopicBindingTaggedHash;
+void append_u32_le(Bytes& out, std::uint32_t value) {
+    for (int i = 0; i < 4; ++i) {
+        out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
+    }
 }
 
-const TaggedHash& proof_tagged_hash(PreparedNonce::Scope scope) {
-    return scope == PreparedNonce::Scope::Message ? kMessageProofTaggedHash : kTopicProofTaggedHash;
-}
-
-const UInt256& secp256k1_order() {
-    static const UInt256 value =
-        UInt256::from_hex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes, std::size_t offset) {
+    std::uint32_t value = 0;
+    if (offset > bytes.size() || bytes.size() - offset < 4) {
+        return std::nullopt;
+    }
+    for (int i = 0; i < 4; ++i) {
+        value |= static_cast<std::uint32_t>(bytes[offset + i]) << (8 * i);
+    }
     return value;
-}
-
-Status validate_puresign_field_alignment() {
-    if (prime_p() != secp256k1_order()) {
-        return unexpected_error(ErrorCode::InternalMismatch);
-    }
-    return {};
-}
-
-Status validate_public_key_bundle(const PublicKey& public_key, purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(validate_public_key(public_key.purify_pubkey));
-    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-    if (purify_bip340_validate_xonly_pubkey(secp_context, public_key.bip340_pubkey.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput);
-    }
-    return {};
-}
-
-const unsigned char* nullable_data(std::span<const unsigned char> input) {
-    return input.empty() ? nullptr : input.data();
-}
-
-XOnly32 binding_digest(const TaggedHash& tag, std::span<const unsigned char> input) {
-    XOnly32 out{};
-    out = tag.digest(input);
-    return out;
-}
-
-std::string_view proof_tag_for_scope(PreparedNonce::Scope scope) {
-    return scope == PreparedNonce::Scope::Message ? kMessageProofTag : kTopicProofTag;
-}
-
-Bytes proof_statement_binding(PreparedNonce::Scope scope) {
-    return bytes_from_ascii(proof_tag_for_scope(scope));
-}
-
-Scalar32 derive_proof_nonce_seed(const SecretKey& secret, PreparedNonce::Scope scope, std::span<const unsigned char> eval_input) {
-    std::array<unsigned char, 64> secret_bytes = secret.packed().to_bytes_be();
-    Scalar32 out{};
-    std::array digest_segments{
-        std::span<const unsigned char>(secret_bytes.data(), secret_bytes.size()),
-        eval_input,
-    };
-    out = proof_tagged_hash(scope).digest_many(digest_segments);
-    detail::secure_clear_bytes(secret_bytes.data(), secret_bytes.size());
-    return out;
-}
-
-Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof, purify_secp_context* secp_context) {
-    XOnly32 xonly{};
-    int parity = 0;
-    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-    if (nonce_proof.proof.commitments.size() != 1) {
-        return unexpected_error(ErrorCode::SizeMismatch);
-    }
-    if (purify_bip340_xonly_from_point(secp_context, nonce_proof.proof.commitments.front().data(), xonly.data(), &parity) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput);
-    }
-    (void)parity;
-    return xonly == nonce_proof.nonce.xonly;
-}
-
-Status validate_message_proof_cache(const MessageProofCache& cache) {
-    return detail::validate_message_proof_cache(cache, kMessageNonceTag);
-}
-
-Status validate_topic_proof_cache(const TopicProofCache& cache) {
-    return detail::validate_topic_proof_cache(cache, kTopicNonceTag);
-}
-
-struct DerivedNonceData {
-    PreparedNonce::Scope scope;
-    Scalar32 scalar{};
-    Nonce nonce{};
-    XOnly32 signer_pubkey{};
-    XOnly32 binding_digest{};
-    Bytes eval_input;
-};
-
-Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret, const DerivedNonceData& nonce_data,
-                                                   const NativeBulletproofCircuitTemplate& circuit_template,
-                                                   purify_secp_context* secp_context,
-                                                   ExperimentalBulletproofBackendCache* backend_cache = nullptr) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& witness, prove_assignment_data(nonce_data.eval_input, secret));
-    PURIFY_ASSIGN_OR_RETURN(auto partial_ok, circuit_template.partial_evaluate(witness.assignment));
-    if (!partial_ok) {
-        return unexpected_error(ErrorCode::BindingMismatch);
-    }
-    PURIFY_ASSIGN_OR_RETURN(auto final_ok, circuit_template.final_evaluate(witness.assignment, witness.public_key));
-    if (!final_ok) {
-        return unexpected_error(ErrorCode::BindingMismatch);
-    }
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, circuit_template.instantiate_packed(witness.public_key));
-    PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit));
-
-    Scalar32 proof_nonce = derive_proof_nonce_seed(secret, nonce_data.scope, nonce_data.eval_input);
-    Bytes statement_binding = proof_statement_binding(nonce_data.scope);
-    PURIFY_ASSIGN_OR_RETURN(auto proof,
-                            prove_experimental_circuit_assume_valid(circuit, witness.assignment, proof_nonce,
-                                                                    bppp::base_generator(secp_context), secp_context,
-                                                                    statement_binding, {}, backend_cache));
-
-    NonceProof out{};
-    out.nonce = nonce_data.nonce;
-    out.proof = std::move(proof);
-    PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(out, secp_context));
-    if (!match) {
-        return unexpected_error(ErrorCode::InternalMismatch);
-    }
-    return out;
-}
-
-Result<DerivedNonceData> derive_nonce_data(const SecretKey& secret, PreparedNonce::Scope scope,
-                                           std::span<const unsigned char> input,
-                                           purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(validate_puresign_field_alignment());
-    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret, secp_context));
-
-    const std::string_view nonce_tag = scope == PreparedNonce::Scope::Message ? kMessageNonceTag : kTopicNonceTag;
-    const TaggedHash& binding_hash = binding_tagged_hash(scope);
-
-    DerivedNonceData out{};
-    out.scope = scope;
-    out.signer_pubkey = signer.xonly_pubkey;
-    out.binding_digest = binding_digest(binding_hash, input);
-
-    out.eval_input = detail::tagged_eval_input(nonce_tag, input);
-    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_value, eval(secret, out.eval_input));
-    out.scalar = nonce_value.to_bytes_be();
-    if (std::all_of(out.scalar.begin(), out.scalar.end(), [](unsigned char byte) { return byte == 0; })) {
-        /* This rejects the unique invalid Schnorr nonce. Since Purify outputs a field element
-         * modulo the secp256k1 group order, the failure probability is exactly 1/n, which is
-         * negligible for n ~= 2^256.
-         */
-        return unexpected_error(ErrorCode::BackendRejectedInput);
-    }
-
-    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-    if (purify_bip340_nonce_from_scalar(secp_context, out.scalar.data(), out.nonce.xonly.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput);
-    }
-    return out;
-}
-
-Result<NonceProof> build_nonce_proof(const SecretKey& secret,
-                                     const DerivedNonceData& nonce_data,
-                                     purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit_template, verifier_circuit_template(nonce_data.eval_input));
-    return build_nonce_proof_from_template(secret, nonce_data, circuit_template, secp_context);
-}
-
-Result<DerivedNonceData> prepare_nonce_data_impl(const SecretKey& secret, PreparedNonce::Scope scope,
-                                                 std::span<const unsigned char> input,
-                                                 purify_secp_context* secp_context) {
-    if (scope == PreparedNonce::Scope::Topic && input.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput);
-    }
-    PURIFY_ASSIGN_OR_RETURN(auto nonce_data, derive_nonce_data(secret, scope, input, secp_context));
-    return nonce_data;
-}
-
-Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key, const NativeBulletproofCircuit& circuit,
-                                             const NonceProof& nonce_proof, PreparedNonce::Scope scope,
-                                             purify_secp_context* secp_context,
-                                             ExperimentalBulletproofBackendCache* backend_cache = nullptr) {
-    PURIFY_RETURN_IF_ERROR(validate_public_key_bundle(public_key, secp_context));
-    PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit));
-    PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(nonce_proof, secp_context));
-    if (!match) {
-        return false;
-    }
-    Bytes statement_binding = proof_statement_binding(scope);
-    return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(secp_context), secp_context, statement_binding,
-                                       backend_cache);
-}
-
-Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
-                                             const NativeBulletproofCircuit::PackedWithSlack& circuit,
-                                             const NonceProof& nonce_proof, PreparedNonce::Scope scope,
-                                             purify_secp_context* secp_context,
-                                             ExperimentalBulletproofBackendCache* backend_cache = nullptr) {
-    PURIFY_RETURN_IF_ERROR(validate_public_key_bundle(public_key, secp_context));
-    PURIFY_RETURN_IF_ERROR(detail::validate_proof_cache_circuit(circuit));
-    PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(nonce_proof, secp_context));
-    if (!match) {
-        return false;
-    }
-    Bytes statement_binding = proof_statement_binding(scope);
-    return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(secp_context), secp_context, statement_binding,
-                                       backend_cache);
 }
 
 }  // namespace
 
-PreparedNonce::PreparedNonce(Scope scope, const Scalar32& scalar, const Nonce& nonce,
-                             const XOnly32& signer_pubkey, const XOnly32& binding_digest)
-    : scope_(scope), scalar_(scalar), nonce_(nonce),
-      signer_pubkey_(signer_pubkey), binding_digest_(binding_digest),
-      available_(true) {}
-
-PreparedNonce PreparedNonce::from_parts(Scope scope, const Scalar32& scalar, const Nonce& nonce,
-                                        const XOnly32& signer_pubkey, const XOnly32& binding_digest) {
-    return PreparedNonce(scope, scalar, nonce, signer_pubkey, binding_digest);
-}
-
-PreparedNonce::PreparedNonce(PreparedNonce&& other) noexcept
-    : scope_(other.scope_), scalar_(other.scalar_), nonce_(other.nonce_),
-      signer_pubkey_(other.signer_pubkey_), binding_digest_(other.binding_digest_),
-      available_(other.available_) {
-    other.clear();
-}
-
-PreparedNonce& PreparedNonce::operator=(PreparedNonce&& other) noexcept {
-    if (this != &other) {
-        clear();
-        scope_ = other.scope_;
-        scalar_ = other.scalar_;
-        nonce_ = other.nonce_;
-        signer_pubkey_ = other.signer_pubkey_;
-        binding_digest_ = other.binding_digest_;
-        available_ = other.available_;
-        other.clear();
-    }
-    return *this;
-}
-
-PreparedNonce::~PreparedNonce() {
-    clear();
-}
-
-void PreparedNonce::clear() noexcept {
-    detail::secure_clear_bytes(scalar_.data(), scalar_.size());
-    available_ = false;
-}
-
-Result<Signature> PreparedNonce::sign_message(const Bip340Key& signer,
-                                              std::span<const unsigned char> message,
-                                              purify_secp_context* secp_context) && {
-    if (!available_) {
-        return unexpected_error(ErrorCode::UninitializedState);
-    }
-    available_ = false;
-    WipeOnDestruction burn(scalar_);
-    if (scope_ != Scope::Message) {
+Result<Bytes> NonceProof::serialize(purify_secp_context* secp_context) const {
+    PURIFY_ASSIGN_OR_RETURN(auto match, Backend::Ops::matches_nonce(*this, secp_context));
+    if (!match) {
         return unexpected_error(ErrorCode::BindingMismatch);
     }
-    if (signer_pubkey_ != signer.xonly_pubkey) {
-        return unexpected_error(ErrorCode::BindingMismatch);
+    PURIFY_ASSIGN_OR_RETURN(const auto& proof_bytes, proof.serialize());
+    if (proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return unexpected_error(ErrorCode::UnexpectedSize);
     }
-    if (binding_digest_ != binding_digest(kMessageBindingTaggedHash, message)) {
-        return unexpected_error(ErrorCode::BindingMismatch);
+    std::size_t serialized_size = 0;
+    if (!(::purify::detail::CheckedSize(37) + proof_bytes.size()).store(serialized_size)) {
+        return unexpected_error(ErrorCode::Overflow);
     }
 
-    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-    Signature out{};
-    if (purify_bip340_sign_with_fixed_nonce(secp_context, out.bytes.data(), nullable_data(message), message.size(),
-                                            signer.seckey.data(), scalar_.data()) == 0) {
+    Bytes out;
+    out.reserve(serialized_size);
+    out.push_back(static_cast<unsigned char>(2));
+    append_u32_le(out, static_cast<std::uint32_t>(proof_bytes.size()));
+    out.insert(out.end(), nonce.xonly.begin(), nonce.xonly.end());
+    out.insert(out.end(), proof_bytes.begin(), proof_bytes.end());
+    return out;
+}
+
+Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serialized,
+                                           purify_secp_context* secp_context) {
+    if (serialized.size() < 37) {
+        return unexpected_error(ErrorCode::InvalidFixedSize);
+    }
+    if (serialized[0] != 2) {
         return unexpected_error(ErrorCode::BackendRejectedInput);
     }
-    if (out.nonce().xonly != nonce_.xonly) {
-        return unexpected_error(ErrorCode::InternalMismatch);
+    std::optional<std::uint32_t> proof_size = read_u32_le(serialized, 1);
+    assert(proof_size.has_value() && "header length check should guarantee a u32 proof size");
+    if (*proof_size != serialized.size() - 37) {
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
-    if (purify_bip340_verify(secp_context, out.bytes.data(), nullable_data(message), message.size(),
-                             signer.xonly_pubkey.data()) == 0) {
-        return unexpected_error(ErrorCode::InternalMismatch);
+
+    NonceProof out{};
+    std::copy_n(serialized.begin() + 5, 32, out.nonce.xonly.begin());
+    PURIFY_ASSIGN_OR_RETURN(auto proof_value,
+                            ExperimentalBulletproofProof::deserialize(serialized.subspan(37, *proof_size)));
+    out.proof = std::move(proof_value);
+    PURIFY_ASSIGN_OR_RETURN(auto match, Backend::Ops::matches_nonce(out, secp_context));
+    if (!match) {
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     return out;
 }
 
-Result<Signature> PreparedNonce::sign_topic_message(const Bip340Key& signer,
-                                                    std::span<const unsigned char> message,
-                                                    purify_secp_context* secp_context) && {
-    if (!available_) {
-        return unexpected_error(ErrorCode::UninitializedState);
+Result<Bytes> ProvenSignature::serialize(purify_secp_context* secp_context) const {
+    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_proof_bytes, nonce_proof.serialize(secp_context));
+    if (nonce_proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return unexpected_error(ErrorCode::UnexpectedSize);
     }
-    available_ = false;
-    WipeOnDestruction burn(scalar_);
-    if (scope_ != Scope::Topic) {
-        return unexpected_error(ErrorCode::BindingMismatch);
-    }
-    if (signer_pubkey_ != signer.xonly_pubkey) {
-        return unexpected_error(ErrorCode::BindingMismatch);
+    std::size_t serialized_size = 0;
+    if (!(::purify::detail::CheckedSize(69) + nonce_proof_bytes.size()).store(serialized_size)) {
+        return unexpected_error(ErrorCode::Overflow);
     }
 
-    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-    Signature out{};
-    if (purify_bip340_sign_with_fixed_nonce(secp_context, out.bytes.data(), nullable_data(message), message.size(),
-                                            signer.seckey.data(), scalar_.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput);
-    }
-    if (out.nonce().xonly != nonce_.xonly) {
-        return unexpected_error(ErrorCode::InternalMismatch);
-    }
-    if (purify_bip340_verify(secp_context, out.bytes.data(), nullable_data(message), message.size(),
-                             signer.xonly_pubkey.data()) == 0) {
-        return unexpected_error(ErrorCode::InternalMismatch);
-    }
+    Bytes out;
+    out.reserve(serialized_size);
+    out.push_back(static_cast<unsigned char>(1));
+    append_u32_le(out, static_cast<std::uint32_t>(nonce_proof_bytes.size()));
+    out.insert(out.end(), nonce_proof_bytes.begin(), nonce_proof_bytes.end());
+    out.insert(out.end(), signature.bytes.begin(), signature.bytes.end());
     return out;
 }
 
-PreparedNonceWithProof PreparedNonceWithProof::from_parts(PreparedNonce prepared, NonceProof proof) {
-    return PreparedNonceWithProof(std::move(prepared), std::move(proof));
-}
-
-Result<ProvenSignature> PreparedNonceWithProof::sign_message(const SecretKey& secret,
-                                                             std::span<const unsigned char> message,
-                                                             purify_secp_context* secp_context) && {
-    NonceProof nonce_proof = std::move(proof_);
-    PURIFY_ASSIGN_OR_RETURN(auto signature,
-                            api_impl::sign_message_with_prepared(secret, message, std::move(prepared_), secp_context));
-    if (signature.nonce().xonly != nonce_proof.nonce.xonly) {
-        return unexpected_error(ErrorCode::InternalMismatch);
+Result<ProvenSignature> ProvenSignature::deserialize(std::span<const unsigned char> serialized,
+                                                     purify_secp_context* secp_context) {
+    if (serialized.size() < 69) {
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
-    return ProvenSignature{signature, std::move(nonce_proof)};
-}
-
-Result<ProvenSignature> PreparedNonceWithProof::sign_topic_message(const SecretKey& secret,
-                                                                   std::span<const unsigned char> message,
-                                                                   purify_secp_context* secp_context) && {
-    NonceProof nonce_proof = std::move(proof_);
-    PURIFY_ASSIGN_OR_RETURN(auto signature,
-                            api_impl::sign_with_prepared_topic(secret, message, std::move(prepared_), secp_context));
-    if (signature.nonce().xonly != nonce_proof.nonce.xonly) {
-        return unexpected_error(ErrorCode::InternalMismatch);
-    }
-    return ProvenSignature{signature, std::move(nonce_proof)};
-}
-
-namespace api_impl {
-
-Result<PublicKey> derive_public_key(const SecretKey& secret, purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& purify_key, derive_key(secret));
-    PURIFY_ASSIGN_OR_RETURN(const auto& bip340_key, derive_bip340_key(secret, secp_context));
-    return PublicKey{purify_key.public_key, bip340_key.xonly_pubkey};
-}
-
-Result<MessageProofCache> build_message_proof_cache(std::span<const unsigned char> message) {
-    Bytes eval_input = detail::tagged_eval_input(kMessageNonceTag, message);
-    PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(eval_input));
-    PURIFY_ASSIGN_OR_RETURN(auto template_digest, circuit_template.integrity_digest());
-    MessageProofCache cache{};
-    cache.message = detail::copy_bytes(message);
-    cache.eval_input = std::move(eval_input);
-    cache.circuit_template = std::move(circuit_template);
-    cache.template_digest = std::move(template_digest);
-    return cache;
-}
-
-Result<TopicProofCache> build_topic_proof_cache(std::span<const unsigned char> topic) {
-    if (topic.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput);
-    }
-    Bytes eval_input = detail::tagged_eval_input(kTopicNonceTag, topic);
-    PURIFY_ASSIGN_OR_RETURN(auto circuit_template, verifier_circuit_template(eval_input));
-    PURIFY_ASSIGN_OR_RETURN(auto template_digest, circuit_template.integrity_digest());
-    TopicProofCache cache{};
-    cache.topic = detail::copy_bytes(topic);
-    cache.eval_input = std::move(eval_input);
-    cache.circuit_template = std::move(circuit_template);
-    cache.template_digest = std::move(template_digest);
-    return cache;
-}
-
-Result<PreparedNonce> prepare_message_nonce(const SecretKey& secret, std::span<const unsigned char> message,
-                                            purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data,
-                            prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message, secp_context));
-    return PreparedNonce::from_parts(PreparedNonce::Scope::Message, nonce_data.scalar, nonce_data.nonce,
-                                     nonce_data.signer_pubkey, nonce_data.binding_digest);
-}
-
-Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey& secret,
-                                                                std::span<const unsigned char> message,
-                                                                purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data,
-                            prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message, message, secp_context));
-    PreparedNonce prepared = PreparedNonce::from_parts(PreparedNonce::Scope::Message, nonce_data.scalar,
-                                                       nonce_data.nonce, nonce_data.signer_pubkey,
-                                                       nonce_data.binding_digest);
-    PURIFY_ASSIGN_OR_RETURN(auto proof, build_nonce_proof(secret, nonce_data, secp_context));
-    return PreparedNonceWithProof::from_parts(std::move(prepared), std::move(proof));
-}
-
-Result<PreparedNonceWithProof> prepare_message_nonce_with_proof(const SecretKey& secret,
-                                                                const MessageProofCache& cache,
-                                                                purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(validate_message_proof_cache(cache));
-    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data, prepare_nonce_data_impl(secret, PreparedNonce::Scope::Message,
-                                                                            cache.message, secp_context));
-    PreparedNonce prepared = PreparedNonce::from_parts(PreparedNonce::Scope::Message, nonce_data.scalar,
-                                                       nonce_data.nonce, nonce_data.signer_pubkey,
-                                                       nonce_data.binding_digest);
-    PURIFY_ASSIGN_OR_RETURN(auto proof, build_nonce_proof_from_template(secret, nonce_data, cache.circuit_template,
-                                                                        secp_context, &cache.backend_cache));
-    return PreparedNonceWithProof::from_parts(std::move(prepared), std::move(proof));
-}
-
-Result<PreparedNonce> prepare_topic_nonce(const SecretKey& secret, std::span<const unsigned char> topic,
-                                          purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data,
-                            prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic, secp_context));
-    return PreparedNonce::from_parts(PreparedNonce::Scope::Topic, nonce_data.scalar, nonce_data.nonce,
-                                     nonce_data.signer_pubkey, nonce_data.binding_digest);
-}
-
-Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& secret,
-                                                              std::span<const unsigned char> topic,
-                                                              purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data,
-                            prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, topic, secp_context));
-    PreparedNonce prepared = PreparedNonce::from_parts(PreparedNonce::Scope::Topic, nonce_data.scalar,
-                                                       nonce_data.nonce, nonce_data.signer_pubkey,
-                                                       nonce_data.binding_digest);
-    PURIFY_ASSIGN_OR_RETURN(auto proof, build_nonce_proof(secret, nonce_data, secp_context));
-    return PreparedNonceWithProof::from_parts(std::move(prepared), std::move(proof));
-}
-
-Result<PreparedNonceWithProof> prepare_topic_nonce_with_proof(const SecretKey& secret,
-                                                              const TopicProofCache& cache,
-                                                              purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(validate_topic_proof_cache(cache));
-    PURIFY_ASSIGN_OR_RETURN(const auto& nonce_data,
-                            prepare_nonce_data_impl(secret, PreparedNonce::Scope::Topic, cache.topic, secp_context));
-    PreparedNonce prepared = PreparedNonce::from_parts(PreparedNonce::Scope::Topic, nonce_data.scalar,
-                                                       nonce_data.nonce, nonce_data.signer_pubkey,
-                                                       nonce_data.binding_digest);
-    PURIFY_ASSIGN_OR_RETURN(auto proof, build_nonce_proof_from_template(secret, nonce_data, cache.circuit_template,
-                                                                        secp_context, &cache.backend_cache));
-    return PreparedNonceWithProof::from_parts(std::move(prepared), std::move(proof));
-}
-
-Result<Signature> sign_message(const SecretKey& secret, std::span<const unsigned char> message,
-                               purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce(secret, message, secp_context));
-    return sign_message_with_prepared(secret, message, std::move(prepared), secp_context);
-}
-
-Result<Signature> sign_message_with_prepared(const SecretKey& secret, std::span<const unsigned char> message,
-                                             PreparedNonce prepared, purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret, secp_context));
-    return std::move(prepared).sign_message(signer, message, secp_context);
-}
-
-Result<ProvenSignature> sign_message_with_prepared_proof(const SecretKey& secret, std::span<const unsigned char> message,
-                                                         PreparedNonceWithProof&& prepared,
-                                                         purify_secp_context* secp_context) {
-    return std::move(prepared).sign_message(secret, message, secp_context);
-}
-
-Result<Signature> sign_with_topic(const SecretKey& secret, std::span<const unsigned char> message,
-                                  std::span<const unsigned char> topic,
-                                  purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce(secret, topic, secp_context));
-    return sign_with_prepared_topic(secret, message, std::move(prepared), secp_context);
-}
-
-Result<Signature> sign_with_prepared_topic(const SecretKey& secret, std::span<const unsigned char> message,
-                                           PreparedNonce prepared, purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& signer, derive_bip340_key(secret, secp_context));
-    return std::move(prepared).sign_topic_message(signer, message, secp_context);
-}
-
-Result<ProvenSignature> sign_with_prepared_topic_proof(const SecretKey& secret, std::span<const unsigned char> message,
-                                                       PreparedNonceWithProof&& prepared,
-                                                       purify_secp_context* secp_context) {
-    return std::move(prepared).sign_topic_message(secret, message, secp_context);
-}
-
-Result<ProvenSignature> sign_message_with_proof(const SecretKey& secret, std::span<const unsigned char> message,
-                                                purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce_with_proof(secret, message, secp_context));
-    return sign_message_with_prepared_proof(secret, message, std::move(prepared), secp_context);
-}
-
-Result<ProvenSignature> sign_message_with_proof(const SecretKey& secret, const MessageProofCache& cache,
-                                                purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce_with_proof(secret, cache, secp_context));
-    return sign_message_with_prepared_proof(secret, cache.message, std::move(prepared), secp_context);
-}
-
-Result<ProvenSignature> sign_with_topic_proof(const SecretKey& secret, std::span<const unsigned char> message,
-                                              std::span<const unsigned char> topic,
-                                              purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce_with_proof(secret, topic, secp_context));
-    return sign_with_prepared_topic_proof(secret, message, std::move(prepared), secp_context);
-}
-
-Result<ProvenSignature> sign_with_topic_proof(const SecretKey& secret, std::span<const unsigned char> message,
-                                              const TopicProofCache& cache,
-                                              purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce_with_proof(secret, cache, secp_context));
-    return sign_with_prepared_topic_proof(secret, message, std::move(prepared), secp_context);
-}
-
-Result<bool> verify_signature(const PublicKey& public_key, std::span<const unsigned char> message,
-                              const Signature& signature, purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(validate_public_key(public_key.purify_pubkey));
-    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-    if (purify_bip340_validate_xonly_pubkey(secp_context, public_key.bip340_pubkey.data()) == 0) {
+    if (serialized[0] != 1) {
         return unexpected_error(ErrorCode::BackendRejectedInput);
     }
-    if (purify_bip340_validate_signature(secp_context, signature.bytes.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput);
+    std::optional<std::uint32_t> nonce_proof_size = read_u32_le(serialized, 1);
+    assert(nonce_proof_size.has_value() && "header length check should guarantee a u32 nonce proof size");
+    const std::size_t payload_size = serialized.size() - 5;
+    if (*nonce_proof_size > payload_size || payload_size - *nonce_proof_size != 64) {
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
-    return purify_bip340_verify(secp_context, signature.bytes.data(), nullable_data(message), message.size(),
-                                public_key.bip340_pubkey.data()) != 0;
-}
 
-Result<bool> verify_message_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> message,
-                                        const NonceProof& nonce_proof,
-                                        purify_secp_context* secp_context,
-                                        ExperimentalBulletproofBackendCache* circuit_cache) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, verifier_circuit(detail::tagged_eval_input(kMessageNonceTag, message),
-                                                                  public_key.purify_pubkey));
-    return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, PreparedNonce::Scope::Message,
-                                           secp_context, circuit_cache);
-}
-
-Result<bool> verify_message_nonce_proof(const MessageProofCache& cache, const PublicKey& public_key,
-                                        const NonceProof& nonce_proof,
-                                        purify_secp_context* secp_context,
-                                        ExperimentalBulletproofBackendCache* circuit_cache) {
-    PURIFY_RETURN_IF_ERROR(validate_message_proof_cache(cache));
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, cache.circuit_template.instantiate_packed(public_key.purify_pubkey));
-    return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, PreparedNonce::Scope::Message,
-                                           secp_context,
-                                           circuit_cache != nullptr ? circuit_cache : &cache.backend_cache);
-}
-
-Result<bool> verify_topic_nonce_proof(const PublicKey& public_key, std::span<const unsigned char> topic,
-                                      const NonceProof& nonce_proof,
-                                      purify_secp_context* secp_context,
-                                      ExperimentalBulletproofBackendCache* circuit_cache) {
-    if (topic.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput);
-    }
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, verifier_circuit(detail::tagged_eval_input(kTopicNonceTag, topic),
-                                                                  public_key.purify_pubkey));
-    return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, PreparedNonce::Scope::Topic, secp_context,
-                                           circuit_cache);
-}
-
-Result<bool> verify_topic_nonce_proof(const TopicProofCache& cache, const PublicKey& public_key,
-                                      const NonceProof& nonce_proof,
-                                      purify_secp_context* secp_context,
-                                      ExperimentalBulletproofBackendCache* circuit_cache) {
-    PURIFY_RETURN_IF_ERROR(validate_topic_proof_cache(cache));
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, cache.circuit_template.instantiate_packed(public_key.purify_pubkey));
-    return verify_nonce_proof_with_circuit(public_key, circuit, nonce_proof, PreparedNonce::Scope::Topic, secp_context,
-                                           circuit_cache != nullptr ? circuit_cache : &cache.backend_cache);
-}
-
-Result<bool> verify_message_signature_with_proof(const PublicKey& public_key, std::span<const unsigned char> message,
-                                                 const ProvenSignature& signature,
-                                                 purify_secp_context* secp_context,
-                                                 ExperimentalBulletproofBackendCache* circuit_cache) {
-    PURIFY_ASSIGN_OR_RETURN(auto sig_ok, verify_signature(public_key, message, signature.signature, secp_context));
-    if (!sig_ok) {
-        return false;
-    }
-    if (signature.signature.nonce().xonly != signature.nonce_proof.nonce.xonly) {
-        return false;
-    }
-    return verify_message_nonce_proof(public_key, message, signature.nonce_proof, secp_context, circuit_cache);
-}
-
-Result<bool> verify_message_signature_with_proof(const MessageProofCache& cache, const PublicKey& public_key,
-                                                 const ProvenSignature& signature,
-                                                 purify_secp_context* secp_context,
-                                                 ExperimentalBulletproofBackendCache* circuit_cache) {
-    PURIFY_ASSIGN_OR_RETURN(auto sig_ok, verify_signature(public_key, cache.message, signature.signature, secp_context));
-    if (!sig_ok) {
-        return false;
-    }
-    if (signature.signature.nonce().xonly != signature.nonce_proof.nonce.xonly) {
-        return false;
-    }
-    return verify_message_nonce_proof(cache, public_key, signature.nonce_proof, secp_context, circuit_cache);
-}
-
-Result<bool> verify_topic_signature_with_proof(const PublicKey& public_key, std::span<const unsigned char> message,
-                                               std::span<const unsigned char> topic,
-                                               const ProvenSignature& signature,
-                                               purify_secp_context* secp_context,
-                                               ExperimentalBulletproofBackendCache* circuit_cache) {
-    PURIFY_ASSIGN_OR_RETURN(auto sig_ok, verify_signature(public_key, message, signature.signature, secp_context));
-    if (!sig_ok) {
-        return false;
-    }
-    if (signature.signature.nonce().xonly != signature.nonce_proof.nonce.xonly) {
-        return false;
-    }
-    return verify_topic_nonce_proof(public_key, topic, signature.nonce_proof, secp_context, circuit_cache);
-}
-
-Result<bool> verify_topic_signature_with_proof(const TopicProofCache& cache, const PublicKey& public_key,
-                                               std::span<const unsigned char> message,
-                                               const ProvenSignature& signature,
-                                               purify_secp_context* secp_context,
-                                               ExperimentalBulletproofBackendCache* circuit_cache) {
-    PURIFY_ASSIGN_OR_RETURN(auto sig_ok, verify_signature(public_key, message, signature.signature, secp_context));
-    if (!sig_ok) {
-        return false;
-    }
-    if (signature.signature.nonce().xonly != signature.nonce_proof.nonce.xonly) {
-        return false;
-    }
-    return verify_topic_nonce_proof(cache, public_key, signature.nonce_proof, secp_context, circuit_cache);
-}
-
-}  // namespace api_impl
-
-Result<PublicKey> PublicKey::from_secret(const SecretKey& secret, purify_secp_context* secp_context) {
-    return api_impl::derive_public_key(secret, secp_context);
-}
-
-Result<bool> PublicKey::verify_signature(std::span<const unsigned char> message, const Signature& signature,
-                                         purify_secp_context* secp_context) const {
-    return api_impl::verify_signature(*this, message, signature, secp_context);
-}
-
-Result<bool> PublicKey::verify_message_nonce_proof(std::span<const unsigned char> message,
-                                                   const NonceProof& nonce_proof,
-                                                   purify_secp_context* secp_context,
-                                                   ExperimentalBulletproofBackendCache* circuit_cache) const {
-    return api_impl::verify_message_nonce_proof(*this, message, nonce_proof, secp_context, circuit_cache);
-}
-
-Result<bool> PublicKey::verify_message_nonce_proof(const MessageProofCache& cache, const NonceProof& nonce_proof,
-                                                   purify_secp_context* secp_context,
-                                                   ExperimentalBulletproofBackendCache* circuit_cache) const {
-    return api_impl::verify_message_nonce_proof(cache, *this, nonce_proof, secp_context, circuit_cache);
-}
-
-Result<bool> PublicKey::verify_topic_nonce_proof(std::span<const unsigned char> topic,
-                                                 const NonceProof& nonce_proof,
-                                                 purify_secp_context* secp_context,
-                                                 ExperimentalBulletproofBackendCache* circuit_cache) const {
-    return api_impl::verify_topic_nonce_proof(*this, topic, nonce_proof, secp_context, circuit_cache);
-}
-
-Result<bool> PublicKey::verify_topic_nonce_proof(const TopicProofCache& cache, const NonceProof& nonce_proof,
-                                                 purify_secp_context* secp_context,
-                                                 ExperimentalBulletproofBackendCache* circuit_cache) const {
-    return api_impl::verify_topic_nonce_proof(cache, *this, nonce_proof, secp_context, circuit_cache);
-}
-
-Result<bool> PublicKey::verify_message_signature_with_proof(std::span<const unsigned char> message,
-                                                            const ProvenSignature& signature,
-                                                            purify_secp_context* secp_context,
-                                                            ExperimentalBulletproofBackendCache* circuit_cache) const {
-    return api_impl::verify_message_signature_with_proof(*this, message, signature, secp_context, circuit_cache);
-}
-
-Result<bool> PublicKey::verify_message_signature_with_proof(const MessageProofCache& cache,
-                                                            const ProvenSignature& signature,
-                                                            purify_secp_context* secp_context,
-                                                            ExperimentalBulletproofBackendCache* circuit_cache) const {
-    return api_impl::verify_message_signature_with_proof(cache, *this, signature, secp_context, circuit_cache);
-}
-
-Result<bool> PublicKey::verify_topic_signature_with_proof(std::span<const unsigned char> message,
-                                                          std::span<const unsigned char> topic,
-                                                          const ProvenSignature& signature,
-                                                          purify_secp_context* secp_context,
-                                                          ExperimentalBulletproofBackendCache* circuit_cache) const {
-    return api_impl::verify_topic_signature_with_proof(*this, message, topic, signature, secp_context, circuit_cache);
-}
-
-Result<bool> PublicKey::verify_topic_signature_with_proof(const TopicProofCache& cache,
-                                                          std::span<const unsigned char> message,
-                                                          const ProvenSignature& signature,
-                                                          purify_secp_context* secp_context,
-                                                          ExperimentalBulletproofBackendCache* circuit_cache) const {
-    return api_impl::verify_topic_signature_with_proof(cache, *this, message, signature, secp_context, circuit_cache);
-}
-
-Result<MessageProofCache> MessageProofCache::build(std::span<const unsigned char> message) {
-    return api_impl::build_message_proof_cache(message);
-}
-
-Result<TopicProofCache> TopicProofCache::build(std::span<const unsigned char> topic) {
-    return api_impl::build_topic_proof_cache(topic);
-}
-
-Result<KeyPair> KeyPair::from_secret(const SecretKey& secret, purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto owned_secret, secret.clone());
-    return KeyPair::from_secret(std::move(owned_secret), secp_context);
-}
-
-Result<KeyPair> KeyPair::from_secret(SecretKey&& secret, purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto public_key, PublicKey::from_secret(secret, secp_context));
-    return KeyPair(std::move(secret), std::move(public_key));
-}
-
-Result<PreparedNonce> KeyPair::prepare_message_nonce(std::span<const unsigned char> message,
-                                                     purify_secp_context* secp_context) const {
-    return api_impl::prepare_message_nonce(secret_, message, secp_context);
-}
-
-Result<PreparedNonceWithProof> KeyPair::prepare_message_nonce_with_proof(std::span<const unsigned char> message,
-                                                                         purify_secp_context* secp_context) const {
-    return api_impl::prepare_message_nonce_with_proof(secret_, message, secp_context);
-}
-
-Result<PreparedNonceWithProof> KeyPair::prepare_message_nonce_with_proof(const MessageProofCache& cache,
-                                                                         purify_secp_context* secp_context) const {
-    return api_impl::prepare_message_nonce_with_proof(secret_, cache, secp_context);
-}
-
-Result<PreparedNonce> KeyPair::prepare_topic_nonce(std::span<const unsigned char> topic,
-                                                   purify_secp_context* secp_context) const {
-    return api_impl::prepare_topic_nonce(secret_, topic, secp_context);
-}
-
-Result<PreparedNonceWithProof> KeyPair::prepare_topic_nonce_with_proof(std::span<const unsigned char> topic,
-                                                                       purify_secp_context* secp_context) const {
-    return api_impl::prepare_topic_nonce_with_proof(secret_, topic, secp_context);
-}
-
-Result<PreparedNonceWithProof> KeyPair::prepare_topic_nonce_with_proof(const TopicProofCache& cache,
-                                                                       purify_secp_context* secp_context) const {
-    return api_impl::prepare_topic_nonce_with_proof(secret_, cache, secp_context);
-}
-
-Result<Signature> KeyPair::sign_message(std::span<const unsigned char> message,
-                                        purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce(message, secp_context));
-    return sign_message_with_prepared(message, std::move(prepared), secp_context);
-}
-
-Result<Signature> KeyPair::sign_message_with_prepared(std::span<const unsigned char> message,
-                                                      PreparedNonce&& prepared,
-                                                      purify_secp_context* secp_context) const {
-    return api_impl::sign_message_with_prepared(
-        secret_, message, std::move(prepared), secp_context);
-}
-
-Result<ProvenSignature> KeyPair::sign_message_with_prepared_proof(std::span<const unsigned char> message,
-                                                                  PreparedNonceWithProof&& prepared,
-                                                                  purify_secp_context* secp_context) const {
-    return std::move(prepared).sign_message(secret_, message, secp_context);
-}
-
-Result<Signature> KeyPair::sign_with_topic(std::span<const unsigned char> message,
-                                           std::span<const unsigned char> topic,
-                                           purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce(topic, secp_context));
-    return sign_with_prepared_topic(message, std::move(prepared), secp_context);
-}
-
-Result<Signature> KeyPair::sign_with_prepared_topic(std::span<const unsigned char> message,
-                                                    PreparedNonce&& prepared,
-                                                    purify_secp_context* secp_context) const {
-    return api_impl::sign_with_prepared_topic(
-        secret_, message, std::move(prepared), secp_context);
-}
-
-Result<ProvenSignature> KeyPair::sign_with_prepared_topic_proof(std::span<const unsigned char> message,
-                                                                PreparedNonceWithProof&& prepared,
-                                                                purify_secp_context* secp_context) const {
-    return std::move(prepared).sign_topic_message(secret_, message, secp_context);
-}
-
-Result<ProvenSignature> KeyPair::sign_message_with_proof(std::span<const unsigned char> message,
-                                                         purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce_with_proof(message, secp_context));
-    return sign_message_with_prepared_proof(message, std::move(prepared), secp_context);
-}
-
-Result<ProvenSignature> KeyPair::sign_message_with_proof(const MessageProofCache& cache,
-                                                         purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_message_nonce_with_proof(cache, secp_context));
-    return sign_message_with_prepared_proof(cache.message, std::move(prepared), secp_context);
-}
-
-Result<ProvenSignature> KeyPair::sign_with_topic_proof(std::span<const unsigned char> message,
-                                                       std::span<const unsigned char> topic,
-                                                       purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce_with_proof(topic, secp_context));
-    return sign_with_prepared_topic_proof(message, std::move(prepared), secp_context);
-}
-
-Result<ProvenSignature> KeyPair::sign_with_topic_proof(std::span<const unsigned char> message,
-                                                       const TopicProofCache& cache,
-                                                       purify_secp_context* secp_context) const {
-    PURIFY_ASSIGN_OR_RETURN(auto prepared, prepare_topic_nonce_with_proof(cache, secp_context));
-    return sign_with_prepared_topic_proof(message, std::move(prepared), secp_context);
+    PURIFY_ASSIGN_OR_RETURN(auto nonce_proof_value,
+                            NonceProof::deserialize(serialized.subspan(5, *nonce_proof_size), secp_context));
+    PURIFY_ASSIGN_OR_RETURN(auto signature_value,
+                            Signature::deserialize(serialized.subspan(5 + *nonce_proof_size, 64), secp_context));
+    return ProvenSignature{signature_value, nonce_proof_value};
 }
 
 }  // namespace purify::puresign
+
+namespace purify::puresign_core {
+
+template struct PublicKey<puresign::Backend>;
+template struct MessageProofCache<puresign::Backend>;
+template struct TopicProofCache<puresign::Backend>;
+template class PreparedNonceWithProof<puresign::Backend>;
+template class KeyPair<puresign::Backend>;
+
+}  // namespace purify::puresign_core

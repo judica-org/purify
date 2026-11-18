@@ -646,7 +646,7 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
                "PureSign++ proof signing preserves the deterministic BIP340 signature bytes");
 
     auto dlog_tampered_proof = proven->nonce_proof;
-    dlog_tampered_proof.proof.public_commitment_dlog_response.back() ^= 1;
+    dlog_tampered_proof.public_commitment_dlog_response.back() ^= 1;
     Result<bool> dlog_tampered_ok = public_key.verify_message_nonce_proof(
         message, dlog_tampered_proof, context.get());
     expect_ok(ctx, dlog_tampered_ok,
@@ -659,14 +659,16 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
     Result<Bytes> nonce_proof_bytes = proven->nonce_proof.serialize(context.get());
     expect_ok(ctx, nonce_proof_bytes, "PureSign++ NonceProof serializes");
     if (nonce_proof_bytes.has_value()) {
-        ctx.expect((*nonce_proof_bytes)[0] == 3,
-                   "PureSign++ NonceProof identifies the raw-precommit transcript");
+        ctx.expect(
+            (*nonce_proof_bytes)[0] ==
+                purify::puresign_plusplus::NonceProof::kSerializationVersion,
+            "PureSign++ NonceProof identifies the typed-SHA transcript");
         ctx.expect(nonce_proof_bytes->size() == 1072 &&
                        nonce_proof_bytes->size() ==
                            purify::puresign_plusplus::NonceProof::kSerializedSize,
-                   "PureSign++ V3 nonce proof stays within its measured wire budget");
+                   "PureSign++ V4 nonce proof stays within its measured wire budget");
         auto old_transcript_frame = *nonce_proof_bytes;
-        old_transcript_frame[0] = 1;
+        old_transcript_frame[0] = 3;
         expect_error(ctx, purify::puresign_plusplus::NonceProof::deserialize(old_transcript_frame, context.get()),
                      purify::ErrorCode::BackendRejectedInput,
                      "PureSign++ NonceProof rejects the previous transcript version");
@@ -735,7 +737,9 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
     Result<Bytes> proven_bytes = proven->serialize(context.get());
     expect_ok(ctx, proven_bytes, "PureSign++ ProvenSignature serializes");
     if (proven_bytes.has_value()) {
-        ctx.expect((*proven_bytes)[0] == 2,
+        ctx.expect(
+            (*proven_bytes)[0] == purify::puresign_plusplus::
+                                       ProvenSignature::kSerializationVersion,
                    "PureSign++ ProvenSignature identifies its fixed framing");
         ctx.expect(
             proven_bytes->size() == 1137 &&

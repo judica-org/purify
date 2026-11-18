@@ -395,6 +395,14 @@ add_library(purify
     src/puresign/construction_parent_input.cpp
     src/puresign/construction_parent_prover_input.cpp
     src/protocol/bppp.cpp
+    src/protocol/bppp_backend_cache.cpp
+    src/protocol/bppp_support.cpp
+    src/protocol/bppp_points.cpp
+    src/protocol/bppp_circuit_reduction.cpp
+    src/protocol/bppp_public_commitments.cpp
+    src/protocol/bppp_circuit_proof.cpp
+    src/protocol/bppp_circuit_v4.cpp
+    src/protocol/bppp_circuit_v4_prove.cpp
     src/protocol/accumulation.cpp
     src/protocol/sha256_transcript.cpp
     src/protocol/sha256_circuit_transcript.cpp
@@ -815,6 +823,14 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/construction_parent_input.cpp
         src/puresign/construction_parent_prover_input.cpp
         src/protocol/bppp.cpp
+        src/protocol/bppp_backend_cache.cpp
+        src/protocol/bppp_support.cpp
+        src/protocol/bppp_points.cpp
+        src/protocol/bppp_circuit_reduction.cpp
+        src/protocol/bppp_public_commitments.cpp
+        src/protocol/bppp_circuit_proof.cpp
+        src/protocol/bppp_circuit_v4.cpp
+        src/protocol/bppp_circuit_v4_prove.cpp
         src/protocol/accumulation.cpp
         src/protocol/sha256_transcript.cpp
         src/protocol/sha256_circuit_transcript.cpp

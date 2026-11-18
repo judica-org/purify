@@ -79,9 +79,11 @@ When a macOS minimum deployment target is supplied, Purify forwards it to
 Cargo so the C++ library and the backend use the same platform boundary.
 
 The installed verifier backend is approximately 2.4 MB on arm64 macOS. Its
-exact size is platform-dependent. It exports only the three private load,
-verify, and destroy ABI entry points. The private ABI header is not installed;
-applications use `ConstructionParentVerifier` from the C++ library.
+exact size is platform-dependent. It exports only six private load, verify,
+and destroy ABI entry points: one purpose-specific set each for construction
+and certificate parents. The private ABI headers are not installed;
+applications use `ConstructionParentVerifier` and `CertificateParentVerifier`
+from the C++ library.
 
 The release manifest pins separate verifier (`VK2`) and prover (`PK1`)
 artifacts by exact length and tagged SHA-256 digest. The verifier backend
@@ -100,7 +102,8 @@ symbol boundaries without downloading these artifacts. It does not claim
 recursive proof acceptance. Artifact-backed acceptance remains the explicit
 release gate.
 
-Run that release gate with the authenticated artifact:
+Run that release gate with both authenticated verifier artifacts and the
+qualified certificate proof:
 
 ```sh
 cmake -S . -B build-parent \
@@ -113,8 +116,10 @@ cmake -S . -B build-parent \
   -DPURIFY_BUILD_FUZZ=OFF \
   -DPURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=/path/to/sha256-parent-verifier.nvk.zst
 CARGO_BUILD_JOBS=1 cmake --build build-parent --parallel
+PURIFY_TEST_CERTIFICATE_PARENT_VERIFIER_ARTIFACT=/path/to/certificate-parent-verifier.vk2 \
+PURIFY_TEST_CERTIFICATE_PARENT_PROOF=/path/to/certificate-parent-proof.bin \
 ctest --test-dir build-parent --output-on-failure \
-  -R '^(purify.tests.slashability_e2e|purify.tests.installed_package|purify.tests.private_construction_parent_symbols)$'
+  -R '^(purify.tests.slashability_e2e|purify.tests.certificate_nonce_parent|purify.tests.installed_package|purify.tests.private_construction_parent_symbols)$'
 ```
 
 Build the standalone purpose-specific prover separately:

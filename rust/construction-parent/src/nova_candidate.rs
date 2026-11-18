@@ -619,7 +619,7 @@ mod tests {
     }
 
     fn decode_bound_vector() -> Vec<u8> {
-        let encoded = include_str!("../../../../test/data/bound_candidate_step_v1.hex")
+        let encoded = include_str!("../tests/vectors/bound_candidate_step_v1.hex")
             .chars()
             .filter(|value| !value.is_ascii_whitespace())
             .collect::<String>();

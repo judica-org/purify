@@ -97,13 +97,19 @@ by normal tests. A missing override retains the frozen vector path.
 
 ## Certificate parent
 
-The certificate-parent tests pin three checked-in cross-language vectors:
+The certificate-parent tests pin four checked-in cross-language vectors:
 
 | Vector | Encoded bytes | SHA256 |
 | --- | ---: | --- |
+| `bound_candidate_step_v1.hex` | 785 | `79b66e9a315752255a2333570531a4ef46b7bc917f049b4c528cbc9fc974bd42` |
 | `certificate_response_authorization_v1.txt` | 1,947 | `8199cfcf64a55db72ec3c7e110e860bef411992f0b5dd83a0b40e60db36a8c78` |
 | `certificate_joined_witness_v2.bin` | 13,782 | `21146d1a2c78206288e741efb57995daba871f787a25ab8548e0119ce58c48d5` |
 | `certificate_joined_witness_v3.bin` | 14,608 | `36a4806d937edd496f28464248256512d45e51e25e36b5b6c184e991b88c9d46` |
+
+The bound-candidate vector is 390 bytes encoded as lowercase hex and five
+newlines. C++ produces the dimension-two accountable candidate step; Rust
+checks the same statement, claim, folding proof, and pending root inside the
+recursive relation.
 
 The authorization vector is 973 canonical response-authorization bytes
 encoded as lowercase hex plus a newline. C++ produces the record and Rust

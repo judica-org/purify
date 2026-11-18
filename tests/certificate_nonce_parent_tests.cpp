@@ -995,6 +995,56 @@ void test_native_certificate_parent(TestContext& ctx)
                   *parsed, verification_views, secp.get()),
               "native certificate receipt verifies end to end");
 
+    auto linear_receipt =
+        accumulator->prove_linear_receipt(verification_views, secp.get());
+    expect_ok(ctx, linear_receipt,
+              "linear certificate receipt proves end to end");
+    if (!linear_receipt) return;
+    expect_ok(ctx,
+              accumulator->verify_linear_receipt(
+                  *linear_receipt, verification_views, secp.get()),
+              "linear certificate receipt verifies end to end");
+
+    const OneProof raw_proofs{*proof};
+    const std::array prover_views{
+        purify::puresign_plusplus::CertificateNonceResponseProverView{
+            *first_inputs, signing_context, hosts, raw_proofs},
+        purify::puresign_plusplus::CertificateNonceResponseProverView{
+            *second_inputs, signing_context, hosts, raw_proofs},
+    };
+    auto linear_witness = purify::puresign_plusplus::
+        serialize_accepted_linear_certificate_nonce_parent_witness(
+            *accumulator, *linear_receipt, prover_views, secp.get(),
+            &circuit_cache);
+    expect_ok(ctx, linear_witness,
+              "accepted linear certificate witness serializes");
+    if (!linear_witness) return;
+    constexpr std::array<unsigned char, 16> linear_witness_magic{
+        'P', 'u', 'r', 'i', 'f', 'y', '/', 'C',
+        'e', 'r', 't', 'J', 'W', 'i', 't', '3'};
+    constexpr std::size_t linear_witness_header_size = 120;
+    constexpr std::size_t linear_response_header_size = 12;
+    const std::size_t expected_linear_witness_size =
+        linear_witness_header_size + 2 * linear_response_header_size +
+        first_inputs->canonical_bytes().size() +
+        second_inputs->canonical_bytes().size() +
+        2 * kQualifiedMemberProofSize;
+    ctx.expect(linear_witness->size() == expected_linear_witness_size &&
+                   std::equal(linear_witness_magic.begin(),
+                              linear_witness_magic.end(),
+                              linear_witness->begin()),
+               "linear certificate witness has the exact CertJWit3 frame");
+
+    auto repeated_witness = purify::puresign_plusplus::
+        serialize_accepted_linear_certificate_nonce_parent_witness(
+            *accumulator, *linear_receipt, prover_views, secp.get(),
+            &circuit_cache);
+    expect_ok(ctx, repeated_witness,
+              "linear certificate witness reserializes");
+    if (!repeated_witness) return;
+    ctx.expect(*repeated_witness == *linear_witness,
+               "linear certificate witness serialization is deterministic");
+
     std::vector<CertificateNonceNativeResponse> reordered_responses{
         parsed->responses()[1], parsed->responses()[0]};
     auto reordered_receipt = CertificateNonceNativeReceipt::create(

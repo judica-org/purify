@@ -9,6 +9,7 @@
 
 #include "purify/bppp.hpp"
 
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,40 @@
 #include "secure_cleanup.hpp"
 
 namespace purify::bppp::detail {
+namespace {
+
+using U64Le = std::array<unsigned char, sizeof(std::uint64_t)>;
+
+U64Le u64_le(std::uint64_t value) {
+  U64Le out{};
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    out[i] = static_cast<unsigned char>((value >> (8 * i)) & 0xffU);
+  }
+  return out;
+}
+
+/**
+ * Parses `tag(seed || labels...)` as one secret scalar candidate.
+ *
+ * The seed is hashed where it lies and never copied. A V4 seed carries the
+ * whole witness, and one proof derives tens of thousands of scalars from it:
+ * a copy per candidate costs more than the rest of the prover and leaves
+ * that many more images of the witness to erase.
+ */
+template <typename... Labels>
+Result<FieldElement>
+secret_scalar_candidate(const TaggedHash &tag,
+                        std::span<const unsigned char> seed,
+                        const Labels &...labels) {
+  SecretScalarBytes candidate_bytes;
+  ScalarBytes digest = tag.digest_many<1 + sizeof...(Labels)>(
+      {seed, std::span<const unsigned char>(labels)...});
+  candidate_bytes.value = digest;
+  ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
+  return FieldElement::try_from_bytes32(candidate_bytes.value);
+}
+
+} // namespace
 
 ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
     ExperimentalCircuitBackend *cache,
@@ -55,15 +90,12 @@ Result<std::size_t> round_up_power_of_two(std::size_t value) {
 Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
                                            const TaggedHash& tag,
                                            std::size_t index) {
-  Bytes prefix(seed.begin(), seed.end());
   PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index, narrow_size_to_u64(index));
-  append_u64_le(prefix, encoded_index);
+  const U64Le index_le = u64_le(encoded_index);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
-    Bytes input = prefix;
-    append_u64_le(input, counter);
-    ScalarBytes candidate_bytes{};
-    candidate_bytes =
-        tag.digest(std::span<const unsigned char>(input.data(), input.size()));
+    const U64Le counter_le = u64_le(counter);
+    const ScalarBytes candidate_bytes =
+        tag.digest_many<3>({seed, index_le, counter_le});
     Result<FieldElement> candidate =
         FieldElement::try_from_bytes32(candidate_bytes);
     if (candidate.has_value() && !candidate->is_zero()) {
@@ -76,24 +108,12 @@ Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
 Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
                      const TaggedHash &tag, std::size_t index,
                      std::uint64_t attempt) {
-  SecretBytes prefix;
-  prefix.reserve(seed.size() + 2 * sizeof(std::uint64_t));
-  prefix.assign(seed.begin(), seed.end());
   PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index, narrow_size_to_u64(index));
-  append_u64_le(prefix, encoded_index);
-  append_u64_le(prefix, attempt);
+  const U64Le index_le = u64_le(encoded_index);
+  const U64Le attempt_le = u64_le(attempt);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
-    SecretBytes input;
-    input.reserve(prefix.size() + sizeof(std::uint64_t));
-    input.assign(prefix.begin(), prefix.end());
-    append_u64_le(input, counter);
-    SecretScalarBytes candidate_bytes;
-    ScalarBytes digest =
-        tag.digest(std::span<const unsigned char>(input.data(), input.size()));
-    candidate_bytes.value = digest;
-    ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
-    Result<FieldElement> candidate =
-        FieldElement::try_from_bytes32(candidate_bytes.value);
+    Result<FieldElement> candidate = secret_scalar_candidate(
+        tag, seed, index_le, attempt_le, u64_le(counter));
     if (candidate.has_value()) {
       out = *candidate;
       ::purify::detail::secure_erase(*candidate);
@@ -107,23 +127,11 @@ Status derive_secret_nonzero_scalar(FieldElement &out,
                                     std::span<const unsigned char> seed,
                                     const TaggedHash &tag,
                                     std::size_t index) {
-  SecretBytes prefix;
-  prefix.reserve(seed.size() + sizeof(std::uint64_t));
-  prefix.assign(seed.begin(), seed.end());
   PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index, narrow_size_to_u64(index));
-  append_u64_le(prefix, encoded_index);
+  const U64Le index_le = u64_le(encoded_index);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
-    SecretBytes input;
-    input.reserve(prefix.size() + sizeof(std::uint64_t));
-    input.assign(prefix.begin(), prefix.end());
-    append_u64_le(input, counter);
-    SecretScalarBytes candidate_bytes;
-    ScalarBytes digest =
-        tag.digest(std::span<const unsigned char>(input.data(), input.size()));
-    candidate_bytes.value = digest;
-    ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
     Result<FieldElement> candidate =
-        FieldElement::try_from_bytes32(candidate_bytes.value);
+        secret_scalar_candidate(tag, seed, index_le, u64_le(counter));
     if (candidate.has_value()) {
       if (!candidate->is_zero()) {
         out = *candidate;

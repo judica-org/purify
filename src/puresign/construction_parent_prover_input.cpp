@@ -82,19 +82,15 @@ bool same_roster(const NonceHostBoundSigningRoster& left,
         left.key_list_hash() != right.key_list_hash() ||
         left.aggregate_was_negated() != right.aggregate_was_negated() ||
         left.coalition_core_digest() != right.coalition_core_digest() ||
-        left.nonce_host_commitment() != right.nonce_host_commitment() ||
-        left.members().size() != right.members().size()) {
+        left.nonce_host_commitment() != right.nonce_host_commitment()) {
         return false;
     }
-    for (std::size_t index = 0; index < left.members().size(); ++index) {
-        if (left.members()[index].public_key !=
-                right.members()[index].public_key ||
-            left.members()[index].coefficient !=
-                right.members()[index].coefficient) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::equal(
+        left.members(), right.members(),
+        [](const SigningRosterMember& lhs, const SigningRosterMember& rhs) {
+            return lhs.public_key == rhs.public_key &&
+                   lhs.coefficient == rhs.coefficient;
+        });
 }
 
 Result<bppp::PointBytes> effective_member_point(

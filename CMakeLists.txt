@@ -404,6 +404,10 @@ add_library(purify
     src/protocol/bppp_circuit_v4.cpp
     src/protocol/bppp_circuit_v4_prove.cpp
     src/protocol/accumulation.cpp
+    src/protocol/accumulation_support.cpp
+    src/protocol/accumulation_ipa.cpp
+    src/protocol/accumulation_norm.cpp
+    src/protocol/accumulation_codec.cpp
     src/protocol/sha256_transcript.cpp
     src/protocol/sha256_circuit_transcript.cpp
     src/bridge/bppp_bridge.c
@@ -832,6 +836,10 @@ if(PURIFY_BUILD_BENCH)
         src/protocol/bppp_circuit_v4.cpp
         src/protocol/bppp_circuit_v4_prove.cpp
         src/protocol/accumulation.cpp
+        src/protocol/accumulation_support.cpp
+        src/protocol/accumulation_ipa.cpp
+        src/protocol/accumulation_norm.cpp
+        src/protocol/accumulation_codec.cpp
         src/protocol/sha256_transcript.cpp
         src/protocol/sha256_circuit_transcript.cpp
         src/bridge/bppp_bridge.c

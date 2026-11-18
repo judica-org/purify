@@ -104,6 +104,15 @@ option(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER
     "Build the purpose-specific construction-parent prover executable."
     OFF
 )
+option(PURIFY_BUILD_CERTIFICATE_PARENT_PROVER
+    "Build the purpose-specific certificate-parent prover executable."
+    OFF
+)
+set(PURIFY_BUILD_PARENT_PROVER OFF)
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER OR
+   PURIFY_BUILD_CERTIFICATE_PARENT_PROVER)
+    set(PURIFY_BUILD_PARENT_PROVER ON)
+endif()
 set(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET "" CACHE STRING
     "Optional Rust target triple for construction-parent Rust targets."
 )
@@ -163,10 +172,9 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER AND
     )
 endif()
 
-if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER AND
-   PURIFY_USE_LEGACY_FIELD_HASHES)
+if(PURIFY_BUILD_PARENT_PROVER AND PURIFY_USE_LEGACY_FIELD_HASHES)
     message(FATAL_ERROR
-        "PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER requires the modern "
+        "Purpose-specific parent prover executables require the modern "
         "tagged field-hash suite."
     )
 endif()
@@ -435,49 +443,49 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
     endif()
 endif()
 
-if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
+if(PURIFY_BUILD_PARENT_PROVER)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND
        NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
         message(FATAL_ERROR
-            "PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER supports only Darwin "
-            "and Linux targets."
+            "Purpose-specific parent prover executables support only "
+            "Darwin and Linux targets."
         )
     endif()
     if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR
-            "The construction-parent prover requires a 64-bit target."
+            "Purpose-specific parent provers require a 64-bit target."
         )
     endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         list(LENGTH CMAKE_OSX_ARCHITECTURES
-            PURIFY_CONSTRUCTION_PARENT_OSX_ARCH_COUNT)
-        if(PURIFY_CONSTRUCTION_PARENT_OSX_ARCH_COUNT GREATER 1)
+            PURIFY_PARENT_PROVER_OSX_ARCH_COUNT)
+        if(PURIFY_PARENT_PROVER_OSX_ARCH_COUNT GREATER 1)
             message(FATAL_ERROR
-                "The construction-parent prover does not support a "
+                "Purpose-specific parent provers do not support a "
                 "multi-architecture CMAKE_OSX_ARCHITECTURES."
             )
         endif()
-        unset(PURIFY_CONSTRUCTION_PARENT_OSX_ARCH_COUNT)
+        unset(PURIFY_PARENT_PROVER_OSX_ARCH_COUNT)
         if(CMAKE_OSX_ARCHITECTURES AND
            NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
             message(FATAL_ERROR
                 "An explicit CMAKE_OSX_ARCHITECTURES requires "
                 "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET for the "
-                "construction-parent prover."
+                "purpose-specific parent provers."
             )
         endif()
     endif()
     if(CMAKE_CROSSCOMPILING AND
        NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
         message(FATAL_ERROR
-            "Cross-compiling the construction-parent prover requires "
+            "Cross-compiling purpose-specific parent provers requires "
             "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
         )
     endif()
 endif()
 
 if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER OR
-   PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
+   PURIFY_BUILD_PARENT_PROVER)
     find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
     set(PURIFY_CONSTRUCTION_PARENT_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/rust/construction-parent"
@@ -713,6 +721,81 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
     )
     unset(PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ENV)
 endif()
+
+if(PURIFY_BUILD_CERTIFICATE_PARENT_PROVER)
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_SOURCE
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/src/bin/purify-certificate-parent-prover.rs"
+    )
+    if(NOT EXISTS "${PURIFY_CERTIFICATE_PARENT_PROVER_SOURCE}")
+        message(FATAL_ERROR
+            "PURIFY_BUILD_CERTIFICATE_PARENT_PROVER requires "
+            "${PURIFY_CERTIFICATE_PARENT_PROVER_SOURCE}."
+        )
+    endif()
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_TARGET_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/certificate-parent-prover-target"
+    )
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ARGS
+        build
+        --locked
+        --release
+        --no-default-features
+        --features prover
+        --bin purify-certificate-parent-prover
+    )
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_DIR
+        "${PURIFY_CERTIFICATE_PARENT_PROVER_TARGET_DIR}/release"
+    )
+    if(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
+        list(APPEND PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ARGS
+            --target "${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}"
+        )
+        set(PURIFY_CERTIFICATE_PARENT_PROVER_DIR
+            "${PURIFY_CERTIFICATE_PARENT_PROVER_TARGET_DIR}/${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}/release"
+        )
+    endif()
+    set(PURIFY_CERTIFICATE_PARENT_PROVER
+        "${PURIFY_CERTIFICATE_PARENT_PROVER_DIR}/purify-certificate-parent-prover${CMAKE_EXECUTABLE_SUFFIX}"
+    )
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ENV
+        --unset=MAKEFLAGS
+        --unset=MFLAGS
+        --unset=CARGO_MAKEFLAGS
+        "CARGO_INCREMENTAL=0"
+        "CARGO_TARGET_DIR=${PURIFY_CERTIFICATE_PARENT_PROVER_TARGET_DIR}"
+    )
+    if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
+        list(APPEND PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ENV
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        )
+    endif()
+    add_custom_command(
+        OUTPUT "${PURIFY_CERTIFICATE_PARENT_PROVER}"
+        COMMAND "${CMAKE_COMMAND}" -E env
+            ${PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ENV}
+            "${PURIFY_CARGO_EXECUTABLE}"
+            ${PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ARGS}
+        DEPENDS
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.lock"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.toml"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/build.rs"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/rust-toolchain.toml"
+            ${PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES}
+        WORKING_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_DIR}"
+        COMMENT "Building purpose-specific certificate-parent prover"
+        VERBATIM
+    )
+    add_custom_target(purify_certificate_parent_prover ALL
+        DEPENDS "${PURIFY_CERTIFICATE_PARENT_PROVER}"
+    )
+    install(PROGRAMS "${PURIFY_CERTIFICATE_PARENT_PROVER}"
+        DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        COMPONENT certificate_parent_prover
+    )
+    unset(PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ENV)
+endif()
+
+unset(PURIFY_BUILD_PARENT_PROVER)
 
 if(WIN32)
     target_link_libraries(purify PUBLIC bcrypt)

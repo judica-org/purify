@@ -94,7 +94,7 @@ external deployment resources rather than files embedded in the library,
 prover executable, or repository. Do not deploy a manifest whose release
 status is not `accepted`. Each load first copies the complete artifact to an
 unlinked private file, so the configured temporary directory must have at
-least 694 MB of writable space. The standalone prover loads PK1 and VK2
+least 1 GiB of writable space. The standalone prover loads PK1 and VK2
 sequentially rather than retaining both snapshots.
 
 The ordinary CI job builds and tests the Rust, package, codec, and private

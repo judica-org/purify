@@ -211,7 +211,7 @@ if(TEST_SYSTEM_NAME STREQUAL "Darwin")
     )
     require_configure_failure(
         "${multi_arch_binary}" ON OFF
-        "does not support a multi-architecture"
+        "do not support a multi-architecture"
         -C "${multi_arch_cache}"
         -DPURIFY_CONSTRUCTION_PARENT_CARGO_TARGET=aarch64-apple-darwin
     )

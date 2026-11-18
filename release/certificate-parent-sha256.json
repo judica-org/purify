@@ -48,20 +48,26 @@
     "proof_sequences": 152
   },
   "source": {
-    "provenance": "The artifacts were qualified in the Char integration repository before the byte-identical Purify source was extracted upstream. These records identify that historical run; they do not claim that this Purify branch reran setup, proving, or verification.",
+    "provenance": "The artifacts were qualified in the Char integration repository before the corresponding src/purify vendor closure was extracted upstream. These records identify that historical run; they do not claim that this Purify branch reran setup, proving, or verification.",
     "artifact_qualification": {
       "repository": "https://github.com/judica-org/char-bitcoin.git",
       "ref": "refs/heads/work/char-certificate-nova-profile",
       "ref_scope": "historical-local-development-ref",
+      "ref_availability": "remote fetchability not asserted",
       "commit": "b6dc3ec2e4a0faed334022d283517ef1dd84be01",
-      "tree": "4e6b4de35cbe78b4b0c1442ce6ea7994d51109e5"
+      "tree": "4e6b4de35cbe78b4b0c1442ce6ea7994d51109e5",
+      "subtree_path": "src/purify",
+      "subtree_tree": "3f4d1b63a56860f690414d5fddc28ba25e98b6c7"
     },
     "proof_gate": {
       "repository": "https://github.com/judica-org/char-bitcoin.git",
       "ref": "refs/heads/work/char-certificate-nova-profile",
       "ref_scope": "historical-local-development-ref",
+      "ref_availability": "remote fetchability not asserted",
       "commit": "a24ee802b91ef850730c17254e11b97e257e57d5",
-      "tree": "9e122ae387707f49f52024a30019d90b32e0d699"
+      "tree": "9e122ae387707f49f52024a30019d90b32e0d699",
+      "subtree_path": "src/purify",
+      "subtree_tree": "e2c0331d687624ce16e10d550f1d85da7345ead7"
     },
     "nova": {
       "repository": "https://github.com/JeremyRubin/Nova.git",
@@ -117,8 +123,11 @@
         "repository": "https://github.com/judica-org/char-bitcoin.git",
         "ref": "refs/heads/work/char-certificate-nova-profile",
         "ref_scope": "historical-local-development-ref",
+        "ref_availability": "remote fetchability not asserted",
         "commit": "a24ee802b91ef850730c17254e11b97e257e57d5",
-        "tree": "9e122ae387707f49f52024a30019d90b32e0d699"
+        "tree": "9e122ae387707f49f52024a30019d90b32e0d699",
+        "subtree_path": "src/purify",
+        "subtree_tree": "e2c0331d687624ce16e10d550f1d85da7345ead7"
       },
       "proof_sha256": "887eb27a8893078734a57fb497ed9f9aadff03803454e419d497f0650727babb",
       "test_file": "src/test/char_certificate_nonce_parent_tests.cpp",

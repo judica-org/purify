@@ -596,30 +596,6 @@ ConstructionLeafAccumulator::prepare(
     return PreparedConstructionLeaf(circuit_precommitment, std::move(norm));
 }
 
-Result<AnchorPunishmentKey> recover_escrowed_anchor(
-    const RecoveryBoundSigningRoster& roster,
-    const FieldElement& exposed_signing_scalar,
-    const UInt512& advertised_anchor_root,
-    const AnchorPunishmentPublicKey& punishment_key,
-    const AnchorEscrowContextDigest& context_digest,
-    const AnchorEscrowRecord& record,
-    purify_secp_context* secp_context,
-    bppp::ExperimentalCircuitBackend* cache) {
-    PURIFY_RETURN_IF_ERROR(require_anchor_v4_hash_suite());
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& recipient,
-        recover_registered_root(roster, exposed_signing_scalar, secp_context));
-    PURIFY_ASSIGN_OR_RETURN(const auto& accepted,
-                            verify_anchor_escrow(roster, advertised_anchor_root,
-                                                 punishment_key, context_digest,
-                                                 record, secp_context, cache));
-    if (!accepted) {
-        return unexpected_error(ErrorCode::EquationMismatch);
-    }
-    return recover_authenticated_anchor_ciphertext(
-        recipient, punishment_key, record.ciphertext(), secp_context);
-}
-
 Result<AnchorPunishmentKey> recover_distributed_escrowed_anchor(
     const VerifiedDistributedRecoverySetup& setup,
     const FieldElement& exposed_signing_scalar,

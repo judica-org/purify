@@ -47,15 +47,11 @@ normalizes it to the even-Y BIP340 representative. Proof creation accepts this
 move-only typed key; there is no public API that derives it from an anchor
 root.
 
-Recovery first authenticates the complete escrow statement. The standalone
-centralized recovery API derives the coalition recovery key directly from the
-exposed coalition signing scalar. The selected construction path uses the
-distributed setup instead and resolves the bounded centered-share carry
-against the authenticated full companion-point aggregate. It then decrypts
-`c` and checks both:
-
-1. the decrypted 32 bytes already equal the normalized even-Y secret bytes;
-2. that secret produces the exact registered x-only punishment key.
+Recovery first authenticates the complete escrow statement. It resolves the
+bounded centered-share carry against the authenticated full companion-point
+aggregate from the distributed setup and decrypts `c`. The decrypted
+bytes must already encode the normalized even-Y secret, and that secret
+must produce the exact registered x-only punishment key.
 
 The first check is important: x-only public keys alone cannot distinguish
 `k` from `-k`. A malleated ciphertext that decrypts to the odd-Y

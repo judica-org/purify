@@ -1,5 +1,5 @@
 {
-  "schema": "purify-certificate-parent-release-v1",
+  "schema": "purify-certificate-parent-release-v2",
   "protocol": "purify-certificate-parent-v1",
   "status": "accepted",
   "transcript_hash": "sha256",
@@ -48,12 +48,25 @@
     "proof_sequences": 152
   },
   "source": {
-    "artifact_qualification_commit": "b6dc3ec2e4a0faed334022d283517ef1dd84be01",
-    "artifact_qualification_source_tree": "4e6b4de35cbe78b4b0c1442ce6ea7994d51109e5",
-    "proof_gate_commit": "a24ee802b91ef850730c17254e11b97e257e57d5",
-    "proof_gate_source_tree": "9e122ae387707f49f52024a30019d90b32e0d699",
-    "nova_repository": "https://github.com/JeremyRubin/Nova",
-    "nova_commit": "aa42229024dc141e4edff89fcaa79f345e156d46"
+    "provenance": "The artifacts were qualified in the Char integration repository before the byte-identical Purify source was extracted upstream. These records identify that historical run; they do not claim that this Purify branch reran setup, proving, or verification.",
+    "artifact_qualification": {
+      "repository": "https://github.com/judica-org/char-bitcoin.git",
+      "ref": "refs/heads/work/char-certificate-nova-profile",
+      "ref_scope": "historical-local-development-ref",
+      "commit": "b6dc3ec2e4a0faed334022d283517ef1dd84be01",
+      "tree": "4e6b4de35cbe78b4b0c1442ce6ea7994d51109e5"
+    },
+    "proof_gate": {
+      "repository": "https://github.com/judica-org/char-bitcoin.git",
+      "ref": "refs/heads/work/char-certificate-nova-profile",
+      "ref_scope": "historical-local-development-ref",
+      "commit": "a24ee802b91ef850730c17254e11b97e257e57d5",
+      "tree": "9e122ae387707f49f52024a30019d90b32e0d699"
+    },
+    "nova": {
+      "repository": "https://github.com/JeremyRubin/Nova.git",
+      "commit": "aa42229024dc141e4edff89fcaa79f345e156d46"
+    }
   },
   "release_gate": {
     "status": "accepted",
@@ -99,9 +112,17 @@
       "peak_memory_footprint_bytes": null,
       "resource_metrics_unavailable_reason": "The successful sandboxed /usr/bin/time -l run denied extended metrics: sysctl kern.clockrate: Operation not permitted."
     },
-    "cpp_native_acceptance": {
+    "external_char_cpp_integration_test": {
+      "source": {
+        "repository": "https://github.com/judica-org/char-bitcoin.git",
+        "ref": "refs/heads/work/char-certificate-nova-profile",
+        "ref_scope": "historical-local-development-ref",
+        "commit": "a24ee802b91ef850730c17254e11b97e257e57d5",
+        "tree": "9e122ae387707f49f52024a30019d90b32e0d699"
+      },
       "proof_sha256": "887eb27a8893078734a57fb497ed9f9aadff03803454e419d497f0650727babb",
-      "test": "char_certificate_nonce_parent_tests",
+      "test_file": "src/test/char_certificate_nonce_parent_tests.cpp",
+      "test_suite": "char_certificate_nonce_parent_tests",
       "canonical_manifest_accepted": true,
       "descriptor_reordered_manifest_rejected": true,
       "elapsed_seconds": 392.58,

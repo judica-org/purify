@@ -39,24 +39,16 @@ bool is_null_outpoint(const BitcoinOutpoint& outpoint) {
 Result<CoalitionFormation> CoalitionFormation::create(
     CoalitionFormationInput input) {
     if (is_zero(input.genesis_hash)) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "coalition_formation:zero_genesis_hash");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     if (is_zero(input.deployment_id)) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "coalition_formation:zero_deployment_id");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     if (is_zero(input.manifest_digest)) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "coalition_formation:zero_manifest_digest");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     if (is_null_outpoint(input.permit)) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "coalition_formation:null_permit");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
 
     static const TaggedHash permit_hash(

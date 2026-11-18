@@ -24,9 +24,9 @@ if(NOT _nm_result EQUAL 0)
 endif()
 
 set(_expected
+    purify_construction_parent_authenticate_root
     purify_construction_parent_verifier_destroy
     purify_construction_parent_verifier_load
-    purify_construction_parent_verify
 )
 set(_actual)
 string(REPLACE "\r\n" "\n" _nm_output "${_nm_output}")

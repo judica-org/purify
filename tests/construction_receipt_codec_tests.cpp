@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -59,9 +60,7 @@ Result<UInt512> public_root(unsigned char marker) {
     std::array<unsigned char, 32> seed{};
     seed.fill(marker);
     seed[0] ^= 0xa5U;
-    PURIFY_ASSIGN_OR_RETURN(auto generated,
-                            purify::generate_key(seed),
-                            "construction_receipt_codec_test:key");
+    PURIFY_ASSIGN_OR_RETURN(auto generated, purify::generate_key(seed));
     return generated.public_key;
 }
 
@@ -75,8 +74,7 @@ Result<AnchorPunishmentPublicKey> punishment_key(unsigned char marker) {
     auto secp = purify::make_secp_context();
     if (!secp) {
         return purify::unexpected_error(
-            purify::ErrorCode::BackendRejectedInput,
-            "construction_receipt_codec_test:secp");
+            purify::ErrorCode::BackendRejectedInput);
     }
     std::array<unsigned char, 32> scalar{};
     scalar.back() = marker;
@@ -84,8 +82,7 @@ Result<AnchorPunishmentPublicKey> punishment_key(unsigned char marker) {
     if (purify_bip340_key_from_seckey(
             secp.get(), scalar.data(), xonly.data()) == 0) {
         return purify::unexpected_error(
-            purify::ErrorCode::BackendRejectedInput,
-            "construction_receipt_codec_test:punishment_key");
+            purify::ErrorCode::BackendRejectedInput);
     }
     return AnchorPunishmentPublicKey::create(xonly, secp.get());
 }
@@ -101,9 +98,7 @@ Result<ReceiptFixture> make_fixture() {
     ReceiptFixture fixture;
     std::vector<RecoveryRootShare> shares;
     for (std::uint64_t scalar : {3, 5}) {
-        PURIFY_ASSIGN_OR_RETURN(
-            auto share, recovery_share(scalar),
-            "construction_receipt_codec_test:share");
+        PURIFY_ASSIGN_OR_RETURN(auto share, recovery_share(scalar));
         shares.push_back(share);
         fixture.setup_entries.emplace_back(
             std::move(share),
@@ -111,24 +106,19 @@ Result<ReceiptFixture> make_fixture() {
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto aggregate,
-        purify::accountable::aggregate_recovery_root_shares(shares),
-        "construction_receipt_codec_test:aggregate");
+        purify::accountable::aggregate_recovery_root_shares(shares));
     fixture.recovery_root = aggregate.recovery_root();
 
     fixture.anchor_entries.resize(2);
-    PURIFY_ASSIGN_OR_RETURN(
-        fixture.anchor_entries[0].ciphertext.ephemeral_key,
-        public_root(2),
-        "construction_receipt_codec_test:ephemeral_0");
+    PURIFY_ASSIGN_OR_RETURN(fixture.anchor_entries[0].ciphertext.ephemeral_key,
+                            public_root(2));
     fixture.anchor_entries[0].ciphertext.masked_scalar =
         FieldElement::from_u64(11);
     fixture.anchor_entries[0].circuit_precommitment =
         FieldElement::from_u64(31).to_bytes_be();
 
-    PURIFY_ASSIGN_OR_RETURN(
-        fixture.anchor_entries[1].ciphertext.ephemeral_key,
-        public_root(4),
-        "construction_receipt_codec_test:ephemeral_1");
+    PURIFY_ASSIGN_OR_RETURN(fixture.anchor_entries[1].ciphertext.ephemeral_key,
+                            public_root(4));
     fixture.anchor_entries[1].ciphertext.masked_scalar =
         FieldElement::from_u64(21);
     fixture.anchor_entries[1].circuit_precommitment =
@@ -136,14 +126,10 @@ Result<ReceiptFixture> make_fixture() {
 
     fixture.resolved.reserve(2);
     for (std::size_t i = 0; i < 2; ++i) {
+        PURIFY_ASSIGN_OR_RETURN(auto root,
+                                public_root(static_cast<unsigned char>(6 + i)));
         PURIFY_ASSIGN_OR_RETURN(
-            auto root,
-            public_root(static_cast<unsigned char>(6 + i)),
-            "construction_receipt_codec_test:anchor_root");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto punishment,
-            punishment_key(static_cast<unsigned char>(9 + i)),
-            "construction_receipt_codec_test:punishment_key");
+            auto punishment, punishment_key(static_cast<unsigned char>(9 + i)));
         purify::accountable::AnchorEscrowContextDigest context{};
         context.fill(static_cast<unsigned char>(0x51 + i));
         fixture.resolved.emplace_back(
@@ -798,6 +784,23 @@ void test_construction_parent_profile_digest(TestContext& ctx) {
         0xf1, 0xb3, 0x72, 0x08, 0xad, 0x9e, 0xb5, 0x94};
     ctx.expect(digest == kRecursiveProfileDigest,
                "native basis matches the recursive profile digest");
+
+    // SHA256 of the raw norm generator encodings, as the recursive relation
+    // pins it in rust/construction-parent/statement/src/profile.rs.
+    constexpr std::array<unsigned char, 32> kRecursiveProfileRawGenerators{
+        0x10, 0x1c, 0xdb, 0x8d, 0x99, 0x28, 0x00, 0xb0,
+        0x3c, 0x39, 0x24, 0x6e, 0xb9, 0x20, 0xc8, 0x37,
+        0xa8, 0x04, 0x0c, 0x5a, 0x36, 0xa0, 0x97, 0x0f,
+        0x0e, 0xbf, 0x85, 0x51, 0x11, 0x21, 0xca, 0x8a};
+    const auto raw_generators = std::as_bytes(
+        std::span(accumulator->leaves().basis().norm_generators()));
+    std::array<unsigned char, 32> raw_generator_digest{};
+    purify_sha256(
+        raw_generator_digest.data(),
+        reinterpret_cast<const unsigned char*>(raw_generators.data()),
+        raw_generators.size());
+    ctx.expect(raw_generator_digest == kRecursiveProfileRawGenerators,
+               "native raw generators match the recursive profile digest");
 
     std::array<unsigned char,
                purify::accountable::ConstructionReceiptAccumulator::

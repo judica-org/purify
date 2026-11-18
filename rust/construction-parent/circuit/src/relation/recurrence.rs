@@ -1,0 +1,774 @@
+//! Direct Nova state binding and ordered construction manifests.
+
+use std::array;
+
+use ff::{Field, PrimeField};
+use nova_snark::{
+    frontend::{gadgets::num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError},
+    traits::circuit::StepCircuit,
+};
+
+use crate::gadgets::ops::Ops;
+use crate::gadgets::point::EncodedPoint;
+use crate::gadgets::scalar::CanonicalScalar;
+use crate::gadgets::sha256::{Byte, Transcript};
+use crate::gadgets::synthesis_error;
+use crate::gadgets::transcript::{
+    append_bytes, append_constant_bytes, append_point, append_scalar,
+};
+use crate::native::candidate::CandidateStepProofWitness;
+use crate::native::circuit_norm::{
+    CandidateNormReductionProofWitness, ManifestBoundConstructionLeafStatementV4,
+};
+use crate::native::circuit_transcript::CircuitProofTranscriptWitnessV4;
+use crate::native::recurrence::{
+    validate_production_shape, ConstructionRecurrenceStateWitness, MANIFEST_INDEX,
+    ROOT_FACTORS_START, ROOT_PREFIX_INDEX, ROOT_SCALE_INDEX, ROOT_X_INDEX, STEP_INDEX,
+};
+use crate::profile::{BASIS_DIGEST, RAW_GENERATOR_DIGEST, ROOT_ROUNDS, STATE_ARITY};
+use crate::relation::candidate::{
+    install_constrained_candidate_step, CandidateRoot, PendingClaim, PolynomialTerm,
+};
+use crate::relation::identity::RelationId;
+use crate::relation::norm_leaf::constrain_manifest_bound_construction_leaf;
+use statement::manifest::STEP_MANIFEST_DOMAIN;
+use statement::Scalar;
+
+const FIELD_BITS: usize = 256;
+
+/// Relation ID frozen by the mixed construction-parent qualification.
+pub const QUALIFIED_RELATION_ID: RelationId = RelationId::from_frozen_bytes([
+    0xa6, 0x6c, 0x58, 0xa8, 0x6a, 0xfc, 0xe6, 0x4b, 0x2b, 0x69, 0xd5, 0x3e, 0x83, 0xd3, 0xd5, 0x43,
+    0x0d, 0x08, 0x0f, 0xaf, 0x0b, 0x68, 0x06, 0x4c, 0xad, 0xb3, 0xa6, 0xd8, 0xb4, 0x39, 0xee, 0xa9,
+]);
+
+pub(crate) struct PriorState {
+    pub(crate) root_claim: PendingClaim,
+    manifest: [Byte; 32],
+    index: AllocatedNum<Scalar>,
+    index_bytes: [Byte; 32],
+}
+
+#[derive(Clone)]
+pub struct ConstructionParentStep {
+    state: ConstructionRecurrenceStateWitness,
+    statement: ManifestBoundConstructionLeafStatementV4,
+    transcript: CircuitProofTranscriptWitnessV4,
+    reduction: CandidateNormReductionProofWitness,
+    proof: CandidateStepProofWitness,
+    input_state: [Scalar; STATE_ARITY],
+    relation_id: RelationId,
+}
+
+impl ConstructionParentStep {
+    pub fn new(
+        state: ConstructionRecurrenceStateWitness,
+        statement: ManifestBoundConstructionLeafStatementV4,
+        transcript: CircuitProofTranscriptWitnessV4,
+        reduction: CandidateNormReductionProofWitness,
+        proof: CandidateStepProofWitness,
+    ) -> Result<Self, statement::RelationError> {
+        validate_production_shape(statement, &reduction, &proof)?;
+        if statement.raw_generator_digest != RAW_GENERATOR_DIGEST
+            || statement.basis_digest != BASIS_DIGEST
+        {
+            return Err(statement::RelationError::Malformed(
+                "construction recurrence profile digest",
+            ));
+        }
+        Self::new_inner(state, statement, transcript, reduction, proof)
+    }
+
+    fn new_inner(
+        state: ConstructionRecurrenceStateWitness,
+        statement: ManifestBoundConstructionLeafStatementV4,
+        transcript: CircuitProofTranscriptWitnessV4,
+        reduction: CandidateNormReductionProofWitness,
+        proof: CandidateStepProofWitness,
+    ) -> Result<Self, statement::RelationError> {
+        statement.shape.validate()?;
+        state
+            .index
+            .checked_add(1)
+            .ok_or(statement::RelationError::Malformed(
+                "construction recurrence index",
+            ))?;
+        let input_state = state.state_fields()?;
+        Ok(Self {
+            state,
+            statement,
+            transcript,
+            reduction,
+            proof,
+            input_state,
+            relation_id: QUALIFIED_RELATION_ID,
+        })
+    }
+
+    pub const fn input_state(&self) -> &[Scalar; STATE_ARITY] {
+        &self.input_state
+    }
+
+    /// The relation ID this step declares to a proving session.
+    ///
+    /// Every constructor declares the reviewed qualified constant. Only
+    /// resource-gated requalification replaces it, with the ID it streamed
+    /// from this exact matrix.
+    pub const fn declared_relation_id(&self) -> RelationId {
+        self.relation_id
+    }
+
+    /// Rebinds a requalification copy to the relation ID streamed from its
+    /// exact matrix. Production proving never calls this; a session only
+    /// folds steps whose declared ID equals its pinned suite's.
+    pub fn set_qualification_relation_id(&mut self, relation_id: RelationId) {
+        self.relation_id = relation_id;
+    }
+
+    fn synthesize_relation<CS: ConstraintSystem<Scalar>>(
+        &self,
+        mut cs: CS,
+        z: &[AllocatedNum<Scalar>],
+    ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
+        if z.len() != STATE_ARITY {
+            return Err(synthesis_error("construction recurrence state arity"));
+        }
+        let prior = bind_prior_state(cs.namespace(|| "prior state"), z, &self.state)?;
+        let leaf = constrain_manifest_bound_construction_leaf(
+            cs.namespace(|| "construction leaf"),
+            self.statement,
+            &self.transcript,
+            &self.reduction,
+        )?;
+        let manifest = install_manifest_transition(
+            cs.namespace(|| "manifest transition"),
+            &prior,
+            ConstrainedManifestLeaf::new(
+                &leaf.circuit_binding_digest,
+                &leaf.precommitment,
+                &leaf.coefficient_commitment,
+                &leaf.anchored_offset,
+            ),
+        )?;
+        let claims = [prior.root_claim.clone(), leaf.claim];
+        let root = install_constrained_candidate_step(
+            cs.namespace(|| "candidate step"),
+            self.statement.basis_digest,
+            &claims,
+            &self.proof,
+        )?;
+        expose_output_state(cs.namespace(|| "output state"), &prior, &root, &manifest)
+    }
+}
+
+impl StepCircuit<Scalar> for ConstructionParentStep {
+    fn arity(&self) -> usize {
+        STATE_ARITY
+    }
+
+    fn synthesize<CS: ConstraintSystem<Scalar>>(
+        &self,
+        cs: &mut CS,
+        z: &[AllocatedNum<Scalar>],
+    ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
+        self.synthesize_relation(cs, z)
+    }
+}
+
+/// Values from a verified leaf that are ordered into the parent manifest.
+///
+/// This is the only seam between the direct norm leaf and the recurrence.
+/// It deliberately carries constrained values, not a second witness model.
+pub(crate) struct ConstrainedManifestLeaf<'a> {
+    binding_digest: &'a [Byte; 32],
+    precommitment: &'a CanonicalScalar,
+    coefficient_commitment: &'a EncodedPoint,
+    anchored_offset: &'a EncodedPoint,
+}
+
+impl<'a> ConstrainedManifestLeaf<'a> {
+    pub(crate) fn new(
+        binding_digest: &'a [Byte; 32],
+        precommitment: &'a CanonicalScalar,
+        coefficient_commitment: &'a EncodedPoint,
+        anchored_offset: &'a EncodedPoint,
+    ) -> Self {
+        Self {
+            binding_digest,
+            precommitment,
+            coefficient_commitment,
+            anchored_offset,
+        }
+    }
+}
+
+impl PriorState {
+    pub(crate) fn index(&self) -> &AllocatedNum<Scalar> {
+        &self.index
+    }
+}
+
+fn enforce_equal<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    value: &AllocatedNum<Scalar>,
+    expected: LinearCombination<Scalar>,
+) {
+    cs.enforce(
+        || "state field binding",
+        |linear| linear + value.get_variable(),
+        |linear| linear + CS::one(),
+        |_| expected,
+    );
+}
+
+fn field_bytes_be<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    value: &AllocatedNum<Scalar>,
+) -> Result<[Byte; 32], SynthesisError> {
+    let bits = value.to_bits_le_strict(cs.namespace(|| "canonical field bits"))?;
+    if bits.len() != FIELD_BITS {
+        return Err(synthesis_error("construction state field width"));
+    }
+    Ok(array::from_fn(|byte| {
+        let offset = (31 - byte) * 8;
+        Byte::from_constrained_bits_le(array::from_fn(|bit| bits[offset + bit].clone()))
+    }))
+}
+
+/// Allocates a canonical scalar equal to one public state field.
+fn bind_scalar<CS: ConstraintSystem<Scalar>>(
+    cs: CS,
+    state: &AllocatedNum<Scalar>,
+    witness: crate::native::secp::SecpScalarWitness,
+) -> Result<CanonicalScalar, SynthesisError> {
+    let mut ops = Ops::new(cs);
+    let scalar = ops.scalar(witness)?;
+    enforce_equal(ops.scope("embedded scalar"), state, scalar.embedded());
+    Ok(scalar)
+}
+
+pub(crate) fn bind_prior_state<CS: ConstraintSystem<Scalar>>(
+    cs: CS,
+    state: &[AllocatedNum<Scalar>],
+    witness: &ConstructionRecurrenceStateWitness,
+) -> Result<PriorState, SynthesisError> {
+    if state.len() != STATE_ARITY || witness.root.factors.len() != ROOT_ROUNDS {
+        return Err(synthesis_error("construction recurrence state shape"));
+    }
+    let mut ops = Ops::new(cs);
+
+    let point = ops.point(witness.root.point)?;
+    enforce_equal(
+        ops.scope("root prefix"),
+        &state[ROOT_PREFIX_INDEX],
+        LinearCombination::zero() + point.prefix().get_variable(),
+    );
+    enforce_equal(
+        ops.scope("root x"),
+        &state[ROOT_X_INDEX],
+        LinearCombination::zero() + point.point().x().get_variable(),
+    );
+    let scale = bind_scalar(
+        ops.scope("root scale"),
+        &state[ROOT_SCALE_INDEX],
+        witness.root.scale,
+    )?;
+    let mut factors = Vec::with_capacity(ROOT_ROUNDS);
+    for (index, factor) in witness.root.factors.iter().copied().enumerate() {
+        factors.push(bind_scalar(
+            ops.scope("root factor"),
+            &state[ROOT_FACTORS_START + index],
+            factor,
+        )?);
+    }
+
+    let manifest = field_bytes_be(ops.scope("prior manifest"), &state[MANIFEST_INDEX])?;
+    let index_bytes = field_bytes_be(ops.scope("step index"), &state[STEP_INDEX])?;
+    Ok(PriorState {
+        root_claim: PendingClaim {
+            point,
+            polynomial: vec![PolynomialTerm {
+                scale,
+                offset: 0,
+                factors,
+            }],
+        },
+        manifest,
+        index: state[STEP_INDEX].clone(),
+        index_bytes,
+    })
+}
+
+pub(crate) fn install_manifest_transition<CS: ConstraintSystem<Scalar>>(
+    cs: CS,
+    state: &PriorState,
+    leaf: ConstrainedManifestLeaf<'_>,
+) -> Result<CanonicalScalar, SynthesisError> {
+    let mut transcript = Transcript::new();
+    append_constant_bytes(&mut transcript, STEP_MANIFEST_DOMAIN)?;
+    transcript.append_field(&state.manifest);
+    transcript.append_field(&state.index_bytes);
+    append_bytes(&mut transcript, leaf.binding_digest)?;
+    append_scalar(&mut transcript, leaf.precommitment)?;
+    append_point(&mut transcript, leaf.coefficient_commitment);
+    append_point(&mut transcript, leaf.anchored_offset);
+    Ops::new(cs).challenge(&mut transcript, 0)
+}
+
+fn scalar_assignment(value: &CanonicalScalar) -> Result<Option<Scalar>, SynthesisError> {
+    value
+        .integer()
+        .map(|value| {
+            Scalar::from_str_vartime(&value.to_string())
+                .ok_or_else(|| synthesis_error("construction scalar embedding"))
+        })
+        .transpose()
+}
+
+fn materialize_scalar<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    value: &CanonicalScalar,
+) -> Result<AllocatedNum<Scalar>, SynthesisError> {
+    let output = AllocatedNum::alloc(cs.namespace(|| "state output"), || {
+        scalar_assignment(value)?.ok_or(SynthesisError::AssignmentMissing)
+    })?;
+    enforce_equal(
+        cs.namespace(|| "state output binding"),
+        &output,
+        value.embedded(),
+    );
+    Ok(output)
+}
+
+fn increment_index<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    index: &AllocatedNum<Scalar>,
+) -> Result<AllocatedNum<Scalar>, SynthesisError> {
+    let next = AllocatedNum::alloc(cs.namespace(|| "next index"), || {
+        index
+            .get_value()
+            .map(|value| value + Scalar::ONE)
+            .ok_or(SynthesisError::AssignmentMissing)
+    })?;
+    cs.enforce(
+        || "increment index",
+        |linear| linear + index.get_variable() + CS::one(),
+        |linear| linear + CS::one(),
+        |linear| linear + next.get_variable(),
+    );
+    Ok(next)
+}
+
+pub(crate) fn expose_output_state<CS: ConstraintSystem<Scalar>>(
+    cs: CS,
+    prior: &PriorState,
+    root: &CandidateRoot,
+    manifest: &CanonicalScalar,
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
+    if root.factors.len() != ROOT_ROUNDS {
+        return Err(synthesis_error("construction output root shape"));
+    }
+    let mut ops = Ops::new(cs);
+    let mut output = Vec::with_capacity(STATE_ARITY);
+    output.push(root.point.prefix().clone());
+    output.push(root.point.point().x().clone());
+    output.push(materialize_scalar(ops.scope("root scale"), &root.scale)?);
+    for factor in &root.factors {
+        output.push(materialize_scalar(ops.scope("root factor"), factor)?);
+    }
+    output.push(materialize_scalar(ops.scope("manifest"), manifest)?);
+    output.push(increment_index(ops.scope("step index"), prior.index())?);
+    debug_assert_eq!(output.len(), STATE_ARITY);
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use nova_snark::frontend::{
+        shape_cs::ShapeCS, test_cs::TestConstraintSystem, ConstraintSystem,
+    };
+
+    use super::*;
+    use crate::gadgets::point::allocate_encoded_point;
+    use crate::gadgets::scalar::allocate_canonical_scalar;
+    use crate::native::candidate::CandidateRootClaim;
+    use crate::native::circuit_transcript::{
+        CircuitCommitmentModeV4, CircuitPointPairWitnessV4, CircuitTranscriptShapeV4,
+    };
+    use crate::native::secp::{SecpEncodedPointWitness, SecpScalarWitness};
+    use statement::manifest::{derive_step_manifest, ManifestLeaf, ManifestStepInput};
+    use statement::PrimaryEngine;
+
+    /// Reduced-shape test circuit, intentionally ineligible for Nova sessions.
+    #[derive(Clone)]
+    pub(crate) struct TestConstructionParentStep(ConstructionParentStep);
+
+    impl TestConstructionParentStep {
+        pub(crate) fn new(
+            state: ConstructionRecurrenceStateWitness,
+            statement: ManifestBoundConstructionLeafStatementV4,
+            transcript: CircuitProofTranscriptWitnessV4,
+            reduction: CandidateNormReductionProofWitness,
+            proof: CandidateStepProofWitness,
+        ) -> Result<Self, statement::RelationError> {
+            if statement.shape.mode != CircuitCommitmentModeV4::Public
+                || statement.shape.commitment_count != 1
+                || reduction.left.len() != statement.shape.round_count()
+                || reduction.right.len() != statement.shape.round_count()
+                || proof.left.len() != ROOT_ROUNDS
+                || proof.right.len() != ROOT_ROUNDS
+            {
+                return Err(statement::RelationError::Malformed(
+                    "direct construction recurrence shape",
+                ));
+            }
+            ConstructionParentStep::new_inner(state, statement, transcript, reduction, proof)
+                .map(Self)
+        }
+    }
+
+    impl StepCircuit<Scalar> for TestConstructionParentStep {
+        fn arity(&self) -> usize {
+            self.0.arity()
+        }
+
+        fn synthesize<CS: ConstraintSystem<Scalar>>(
+            &self,
+            cs: &mut CS,
+            z: &[AllocatedNum<Scalar>],
+        ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
+            self.0.synthesize(cs, z)
+        }
+    }
+
+    fn zero_reduced_shape_step() -> TestConstructionParentStep {
+        let shape = CircuitTranscriptShapeV4 {
+            mode: CircuitCommitmentModeV4::Public,
+            gate_count: 2,
+            commitment_count: 1,
+            n_vec_len: 4,
+            l_vec_len: 4,
+        };
+        let identity = SecpEncodedPointWitness::identity();
+        let zero = SecpScalarWitness::from_u64(0);
+        let pair = CircuitPointPairWitnessV4 {
+            encoded: [0; 65],
+            first_y: [0; 32],
+            second_y: [0; 32],
+        };
+        TestConstructionParentStep::new(
+            ConstructionRecurrenceStateWitness {
+                root: CandidateRootClaim {
+                    point: SecpEncodedPointWitness::from_point_value(
+                        crate::native::secp::standard_generator(),
+                    ),
+                    scale: zero,
+                    factors: vec![zero; ROOT_ROUNDS],
+                },
+                manifest: [1; 32],
+                index: 1,
+            },
+            ManifestBoundConstructionLeafStatementV4 {
+                shape,
+                circuit_binding_digest: [0x31; 32],
+                raw_generator_digest: RAW_GENERATOR_DIGEST,
+                basis_digest: BASIS_DIGEST,
+            },
+            CircuitProofTranscriptWitnessV4 {
+                public_commitments: vec![identity],
+                raw_commitment: identity,
+                coefficient_commitment: identity,
+                anchored_offset: identity,
+                anchored_commitment: identity,
+                batched_public_commitment: identity,
+                dlog_nonce: identity,
+                dlog_response: zero,
+                mask_commitment: identity,
+                t2: zero,
+                combined_commitment: identity,
+                rounds: vec![pair; shape.round_count()],
+                terminal_n: zero,
+                terminal_l: zero,
+            },
+            CandidateNormReductionProofWitness {
+                coefficient_evaluation: zero,
+                left: vec![identity; shape.round_count()],
+                right: vec![identity; shape.round_count()],
+                terminal_scalar: zero,
+                folded_generator: identity,
+            },
+            CandidateStepProofWitness {
+                left: vec![identity; ROOT_ROUNDS],
+                right: vec![identity; ROOT_ROUNDS],
+                terminal_scalar: SecpScalarWitness::from_u64(1),
+                folded_generator: identity,
+            },
+        )
+        .expect("small direct step")
+    }
+
+    #[test]
+    fn reduced_shape_test_step_keeps_the_state_arity() {
+        assert_eq!(zero_reduced_shape_step().arity(), STATE_ARITY);
+    }
+
+    const GENERATOR_X: [u8; 32] = [
+        0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce, 0x87, 0x0b,
+        0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59, 0xf2, 0x81, 0x5b, 0x16, 0xf8,
+        0x17, 0x98,
+    ];
+
+    fn generator(prefix: u8) -> SecpEncodedPointWitness {
+        let mut encoded = [0; 33];
+        encoded[0] = prefix;
+        encoded[1..].copy_from_slice(&GENERATOR_X);
+        SecpEncodedPointWitness::parse(encoded).expect("generator")
+    }
+
+    fn state(marker: u8, point: SecpEncodedPointWitness) -> ConstructionRecurrenceStateWitness {
+        ConstructionRecurrenceStateWitness {
+            root: CandidateRootClaim {
+                point,
+                scale: SecpScalarWitness::from_u64(u64::from(marker) + 1),
+                factors: (0..ROOT_ROUNDS)
+                    .map(|index| SecpScalarWitness::from_u64(u64::from(marker) + index as u64 + 2))
+                    .collect(),
+            },
+            manifest: [marker; 32],
+            index: u32::from(marker),
+        }
+    }
+
+    fn canonical_empty_state() -> ConstructionRecurrenceStateWitness {
+        ConstructionRecurrenceStateWitness {
+            root: CandidateRootClaim {
+                point: SecpEncodedPointWitness::identity(),
+                scale: SecpScalarWitness::from_u64(0),
+                factors: vec![SecpScalarWitness::from_u64(0); ROOT_ROUNDS],
+            },
+            manifest: [0; 32],
+            index: 0,
+        }
+    }
+
+    fn allocate_state<CS: ConstraintSystem<Scalar>>(
+        mut cs: CS,
+        witness: &ConstructionRecurrenceStateWitness,
+    ) -> Vec<AllocatedNum<Scalar>> {
+        witness
+            .state_fields()
+            .expect("state fields")
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                AllocatedNum::alloc_input(cs.namespace(|| format!("state {index}")), || Ok(value))
+                    .expect("state input")
+            })
+            .collect()
+    }
+
+    fn allocate_bytes<CS: ConstraintSystem<Scalar>>(mut cs: CS, value: [u8; 32]) -> [Byte; 32] {
+        array::from_fn(|index| {
+            Byte::allocate(cs.namespace(|| format!("byte {index}")), value[index]).expect("byte")
+        })
+    }
+
+    fn constrained_scalar_bytes(value: &CanonicalScalar) -> [u8; 32] {
+        let (_, encoded) = value.integer().expect("scalar witness").to_bytes_be();
+        let mut bytes = [0; 32];
+        bytes[32 - encoded.len()..].copy_from_slice(&encoded);
+        bytes
+    }
+
+    fn synthesize(
+        state_witness: &ConstructionRecurrenceStateWitness,
+        binding: [u8; 32],
+        precommitment: SecpScalarWitness,
+        coefficient: SecpEncodedPointWitness,
+        offset: SecpEncodedPointWitness,
+    ) -> ShapeCS<PrimaryEngine> {
+        let mut cs = ShapeCS::<PrimaryEngine>::new();
+        let inputs = allocate_state(cs.namespace(|| "state inputs"), state_witness);
+        let state = bind_prior_state(cs.namespace(|| "state binding"), &inputs, state_witness)
+            .expect("state binding");
+        let binding = allocate_bytes(cs.namespace(|| "binding digest"), binding);
+        let precommitment =
+            allocate_canonical_scalar(cs.namespace(|| "precommitment"), precommitment)
+                .expect("precommitment");
+        let coefficient = allocate_encoded_point(cs.namespace(|| "coefficient"), coefficient)
+            .expect("coefficient");
+        let offset = allocate_encoded_point(cs.namespace(|| "offset"), offset).expect("offset");
+        let manifest = install_manifest_transition(
+            cs.namespace(|| "manifest"),
+            &state,
+            ConstrainedManifestLeaf::new(&binding, &precommitment, &coefficient, &offset),
+        )
+        .expect("manifest transition");
+        let root_claim = state.root_claim.clone();
+        let root_term = &root_claim.polynomial[0];
+        let root = CandidateRoot {
+            point: root_claim.point,
+            scale: root_term.scale.clone(),
+            factors: root_term.factors.clone(),
+        };
+        expose_output_state(cs.namespace(|| "output state"), &state, &root, &manifest)
+            .expect("output state");
+        cs
+    }
+
+    #[test]
+    fn constrained_manifest_matches_native_transition() {
+        let state_witness = state(7, generator(2));
+        let binding = [0x31; 32];
+        let precommitment = SecpScalarWitness::from_u64(19);
+        let coefficient = generator(3);
+        let offset = SecpEncodedPointWitness::identity();
+
+        let mut cs = TestConstraintSystem::<Scalar>::new();
+        let inputs = allocate_state(cs.namespace(|| "state inputs"), &state_witness);
+        let state = bind_prior_state(cs.namespace(|| "state binding"), &inputs, &state_witness)
+            .expect("state binding");
+        assert_eq!(state.index().get_value(), Some(Scalar::from(7)));
+        assert_eq!(
+            state.root_claim.point.prefix().get_value(),
+            inputs[ROOT_PREFIX_INDEX].get_value()
+        );
+        assert_eq!(
+            state.root_claim.point.point().x().get_value(),
+            inputs[ROOT_X_INDEX].get_value()
+        );
+        assert_eq!(state.root_claim.polynomial.len(), 1);
+        let root_term = &state.root_claim.polynomial[0];
+        assert_eq!(root_term.offset, 0);
+        assert_eq!(
+            constrained_scalar_bytes(&root_term.scale),
+            state_witness.root.scale.bytes
+        );
+        assert_eq!(root_term.factors.len(), ROOT_ROUNDS);
+        for (actual, expected) in root_term.factors.iter().zip(&state_witness.root.factors) {
+            assert_eq!(constrained_scalar_bytes(actual), expected.bytes);
+        }
+        assert_eq!(
+            state.manifest.each_ref().map(Byte::value),
+            state_witness.manifest
+        );
+        let binding_vars = allocate_bytes(cs.namespace(|| "binding digest"), binding);
+        let precommitment_var =
+            allocate_canonical_scalar(cs.namespace(|| "precommitment"), precommitment)
+                .expect("precommitment");
+        let coefficient_var = allocate_encoded_point(cs.namespace(|| "coefficient"), coefficient)
+            .expect("coefficient");
+        let offset_var = allocate_encoded_point(cs.namespace(|| "offset"), offset).expect("offset");
+        let actual = install_manifest_transition(
+            cs.namespace(|| "manifest"),
+            &state,
+            ConstrainedManifestLeaf::new(
+                &binding_vars,
+                &precommitment_var,
+                &coefficient_var,
+                &offset_var,
+            ),
+        )
+        .expect("direct manifest");
+
+        let leaf = ManifestLeaf::new(
+            binding,
+            precommitment.bytes,
+            coefficient.encoded,
+            offset.encoded,
+        )
+        .expect("manifest leaf");
+        let expected = derive_step_manifest(
+            &ManifestStepInput::new(state_witness.manifest, 7, leaf).expect("manifest input"),
+        )
+        .expect("native manifest");
+        assert_eq!(constrained_scalar_bytes(&actual), expected);
+
+        let root_claim = state.root_claim.clone();
+        let root_term = &root_claim.polynomial[0];
+        let root = CandidateRoot {
+            point: root_claim.point,
+            scale: root_term.scale.clone(),
+            factors: root_term.factors.clone(),
+        };
+        let output = expose_output_state(cs.namespace(|| "output state"), &state, &root, &actual)
+            .expect("output state");
+        let expected_state = ConstructionRecurrenceStateWitness {
+            root: state_witness.root.clone(),
+            manifest: expected,
+            index: state_witness.index + 1,
+        }
+        .state_fields()
+        .expect("expected output state");
+        assert_eq!(output.len(), STATE_ARITY);
+        assert_eq!(
+            output
+                .iter()
+                .map(AllocatedNum::get_value)
+                .collect::<Option<Vec<_>>>()
+                .expect("output assignments"),
+            expected_state
+        );
+        assert!(cs.is_satisfied(), "{:?}", cs.which_is_unsatisfied());
+    }
+
+    #[test]
+    fn canonical_empty_claim_is_a_valid_first_step_state() {
+        let state_witness = canonical_empty_state();
+        let fields = state_witness.state_fields().expect("empty state fields");
+        assert_eq!(fields, [Scalar::ZERO; STATE_ARITY]);
+
+        let mut cs = TestConstraintSystem::<Scalar>::new();
+        let inputs = allocate_state(cs.namespace(|| "empty state inputs"), &state_witness);
+        let state = bind_prior_state(
+            cs.namespace(|| "empty state binding"),
+            &inputs,
+            &state_witness,
+        )
+        .expect("empty state binding");
+
+        assert_eq!(
+            state.root_claim.point.prefix().get_value(),
+            Some(Scalar::ZERO)
+        );
+        assert_eq!(
+            state.root_claim.point.point().x().get_value(),
+            Some(Scalar::ZERO)
+        );
+        assert_eq!(
+            state.root_claim.point.point().identity_num().get_value(),
+            Some(Scalar::ONE)
+        );
+        assert_eq!(state.root_claim.polynomial.len(), 1);
+        let zero = num_bigint::BigInt::from(0u8);
+        assert_eq!(state.root_claim.polynomial[0].scale.integer(), Some(&zero));
+        assert!(state.root_claim.polynomial[0]
+            .factors
+            .iter()
+            .all(|factor| factor.integer() == Some(&zero)));
+        assert_eq!(state.index().get_value(), Some(Scalar::ZERO));
+        assert!(cs.is_satisfied(), "{:?}", cs.which_is_unsatisfied());
+    }
+
+    #[test]
+    fn constrained_state_and_manifest_shape_exclude_witnesses() {
+        let first = synthesize(
+            &state(7, generator(2)),
+            [0x31; 32],
+            SecpScalarWitness::from_u64(19),
+            generator(3),
+            SecpEncodedPointWitness::identity(),
+        );
+        let second = synthesize(
+            &state(8, SecpEncodedPointWitness::identity()),
+            [0x52; 32],
+            SecpScalarWitness::from_u64(23),
+            SecpEncodedPointWitness::identity(),
+            generator(2),
+        );
+        assert_eq!(first.num_inputs(), STATE_ARITY + 1);
+        assert_eq!(first.num_inputs(), second.num_inputs());
+        assert_eq!(first.num_aux(), second.num_aux());
+        assert_eq!(first.constraints, second.constraints);
+    }
+}

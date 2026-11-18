@@ -1,10 +1,9 @@
 # Distributed coalition recovery setup
 
-This document specifies the selected public-aggregation protocol for creating
-a coalition recovery root. It replaces the centralized proof that derived a
-recovery root directly from the aggregate MuSig scalar. No party reconstructs
-that aggregate scalar during formation, and the protocol needs neither a
-general MPC prover nor encrypted signing shares.
+Each member derives a recovery contribution from its own effective MuSig
+share. Formation verifies the contributions and aggregates their public
+points into the coalition recovery root. The aggregate signing scalar is
+never reconstructed during formation.
 
 ## Scalars and groups
 

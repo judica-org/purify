@@ -225,9 +225,8 @@ set(expected_cargo_args
     build
     --locked
     --release
-    --no-default-features
-    --features
-    prover
+    --package
+    purify-construction-prover
     --bin
     purify-construction-parent-prover
 )

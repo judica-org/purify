@@ -61,11 +61,9 @@ Result<Sha256Challenge> make_challenge(const TranscriptDigest& digest) {
     auto scalar_bytes = digest;
     scalar_bytes[0] &= 0x7f;
     PURIFY_ASSIGN_OR_RETURN(auto scalar,
-                            FieldElement::try_from_bytes32(scalar_bytes),
-                            "sha256_transcript:scalar");
+                            FieldElement::try_from_bytes32(scalar_bytes));
     if (scalar.is_zero()) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "sha256_transcript:zero_challenge");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     return Sha256Challenge{digest, std::move(scalar)};
 }
@@ -104,15 +102,13 @@ void Sha256Transcript::append_scalar(const FieldElement& value) {
 Status Sha256Transcript::append_point(unsigned char prefix,
                                       const TranscriptBytes32& x) {
     if (prefix != 0 && prefix != 2 && prefix != 3) {
-        return unexpected_error(ErrorCode::UnsupportedSymbol,
-                                "sha256_transcript:point_prefix");
+        return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
     if (prefix == 0 &&
         std::any_of(x.begin(), x.end(), [](unsigned char byte) {
             return byte != 0;
         })) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "sha256_transcript:point_identity");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     append_header(kPointItem, prefix);
     append_payload(x);
@@ -123,8 +119,7 @@ Status Sha256Transcript::append_point_pair(
     unsigned char parity, const TranscriptBytes32& first_x,
     const TranscriptBytes32& second_x) {
     if (parity > 3) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "sha256_transcript:pair_parity");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     append_header(kPointPairItem, parity);
     append_payload(first_x);
@@ -134,8 +129,7 @@ Status Sha256Transcript::append_point_pair(
 
 Status Sha256Transcript::append_bytes(std::span<const unsigned char> bytes) {
     if (!size_fits_u64(bytes.size())) {
-        return unexpected_error(ErrorCode::Overflow,
-                                "sha256_transcript:byte_length");
+        return unexpected_error(ErrorCode::Overflow);
     }
     append_header(kBytesItem, static_cast<std::uint64_t>(bytes.size()));
     append_payload(bytes);
@@ -151,8 +145,7 @@ Result<Sha256Challenge> Sha256Transcript::challenge(std::uint64_t round) {
     const std::array<std::span<const unsigned char>, 3> segments{
         state_, pending_, challenge_header};
     const auto digest = sha256_many(segments);
-    PURIFY_ASSIGN_OR_RETURN(auto challenge, make_challenge(digest),
-                            "sha256_transcript:challenge");
+    PURIFY_ASSIGN_OR_RETURN(auto challenge, make_challenge(digest));
     state_ = digest;
     pending_.clear();
     return challenge;

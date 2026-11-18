@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "purify/puresign/accountable_responses.hpp"
-#include "purify/puresign/recovery_root.hpp"
 #include "purify_test_helpers.hpp"
 
 namespace {
@@ -25,7 +24,6 @@ using purify::accountable::CoalitionManifestDigest;
 using purify::accountable::ConflictContext;
 using purify::accountable::NonceHostBoundSigningRoster;
 using purify::accountable::PartialResponse;
-using purify::accountable::RecoveryBoundSigningRoster;
 using purify::accountable::ScalarSignature;
 using purify::accountable::SigningRoster;
 using purify_test::TestContext;
@@ -43,8 +41,7 @@ Result<Point> public_point(FieldElement scalar,
     std::array<unsigned char, 32> x{};
     if (purify_bip340_key_from_seckey(
             secp_context, normalized.data(), x.data()) == 0) {
-        return purify::unexpected_error(purify::ErrorCode::RangeViolation,
-                                        "response_test:point");
+        return purify::unexpected_error(purify::ErrorCode::RangeViolation);
     }
     Point out{};
     out[0] = normalized == original ? 0x02 : 0x03;
@@ -54,8 +51,7 @@ Result<Point> public_point(FieldElement scalar,
 
 Result<std::pair<FieldElement, Point>> even_secret_and_point(
     FieldElement scalar, purify_secp_context* secp_context) {
-    PURIFY_ASSIGN_OR_RETURN(auto point, public_point(scalar, secp_context),
-                            "response_test:even_point");
+    PURIFY_ASSIGN_OR_RETURN(auto point, public_point(scalar, secp_context));
     if (point[0] == 0x03) {
         scalar = scalar.negate();
         point[0] = 0x02;
@@ -70,8 +66,7 @@ Result<std::vector<PartialResponse>> toy_partials(
     const FieldElement& challenge) {
     if (secrets.size() != roster.members().size() ||
         raw_nonces.size() != secrets.size()) {
-        return purify::unexpected_error(purify::ErrorCode::SizeMismatch,
-                                        "response_test:partial_count");
+        return purify::unexpected_error(purify::ErrorCode::SizeMismatch);
     }
     std::vector<PartialResponse> out;
     out.reserve(secrets.size());
@@ -80,9 +75,7 @@ Result<std::vector<PartialResponse>> toy_partials(
             raw_nonces[i] + challenge * roster.members()[i].coefficient *
                                 secrets[i];
         PURIFY_ASSIGN_OR_RETURN(
-            auto response,
-            ScalarSignature::deserialize(value.to_bytes_be()),
-            "response_test:response_scalar");
+            auto response, ScalarSignature::deserialize(value.to_bytes_be()));
         out.push_back({response});
     }
     return out;
@@ -95,41 +88,13 @@ Result<ScalarSignature> toy_aggregate_response(
     const FieldElement& challenge) {
     PURIFY_ASSIGN_OR_RETURN(
         const auto& partials,
-        toy_partials(roster, secrets, raw_nonces, challenge),
-        "response_test:aggregate_partials");
+        toy_partials(roster, secrets, raw_nonces, challenge));
     auto aggregate = FieldElement::zero();
     for (const auto& partial : partials) {
         aggregate = aggregate +
                     FieldElement::from_bytes32(partial.response.serialize());
     }
     return ScalarSignature::deserialize(aggregate.to_bytes_be());
-}
-
-Result<RecoveryBoundSigningRoster> bind_recovery_root(
-    const NonceHostBoundSigningRoster& roster,
-    std::span<const FieldElement> secrets,
-    purify_secp_context* secp_context) {
-    if (secrets.size() != roster.members().size()) {
-        return purify::unexpected_error(
-            purify::ErrorCode::SizeMismatch,
-            "response_test:recovery_binding_secrets");
-    }
-    auto aggregate_secret = FieldElement::zero();
-    for (std::size_t i = 0; i < secrets.size(); ++i) {
-        aggregate_secret = aggregate_secret +
-                           roster.members()[i].coefficient * secrets[i];
-    }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& root,
-        purify::accountable::derive_recovery_root(aggregate_secret),
-        "response_test:recovery_root");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto setup_proof,
-        purify::accountable::prove_recovery_root_setup(
-            roster, root.public_key, aggregate_secret, secp_context),
-        "response_test:setup_proof");
-    return purify::accountable::verify_recovery_root_setup(
-        roster, root.public_key, setup_proof, secp_context);
 }
 
 } // namespace
@@ -175,26 +140,12 @@ void run_accountable_response_tests(TestContext& ctx) {
     expect_ok(ctx, formation, "response coalition formation creates");
     if (!formation) return;
     bool saw_odd_raw_nonce = false;
-    bool saw_positive_recovery_scalar = false;
-    bool saw_negative_recovery_scalar = false;
 
     for (const std::size_t count : {std::size_t{1}, keys.size()}) {
         auto raw_roster = SigningRoster::aggregate(
             std::span(keys).first(count), secp.get());
         expect_ok(ctx, raw_roster, "response roster aggregates");
         if (!raw_roster) return;
-        auto aggregate_secret = FieldElement::zero();
-        for (std::size_t i = 0; i < count; ++i) {
-            aggregate_secret =
-                aggregate_secret +
-                raw_roster->members()[i].coefficient * secrets[i];
-        }
-        const bool negative =
-            purify::prime_p().shifted_right(1) <
-            aggregate_secret.to_uint256();
-        saw_negative_recovery_scalar |= negative;
-        saw_positive_recovery_scalar |= !negative;
-
         std::vector<purify::puresign_plusplus::KeyPair> nonce_signers;
         std::vector<purify::puresign_plusplus::PublicKey> hosts;
         nonce_signers.reserve(count);
@@ -230,11 +181,6 @@ void run_accountable_response_tests(TestContext& ctx) {
         if (!roster) return;
         ctx.expect(roster->nonce_host_commitment() == *host_commitment,
                    "bound roster retains the validated host commitment");
-        auto recovery_roster = bind_recovery_root(
-            *roster, std::span(secrets).first(count), secp.get());
-        expect_ok(ctx, recovery_roster,
-                  "optional recovery-root setup proof verifies");
-        if (!recovery_roster) return;
 
         ConflictContext context{
             roster->signing_key(), roster->nonce_host_commitment(),
@@ -379,16 +325,6 @@ void run_accountable_response_tests(TestContext& ctx) {
         }
         ctx.expect(recovered->scalar() == expected_key,
                    "typed extraction returns the exact aggregate scalar");
-
-        auto recovered_root = purify::accountable::recover_registered_root(
-            *recovery_roster, recovered->scalar(), secp.get());
-        expect_ok(ctx, recovered_root,
-                  "typed exposed key feeds registered-root recovery");
-        if (recovered_root) {
-            ctx.expect(recovered_root->public_key ==
-                           recovery_roster->recovery_root(),
-                       "conflict extraction opens the registered root");
-        }
 
         auto changed_response = partials->front();
         auto plus_one =
@@ -564,7 +500,4 @@ void run_accountable_response_tests(TestContext& ctx) {
     }
     ctx.expect(saw_odd_raw_nonce,
                "deterministic fixtures exercise an odd full nonce point");
-    ctx.expect(saw_positive_recovery_scalar &&
-                   saw_negative_recovery_scalar,
-               "setup proofs exercise both canonical scalar signs");
 }

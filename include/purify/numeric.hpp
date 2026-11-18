@@ -266,10 +266,10 @@ struct BigUInt {
             } else if (ch >= 'A' && ch <= 'F') {
                 value = static_cast<unsigned>(10 + ch - 'A');
             } else {
-                return unexpected_error(ErrorCode::InvalidHex, "BigUInt::try_from_hex:invalid_digit");
+                return unexpected_error(ErrorCode::InvalidHex);
             }
             if (!out.try_mul_small(16) || !out.try_add_small(value)) {
-                return unexpected_error(ErrorCode::Overflow, "BigUInt::try_from_hex:overflow");
+                return unexpected_error(ErrorCode::Overflow);
             }
         }
         return out;
@@ -716,11 +716,11 @@ Result<BigUInt<OutWords>> try_narrow(const BigUInt<InWords>& value) {
     BigUInt<OutWords> out;
     if constexpr (OutWords == 4 && InWords == 5) {
         if (!purify_u256_try_narrow_u320(out.limbs.data(), value.limbs.data())) {
-            return unexpected_error(ErrorCode::NarrowingOverflow, "try_narrow:high_bits_set");
+            return unexpected_error(ErrorCode::NarrowingOverflow);
         }
     } else if constexpr (OutWords == 4 && InWords == 8) {
         if (!purify_u256_try_narrow_u512(out.limbs.data(), value.limbs.data())) {
-            return unexpected_error(ErrorCode::NarrowingOverflow, "try_narrow:high_bits_set");
+            return unexpected_error(ErrorCode::NarrowingOverflow);
         }
     } else {
         for (std::size_t i = 0; i < OutWords; ++i) {
@@ -728,7 +728,7 @@ Result<BigUInt<OutWords>> try_narrow(const BigUInt<InWords>& value) {
         }
         for (std::size_t i = OutWords; i < InWords; ++i) {
             if (value.limbs[i] != 0) {
-                return unexpected_error(ErrorCode::NarrowingOverflow, "try_narrow:high_bits_set");
+                return unexpected_error(ErrorCode::NarrowingOverflow);
             }
         }
     }
@@ -751,11 +751,11 @@ Result<std::pair<BigUInt<Words>, BigUInt<Words>>> try_divmod_same(const BigUInt<
     if constexpr (Words == 8) {
         if (!purify_u512_try_divmod_same(quotient.limbs.data(), remainder.limbs.data(),
                                          numerator.limbs.data(), denominator.limbs.data())) {
-            return unexpected_error(ErrorCode::DivisionByZero, "try_divmod_same:zero_denominator");
+            return unexpected_error(ErrorCode::DivisionByZero);
         }
     } else {
         if (denominator.is_zero()) {
-            return unexpected_error(ErrorCode::DivisionByZero, "try_divmod_same:zero_denominator");
+            return unexpected_error(ErrorCode::DivisionByZero);
         }
         std::size_t n_bits = remainder.bit_length();
         std::size_t d_bits = denominator.bit_length();
@@ -772,7 +772,7 @@ Result<std::pair<BigUInt<Words>, BigUInt<Words>>> try_divmod_same(const BigUInt<
                 assert(sub_ok && "divmod_same() subtraction should stay in range");
                 assert(bit_ok && "divmod_same() quotient bit index should stay in range");
                 if (!sub_ok || !bit_ok) {
-                    return unexpected_error(ErrorCode::InternalMismatch, "try_divmod_same:internal_step");
+                    return unexpected_error(ErrorCode::InternalMismatch);
                 }
             }
             if (idx != 0) {

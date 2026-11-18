@@ -464,65 +464,24 @@ void check_norm_length_boundary(TestContext& ctx) {
         "cached verification applies the same norm length boundary");
 }
 
-void check_pending_norm_equation(TestContext& ctx) {
+void check_public_msm_encoding(TestContext& ctx) {
     using namespace purify::bppp;
     auto secp = purify::make_secp_context();
-    ctx.expect(secp != nullptr, "pending norm context creates");
+    ctx.expect(secp != nullptr, "public MSM context creates");
     if (!secp) return;
-    auto generators = create_generators(8, secp.get());
-    expect_ok(ctx, generators, "pending norm generators create");
-    if (!generators) return;
-    const auto scalar = [](int value) { return FieldElement::from_int(value).to_bytes_be(); };
-    NormArgInputs inputs{scalar(3), {generators->begin(), generators->begin() + 6},
-        {scalar(2), scalar(3), scalar(4), scalar(5)},
-        {scalar(7), scalar(11)}, {scalar(13), scalar(17)}};
-    auto proof = prove_norm_arg(inputs, secp.get());
-    expect_ok(ctx, proof, "pending norm fixture proves");
-    if (!proof) return;
-    ctx.expect(verify_norm_arg(*proof, secp.get()), "ordinary verifier accepts pending fixture");
-    std::array<ScalarBytes, 2> gammas{};
-    ScalarBytes n{}, l{};
-    PointBytes residual{};
-    const auto* gs = reinterpret_cast<const unsigned char*>(generators->data());
-    const auto* cs = reinterpret_cast<const unsigned char*>(inputs.c_vec.data());
-    ctx.expect(purify_bppp_prepare_norm_arg_claim(secp.get(), inputs.rho.data(), gs, 6,
-        cs, 2, 4, proof->commitment.data(), proof->proof.data(), proof->proof.size(),
-        n.data(), l.data(), reinterpret_cast<unsigned char*>(gammas.data()), 2,
-        residual.data()) != 0, "norm transcript prepares a pending equation");
-    const auto rho = FieldElement::from_int(3);
-    const auto gamma0 = FieldElement::from_bytes32(gammas[0]);
-    const auto gamma1 = FieldElement::from_bytes32(gammas[1]);
-    const auto terminal_n = FieldElement::from_bytes32(n);
-    const auto terminal_l = FieldElement::from_bytes32(l);
-    // Enumerate the four G and two H coefficients directly, independently
-    // of the later compact-polynomial accumulator's expansion routine.
-    const auto coefficient_evaluation = FieldElement::from_int(13) + FieldElement::from_int(17) * gamma0;
-    const std::array<ScalarBytes, 9> coefficients{
-        (terminal_n * rho * rho * rho).to_bytes_be(),
-        (terminal_n * rho * rho * gamma0).to_bytes_be(),
-        (terminal_n * rho * gamma1).to_bytes_be(),
-        (terminal_n * gamma0 * gamma1).to_bytes_be(),
-        terminal_l.to_bytes_be(), (terminal_l * gamma0).to_bytes_be(), scalar(0), scalar(0),
-        (terminal_l * coefficient_evaluation).to_bytes_be()};
-    std::array<PointBytes, 9> basis{};
-    ctx.expect(purify_bppp_generators_to_points(secp.get(), gs, 8,
-        reinterpret_cast<unsigned char*>(basis.data())) != 0, "unshifted norm basis creates");
-    const auto encoded_base = base_generator(secp.get());
-    ctx.expect(purify_bppp_generators_to_points(secp.get(), encoded_base.data(), 1,
-        basis[8].data()) != 0, "standard base converts to SEC1");
-    PointBytes expected{};
-    ctx.expect(purify_bppp_public_msm(secp.get(),
-        reinterpret_cast<const unsigned char*>(basis.data()),
-        reinterpret_cast<const unsigned char*>(coefficients.data()), basis.size(), expected.data()) != 0
-        && expected == residual, "unshifted pending equation includes the direct coefficient fold");
+    const auto base = base_generator(secp.get());
+    PointBytes base_point{}, expected{};
+    ctx.expect(purify_bppp_generators_to_points(
+                   secp.get(), base.data(), 1, base_point.data()) != 0,
+               "base generator converts to SEC1");
 
     const PointBytes infinity{};
-    auto one = scalar(1);
+    const auto one = FieldElement::one().to_bytes_be();
     ctx.expect(purify_bppp_public_msm(secp.get(), nullptr, nullptr, 0, expected.data()) != 0
         && expected == infinity, "empty public MSM is canonical infinity");
     ctx.expect(purify_bppp_public_msm(secp.get(), infinity.data(), one.data(), 1,
         expected.data()) != 0 && expected == infinity, "public MSM accepts canonical infinity");
-    auto malformed = basis[0];
+    auto malformed = base_point;
     malformed[0] = 0;
     ctx.expect(purify_bppp_public_msm(secp.get(), malformed.data(), one.data(), 1,
         expected.data()) == 0, "public MSM rejects noncanonical infinity");
@@ -708,19 +667,49 @@ void check_protocol_owned_round_challenges(TestContext& ctx) {
 
     ScalarBytes terminal_n{}, terminal_l{};
     PointBytes residual{};
-    ctx.expect(
-        purify_bppp_prepare_norm_arg_claim_with_challenges(
-            secp.get(), inputs.rho.data(),
-            reinterpret_cast<const unsigned char*>(generators->data()),
-            generators->size(),
-            reinterpret_cast<const unsigned char*>(inputs.c_vec.data()),
-            inputs.c_vec.size(), inputs.n_vec.size(), commitment->data(),
-            proof.data(), proof.size(), gamma_bytes,
-            challenges.scalars.size(), terminal_n.data(),
-            terminal_l.data(), residual.data()) != 0,
-        "protocol challenges prepare the matching pending claim");
-    ctx.expect(residual != PointBytes{},
-               "protocol challenge pending residual is finite");
+    const int prepared = purify_bppp_prepare_norm_arg_claim_with_challenges(
+        secp.get(), inputs.rho.data(),
+        reinterpret_cast<const unsigned char*>(generators->data()),
+        generators->size(),
+        reinterpret_cast<const unsigned char*>(inputs.c_vec.data()),
+        inputs.c_vec.size(), inputs.n_vec.size(), commitment->data(),
+        proof.data(), proof.size(), gamma_bytes, challenges.scalars.size(),
+        terminal_n.data(), terminal_l.data(), residual.data());
+    ctx.expect(prepared != 0,
+               "protocol challenges prepare the matching pending claim");
+    if (prepared == 0 || challenges.scalars.size() != 2) return;
+
+    const auto rho = FieldElement::from_bytes32(inputs.rho);
+    const auto gamma0 = FieldElement::from_bytes32(challenges.scalars[0]);
+    const auto gamma1 = FieldElement::from_bytes32(challenges.scalars[1]);
+    const auto n = FieldElement::from_bytes32(terminal_n);
+    const auto l = FieldElement::from_bytes32(terminal_l);
+    const auto evaluation = FieldElement::from_int(19) +
+        FieldElement::from_int(23) * gamma0 +
+        FieldElement::from_int(29) * gamma1 +
+        FieldElement::from_int(31) * gamma0 * gamma1;
+    const std::array<ScalarBytes, 9> coefficients{
+        (n * rho * rho * rho).to_bytes_be(),
+        (n * rho * rho * gamma0).to_bytes_be(),
+        (n * rho * gamma1).to_bytes_be(),
+        (n * gamma0 * gamma1).to_bytes_be(),
+        l.to_bytes_be(), (l * gamma0).to_bytes_be(),
+        (l * gamma1).to_bytes_be(), (l * gamma0 * gamma1).to_bytes_be(),
+        (l * evaluation).to_bytes_be()};
+    std::array<PointBytes, 9> basis{};
+    ctx.expect(purify_bppp_generators_to_points(
+                   secp.get(), generators->front().data(), generators->size(),
+                   basis.front().data()) != 0,
+               "unshifted norm basis converts to SEC1");
+    const auto base = base_generator(secp.get());
+    ctx.expect(purify_bppp_generators_to_points(
+                   secp.get(), base.data(), 1, basis.back().data()) != 0,
+               "standard base converts to SEC1");
+    PointBytes expected{};
+    ctx.expect(purify_bppp_public_msm(
+                   secp.get(), basis.front().data(), coefficients.front().data(),
+                   basis.size(), expected.data()) != 0 && expected == residual,
+               "pending residual equals the independently folded basis");
 }
 
 } // namespace
@@ -730,6 +719,6 @@ void run_norm_protocol_tests(TestContext& ctx) {
     check_public_digest_transcript(ctx);
     check_initial_point_boundary(ctx);
     check_norm_length_boundary(ctx);
-    check_pending_norm_equation(ctx);
+    check_public_msm_encoding(ctx);
     check_protocol_owned_round_challenges(ctx);
 }

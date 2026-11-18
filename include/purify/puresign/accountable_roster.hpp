@@ -12,11 +12,8 @@
 #include <vector>
 
 #include "purify/numeric.hpp"
+#include "purify/puresign/bppp.hpp"
 #include "purify/puresign/coalition_formation.hpp"
-
-namespace purify::puresign_plusplus {
-struct PublicKey;
-}
 
 namespace purify::accountable {
 
@@ -26,7 +23,6 @@ using NonceHostCommitment = std::array<unsigned char, 32>;
 class SigningRoster;
 class NonceHostBoundSigningRoster;
 class RecoveryBoundSigningRoster;
-class RecoveryRootSetupProof;
 class VerifiedDistributedRecoverySetup;
 class VerifiedConstructionReceipt;
 
@@ -52,21 +48,6 @@ bind_formation_nonce_hosts(
 [[nodiscard]] Result<NonceHostBoundSigningRoster> bind_nonce_hosts(
     SigningRoster roster, const CoalitionCoreDigest& coalition_core_digest,
     std::span<const puresign_plusplus::PublicKey> ordered_hosts,
-    purify_secp_context* secp_context);
-
-/**
- * Verify aggregate-key knowledge and the recovery-root relation.
- *
- * The circuit wrapper's external-commitment proof establishes knowledge of the
- * exact final aggregate signing scalar. The root relation derives the exact
- * registered companion root from that same witness. This is the centralized
- * constructor for `RecoveryBoundSigningRoster`; distributed contribution
- * verification supplies the other constructor. Member consent is separate
- * application policy.
- */
-[[nodiscard]] Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
-    NonceHostBoundSigningRoster roster, const UInt512& recovery_root,
-    const RecoveryRootSetupProof& proof,
     purify_secp_context* secp_context);
 
 /** @brief An ordered individual signing key and its normalized public weight. */
@@ -192,9 +173,6 @@ private:
 
     UInt512 recovery_root_{};
 
-    friend Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
-        NonceHostBoundSigningRoster, const UInt512&,
-        const RecoveryRootSetupProof&, purify_secp_context*);
     friend class VerifiedDistributedRecoverySetup;
     friend class VerifiedConstructionReceipt;
 };

@@ -1,0 +1,34 @@
+# Coverage-guided fuzz targets for the bytes the shipped verifier parses
+# before any proof is checked. Run with cargo-fuzz on a nightly toolchain;
+# see README.md.
+[package]
+name = "purify-construction-parent-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+statement = { package = "purify-construction-statement", path = "../statement" }
+verifier = { package = "purify-construction-parent", path = "../verifier" }
+
+[[bin]]
+name = "proof_codec"
+path = "fuzz_targets/proof_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "public_inputs"
+path = "fuzz_targets/public_inputs.rs"
+test = false
+doc = false
+bench = false
+
+# Not a member of the construction-parent workspace: libFuzzer needs its own
+# sanitizer build of every dependency.
+[workspace]

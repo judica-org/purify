@@ -99,9 +99,7 @@ Result<PointBytes> commit_witness_only(const NormArgInputs& inputs,
 {
     if (inputs.generators.size() !=
         inputs.n_vec.size() + inputs.l_vec.size()) {
-        return purify::unexpected_error(
-            purify::ErrorCode::SizeMismatch,
-            "circuit_soundness:commit_witness_only:generators");
+        return purify::unexpected_error(purify::ErrorCode::SizeMismatch);
     }
 
     const auto generator_bytes = std::as_bytes(
@@ -120,8 +118,7 @@ Result<PointBytes> commit_witness_only(const NormArgInputs& inputs,
             reinterpret_cast<const unsigned char*>(l_bytes.data()),
             inputs.l_vec.size(), out.data())) {
         return purify::unexpected_error(
-            purify::ErrorCode::BackendRejectedInput,
-            "circuit_soundness:commit_witness_only:backend");
+            purify::ErrorCode::BackendRejectedInput);
     }
     return out;
 }
@@ -133,8 +130,7 @@ Result<PointBytes> generator_point(const PointBytes& generator,
     if (!purify_bppp_generator_to_point(
             context, generator.data(), out.data())) {
         return purify::unexpected_error(
-            purify::ErrorCode::BackendRejectedInput,
-            "circuit_soundness:generator_point");
+            purify::ErrorCode::BackendRejectedInput);
     }
     return out;
 }
@@ -148,8 +144,7 @@ Result<PointBytes> scale_generator(const PointBytes& generator,
     if (!purify_bppp_scale_generator(
             context, generator.data(), encoded.data(), out.data())) {
         return purify::unexpected_error(
-            purify::ErrorCode::BackendRejectedInput,
-            "circuit_soundness:scale_generator");
+            purify::ErrorCode::BackendRejectedInput);
     }
     return out;
 }
@@ -163,8 +158,7 @@ Result<PointBytes> scale_point(const PointBytes& point,
     if (!purify_point_scale(
             context, point.data(), encoded.data(), out.data())) {
         return purify::unexpected_error(
-            purify::ErrorCode::BackendRejectedInput,
-            "circuit_soundness:scale_point");
+            purify::ErrorCode::BackendRejectedInput);
     }
     return out;
 }
@@ -176,8 +170,7 @@ Result<PointBytes> add_points(const PointBytes& lhs, const PointBytes& rhs,
     if (!purify_point_add(
             context, lhs.data(), rhs.data(), out.data())) {
         return purify::unexpected_error(
-            purify::ErrorCode::BackendRejectedInput,
-            "circuit_soundness:add_points");
+            purify::ErrorCode::BackendRejectedInput);
     }
     return out;
 }
@@ -247,14 +240,11 @@ Result<RawBasisAttack> build_raw_basis_attack(
         .commitments = {FieldElement::one()},
     };
     if (!attack.circuit.evaluate(attack.assignment)) {
-        return purify::unexpected_error(
-            purify::ErrorCode::EquationMismatch,
-            "circuit_soundness:raw_basis_assignment");
+        return purify::unexpected_error(purify::ErrorCode::EquationMismatch);
     }
 
-    PURIFY_ASSIGN_OR_RETURN(
-        auto generators, purify::bppp::create_generators(8, context),
-        "circuit_soundness:raw_basis_generators");
+    PURIFY_ASSIGN_OR_RETURN(auto generators,
+                            purify::bppp::create_generators(8, context));
     const std::vector<FieldElement> raw_n{
         FieldElement::from_u64(2), FieldElement::zero(),
         FieldElement::zero(), FieldElement::zero()};
@@ -265,38 +255,29 @@ Result<RawBasisAttack> build_raw_basis_attack(
     raw_inputs.generators = generators;
     raw_inputs.n_vec = purify::bppp::scalar_bytes(raw_n);
     raw_inputs.l_vec = purify::bppp::scalar_bytes(raw_l);
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& raw_a, commit_witness_only(raw_inputs, context),
-        "circuit_soundness:raw_basis_precommit");
+    PURIFY_ASSIGN_OR_RETURN(const auto& raw_a,
+                            commit_witness_only(raw_inputs, context));
 
     const ScalarBytes zero{};
     const auto base = purify::bppp::base_generator(context);
     PURIFY_ASSIGN_OR_RETURN(
         attack.exact_output,
         purify::bppp::pedersen_commit_char(
-            zero, FieldElement::one().to_bytes_be(), context, base, base),
-        "circuit_soundness:raw_basis_exact_output");
+            zero, FieldElement::one().to_bytes_be(), context, base, base));
     const FieldElement delta = FieldElement::from_u64(19);
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& gu, generator_point(generators[2], context),
-        "circuit_soundness:raw_basis_gu");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& gv, generator_point(generators[3], context),
-        "circuit_soundness:raw_basis_gv");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& scaled_gu, scale_point(gu, delta, context),
-        "circuit_soundness:raw_basis_scaled_gu");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& scaled_gv, scale_point(gv, delta, context),
-        "circuit_soundness:raw_basis_scaled_gv");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& public_delta,
-        add_points(scaled_gu, scaled_gv, context),
-        "circuit_soundness:raw_basis_public_delta");
+    PURIFY_ASSIGN_OR_RETURN(const auto& gu,
+                            generator_point(generators[2], context));
+    PURIFY_ASSIGN_OR_RETURN(const auto& gv,
+                            generator_point(generators[3], context));
+    PURIFY_ASSIGN_OR_RETURN(const auto& scaled_gu,
+                            scale_point(gu, delta, context));
+    PURIFY_ASSIGN_OR_RETURN(const auto& scaled_gv,
+                            scale_point(gv, delta, context));
+    PURIFY_ASSIGN_OR_RETURN(const auto& public_delta,
+                            add_points(scaled_gu, scaled_gv, context));
     PURIFY_ASSIGN_OR_RETURN(
         attack.wrong_output,
-        add_points(attack.exact_output, public_delta, context),
-        "circuit_soundness:raw_basis_wrong_output");
+        add_points(attack.exact_output, public_delta, context));
 
     attack.statement =
         purify::bytes_from_ascii("raw-basis-padding-attack");
@@ -307,18 +288,15 @@ Result<RawBasisAttack> build_raw_basis_attack(
         attack.honest_proof,
         purify::bppp::
             prove_experimental_circuit_zk_norm_arg_with_public_commitments(
-                attack.circuit, attack.assignment, prover_seed,
-                exact_outputs, context, attack.statement),
-        "circuit_soundness:raw_basis_honest_proof");
+                attack.circuit, attack.assignment, prover_seed, exact_outputs,
+                context, attack.statement));
 
     const std::array<PointBytes, 1> wrong_outputs{attack.wrong_output};
     const Bytes bound_binding =
         bind_public_commitments(wrong_outputs, attack.statement);
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& binding_digest,
-        purify::experimental_circuit_binding_digest(
-            attack.circuit, bound_binding),
-        "circuit_soundness:raw_basis_binding");
+    PURIFY_ASSIGN_OR_RETURN(const auto& binding_digest,
+                            purify::experimental_circuit_binding_digest(
+                                attack.circuit, bound_binding));
     Bytes precommit_seed = binding_digest;
     precommit_seed.insert(
         precommit_seed.end(), raw_a.begin(), raw_a.end());
@@ -344,9 +322,8 @@ Result<RawBasisAttack> build_raw_basis_attack(
             i % 2 == 0 ? term : sqrt_minus_one * term;
         PURIFY_ASSIGN_OR_RETURN(
             transformed_generators[i],
-            scale_generator(generators[i],
-                            rho_power * coordinate.inverse(), context),
-            "circuit_soundness:raw_basis_transform_generator");
+            scale_generator(generators[i], rho_power * coordinate.inverse(),
+                            context));
         if (i % 2 == 1) term = term * ratio;
         rho_power = rho_power * rho;
     }
@@ -381,16 +358,12 @@ Result<RawBasisAttack> build_raw_basis_attack(
     hidden_inputs.c_vec = purify::bppp::scalar_bytes(c_vec);
     PURIFY_ASSIGN_OR_RETURN(
         attack.direct_commitment,
-        purify::bppp::commit_norm_arg(hidden_inputs, context),
-        "circuit_soundness:raw_basis_direct_commitment");
+        purify::bppp::commit_norm_arg(hidden_inputs, context));
     PURIFY_ASSIGN_OR_RETURN(
         const auto& public_term,
-        scale_point(attack.wrong_output, row_weight, context),
-        "circuit_soundness:raw_basis_public_term");
-    PURIFY_ASSIGN_OR_RETURN(
-        attack.anchored_commitment,
-        add_points(raw_a, public_term, context),
-        "circuit_soundness:raw_basis_anchor");
+        scale_point(attack.wrong_output, row_weight, context));
+    PURIFY_ASSIGN_OR_RETURN(attack.anchored_commitment,
+                            add_points(raw_a, public_term, context));
 
     std::vector<FieldElement> mask_n(4, FieldElement::zero());
     mask_n[0] = FieldElement::one();
@@ -401,16 +374,14 @@ Result<RawBasisAttack> build_raw_basis_attack(
     NormArgInputs mask_inputs = hidden_inputs;
     mask_inputs.n_vec = purify::bppp::scalar_bytes(mask_n);
     mask_inputs.l_vec = purify::bppp::scalar_bytes(mask_l);
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& raw_s, commit_witness_only(mask_inputs, context),
-        "circuit_soundness:raw_basis_mask_commitment");
+    PURIFY_ASSIGN_OR_RETURN(const auto& raw_s,
+                            commit_witness_only(mask_inputs, context));
     PointBytes s_commitment{};
     if (!purify_bppp_offset_commitment(
             context, raw_s.data(), linear.to_bytes_be().data(),
             s_commitment.data())) {
         return purify::unexpected_error(
-            purify::ErrorCode::BackendRejectedInput,
-            "circuit_soundness:raw_basis_mask_offset");
+            purify::ErrorCode::BackendRejectedInput);
     }
 
     Bytes outer_seed = challenge_digest;
@@ -431,27 +402,22 @@ Result<RawBasisAttack> build_raw_basis_attack(
     }
     NormArgInputs masked_inputs = hidden_inputs;
     masked_inputs.n_vec = purify::bppp::scalar_bytes(masked_n);
-    PURIFY_ASSIGN_OR_RETURN(
-        attack.inner_proof,
-        purify::bppp::prove_norm_arg(masked_inputs, context),
-        "circuit_soundness:raw_basis_inner_proof");
+    PURIFY_ASSIGN_OR_RETURN(attack.inner_proof, purify::bppp::prove_norm_arg(
+                                                    masked_inputs, context));
 
     PURIFY_ASSIGN_OR_RETURN(
         const auto& scaled_s,
-        scale_point(s_commitment, outer_challenge, context),
-        "circuit_soundness:raw_basis_scaled_mask");
+        scale_point(s_commitment, outer_challenge, context));
     PURIFY_ASSIGN_OR_RETURN(
         const auto& combined,
-        add_points(attack.anchored_commitment, scaled_s, context),
-        "circuit_soundness:raw_basis_combined");
+        add_points(attack.anchored_commitment, scaled_s, context));
     const FieldElement quadratic =
         outer_challenge * outer_challenge * t2;
     if (!purify_bppp_offset_commitment(
             context, combined.data(), quadratic.to_bytes_be().data(),
             attack.combined_commitment.data())) {
         return purify::unexpected_error(
-            purify::ErrorCode::BackendRejectedInput,
-            "circuit_soundness:raw_basis_quadratic_offset");
+            purify::ErrorCode::BackendRejectedInput);
     }
 
     attack.forged_proof = {
@@ -528,7 +494,7 @@ void test_public_commitment_dlog_rejects_raw_basis_attack(TestContext& ctx)
     auto prepared = purify::bppp::detail::
         prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
             attack->circuit, attack->honest_proof, exact_outputs,
-            context.get(), attack->statement, nullptr);
+            context.get(), attack->statement);
     ctx.expect(prepared.has_value() && prepared->has_value(),
                "honest V3 proof prepares its public norm statement");
     if (!prepared.has_value() || !prepared->has_value()) return;

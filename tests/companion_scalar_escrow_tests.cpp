@@ -74,9 +74,8 @@ void test_companion_scalar_escrow(TestContext& ctx) {
     const auto proved = std::chrono::steady_clock::now();
     expect_ok(ctx, proof, "experimental backend proves the honest scalar-encryption relation");
     if (!proof) return;
-    // This is extraction algebra, not complete certificate validation. Nonce
-    // evidence and Q-to-recipient setup authentication remain external; the
-    // canonical_recovery_root suite separately exercises that setup proof.
+    // This fixture exercises extraction algebra. The slashability suite
+    // also checks nonce evidence and distributed setup authentication.
     const auto slot = purify::bytes_from_ascii("old-root/domain=1/epoch=2/slot=3");
     purify::accountable::ConflictContext conflict{{}, {}, {}, slot};
     std::copy(coalition_point->begin() + 1, coalition_point->end(), conflict.signing_key.begin());

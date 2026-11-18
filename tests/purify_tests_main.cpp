@@ -24,7 +24,6 @@ void run_slashability_native_tests(TestContext& ctx);
 #if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
 void run_slashability_e2e_tests(TestContext& ctx);
 #endif
-void run_canonical_recovery_root_tests(TestContext& ctx);
 void run_recovery_root_share_tests(TestContext& ctx);
 void run_recovery_root_contribution_tests(TestContext& ctx);
 void run_anchor_escrow_tests(TestContext& ctx);
@@ -63,7 +62,6 @@ constexpr SuiteSpec kSuites[]{
 #if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
     {"slashability_e2e", &run_slashability_e2e_tests},
 #endif
-    {"canonical_recovery_root", &run_canonical_recovery_root_tests},
     {"recovery_root_share", &run_recovery_root_share_tests},
     {"recovery_root_contribution",
      &run_recovery_root_contribution_tests},

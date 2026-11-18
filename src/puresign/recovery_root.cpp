@@ -4,10 +4,10 @@
 
 #include "purify/puresign/recovery_root.hpp"
 #include "purify/puresign/construction_leaf_accumulation.hpp"
-#include "purify/puresign/recovery_root_accumulation.hpp"
 #include "recovery_root_internal.hpp"
 #include "../protocol/algebraic_circuit_accumulation.hpp"
 #include "../protocol/algebraic_circuit_proof.hpp"
+#include "../protocol/circuit_zk_norm_arg_proof_v4_codec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -30,11 +30,10 @@ using ::purify::detail::WipeOnDestruction;
 
 using SecretScalarBytes = ::purify::detail::Secret<bppp::ScalarBytes>;
 
-Status require_recovery_contribution_hash_suite(const char* label) {
+Status require_recovery_contribution_hash_suite() {
 #if PURIFY_USE_LEGACY_FIELD_HASHES
-    return unexpected_error(ErrorCode::UnsupportedSymbol, label);
+    return unexpected_error(ErrorCode::UnsupportedSymbol);
 #else
-    (void)label;
     return {};
 #endif
 }
@@ -71,12 +70,6 @@ CanonicalScalar canonical_scalar(const FieldElement& scalar) {
     return out;
 }
 
-UInt256 magnitude(const FieldElement& scalar) {
-    auto canonical = canonical_scalar(scalar);
-    WipeOnDestruction canonical_guard(canonical);
-    return canonical.magnitude;
-}
-
 std::array<unsigned char, 8> encode_u64(std::size_t value) {
     std::array<unsigned char, 8> out{};
     const auto encoded = static_cast<std::uint64_t>(value);
@@ -111,36 +104,33 @@ Result<PointBytes> weighted_member_point(
     const NonceHostBoundSigningRoster& roster, std::size_t member_index,
     purify_secp_context* secp_context) {
     if (member_index >= roster.members().size()) {
-        return unexpected_error(ErrorCode::IndexOutOfRange,
-                                "recovery_contribution:member_index");
+        return unexpected_error(ErrorCode::IndexOutOfRange);
     }
     const auto& member = roster.members()[member_index];
     const auto coefficient = member.coefficient.to_bytes_be();
     PointBytes weighted{};
     if (purify_point_scale(secp_context, member.public_key.data(),
                            coefficient.data(), weighted.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput,
-                                "recovery_contribution:weighted_key");
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     return weighted;
 }
 
 Result<AffinePoint> decode_companion_point(
-    std::span<const unsigned char> encoded, const EllipticCurve& curve,
-    const char* label) {
+    std::span<const unsigned char> encoded, const EllipticCurve& curve) {
     if (encoded.size() != 33) {
-        return unexpected_error(ErrorCode::InvalidFixedSize, label);
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
     if (encoded[0] != 0x02 && encoded[0] != 0x03) {
-        return unexpected_error(ErrorCode::RangeViolation, label);
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     std::array<unsigned char, 32> x_bytes{};
     std::copy(encoded.begin() + 1, encoded.end(), x_bytes.begin());
     PURIFY_ASSIGN_OR_RETURN(const auto x,
-                            FieldElement::try_from_bytes32(x_bytes), label);
+                            FieldElement::try_from_bytes32(x_bytes));
     auto point = curve.lift_x(x);
     if (!point || point->infinity) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, label);
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     auto affine = curve.affine(*point);
     if (affine.y.is_odd() != (encoded[0] == 0x03)) {
@@ -149,19 +139,17 @@ Result<AffinePoint> decode_companion_point(
     const JacobianPoint exact{
         affine.x, affine.y, FieldElement::one(), false};
     if (!curve.mul(exact, curve.order()).infinity) {
-        return unexpected_error(ErrorCode::BackendRejectedInput, label);
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     }
     return affine;
 }
 
 Status validate_recovery_root_share_count(std::size_t member_count) {
     if (member_count == 0) {
-        return unexpected_error(ErrorCode::EmptyInput,
-                                "recovery_share_aggregate:empty");
+        return unexpected_error(ErrorCode::EmptyInput);
     }
     if (member_count > RecoveryRootShareAggregate::kMaxMembers) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "recovery_share_aggregate:member_count");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     return {};
 }
@@ -199,10 +187,9 @@ UInt256 subtract_mod(UInt256 lhs, const UInt256& rhs,
 
 Result<UInt256> centered_residue(UInt256 residue,
                                  const UInt256& modulus,
-                                 const UInt256& half_modulus,
-                                 const char* label) {
+                                 const UInt256& half_modulus) {
     if (residue.is_zero()) {
-        return unexpected_error(ErrorCode::EquationMismatch, label);
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
     auto negative = modulus;
     negative.sub_assign(residue);
@@ -274,8 +261,7 @@ Result<CenteredScalarRelation> centered_scalar_relation(
     Transcript& transcript,
     const FieldElement* scalar = nullptr) {
     if (scalar && scalar->is_zero()) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "recovery_root:zero_witness");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     std::optional<UInt256> value;
     std::optional<FieldElement> sign_value;
@@ -304,28 +290,11 @@ Result<CenteredScalarRelation> centered_scalar_relation(
         bits.size() + 1};
 }
 
-Result<CircuitMainResult> setup_relation(
-    Transcript& transcript,
-    const FieldElement* scalar = nullptr) {
-    PURIFY_ASSIGN_OR_RETURN(
-        auto centered, centered_scalar_relation(transcript, scalar),
-        "recovery_root:centered_scalar");
-    const Expr first = circuit_ec_multiply_x(
-        curve1(), transcript, generator1(), centered.recoded_bits);
-    const Expr second = circuit_ec_multiply_x(
-        curve2(), transcript, generator2(), centered.recoded_bits);
-    return CircuitMainResult{
-        transcript.mul(Expr(1) - 2 * centered.sign,
-                       centered.magnitude),
-        first, second, centered.n_bits};
-}
-
 Result<ContributionRelation> contribution_relation(
     Transcript& transcript, const RecoveryRootShare& share,
     const FieldElement* scalar = nullptr) {
-    PURIFY_ASSIGN_OR_RETURN(
-        auto centered, centered_scalar_relation(transcript, scalar),
-        "recovery_contribution:centered_scalar");
+    PURIFY_ASSIGN_OR_RETURN(auto centered,
+                            centered_scalar_relation(transcript, scalar));
     auto first = circuit_ec_multiply_point(
         curve1(), transcript, generator1(), centered.recoded_bits);
     auto second = circuit_ec_multiply_point(
@@ -343,53 +312,19 @@ Result<ContributionRelation> contribution_relation(
         centered.n_bits};
 }
 
-Result<NativeBulletproofCircuit> public_setup_circuit(const UInt512& root) {
-    PURIFY_RETURN_IF_ERROR(validate_public_points(root),
-                           "recovery_root:root");
-    Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(const auto& relation, setup_relation(transcript),
-                            "recovery_root:relation");
-    BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits),
-                           "recovery_root:lower");
-    PURIFY_RETURN_IF_ERROR(
-        bp.add_pubkey_and_out(root, relation.p1x, relation.p2x, relation.out),
-        "recovery_root:bind");
-    return bp.native_circuit();
-}
-
-Result<BulletproofAssignmentData> setup_assignment(
-    const UInt512& root, const FieldElement& scalar) {
-    Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(const auto& relation,
-                            setup_relation(transcript, &scalar),
-                            "recovery_root:witness");
-    BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits),
-                           "recovery_root:lower");
-    PURIFY_RETURN_IF_ERROR(
-        bp.add_pubkey_and_out(root, relation.p1x, relation.p2x, relation.out),
-        "recovery_root:bind");
-    return bp.assignment_data(transcript.varmap(), scalar);
-}
-
 Result<NativeBulletproofCircuit> contribution_circuit(
     const RecoveryRootShare& share,
     std::size_t* relation_multiplications = nullptr) {
     Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto relation, contribution_relation(transcript, share),
-        "recovery_contribution:relation");
+    PURIFY_ASSIGN_OR_RETURN(const auto relation,
+                            contribution_relation(transcript, share));
     if (relation_multiplications != nullptr) {
         *relation_multiplications = transcript.muls().size();
     }
     BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits,
-                                              8192),
-                           "recovery_contribution:lower");
     PURIFY_RETURN_IF_ERROR(
-        bp.bind_output_to_commitment(relation.output),
-        "recovery_contribution:bind_output");
+        bp.from_transcript(transcript, relation.n_bits, 8192));
+    PURIFY_RETURN_IF_ERROR(bp.bind_output_to_commitment(relation.output));
     return bp.native_circuit();
 }
 
@@ -398,38 +333,12 @@ Result<BulletproofAssignmentData> contribution_assignment(
     Transcript transcript;
     PURIFY_ASSIGN_OR_RETURN(
         const auto relation,
-        contribution_relation(transcript, share, &effective_scalar),
-        "recovery_contribution:witness_relation");
+        contribution_relation(transcript, share, &effective_scalar));
     BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits,
-                                              8192),
-                           "recovery_contribution:lower_witness");
     PURIFY_RETURN_IF_ERROR(
-        bp.bind_output_to_commitment(relation.output),
-        "recovery_contribution:bind_output_witness");
+        bp.from_transcript(transcript, relation.n_bits, 8192));
+    PURIFY_RETURN_IF_ERROR(bp.bind_output_to_commitment(relation.output));
     return bp.assignment_data(transcript.varmap(), effective_scalar);
-}
-
-Result<Bytes> setup_binding(const NonceHostBoundSigningRoster& roster,
-                            const UInt512& root) {
-    if (roster.members().empty()) {
-        return unexpected_error(ErrorCode::EmptyInput,
-                                "recovery_root:empty_roster");
-    }
-    if (!size_fits_u64(roster.members().size())) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "recovery_root:roster_size");
-    }
-    const auto root_bytes = root.to_bytes_be();
-    const auto count = encode_u64(roster.members().size());
-    const auto key = roster_point(roster);
-    static const TaggedHash hash(
-        "Purify/Accountable/RecoveryRootSetup/v2");
-    const auto digest = hash.digest_many<6>({
-        roster.key_list_hash(), key, count, root_bytes,
-        roster.coalition_core_digest(), roster.nonce_host_commitment(),
-    });
-    return Bytes(digest.begin(), digest.end());
 }
 
 Result<Bytes> contribution_binding(
@@ -437,21 +346,17 @@ Result<Bytes> contribution_binding(
     const CoalitionFormation& formation, std::size_t member_index,
     const RecoveryRootShare& share) {
     if (roster.members().empty()) {
-        return unexpected_error(ErrorCode::EmptyInput,
-                                "recovery_contribution:empty_roster");
+        return unexpected_error(ErrorCode::EmptyInput);
     }
     if (member_index >= roster.members().size()) {
-        return unexpected_error(ErrorCode::IndexOutOfRange,
-                                "recovery_contribution:member_index");
+        return unexpected_error(ErrorCode::IndexOutOfRange);
     }
     if (formation.core_digest() != roster.coalition_core_digest()) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "recovery_contribution:formation_core");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     if (!size_fits_u64(roster.members().size()) ||
         !size_fits_u64(member_index)) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "recovery_contribution:roster_size");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     const auto& member = roster.members()[member_index];
     const auto count = encode_u64(roster.members().size());
@@ -486,19 +391,13 @@ Bytes RecoveryRootShare::serialize() const {
 Result<RecoveryRootShare> RecoveryRootShare::deserialize(
     std::span<const unsigned char> encoded) {
     if (encoded.size() != kSerializedSize) {
-        return unexpected_error(ErrorCode::InvalidFixedSize,
-                                "recovery_contribution:share_size");
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
     PURIFY_ASSIGN_OR_RETURN(
-        auto first,
-        decode_companion_point(encoded.first<33>(), curve1(),
-                               "recovery_contribution:first_share"),
-        "recovery_contribution:first_share");
+        auto first, decode_companion_point(encoded.first<33>(), curve1()));
     PURIFY_ASSIGN_OR_RETURN(
         auto second,
-        decode_companion_point(encoded.subspan<33, 33>(), curve2(),
-                               "recovery_contribution:second_share"),
-        "recovery_contribution:second_share");
+        decode_companion_point(encoded.subspan<33, 33>(), curve2()));
     return RecoveryRootShare(std::move(first), std::move(second));
 }
 
@@ -506,47 +405,30 @@ Result<RecoveryRootShare> derive_recovery_root_share(
     const SigningRoster& roster, std::size_t member_index,
     const FieldElement& member_secret,
     purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(
-            secp_context, "recovery_contribution:derive_share"),
-        "recovery_contribution:derive_share");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
     if (member_secret.is_zero()) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "recovery_contribution:zero_member_secret");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     if (member_index >= roster.members().size()) {
-        return unexpected_error(
-            ErrorCode::IndexOutOfRange,
-            "recovery_contribution:member_index");
+        return unexpected_error(ErrorCode::IndexOutOfRange);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto member_point,
-        secp_point(member_secret, secp_context),
-        "recovery_contribution:member_point");
+    PURIFY_ASSIGN_OR_RETURN(const auto member_point,
+                            secp_point(member_secret, secp_context));
     if (member_point != roster.members()[member_index].public_key) {
-        return unexpected_error(
-            ErrorCode::BindingMismatch,
-            "recovery_contribution:member_secret");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
     auto effective_scalar =
         roster.members()[member_index].coefficient * member_secret;
     WipeOnDestruction effective_scalar_guard(effective_scalar);
     if (effective_scalar.is_zero()) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "recovery_contribution:zero_effective_scalar");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     auto centered = canonical_scalar(effective_scalar);
     WipeOnDestruction centered_guard(centered);
-    PURIFY_ASSIGN_OR_RETURN(
-        auto first,
-        curve1().mul_secret_affine(generator1(), centered.magnitude),
-        "recovery_contribution:first_share");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto second,
-        curve2().mul_secret_affine(generator2(), centered.magnitude),
-        "recovery_contribution:second_share");
+    PURIFY_ASSIGN_OR_RETURN(auto first, curve1().mul_secret_affine(
+                                            generator1(), centered.magnitude));
+    PURIFY_ASSIGN_OR_RETURN(auto second, curve2().mul_secret_affine(
+                                             generator2(), centered.magnitude));
     first.y.conditional_assign(first.y.negate(), centered.negated);
     second.y.conditional_assign(second.y.negate(), centered.negated);
     return RecoveryRootShare(std::move(first), std::move(second));
@@ -555,8 +437,7 @@ Result<RecoveryRootShare> derive_recovery_root_share(
 Result<RecoveryRootShareAggregate> aggregate_recovery_root_shares(
     std::span<const RecoveryRootShare> ordered_shares) {
     PURIFY_RETURN_IF_ERROR(
-        validate_recovery_root_share_count(ordered_shares.size()),
-        "recovery_share_aggregate:member_count");
+        validate_recovery_root_share_count(ordered_shares.size()));
     auto first_sum = JacobianPoint::infinity_point();
     auto second_sum = JacobianPoint::infinity_point();
     for (const auto& share : ordered_shares) {
@@ -564,8 +445,7 @@ Result<RecoveryRootShareAggregate> aggregate_recovery_root_shares(
         second_sum = curve2().add_mixed(second_sum, share.second());
     }
     if (first_sum.infinity || second_sum.infinity) {
-        return unexpected_error(ErrorCode::EquationMismatch,
-                                "recovery_share_aggregate:infinite_sum");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
     auto first_affine = curve1().affine(first_sum);
     auto second_affine = curve2().affine(second_sum);
@@ -581,33 +461,24 @@ Result<GeneratedKey> recover_aggregated_recovery_root(
     const RecoveryRootShareAggregate& aggregate,
     const FieldElement& exposed_signing_scalar,
     purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(
-            secp_context, "recovery_share_aggregate:recover"),
-        "recovery_share_aggregate:recover");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
     if (aggregate.member_count() != roster.members().size()) {
-        return unexpected_error(ErrorCode::SizeMismatch,
-                                "recovery_share_aggregate:member_count");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
     if (exposed_signing_scalar.is_zero()) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "recovery_share_aggregate:zero_scalar");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto exposed_point,
-        secp_point(exposed_signing_scalar, secp_context),
-        "recovery_share_aggregate:signing_point");
+    PURIFY_ASSIGN_OR_RETURN(const auto exposed_point,
+                            secp_point(exposed_signing_scalar, secp_context));
     if (exposed_point != roster_point(roster)) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "recovery_share_aggregate:signing_scalar");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
 
     const auto scalar = exposed_signing_scalar.to_uint256();
     const auto first_step = curve1().mul(generator1(), prime_p());
     const auto second_step = curve2().mul(generator2(), prime_p());
     if (first_step.infinity || second_step.infinity) {
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "recovery_share_aggregate:carry_step");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
     auto first_candidate = curve1().mul(generator1(), scalar);
     auto second_candidate = curve2().mul(generator2(), scalar);
@@ -656,76 +527,48 @@ Result<GeneratedKey> recover_aggregated_recovery_root(
             std::move(second_residue), second_step_residue, order_n2());
     }
     if (match_count != 1 || !match) {
-        return unexpected_error(
-            ErrorCode::EquationMismatch,
-            match_count == 0
-                ? "recovery_share_aggregate:missing_carry"
-                : "recovery_share_aggregate:ambiguous_carry");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
 
     PURIFY_ASSIGN_OR_RETURN(
         auto first_secret,
-        centered_residue(std::move(match->first), order_n1(), half_n1(),
-                         "recovery_share_aggregate:first_zero"),
-        "recovery_share_aggregate:first_secret");
+        centered_residue(std::move(match->first), order_n1(), half_n1()));
     WipeOnDestruction first_secret_guard(first_secret);
     PURIFY_ASSIGN_OR_RETURN(
         auto second_secret,
-        centered_residue(std::move(match->second), order_n2(), half_n2(),
-                         "recovery_share_aggregate:second_zero"),
-        "recovery_share_aggregate:second_secret");
+        centered_residue(std::move(match->second), order_n2(), half_n2()));
     WipeOnDestruction second_secret_guard(second_secret);
-    PURIFY_ASSIGN_OR_RETURN(
-        auto packed, pack_secret(first_secret, second_secret),
-        "recovery_share_aggregate:pack");
+    PURIFY_ASSIGN_OR_RETURN(auto packed,
+                            pack_secret(first_secret, second_secret));
     WipeOnDestruction packed_guard(packed);
-    PURIFY_ASSIGN_OR_RETURN(
-        auto secret, SecretKey::from_packed(packed),
-        "recovery_share_aggregate:secret");
-    PURIFY_ASSIGN_OR_RETURN(auto recovered, derive_key(std::move(secret)),
-                            "recovery_share_aggregate:derive");
+    PURIFY_ASSIGN_OR_RETURN(auto secret, SecretKey::from_packed(packed));
+    PURIFY_ASSIGN_OR_RETURN(auto recovered, derive_key(std::move(secret)));
     if (recovered.public_key != aggregate.recovery_root()) {
-        return unexpected_error(ErrorCode::EquationMismatch,
-                                "recovery_share_aggregate:exact_root");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
     return recovered;
 }
 
 Status RecoveryRootContribution::validate_encoding(
     purify_secp_context* secp_context) const {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context,
-                             "recovery_contribution:proof_encoding"),
-        "recovery_contribution:proof_encoding");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
     static constexpr std::size_t kRoundCount = 14;
     static_assert(kNormProofSize == 65 * kRoundCount + 64);
-    const bppp::candidate::CircuitZkNormArgProofV4 proof{
-        raw_commitment_, mask_commitment_, t2_,
-        public_commitment_dlog_nonce_,
-        public_commitment_dlog_response_, norm_proof_};
     return bppp::candidate::
         validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
-            proof, bppp::candidate::CircuitCommitmentModeV4::Public,
+            proof_, bppp::candidate::CircuitCommitmentModeV4::Public,
             kRoundCount, secp_context);
 }
 
 Result<Bytes> RecoveryRootContribution::serialize(
     purify_secp_context* secp_context) const {
-    PURIFY_RETURN_IF_ERROR(validate_encoding(secp_context),
-                           "recovery_contribution:serialize");
+    PURIFY_RETURN_IF_ERROR(validate_encoding(secp_context));
     Bytes out;
     out.reserve(kSerializedSize);
     out.push_back(kSerializationVersion);
     const auto encoded_share = share_.serialize();
     out.insert(out.end(), encoded_share.begin(), encoded_share.end());
-    out.insert(out.end(), raw_commitment_.begin(), raw_commitment_.end());
-    out.insert(out.end(), mask_commitment_.begin(), mask_commitment_.end());
-    out.insert(out.end(), t2_.begin(), t2_.end());
-    out.insert(out.end(), public_commitment_dlog_nonce_.begin(),
-               public_commitment_dlog_nonce_.end());
-    out.insert(out.end(), public_commitment_dlog_response_.begin(),
-               public_commitment_dlog_response_.end());
-    out.insert(out.end(), norm_proof_.begin(), norm_proof_.end());
+    bppp::candidate::append_circuit_proof_body_v4(out, proof_);
     assert(out.size() == kSerializedSize);
     return out;
 }
@@ -733,45 +576,19 @@ Result<Bytes> RecoveryRootContribution::serialize(
 Result<RecoveryRootContribution> RecoveryRootContribution::deserialize(
     std::span<const unsigned char> encoded,
     purify_secp_context* secp_context) {
-    static constexpr std::size_t kProofOffset =
-        1 + RecoveryRootShare::kSerializedSize;
-    static constexpr std::size_t kNormOffset = kProofOffset + 162;
-    static_assert(kNormOffset + kNormProofSize == kSerializedSize);
     if (encoded.size() != kSerializedSize) {
-        return unexpected_error(ErrorCode::InvalidFixedSize,
-                                "recovery_contribution:deserialize_size");
+        return unexpected_error(ErrorCode::InvalidFixedSize);
     }
     if (encoded[0] != kSerializationVersion) {
-        return unexpected_error(ErrorCode::UnsupportedSymbol,
-                                "recovery_contribution:deserialize_version");
+        return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto share,
-        RecoveryRootShare::deserialize(
-            encoded.subspan(1, RecoveryRootShare::kSerializedSize)),
-        "recovery_contribution:deserialize_share");
+    PURIFY_ASSIGN_OR_RETURN(auto share,
+                            RecoveryRootShare::deserialize(encoded.subspan(
+                                1, RecoveryRootShare::kSerializedSize)));
     RecoveryRootContribution out(std::move(share));
-    std::size_t offset = kProofOffset;
-    std::copy_n(encoded.begin() + offset, out.raw_commitment_.size(),
-                out.raw_commitment_.begin());
-    offset += out.raw_commitment_.size();
-    std::copy_n(encoded.begin() + offset, out.mask_commitment_.size(),
-                out.mask_commitment_.begin());
-    offset += out.mask_commitment_.size();
-    std::copy_n(encoded.begin() + offset, out.t2_.size(), out.t2_.begin());
-    offset += out.t2_.size();
-    std::copy_n(encoded.begin() + offset,
-                out.public_commitment_dlog_nonce_.size(),
-                out.public_commitment_dlog_nonce_.begin());
-    offset += out.public_commitment_dlog_nonce_.size();
-    std::copy_n(encoded.begin() + offset,
-                out.public_commitment_dlog_response_.size(),
-                out.public_commitment_dlog_response_.begin());
-    offset += out.public_commitment_dlog_response_.size();
-    assert(offset == kNormOffset);
-    out.norm_proof_.assign(encoded.begin() + offset, encoded.end());
-    PURIFY_RETURN_IF_ERROR(out.validate_encoding(secp_context),
-                           "recovery_contribution:deserialize");
+    out.proof_ = bppp::candidate::read_circuit_proof_body_v4(
+        encoded.last<kProofSerializedSize>());
+    PURIFY_RETURN_IF_ERROR(out.validate_encoding(secp_context));
     return out;
 }
 
@@ -780,15 +597,11 @@ namespace testing {
 Result<RecoveryRootContributionCircuitShape>
 recovery_root_contribution_circuit_shape_for_testing(
     const RecoveryRootShare& share) {
-    PURIFY_RETURN_IF_ERROR(
-        require_recovery_contribution_hash_suite(
-            "recovery_contribution:shape_hash_suite"),
-        "recovery_contribution:shape_hash_suite");
+    PURIFY_RETURN_IF_ERROR(require_recovery_contribution_hash_suite());
     std::size_t relation_multiplications = 0;
     PURIFY_ASSIGN_OR_RETURN(
         const auto circuit,
-        contribution_circuit(share, &relation_multiplications),
-        "recovery_contribution:shape");
+        contribution_circuit(share, &relation_multiplications));
     return RecoveryRootContributionCircuitShape{
         relation_multiplications, circuit.n_gates};
 }
@@ -802,13 +615,11 @@ Result<bool> recovery_root_contribution_assignment_satisfies_for_testing(
     const RecoveryRootShare& circuit_share,
     const RecoveryRootShare& assignment_share,
     const FieldElement& effective_scalar) {
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto circuit, contribution_circuit(circuit_share),
-        "recovery_contribution:test_circuit");
+    PURIFY_ASSIGN_OR_RETURN(const auto circuit,
+                            contribution_circuit(circuit_share));
     PURIFY_ASSIGN_OR_RETURN(
         const auto assignment,
-        contribution_assignment(assignment_share, effective_scalar),
-        "recovery_contribution:test_assignment");
+        contribution_assignment(assignment_share, effective_scalar));
     return circuit.evaluate(assignment);
 }
 
@@ -820,35 +631,25 @@ Result<RecoveryRootContribution> prove_recovery_root_contribution(
     const FieldElement& member_secret,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context, "recovery_contribution:prove"),
-        "recovery_contribution:prove");
-    PURIFY_RETURN_IF_ERROR(
-        require_recovery_contribution_hash_suite(
-            "recovery_contribution:prove_hash_suite"),
-        "recovery_contribution:prove_hash_suite");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
+    PURIFY_RETURN_IF_ERROR(require_recovery_contribution_hash_suite());
     PURIFY_ASSIGN_OR_RETURN(
         auto share,
-        derive_recovery_root_share(
-            roster.signing_roster(), member_index, member_secret,
-            secp_context),
-        "recovery_contribution:derive_share");
+        derive_recovery_root_share(roster.signing_roster(), member_index,
+                                   member_secret, secp_context));
     RecoveryRootContribution contribution(std::move(share));
     auto effective_scalar =
         roster.members()[member_index].coefficient * member_secret;
     WipeOnDestruction effective_scalar_guard(effective_scalar);
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto circuit, contribution_circuit(contribution.share_),
-        "recovery_contribution:circuit");
+    PURIFY_ASSIGN_OR_RETURN(const auto circuit,
+                            contribution_circuit(contribution.share_));
     PURIFY_ASSIGN_OR_RETURN(
         auto assignment,
-        contribution_assignment(contribution.share_, effective_scalar),
-        "recovery_contribution:assignment");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto binding,
-        contribution_binding(roster, formation, member_index,
-                             contribution.share_),
-        "recovery_contribution:binding");
+        contribution_assignment(contribution.share_, effective_scalar));
+    PURIFY_ASSIGN_OR_RETURN(const auto binding,
+                            contribution_binding(roster, formation,
+                                                 member_index,
+                                                 contribution.share_));
     SecretScalarBytes effective_bytes;
     purify_scalar_get_b32(
         effective_bytes.value.data(),
@@ -860,26 +661,15 @@ Result<RecoveryRootContribution> prove_recovery_root_contribution(
         effective_bytes.value, binding});
     PURIFY_ASSIGN_OR_RETURN(
         const auto weighted,
-        weighted_member_point(roster, member_index, secp_context),
-        "recovery_contribution:weighted_key");
+        weighted_member_point(roster, member_index, secp_context));
     const std::array<PointBytes, 1> outputs{weighted};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
-        bppp::candidate::
-            prove_circuit_zk_norm_arg_v4_with_public_commitments(
-                circuit, assignment, prover_seed.value, outputs,
-                secp_context, binding, cache),
-        "recovery_contribution:prove_circuit");
-    contribution.raw_commitment_ = publication.proof.raw_commitment;
-    contribution.mask_commitment_ = publication.proof.mask_commitment;
-    contribution.t2_ = publication.proof.t2;
-    contribution.public_commitment_dlog_nonce_ =
-        publication.proof.public_commitment_dlog_nonce;
-    contribution.public_commitment_dlog_response_ =
-        publication.proof.public_commitment_dlog_response;
-    contribution.norm_proof_ = std::move(publication.proof.norm_proof);
-    PURIFY_RETURN_IF_ERROR(contribution.validate_encoding(secp_context),
-                           "recovery_contribution:proof_encoding");
+        bppp::candidate::prove_circuit_zk_norm_arg_v4_with_public_commitments(
+            circuit, assignment, prover_seed.value, outputs, secp_context,
+            binding, cache));
+    contribution.proof_ = std::move(publication.proof);
+    PURIFY_RETURN_IF_ERROR(contribution.validate_encoding(secp_context));
     return contribution;
 }
 
@@ -889,39 +679,20 @@ Result<bool> verify_recovery_root_contribution(
     const RecoveryRootContribution& contribution,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context, "recovery_contribution:verify"),
-        "recovery_contribution:verify");
-    PURIFY_RETURN_IF_ERROR(
-        require_recovery_contribution_hash_suite(
-            "recovery_contribution:verify_hash_suite"),
-        "recovery_contribution:verify_hash_suite");
-    PURIFY_RETURN_IF_ERROR(contribution.validate_encoding(secp_context),
-                           "recovery_contribution:proof_encoding");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto circuit, contribution_circuit(contribution.share_),
-        "recovery_contribution:circuit");
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
+    PURIFY_RETURN_IF_ERROR(require_recovery_contribution_hash_suite());
+    PURIFY_RETURN_IF_ERROR(contribution.validate_encoding(secp_context));
+    PURIFY_ASSIGN_OR_RETURN(const auto circuit, contribution_circuit(contribution.share_));
     PURIFY_ASSIGN_OR_RETURN(
         const auto binding,
-        contribution_binding(roster, formation, member_index,
-                             contribution.share_),
-        "recovery_contribution:binding");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto weighted,
-        weighted_member_point(roster, member_index, secp_context),
-        "recovery_contribution:weighted_key");
+        contribution_binding(roster, formation, member_index, contribution.share_));
+    PURIFY_ASSIGN_OR_RETURN(const auto weighted,
+                            weighted_member_point(roster, member_index, secp_context));
     const std::array<PointBytes, 1> outputs{weighted};
-    bppp::candidate::CircuitZkNormArgProofV4 proof{
-        contribution.raw_commitment_, contribution.mask_commitment_,
-        contribution.t2_, contribution.public_commitment_dlog_nonce_,
-        contribution.public_commitment_dlog_response_,
-        contribution.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
-        bppp::candidate::
-            reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-                circuit, std::move(proof), outputs, secp_context, binding),
-        "recovery_contribution:publication");
+        bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+            circuit, contribution.proof_, outputs, secp_context, binding));
     return bppp::candidate::
         verify_circuit_zk_norm_arg_v4_with_public_commitments(
             circuit, publication, outputs, secp_context, binding, cache);
@@ -935,14 +706,10 @@ verify_distributed_recovery_setup(
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) {
     if (ordered_contributions.size() != roster.members().size()) {
-        return unexpected_error(
-            ErrorCode::SizeMismatch,
-            "recovery_contribution_set:member_count");
+        return unexpected_error(ErrorCode::SizeMismatch);
     }
     if (formation.core_digest() != roster.coalition_core_digest()) {
-        return unexpected_error(
-            ErrorCode::BindingMismatch,
-            "recovery_contribution_set:formation_core");
+        return unexpected_error(ErrorCode::BindingMismatch);
     }
 
     std::vector<RecoveryRootShare> ordered_shares;
@@ -950,21 +717,16 @@ verify_distributed_recovery_setup(
     for (std::size_t i = 0; i < ordered_contributions.size(); ++i) {
         PURIFY_ASSIGN_OR_RETURN(
             const auto accepted,
-            verify_recovery_root_contribution(
-                roster, formation, i, ordered_contributions[i],
-                secp_context, cache),
-            "recovery_contribution_set:verify");
+            verify_recovery_root_contribution(roster, formation, i,
+                                              ordered_contributions[i],
+                                              secp_context, cache));
         if (!accepted) {
-            return unexpected_error(
-                ErrorCode::EquationMismatch,
-                "recovery_contribution_set:proof");
+            return unexpected_error(ErrorCode::EquationMismatch);
         }
         ordered_shares.push_back(ordered_contributions[i].share());
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto aggregate,
-        aggregate_recovery_root_shares(ordered_shares),
-        "recovery_contribution_set:aggregate");
+    PURIFY_ASSIGN_OR_RETURN(auto aggregate,
+                            aggregate_recovery_root_shares(ordered_shares));
     return VerifiedDistributedRecoverySetup(
         std::move(roster), std::move(aggregate));
 }
@@ -976,37 +738,25 @@ ConstructionLeafAccumulator::derive_parent_constants(
     const RecoveryRootShare& share,
     const bppp::ScalarBytes& circuit_precommitment,
     purify_secp_context* secp_context) const {
-    PURIFY_RETURN_IF_ERROR(
-        require_recovery_contribution_hash_suite(
-            "recovery_contribution_parent:hash_suite"),
-        "recovery_contribution_parent:hash_suite");
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(
-            secp_context, "recovery_contribution_parent:context"),
-        "recovery_contribution_parent:context");
+    PURIFY_RETURN_IF_ERROR(require_recovery_contribution_hash_suite());
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
     PURIFY_ASSIGN_OR_RETURN(
         const auto precommitment,
         bppp::candidate::CircuitPrecommitmentDigestV4::parse(
-            circuit_precommitment),
-        "recovery_contribution_parent:precommitment");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto circuit, contribution_circuit(share),
-        "recovery_contribution_parent:circuit");
+            circuit_precommitment));
+    PURIFY_ASSIGN_OR_RETURN(const auto circuit, contribution_circuit(share));
     PURIFY_ASSIGN_OR_RETURN(
         const auto binding,
-        contribution_binding(roster, formation, member_index, share),
-        "recovery_contribution_parent:binding");
+        contribution_binding(roster, formation, member_index, share));
     PURIFY_ASSIGN_OR_RETURN(
         const auto weighted,
-        weighted_member_point(roster, member_index, secp_context),
-        "recovery_contribution_parent:weighted_key");
+        weighted_member_point(roster, member_index, secp_context));
     const std::array<PointBytes, 1> outputs{weighted};
     PURIFY_ASSIGN_OR_RETURN(
         auto constants,
         bppp::candidate::
             derive_circuit_norm_parent_constants_v4_with_public_commitments(
-                circuit, precommitment, outputs, secp_context, binding),
-        "recovery_contribution_parent:derive");
+                circuit, precommitment, outputs, secp_context, binding));
     return ConstructionLeafParentConstants{
         std::move(constants.circuit_binding_digest),
         std::move(constants.raw_generator_digest),
@@ -1021,346 +771,32 @@ ConstructionLeafAccumulator::prepare(
     const RecoveryRootContribution& contribution,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache) const {
-    PURIFY_RETURN_IF_ERROR(
-        require_recovery_contribution_hash_suite(
-            "recovery_contribution_accumulation:hash_suite"),
-        "recovery_contribution_accumulation:hash_suite");
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(
-            secp_context, "recovery_contribution_accumulation:context"),
-        "recovery_contribution_accumulation:context");
-    PURIFY_RETURN_IF_ERROR(
-        contribution.validate_encoding(secp_context),
-        "recovery_contribution_accumulation:record");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto circuit, contribution_circuit(contribution.share_),
-        "recovery_contribution_accumulation:circuit");
+    PURIFY_RETURN_IF_ERROR(require_recovery_contribution_hash_suite());
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
+    PURIFY_RETURN_IF_ERROR(contribution.validate_encoding(secp_context));
+    PURIFY_ASSIGN_OR_RETURN(const auto circuit, contribution_circuit(contribution.share_));
     PURIFY_ASSIGN_OR_RETURN(
         const auto binding,
-        contribution_binding(roster, formation, member_index,
-                             contribution.share_),
-        "recovery_contribution_accumulation:binding");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto weighted,
-        weighted_member_point(roster, member_index, secp_context),
-        "recovery_contribution_accumulation:weighted_key");
+        contribution_binding(roster, formation, member_index, contribution.share_));
+    PURIFY_ASSIGN_OR_RETURN(const auto weighted,
+                            weighted_member_point(roster, member_index, secp_context));
     const std::array<PointBytes, 1> outputs{weighted};
-    bppp::candidate::CircuitZkNormArgProofV4 proof{
-        contribution.raw_commitment_, contribution.mask_commitment_,
-        contribution.t2_, contribution.public_commitment_dlog_nonce_,
-        contribution.public_commitment_dlog_response_,
-        contribution.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
-        bppp::candidate::
-            reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-                circuit, std::move(proof), outputs, secp_context, binding),
-        "recovery_contribution_accumulation:publication");
+        bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
+            circuit, contribution.proof_, outputs, secp_context, binding));
     const auto circuit_precommitment = publication.precommitment.bytes();
-    PURIFY_ASSIGN_OR_RETURN(
-        auto prepared,
-        bppp::candidate::
-            prepare_circuit_zk_norm_arg_v4_with_public_commitments(
-                circuit, publication, outputs, secp_context, binding,
-                cache),
-        "recovery_contribution_accumulation:outer");
+    PURIFY_ASSIGN_OR_RETURN(auto prepared,
+                            bppp::candidate::prepare_circuit_zk_norm_arg_v4_with_public_commitments(
+                                circuit, publication, outputs, secp_context, binding, cache));
     if (!prepared.has_value()) {
-        return unexpected_error(
-            ErrorCode::EquationMismatch,
-            "recovery_contribution_accumulation:outer");
+        return unexpected_error(ErrorCode::EquationMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto norm,
-        bppp::accumulation::
-            prepare_v4_circuit_norm_for_algebraic_reduction(
-                basis_, std::move(*prepared), secp_context),
-        "recovery_contribution_accumulation:norm");
+    PURIFY_ASSIGN_OR_RETURN(auto norm,
+                            bppp::accumulation::prepare_v4_circuit_norm_for_algebraic_reduction(
+                                basis_, std::move(*prepared), secp_context));
     return PreparedConstructionLeaf(circuit_precommitment,
                                     std::move(norm));
-}
-
-Status RecoveryRootSetupProof::validate_encoding(
-    purify_secp_context* secp_context) const {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context, "recovery_root:proof_encoding"),
-        "recovery_root:proof_encoding");
-    static constexpr std::size_t kRoundCount = 12;
-    static_assert(kNormProofSize == 65 * kRoundCount + 64);
-    const bppp::candidate::CircuitZkNormArgProofV4 proof{
-        raw_commitment_, mask_commitment_, t2_,
-        public_commitment_dlog_nonce_,
-        public_commitment_dlog_response_, norm_proof_};
-    return bppp::candidate::
-        validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
-            proof, bppp::candidate::CircuitCommitmentModeV4::Public,
-            kRoundCount, secp_context);
-}
-
-Result<Bytes> RecoveryRootSetupProof::serialize(
-    purify_secp_context* secp_context) const {
-    PURIFY_RETURN_IF_ERROR(validate_encoding(secp_context),
-                           "recovery_root:serialize");
-    Bytes out;
-    out.reserve(kSerializedSize);
-    out.push_back(kSerializationVersion);
-    out.insert(out.end(), raw_commitment_.begin(), raw_commitment_.end());
-    out.insert(out.end(), mask_commitment_.begin(), mask_commitment_.end());
-    out.insert(out.end(), t2_.begin(), t2_.end());
-    out.insert(out.end(), public_commitment_dlog_nonce_.begin(),
-               public_commitment_dlog_nonce_.end());
-    out.insert(out.end(),
-               public_commitment_dlog_response_.begin(),
-               public_commitment_dlog_response_.end());
-    out.insert(out.end(), norm_proof_.begin(), norm_proof_.end());
-    assert(out.size() == kSerializedSize);
-    return out;
-}
-
-Result<RecoveryRootSetupProof> RecoveryRootSetupProof::deserialize(
-    std::span<const unsigned char> encoded,
-    purify_secp_context* secp_context) {
-    constexpr std::size_t header_size = 163;
-    static_assert(header_size + kNormProofSize == kSerializedSize);
-    if (encoded.size() != kSerializedSize) {
-        return unexpected_error(ErrorCode::InvalidFixedSize,
-                                "recovery_root:deserialize_header");
-    }
-    if (encoded[0] != kSerializationVersion) {
-        return unexpected_error(ErrorCode::UnsupportedSymbol,
-                                "recovery_root:deserialize_version");
-    }
-    RecoveryRootSetupProof out;
-    std::copy_n(encoded.begin() + 1, 33,
-                out.raw_commitment_.begin());
-    std::copy_n(encoded.begin() + 34, 33,
-                out.mask_commitment_.begin());
-    std::copy_n(encoded.begin() + 67, 32,
-                out.t2_.begin());
-    std::copy_n(encoded.begin() + 99, 32,
-                out.public_commitment_dlog_nonce_.begin());
-    std::copy_n(encoded.begin() + 131, 32,
-                out.public_commitment_dlog_response_.begin());
-    out.norm_proof_.assign(encoded.begin() + header_size, encoded.end());
-    PURIFY_RETURN_IF_ERROR(out.validate_encoding(secp_context),
-                           "recovery_root:deserialize");
-    return out;
-}
-
-Result<GeneratedKey> derive_recovery_root(
-    const FieldElement& signing_scalar) {
-    if (signing_scalar.is_zero()) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "recovery_root:zero_scalar");
-    }
-    auto first = magnitude(signing_scalar);
-    WipeOnDestruction first_guard(first);
-    auto second = first;
-    WipeOnDestruction second_guard(second);
-    auto reduced_second = order_n2();
-    WipeOnDestruction reduced_second_guard(reduced_second);
-    reduced_second.sub_assign(first);
-    second.conditional_assign(reduced_second, half_n2() < second);
-    PURIFY_ASSIGN_OR_RETURN(auto packed, pack_secret(first, second),
-                            "recovery_root:pack");
-    WipeOnDestruction packed_guard(packed);
-    PURIFY_ASSIGN_OR_RETURN(auto secret, SecretKey::from_packed(packed),
-                            "recovery_root:secret");
-    return derive_key(std::move(secret));
-}
-
-Result<RecoveryRootSetupProof> prove_recovery_root_setup(
-    const NonceHostBoundSigningRoster& roster,
-    const UInt512& recovery_root, const FieldElement& signing_scalar,
-    purify_secp_context* secp_context,
-    bppp::ExperimentalCircuitBackend* cache) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context, "recovery_root:prove"),
-        "recovery_root:prove");
-    if (signing_scalar.is_zero()) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "recovery_root:zero_signing_scalar");
-    }
-    PURIFY_ASSIGN_OR_RETURN(const auto& scalar_point,
-                            secp_point(signing_scalar, secp_context),
-                            "recovery_root:signing_point");
-    if (scalar_point != roster_point(roster)) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "recovery_root:signing_scalar");
-    }
-    PURIFY_ASSIGN_OR_RETURN(const auto& expected_root,
-                            derive_recovery_root(signing_scalar),
-                            "recovery_root:derive");
-    if (expected_root.public_key != recovery_root) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "recovery_root:expected_root");
-    }
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit,
-                            public_setup_circuit(recovery_root),
-                            "recovery_root:public_circuit");
-    PURIFY_ASSIGN_OR_RETURN(auto assignment,
-                            setup_assignment(recovery_root, signing_scalar),
-                            "recovery_root:assignment");
-    PURIFY_ASSIGN_OR_RETURN(const auto& binding,
-                            setup_binding(roster, recovery_root),
-                            "recovery_root:binding");
-    SecretScalarBytes encoded_scalar;
-    purify_scalar_get_b32(
-        encoded_scalar.value.data(),
-        &::purify::detail::FieldElementAccess::raw(signing_scalar));
-    SecretScalarBytes secret_prover_seed;
-    static const TaggedHash prover_seed_hash(
-        "Purify/Accountable/RecoveryRootProverSeed/v2");
-    auto prover_seed = prover_seed_hash.digest_many<2>(
-        {encoded_scalar.value, binding});
-    WipeOnDestruction prover_seed_guard(prover_seed);
-    secret_prover_seed.value = prover_seed;
-    const std::array<PointBytes, 1> outputs{roster_point(roster)};
-    PURIFY_ASSIGN_OR_RETURN(
-        auto publication,
-        bppp::candidate::
-            prove_circuit_zk_norm_arg_v4_with_public_commitments(
-            circuit, assignment, secret_prover_seed.value, outputs,
-            secp_context, binding,
-            cache),
-        "recovery_root:prove_circuit");
-    RecoveryRootSetupProof proof;
-    proof.raw_commitment_ = publication.proof.raw_commitment;
-    proof.mask_commitment_ = publication.proof.mask_commitment;
-    proof.t2_ = publication.proof.t2;
-    proof.public_commitment_dlog_nonce_ =
-        publication.proof.public_commitment_dlog_nonce;
-    proof.public_commitment_dlog_response_ =
-        publication.proof.public_commitment_dlog_response;
-    proof.norm_proof_ = std::move(publication.proof.norm_proof);
-    return proof;
-}
-
-Result<RecoveryRootSetupAccumulator>
-RecoveryRootSetupAccumulator::create(
-    purify_secp_context* secp_context) {
-    static_assert(RecoveryRootSetupProof::kNormProofSize == 65 * 12 + 64);
-    PURIFY_ASSIGN_OR_RETURN(
-        auto basis,
-        bppp::accumulation::Basis::create(
-            kNormVectorLength, kNormVectorLength,
-            "Purify/Accountable/RecoveryRootSetupAccumulation/v2",
-            secp_context),
-        "recovery_root_accumulation:basis");
-    return RecoveryRootSetupAccumulator(std::move(basis));
-}
-
-Result<bppp::accumulation::AlgebraicPreparedNorm>
-RecoveryRootSetupAccumulator::prepare(
-    const NonceHostBoundSigningRoster& roster,
-    const UInt512& recovery_root,
-    const RecoveryRootSetupProof& proof,
-    purify_secp_context* secp_context,
-    bppp::ExperimentalCircuitBackend* cache) const {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context,
-                             "recovery_root_accumulation:prepare"),
-        "recovery_root_accumulation:prepare");
-    PURIFY_RETURN_IF_ERROR(proof.validate_encoding(secp_context),
-                           "recovery_root_accumulation:proof");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& circuit, public_setup_circuit(recovery_root),
-        "recovery_root_accumulation:circuit");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& binding, setup_binding(roster, recovery_root),
-        "recovery_root_accumulation:binding");
-    const std::array<PointBytes, 1> outputs{roster_point(roster)};
-    bppp::candidate::CircuitZkNormArgProofV4 circuit_proof{
-        proof.raw_commitment_, proof.mask_commitment_, proof.t2_,
-        proof.public_commitment_dlog_nonce_,
-        proof.public_commitment_dlog_response_, proof.norm_proof_};
-    PURIFY_ASSIGN_OR_RETURN(
-        auto publication,
-        bppp::candidate::
-            reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-            circuit, std::move(circuit_proof), outputs, secp_context,
-            binding),
-        "recovery_root_accumulation:publication");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto prepared,
-        bppp::candidate::
-            prepare_circuit_zk_norm_arg_v4_with_public_commitments(
-            circuit, publication, outputs, secp_context, binding, cache),
-        "recovery_root_accumulation:outer");
-    if (!prepared.has_value()) {
-        return unexpected_error(ErrorCode::EquationMismatch,
-                                "recovery_root_accumulation:outer");
-    }
-    return bppp::accumulation::
-        prepare_v4_circuit_norm_for_algebraic_reduction(
-            basis_, std::move(*prepared), secp_context);
-}
-
-Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
-    NonceHostBoundSigningRoster roster, const UInt512& recovery_root,
-    const RecoveryRootSetupProof& proof,
-    purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context, "recovery_root:verify"),
-        "recovery_root:verify");
-    PURIFY_RETURN_IF_ERROR(proof.validate_encoding(secp_context),
-                           "recovery_root:verify_encoding");
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit,
-                            public_setup_circuit(recovery_root),
-                            "recovery_root:public_circuit");
-    PURIFY_ASSIGN_OR_RETURN(const auto& binding,
-                            setup_binding(roster, recovery_root),
-                            "recovery_root:binding");
-    const std::array<PointBytes, 1> outputs{roster_point(roster)};
-    bppp::candidate::CircuitZkNormArgProofV4 circuit_proof{
-        proof.raw_commitment_, proof.mask_commitment_, proof.t2_,
-        proof.public_commitment_dlog_nonce_,
-        proof.public_commitment_dlog_response_, proof.norm_proof_};
-    PURIFY_ASSIGN_OR_RETURN(
-        auto publication,
-        bppp::candidate::
-            reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-            circuit, std::move(circuit_proof), outputs, secp_context,
-            binding),
-        "recovery_root:publication");
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto& root_valid,
-        bppp::candidate::
-            verify_circuit_zk_norm_arg_v4_with_public_commitments(
-            circuit, publication, outputs, secp_context, binding),
-        "recovery_root:verify_circuit");
-    if (!root_valid) {
-        return unexpected_error(ErrorCode::EquationMismatch,
-                                "recovery_root:setup_proof");
-    }
-    return RecoveryBoundSigningRoster(std::move(roster), recovery_root);
-}
-
-Result<GeneratedKey> recover_registered_root(
-    const RecoveryBoundSigningRoster& roster,
-    const FieldElement& exposed_signing_scalar,
-    purify_secp_context* secp_context) {
-    PURIFY_RETURN_IF_ERROR(
-        require_secp_context(secp_context, "recovery_root:recover"),
-        "recovery_root:recover");
-    PURIFY_ASSIGN_OR_RETURN(const auto& point,
-                            secp_point(exposed_signing_scalar, secp_context),
-                            "recovery_root:recovered_point");
-    PointBytes expected{};
-    expected[0] = 0x02;
-    std::copy(roster.signing_key().begin(), roster.signing_key().end(),
-              expected.begin() + 1);
-    if (point != expected) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "recovery_root:exact_signing_key");
-    }
-    PURIFY_ASSIGN_OR_RETURN(auto root,
-                            derive_recovery_root(exposed_signing_scalar),
-                            "recovery_root:derive_exposed");
-    if (root.public_key != roster.recovery_root()) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "recovery_root:exact_registered_root");
-    }
-    return root;
 }
 
 } // namespace purify::accountable

@@ -4,6 +4,7 @@
 
 #include "purify/puresign/construction_parent_verifier.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -24,53 +25,48 @@ static_assert(detail::kConstructionParentDescriptorSize ==
               PURIFY_CONSTRUCTION_PARENT_DESCRIPTOR_SIZE);
 static_assert(ConstructionReceiptEnvelope::kParentProofSize ==
               PURIFY_CONSTRUCTION_PARENT_PROOF_SIZE);
+static_assert(sizeof(purify_construction_parent_statement) ==
+              PURIFY_CONSTRUCTION_PARENT_STATEMENT_SIZE);
+
+/** Copies one fixed-width statement field; a width mismatch does not compile. */
+template <std::size_t N>
+void copy_field(std::uint8_t (&out)[N],
+                const std::array<unsigned char, N>& in) {
+    std::copy(in.begin(), in.end(), out);
+}
 
 Unexpected<Error> load_error(
     purify_construction_parent_status status) {
     switch (status) {
     case PURIFY_CONSTRUCTION_PARENT_MALFORMED:
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "construction_parent:artifact_path");
+        return unexpected_error(ErrorCode::RangeViolation);
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_OPEN_FAILED:
-        return unexpected_error(ErrorCode::IoOpenFailed,
-                                "construction_parent:artifact_open");
-    case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_REJECTED:
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "construction_parent:artifact_identity");
+        return unexpected_error(ErrorCode::IoOpenFailed);
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_SNAPSHOT_FAILED:
-        return unexpected_error(ErrorCode::IoWriteFailed,
-                                "construction_parent:artifact_snapshot");
+        return unexpected_error(ErrorCode::IoWriteFailed);
+    case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_REJECTED:
     case PURIFY_CONSTRUCTION_PARENT_PROOF_REJECTED:
-    case PURIFY_CONSTRUCTION_PARENT_BUFFER_TOO_SMALL:
     case PURIFY_CONSTRUCTION_PARENT_INTERNAL_ERROR:
     case PURIFY_CONSTRUCTION_PARENT_OK:
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "construction_parent:artifact_backend");
+        break;
     }
-    return unexpected_error(ErrorCode::InternalMismatch,
-                            "construction_parent:artifact_status");
+    return unexpected_error(ErrorCode::InternalMismatch);
 }
 
 Unexpected<Error> verify_error(
     purify_construction_parent_status status) {
     switch (status) {
     case PURIFY_CONSTRUCTION_PARENT_MALFORMED:
-        return unexpected_error(ErrorCode::BackendRejectedInput,
-                                "construction_parent:malformed");
     case PURIFY_CONSTRUCTION_PARENT_PROOF_REJECTED:
-        return unexpected_error(ErrorCode::BackendRejectedInput,
-                                "construction_parent:proof");
-    case PURIFY_CONSTRUCTION_PARENT_BUFFER_TOO_SMALL:
+        return unexpected_error(ErrorCode::BackendRejectedInput);
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_OPEN_FAILED:
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_REJECTED:
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_SNAPSHOT_FAILED:
     case PURIFY_CONSTRUCTION_PARENT_INTERNAL_ERROR:
     case PURIFY_CONSTRUCTION_PARENT_OK:
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "construction_parent:backend");
+        break;
     }
-    return unexpected_error(ErrorCode::InternalMismatch,
-                            "construction_parent:status");
+    return unexpected_error(ErrorCode::InternalMismatch);
 }
 
 }  // namespace
@@ -104,18 +100,15 @@ Result<AnchorPunishmentKey> VerifiedConstructionReceipt::recover_anchor(
     purify_secp_context* secp_context) const {
     if (entries_.size() != resolved_entries_.size() ||
         entries_.size() != anchor_count_) {
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "construction_parent:receipt_entries");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
     if (anchor_index >= entries_.size()) {
-        return unexpected_error(ErrorCode::IndexOutOfRange,
-                                "construction_parent:anchor_index");
+        return unexpected_error(ErrorCode::IndexOutOfRange);
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto& recipient,
-        recover_aggregated_recovery_root(
-            roster_, aggregate_, exposed_signing_scalar, secp_context),
-        "construction_parent:recover_recipient");
+        recover_aggregated_recovery_root(roster_, aggregate_,
+                                         exposed_signing_scalar, secp_context));
     const auto& entry = entries_[anchor_index];
     const auto& resolved = resolved_entries_[anchor_index];
     return recover_authenticated_anchor_ciphertext(
@@ -127,8 +120,7 @@ Result<ConstructionParentVerifier> ConstructionParentVerifier::load(
     std::string_view artifact_path) {
     if (artifact_path.empty() ||
         artifact_path.find('\0') != std::string_view::npos) {
-        return unexpected_error(ErrorCode::RangeViolation,
-                                "construction_parent:artifact_path");
+        return unexpected_error(ErrorCode::RangeViolation);
     }
     purify_construction_parent_verifier* verifier = nullptr;
     const auto status = purify_construction_parent_verifier_load(
@@ -138,8 +130,7 @@ Result<ConstructionParentVerifier> ConstructionParentVerifier::load(
         return load_error(status);
     }
     if (verifier == nullptr) {
-        return unexpected_error(ErrorCode::InternalMismatch,
-                                "construction_parent:artifact_owner");
+        return unexpected_error(ErrorCode::InternalMismatch);
     }
     return ConstructionParentVerifier(
         std::make_unique<Impl>(verifier));
@@ -152,8 +143,7 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     const ConstructionLeafAccumulator& leaves,
     purify_secp_context* secp_context) const {
     if (!impl_ || impl_->verifier == nullptr) {
-        return unexpected_error(ErrorCode::UninitializedState,
-                                "construction_parent:verifier");
+        return unexpected_error(ErrorCode::UninitializedState);
     }
 
     const auto& payload = envelope.payload();
@@ -161,34 +151,35 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     PURIFY_ASSIGN_OR_RETURN(
         auto inputs,
         detail::resolve_construction_parent_public_inputs(
-            setup, payload, resolved_entries, leaves, secp_context),
-        "construction_parent:public_inputs");
+            setup, payload, resolved_entries, leaves, secp_context));
     std::array<unsigned char,
                ConstructionReceiptAccumulator::kRootClaimSerializedSize>
         pending_root{};
-    const auto& basis_digest = leaves.basis().digest();
-    const auto recovery_root = setup.recovery_root().to_bytes_be();
+    purify_construction_parent_statement statement{};
+    copy_field(statement.construction_statement_digest,
+               inputs.statement_digest);
+    copy_field(statement.resolved_setup_record_digest,
+               setup.resolved_digest().bytes());
+    copy_field(statement.recovery_root, setup.recovery_root().to_bytes_be());
+    copy_field(statement.native_basis_digest, leaves.basis().digest());
+    copy_field(statement.native_raw_generator_digest,
+               inputs.raw_generator_digest);
+    statement.setup_leaf_count = inputs.setup_count;
+    statement.anchor_leaf_count = inputs.anchor_count;
     const Bytes& proof = envelope.parent_proof();
-    const auto status = purify_construction_parent_verify(
-        impl_->verifier, inputs.statement_digest.data(),
-        setup.resolved_digest().bytes().data(), recovery_root.data(),
-        basis_digest.data(), inputs.raw_generator_digest.data(),
-        inputs.setup_count, inputs.anchor_count, inputs.descriptors.data(),
+    const auto status = purify_construction_parent_authenticate_root(
+        impl_->verifier, &statement, inputs.descriptors.data(),
         inputs.descriptors.size(), proof.data(), proof.size(),
-        pending_root.data(), pending_root.size());
+        pending_root.data());
     if (status != PURIFY_CONSTRUCTION_PARENT_OK) {
         return verify_error(status);
     }
 
-    PURIFY_ASSIGN_OR_RETURN(
-        auto final_claim,
-        bppp::accumulation::parse_root_claim(
-            leaves.basis(), pending_root, secp_context),
-        "construction_parent:parse_root");
+    PURIFY_ASSIGN_OR_RETURN(auto final_claim,
+                            bppp::accumulation::parse_root_claim(
+                                leaves.basis(), pending_root, secp_context));
     PURIFY_RETURN_IF_ERROR(
-        bppp::accumulation::decide(
-            leaves.basis(), final_claim, secp_context),
-        "construction_parent:decide");
+        bppp::accumulation::decide(leaves.basis(), final_claim, secp_context));
     return VerifiedConstructionReceipt(
         inputs.statement_digest, setup.roster(),
         std::move(inputs.aggregate),

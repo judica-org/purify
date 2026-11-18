@@ -33,19 +33,19 @@ Result<PointPair> decode_points(const UInt512& encoded) {
 
 Result<purify::GeneratedKey> key_from_pair(UInt256 first, UInt256 second) {
     if (first.is_zero() || second.is_zero() || purify::half_n1() < first || purify::half_n2() < second) {
-        return purify::unexpected_error(purify::ErrorCode::RangeViolation, "scalar_escrow:canonical_pair");
+        return purify::unexpected_error(purify::ErrorCode::RangeViolation);
     }
     first.sub_assign(UInt256::one());
     second.sub_assign(UInt256::one());
     auto packed = purify::multiply(purify::half_n1(), second);
     packed.add_assign(purify::widen<8>(first));
-    PURIFY_ASSIGN_OR_RETURN(auto secret, purify::SecretKey::from_packed(packed), "scalar_escrow:secret");
+    PURIFY_ASSIGN_OR_RETURN(auto secret, purify::SecretKey::from_packed(packed));
     return purify::derive_key(std::move(secret));
 }
 
 Result<purify::GeneratedKey> recipient_from_scalar(const FieldElement& scalar) {
     if (scalar.is_zero()) {
-        return purify::unexpected_error(purify::ErrorCode::RangeViolation, "scalar_escrow:zero_coalition");
+        return purify::unexpected_error(purify::ErrorCode::RangeViolation);
     }
     const auto value = scalar.to_uint256();
     const auto magnitude = purify::prime_p().shifted_right(1) < value ? scalar.negate().to_uint256() : value;
@@ -57,21 +57,21 @@ Result<purify::GeneratedKey> recipient_from_scalar(const FieldElement& scalar) {
 }
 
 Result<FieldElement> shared_pad(const purify::SecretKey& secret, const UInt512& peer) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& scalars, purify::unpack_secret(secret.packed()), "scalar_escrow:secret");
-    PURIFY_ASSIGN_OR_RETURN(const auto& points, decode_points(peer), "scalar_escrow:peer");
+    PURIFY_ASSIGN_OR_RETURN(const auto& scalars, purify::unpack_secret(secret.packed()));
+    PURIFY_ASSIGN_OR_RETURN(const auto& points, decode_points(peer));
     PURIFY_ASSIGN_OR_RETURN(const auto& first,
-        purify::curve1().mul_secret_affine(points.first, scalars.first), "scalar_escrow:shared_first");
+                            purify::curve1().mul_secret_affine(points.first, scalars.first));
     PURIFY_ASSIGN_OR_RETURN(const auto& second,
-        purify::curve2().mul_secret_affine(points.second, scalars.second), "scalar_escrow:shared_second");
+                            purify::curve2().mul_secret_affine(points.second, scalars.second));
     return purify::combine(first.x, second.x);
 }
 
 Result<Ciphertext> encrypt(const UInt512& recipient, const Opening& opening) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& scalars, purify::unpack_secret(opening.payload.packed()), "scalar_escrow:payload");
+    PURIFY_ASSIGN_OR_RETURN(const auto& scalars, purify::unpack_secret(opening.payload.packed()));
     const std::array<UInt256, 2> payload{scalars.first, scalars.second};
     Ciphertext out;
     for (std::size_t i = 0; i < 2; ++i) {
-        PURIFY_ASSIGN_OR_RETURN(const auto& pad, shared_pad(opening.ephemeral[i]->secret, recipient), "scalar_escrow:pad");
+        PURIFY_ASSIGN_OR_RETURN(const auto& pad, shared_pad(opening.ephemeral[i]->secret, recipient));
         out.ephemeral[i] = opening.ephemeral[i]->public_key;
         out.masked[i] = FieldElement::from_uint256(payload[i]) + pad;
     }
@@ -128,15 +128,15 @@ Expr canonical_payload(purify::Transcript& transcript, const std::vector<Expr>& 
 
 Result<purify::CircuitMainResult> escrow_relation(purify::Transcript& transcript, const UInt512& recipient,
                                                 const Ciphertext& ciphertext, const Opening* opening) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& receiver, decode_points(recipient), "scalar_escrow:recipient");
+    PURIFY_ASSIGN_OR_RETURN(const auto& receiver, decode_points(recipient));
     std::array<std::pair<UInt256, UInt256>, 2> ephemeral_coords;
     for (std::size_t i = 0; i < 2; ++i) {
-        PURIFY_RETURN_IF_ERROR(decode_points(ciphertext.ephemeral[i]), "scalar_escrow:ephemeral");
-        PURIFY_ASSIGN_OR_RETURN(ephemeral_coords[i], purify::unpack_public(ciphertext.ephemeral[i]), "scalar_escrow:coords");
+        PURIFY_RETURN_IF_ERROR(decode_points(ciphertext.ephemeral[i]));
+        PURIFY_ASSIGN_OR_RETURN(ephemeral_coords[i], purify::unpack_public(ciphertext.ephemeral[i]));
     }
     std::array<std::optional<UInt256>, 2> payload_values;
     if (opening) {
-        PURIFY_ASSIGN_OR_RETURN(const auto& pair, purify::unpack_secret(opening->payload.packed()), "scalar_escrow:payload");
+        PURIFY_ASSIGN_OR_RETURN(const auto& pair, purify::unpack_secret(opening->payload.packed()));
         payload_values = {pair.first, pair.second};
         for (auto& value : payload_values) value->sub_assign(UInt256::one());
     }
@@ -150,10 +150,9 @@ Result<purify::CircuitMainResult> escrow_relation(purify::Transcript& transcript
     for (std::size_t i = 0; i < 2; ++i) {
         std::array<std::vector<int>, 2> values{std::vector<int>(255, -1), std::vector<int>(255, -1)};
         if (opening) {
-            PURIFY_ASSIGN_OR_RETURN(const auto& pair, purify::unpack_secret(opening->ephemeral[i]->secret.packed()),
-                                    "scalar_escrow:ephemeral_secret");
-            PURIFY_ASSIGN_OR_RETURN(values[0], purify::key_to_bits(pair.first, purify::half_n1()), "scalar_escrow:r1_bits");
-            PURIFY_ASSIGN_OR_RETURN(values[1], purify::key_to_bits(pair.second, purify::half_n2()), "scalar_escrow:r2_bits");
+            PURIFY_ASSIGN_OR_RETURN(const auto& pair, purify::unpack_secret(opening->ephemeral[i]->secret.packed()));
+            PURIFY_ASSIGN_OR_RETURN(values[0], purify::key_to_bits(pair.first, purify::half_n1()));
+            PURIFY_ASSIGN_OR_RETURN(values[1], purify::key_to_bits(pair.second, purify::half_n2()));
         }
         for (std::size_t component = 0; component < 2; ++component) {
             auto& bits = ephemeral_bits[i][component];
@@ -188,22 +187,22 @@ Result<purify::CircuitMainResult> escrow_relation(purify::Transcript& transcript
 
 Result<purify::NativeBulletproofCircuit> public_circuit(const UInt512& recipient, const UInt512& payload,
                                                       const Ciphertext& ciphertext) {
-    PURIFY_RETURN_IF_ERROR(decode_points(payload), "scalar_escrow:old_root");
+    PURIFY_RETURN_IF_ERROR(decode_points(payload));
     purify::Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(const auto& relation, escrow_relation(transcript, recipient, ciphertext, nullptr), "scalar_escrow:relation");
+    PURIFY_ASSIGN_OR_RETURN(const auto& relation, escrow_relation(transcript, recipient, ciphertext, nullptr));
     purify::BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits), "scalar_escrow:lower");
-    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(payload, relation.p1x, relation.p2x, relation.out), "scalar_escrow:bind");
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits));
+    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(payload, relation.p1x, relation.p2x, relation.out));
     return bp.native_circuit();
 }
 
 Result<purify::BulletproofAssignmentData> assignment(const UInt512& recipient, const UInt512& payload,
                                                    const Ciphertext& ciphertext, const Opening& opening) {
     purify::Transcript transcript;
-    PURIFY_ASSIGN_OR_RETURN(const auto& relation, escrow_relation(transcript, recipient, ciphertext, &opening), "scalar_escrow:witness");
+    PURIFY_ASSIGN_OR_RETURN(const auto& relation, escrow_relation(transcript, recipient, ciphertext, &opening));
     purify::BulletproofTranscript bp;
-    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits), "scalar_escrow:lower");
-    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(payload, relation.p1x, relation.p2x, relation.out), "scalar_escrow:bind");
+    PURIFY_RETURN_IF_ERROR(bp.from_transcript(transcript, relation.n_bits));
+    PURIFY_RETURN_IF_ERROR(bp.add_pubkey_and_out(payload, relation.p1x, relation.p2x, relation.out));
     return bp.assignment_data(transcript.varmap(), FieldElement::one());
 }
 
@@ -237,8 +236,8 @@ Result<purify::bppp::PointBytes> secp_point(const FieldElement& scalar, purify_s
 Result<bool> verify(const UInt512& recipient, const UInt512& payload, const Ciphertext& ciphertext,
                     const Bytes& context, const purify::bppp::ExperimentalCircuitZkNormArgProof& proof,
                     purify_secp_context* secp) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, public_circuit(recipient, payload, ciphertext), "scalar_escrow:public");
-    PURIFY_ASSIGN_OR_RETURN(const auto& generator, secp_point(FieldElement::one(), secp), "scalar_escrow:fixed_output");
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit, public_circuit(recipient, payload, ciphertext));
+    PURIFY_ASSIGN_OR_RETURN(const auto& generator, secp_point(FieldElement::one(), secp));
     const std::array<purify::bppp::PointBytes, 1> output{generator};
     return purify::bppp::verify_experimental_circuit_zk_norm_arg_with_public_commitments(
         circuit, proof, output, secp, binding(recipient, payload, ciphertext, context));
@@ -248,25 +247,25 @@ Result<purify::GeneratedKey> decrypt_checked(const purify::SecretKey& recipient_
                                             const UInt512& payload, const Ciphertext& ciphertext, const Bytes& context,
                                             const purify::bppp::ExperimentalCircuitZkNormArgProof& proof,
                                             purify_secp_context* secp) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& accepted, verify(recipient, payload, ciphertext, context, proof, secp), "scalar_escrow:verify");
-    if (!accepted) return purify::unexpected_error(purify::ErrorCode::BindingMismatch, "scalar_escrow:invalid_proof");
+    PURIFY_ASSIGN_OR_RETURN(const auto& accepted, verify(recipient, payload, ciphertext, context, proof, secp));
+    if (!accepted) return purify::unexpected_error(purify::ErrorCode::BindingMismatch);
     return decrypt_payload(recipient_secret, recipient, payload, ciphertext);
 }
 
 Result<purify::GeneratedKey> decrypt_payload(const purify::SecretKey& recipient_secret, const UInt512& recipient,
                                             const UInt512& payload, const Ciphertext& ciphertext) {
-    PURIFY_ASSIGN_OR_RETURN(const auto& receiver, purify::derive_key(recipient_secret), "scalar_escrow:recipient_secret");
+    PURIFY_ASSIGN_OR_RETURN(const auto& receiver, purify::derive_key(recipient_secret));
     if (receiver.public_key != recipient) {
-        return purify::unexpected_error(purify::ErrorCode::BindingMismatch, "scalar_escrow:wrong_recipient");
+        return purify::unexpected_error(purify::ErrorCode::BindingMismatch);
     }
     std::array<UInt256, 2> plaintext;
     for (std::size_t i = 0; i < 2; ++i) {
-        PURIFY_ASSIGN_OR_RETURN(const auto& pad, shared_pad(recipient_secret, ciphertext.ephemeral[i]), "scalar_escrow:decrypt_pad");
+        PURIFY_ASSIGN_OR_RETURN(const auto& pad, shared_pad(recipient_secret, ciphertext.ephemeral[i]));
         plaintext[i] = (ciphertext.masked[i] - pad).to_uint256();
     }
-    PURIFY_ASSIGN_OR_RETURN(auto root, key_from_pair(plaintext[0], plaintext[1]), "scalar_escrow:canonical_plaintext");
+    PURIFY_ASSIGN_OR_RETURN(auto root, key_from_pair(plaintext[0], plaintext[1]));
     if (root.public_key != payload) {
-        return purify::unexpected_error(purify::ErrorCode::BindingMismatch, "scalar_escrow:wrong_plaintext");
+        return purify::unexpected_error(purify::ErrorCode::BindingMismatch);
     }
     return root;
 }

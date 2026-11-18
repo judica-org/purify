@@ -9,6 +9,7 @@
 #define PURIFY_LEGACY_BULLETPROOF_CORE_H
 
 #include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -189,11 +190,14 @@ static void secp256k1_scalar_chacha20(
     unsigned char idx_bytes[9];
     secp256k1_sha256 sha256;
     int overflow = 0;
+    /* Widen first: shifting a 32-bit size_t by 32 or more is undefined, and
+     * the index must serialize to the same eight bytes on every target. */
+    const uint64_t idx64 = idx;
     size_t shift;
 
     VERIFY_CHECK(seed != NULL);
     for (shift = 0; shift < 8; ++shift) {
-        idx_bytes[shift] = (unsigned char)(idx >> (8 * (7 - shift)));
+        idx_bytes[shift] = (unsigned char)(idx64 >> (8 * (7 - shift)));
     }
 
     idx_bytes[8] = 0;

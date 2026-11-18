@@ -39,9 +39,7 @@ Result<RecoveryRootShare> share_from_signed_magnitude(
         second = purify::curve2().negate(second);
     }
     if (first.infinity || second.infinity) {
-        return purify::unexpected_error(
-            purify::ErrorCode::RangeViolation,
-            "recovery_share_test:infinite_share");
+        return purify::unexpected_error(purify::ErrorCode::RangeViolation);
     }
     const auto first_affine = purify::curve1().affine(first);
     const auto second_affine = purify::curve2().affine(second);
@@ -77,9 +75,7 @@ Result<RosterFixture> make_roster_fixture(
     std::vector<PointBytes> keys;
     keys.reserve(secrets.size());
     for (auto& secret : secrets) {
-        PURIFY_ASSIGN_OR_RETURN(
-            auto key, secp_point(secret, secp_context),
-            "recovery_share_test:member_key");
+        PURIFY_ASSIGN_OR_RETURN(auto key, secp_point(secret, secp_context));
         if (key[0] == 0x03) {
             secret = secret.negate();
             key[0] = 0x02;
@@ -88,8 +84,7 @@ Result<RosterFixture> make_roster_fixture(
     }
     PURIFY_ASSIGN_OR_RETURN(
         auto roster,
-        purify::accountable::SigningRoster::aggregate(keys, secp_context),
-        "recovery_share_test:roster");
+        purify::accountable::SigningRoster::aggregate(keys, secp_context));
     auto aggregate_scalar = FieldElement::zero();
     std::vector<FieldElement> effective_scalars;
     effective_scalars.reserve(secrets.size());
@@ -106,25 +101,19 @@ Result<RosterFixture> make_roster_fixture(
         std::array<unsigned char, 32> seed{};
         seed[0] = fixture_tag;
         seed[1] = static_cast<unsigned char>(i + 1);
+        PURIFY_ASSIGN_OR_RETURN(auto generated, purify::generate_key(seed));
         PURIFY_ASSIGN_OR_RETURN(
-            auto generated, purify::generate_key(seed),
-            "recovery_share_test:host_secret");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto host,
-            purify::puresign_plusplus::PublicKey::from_secret(
-                generated.secret, secp_context),
-            "recovery_share_test:host");
+            auto host, purify::puresign_plusplus::PublicKey::from_secret(
+                           generated.secret, secp_context));
         std::copy(keys[i].begin() + 1, keys[i].end(),
                   host.bip340_pubkey.begin());
         hosts.push_back(std::move(host));
     }
     purify::accountable::CoalitionCoreDigest core{};
     core.fill(fixture_tag);
-    PURIFY_ASSIGN_OR_RETURN(
-        auto bound,
-        purify::accountable::bind_nonce_hosts(
-            std::move(roster), core, hosts, secp_context),
-        "recovery_share_test:bound_roster");
+    PURIFY_ASSIGN_OR_RETURN(auto bound,
+                            purify::accountable::bind_nonce_hosts(
+                                std::move(roster), core, hosts, secp_context));
     return RosterFixture{
         std::move(bound), aggregate_scalar, std::move(secrets),
         std::move(effective_scalars)};
@@ -134,15 +123,11 @@ Result<std::vector<RecoveryRootShare>> split_signed_total(
     UInt512 magnitude, std::size_t member_count, bool negative) {
     if (member_count == 0 ||
         member_count > std::numeric_limits<std::uint32_t>::max()) {
-        return purify::unexpected_error(
-            purify::ErrorCode::RangeViolation,
-            "recovery_share_test:split_count");
+        return purify::unexpected_error(purify::ErrorCode::RangeViolation);
     }
     const auto remainder = magnitude.divmod_small(
         static_cast<std::uint32_t>(member_count));
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto base, purify::try_narrow<4>(magnitude),
-        "recovery_share_test:split_magnitude");
+    PURIFY_ASSIGN_OR_RETURN(const auto base, purify::try_narrow<4>(magnitude));
     std::vector<RecoveryRootShare> shares;
     shares.reserve(member_count);
     for (std::size_t i = 0; i < member_count; ++i) {
@@ -150,13 +135,10 @@ Result<std::vector<RecoveryRootShare>> split_signed_total(
         if (i < remainder) part.add_small(1);
         if (part.is_zero() ||
             purify::prime_p().shifted_right(1) < part) {
-            return purify::unexpected_error(
-                purify::ErrorCode::RangeViolation,
-                "recovery_share_test:split_centered");
+            return purify::unexpected_error(purify::ErrorCode::RangeViolation);
         }
-        PURIFY_ASSIGN_OR_RETURN(
-            auto share, share_from_signed_magnitude(part, negative),
-            "recovery_share_test:split_share");
+        PURIFY_ASSIGN_OR_RETURN(auto share,
+                                share_from_signed_magnitude(part, negative));
         shares.push_back(std::move(share));
     }
     return shares;
@@ -167,18 +149,14 @@ Result<UInt256> expected_centered_component(
     const UInt256& half_order) {
     auto remainder = purify::divmod_same(
         magnitude, purify::widen<8>(order)).second;
-    PURIFY_ASSIGN_OR_RETURN(
-        auto residue, purify::try_narrow<4>(remainder),
-        "recovery_share_test:component_narrow");
+    PURIFY_ASSIGN_OR_RETURN(auto residue, purify::try_narrow<4>(remainder));
     if (negative && !residue.is_zero()) {
         auto negated = order;
         negated.sub_assign(residue);
         residue = negated;
     }
     if (residue.is_zero()) {
-        return purify::unexpected_error(
-            purify::ErrorCode::EquationMismatch,
-            "recovery_share_test:zero_component");
+        return purify::unexpected_error(purify::ErrorCode::EquationMismatch);
     }
     if (half_order < residue) {
         auto centered = order;

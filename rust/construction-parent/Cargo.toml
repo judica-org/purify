@@ -1,34 +1,38 @@
-[package]
-name = "purify-construction-parent"
+# Transparent recursive proofs for Purify construction receipts.
+#
+# Each crate has exactly one build configuration:
+#
+#   statement  what a verifier needs natively to form public inputs
+#   verifier   the shipped cdylib: proof codec, suite, artifact loading, C ABI
+#   circuit    the step relation and its native witness model
+#   prover     proving sessions, prover artifacts, and the prover binary
+#
+# The verifier depends only on `statement`. Nothing in its source or
+# dependency tree can perform setup or proving.
+
+[workspace]
+resolver = "2"
+members = ["statement", "verifier", "circuit", "prover"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.98.1"
 license = "MIT"
 publish = false
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[[bin]]
-name = "purify-construction-parent-prover"
-path = "src/bin/purify-construction-parent-prover.rs"
-required-features = ["prover"]
-
-[features]
-default = []
-prover = ["dep:num-bigint"]
-
-[dependencies]
+[workspace.dependencies]
 bincode = { version = "=2.0.1", features = ["serde"] }
 ff = { version = "0.13", default-features = false }
 getrandom = "=0.2.17"
 nova-snark = { git = "https://github.com/JeremyRubin/Nova", rev = "aa42229024dc141e4edff89fcaa79f345e156d46", version = "=0.76.0", default-features = false }
-num-bigint = { version = "=0.4.8", default-features = false, optional = true }
+num-bigint = { version = "=0.4.8", default-features = false }
 rayon = "=1.12.0"
 serde = { version = "=1.0.228", features = ["derive"] }
 sha2 = "0.10"
 thiserror = "2"
 zstd = { version = "=0.14.3", default-features = false, features = ["vendored"] }
 
-[dev-dependencies]
-num-bigint = { version = "=0.4.8", default-features = false }
+statement = { package = "purify-construction-statement", path = "statement" }
+verifier = { package = "purify-construction-parent", path = "verifier" }
+circuit = { package = "purify-construction-circuit", path = "circuit" }

@@ -64,42 +64,35 @@ Result<PointBytes> secp_point(const FieldElement& scalar,
 }
 
 Result<ContributionFixture> make_fixture(
-    purify_secp_context* secp_context) {
+    purify_secp_context* secp_context,
+    unsigned char nonce_host_marker = 0xc1) {
     std::vector<FieldElement> secrets{
         FieldElement::from_u64(7), FieldElement::from_u64(11),
         FieldElement::from_u64(19)};
     std::vector<PointBytes> member_keys;
     member_keys.reserve(secrets.size());
     for (auto& secret : secrets) {
-        PURIFY_ASSIGN_OR_RETURN(
-            auto point, secp_point(secret, secp_context),
-            "recovery_contribution_test:member_point");
+        PURIFY_ASSIGN_OR_RETURN(auto point, secp_point(secret, secp_context));
         if (point[0] == 0x03) {
             secret = secret.negate();
             point[0] = 0x02;
         }
         member_keys.push_back(std::move(point));
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto roster,
-        purify::accountable::SigningRoster::aggregate(member_keys,
-                                                       secp_context),
-        "recovery_contribution_test:roster");
+    PURIFY_ASSIGN_OR_RETURN(auto roster,
+                            purify::accountable::SigningRoster::aggregate(
+                                member_keys, secp_context));
 
     std::vector<purify::puresign_plusplus::PublicKey> hosts;
     hosts.reserve(member_keys.size());
     for (std::size_t i = 0; i < member_keys.size(); ++i) {
         std::array<unsigned char, 32> seed{};
-        seed[0] = 0xc1;
+        seed[0] = nonce_host_marker;
         seed[1] = static_cast<unsigned char>(i + 1);
+        PURIFY_ASSIGN_OR_RETURN(auto generated, purify::generate_key(seed));
         PURIFY_ASSIGN_OR_RETURN(
-            auto generated, purify::generate_key(seed),
-            "recovery_contribution_test:host_secret");
-        PURIFY_ASSIGN_OR_RETURN(
-            auto host,
-            purify::puresign_plusplus::PublicKey::from_secret(
-                generated.secret, secp_context),
-            "recovery_contribution_test:host");
+            auto host, purify::puresign_plusplus::PublicKey::from_secret(
+                           generated.secret, secp_context));
         std::copy(member_keys[i].begin() + 1, member_keys[i].end(),
                   host.bip340_pubkey.begin());
         hosts.push_back(std::move(host));
@@ -112,14 +105,10 @@ Result<ContributionFixture> make_fixture(
     input.permit.output_index = 4;
     input.manifest_digest.fill(0x44);
     PURIFY_ASSIGN_OR_RETURN(
-        auto formation,
-        purify::accountable::CoalitionFormation::create(input),
-        "recovery_contribution_test:formation");
+        auto formation, purify::accountable::CoalitionFormation::create(input));
     PURIFY_ASSIGN_OR_RETURN(
-        auto bound,
-        purify::accountable::bind_formation_nonce_hosts(
-            std::move(roster), formation, hosts, secp_context),
-        "recovery_contribution_test:bound_roster");
+        auto bound, purify::accountable::bind_formation_nonce_hosts(
+                        std::move(roster), formation, hosts, secp_context));
     return ContributionFixture{
         std::move(bound), std::move(formation), std::move(secrets)};
 }
@@ -417,20 +406,33 @@ void test_recovery_root_contribution(TestContext& ctx) {
             "contribution rejects another formation core");
     }
 
-    auto changed_share = *encoded;
-    changed_share[1] =
-        static_cast<unsigned char>(changed_share[1] == 0x02 ? 0x03 : 0x02);
-    auto changed =
-        purify::accountable::RecoveryRootContribution::deserialize(
-            changed_share, secp.get());
-    expect_ok(ctx, changed, "opposite full-point parity remains canonical");
-    if (changed) {
-        auto changed_result =
+    auto alternate_hosts = make_fixture(secp.get(), 0xc2);
+    expect_ok(ctx, alternate_hosts, "alternate contribution nonce hosts bind");
+    if (alternate_hosts) {
+        auto wrong_hosts =
             purify::accountable::verify_recovery_root_contribution(
-                fixture->roster, fixture->formation, member_index,
-                *changed, secp.get());
-        ctx.expect(changed_result && !*changed_result,
-                   "proof rejects a changed companion-point sign");
+                alternate_hosts->roster, alternate_hosts->formation,
+                member_index, *parsed, secp.get(), &proof_cache);
+        ctx.expect(wrong_hosts && !*wrong_hosts,
+                   "contribution proof binds the exact nonce-host commitment");
+    }
+
+    // After the version byte, each 33-byte point starts with its sign.
+    for (const auto offset : {1u, 34u}) {
+        auto changed_share = *encoded;
+        changed_share[offset] ^= 1;
+        auto changed =
+            purify::accountable::RecoveryRootContribution::deserialize(
+                changed_share, secp.get());
+        expect_ok(ctx, changed, "opposite full-point parity remains canonical");
+        if (changed) {
+            auto changed_result =
+                purify::accountable::verify_recovery_root_contribution(
+                    fixture->roster, fixture->formation, member_index,
+                    *changed, secp.get(), &proof_cache);
+            ctx.expect(changed_result && !*changed_result,
+                       "proof rejects a changed companion-point sign");
+        }
     }
 
     auto invalid_share = std::array<unsigned char,

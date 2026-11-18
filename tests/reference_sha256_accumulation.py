@@ -11,7 +11,7 @@ from pathlib import Path
 
 from reference_norm_accumulation import (
     N, add, coefficients, dot, encode_polynomial, evaluate, generator_from_seed,
-    generator_stream, msm, mul, pb, prepare_norm, sb, size, tagged_hash,
+    generator_stream, msm, mul, pb, prepare_norm, sb, scalar_checks, size, tagged_hash,
 )
 from reference_sha256_transcript import Sha256Transcript
 
@@ -214,6 +214,7 @@ def fixture():
 
 
 def check_vector():
+    scalar_checks()
     path = (Path(__file__).parents[1] / "rust" / "construction-parent"
             / "tests" / "vectors" / "sha256_accumulation_v2.json")
     assert json.loads(path.read_text(encoding="ascii")) == fixture()

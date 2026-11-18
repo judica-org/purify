@@ -1,0 +1,26 @@
+[package]
+name = "purify-construction-parent"
+description = "Verifier backend for Purify construction-parent proofs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "purify_construction_parent"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+statement.workspace = true
+bincode.workspace = true
+getrandom.workspace = true
+nova-snark.workspace = true
+rayon.workspace = true
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+ff.workspace = true

@@ -7,6 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <memory>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -27,15 +30,537 @@ using purify::puresign_plusplus::CertificateNonceNativeResponse;
 using purify::puresign_plusplus::CertificateNonceParentAccumulator;
 using purify::puresign_plusplus::CertificateNonceParentPublicInputs;
 using purify::puresign_plusplus::CertificateNonceParentScope;
+using purify::puresign_plusplus::CertificateNoncePublicLeafDescriptor;
+using purify::puresign_plusplus::CertificateNonceRecursiveManifestResolution;
 using purify::puresign_plusplus::CertificateNonceRecursiveResponseView;
+using purify::puresign_plusplus::CertificateNonceResponseAuthorization;
 using purify::puresign_plusplus::CertificateNonceResponseFrame;
 using purify::puresign_plusplus::CertificateNonceResponseVerificationView;
 using purify::puresign_plusplus::NonceProof;
-using purify_test::TestContext;
+using purify::puresign_plusplus::PublicKey;
 using purify_test::expect_error;
 using purify_test::expect_ok;
+using purify_test::TestContext;
 
 using Point = std::array<unsigned char, 33>;
+
+constexpr std::size_t kQualifiedWitnessSize = 14'608;
+constexpr std::size_t kQualifiedResponseCount = 2;
+constexpr std::size_t kQualifiedMemberCount = 2;
+constexpr std::size_t kQualifiedParentConstantsSize = 98;
+constexpr std::size_t kQualifiedMemberProofSize =
+    kQualifiedParentConstantsSize + NonceProof::kSerializedSize +
+    purify::puresign_plusplus::CertificateNonceLinearReceipt::
+        kReductionSerializedSize +
+    purify::puresign_plusplus::CertificateNonceLinearReceipt::
+        kStepSerializedSize;
+
+class FixtureCursor {
+public:
+    explicit FixtureCursor(std::span<const unsigned char> bytes) : bytes_(bytes)
+    {}
+
+    Result<std::span<const unsigned char>> take(std::size_t size)
+    {
+        if (size > bytes_.size() - offset_) {
+            return purify::unexpected_error(
+                purify::ErrorCode::InvalidFixedSize,
+                "certificate_parent_test:fixture_truncated");
+        }
+        const auto result = bytes_.subspan(offset_, size);
+        offset_ += size;
+        return result;
+    }
+
+    template <std::size_t Size> Result<std::array<unsigned char, Size>> array()
+    {
+        PURIFY_ASSIGN_OR_RETURN(const auto bytes, take(Size),
+                                "certificate_parent_test:fixture_array");
+        std::array<unsigned char, Size> result{};
+        std::copy(bytes.begin(), bytes.end(), result.begin());
+        return result;
+    }
+
+    Result<unsigned char> u8()
+    {
+        PURIFY_ASSIGN_OR_RETURN(const auto bytes, array<1>(),
+                                "certificate_parent_test:fixture_u8");
+        return bytes[0];
+    }
+
+    Result<std::uint32_t> u32()
+    {
+        PURIFY_ASSIGN_OR_RETURN(const auto bytes, array<4>(),
+                                "certificate_parent_test:fixture_u32");
+        std::uint32_t result = 0;
+        for (const auto byte : bytes) {
+            result = (result << 8) | byte;
+        }
+        return result;
+    }
+
+    Result<std::uint64_t> u64()
+    {
+        PURIFY_ASSIGN_OR_RETURN(const auto bytes, array<8>(),
+                                "certificate_parent_test:fixture_u64");
+        std::uint64_t result = 0;
+        for (const auto byte : bytes) {
+            result = (result << 8) | byte;
+        }
+        return result;
+    }
+
+    std::size_t remaining() const noexcept { return bytes_.size() - offset_; }
+
+private:
+    std::span<const unsigned char> bytes_;
+    std::size_t offset_ = 0;
+};
+
+struct DecodedQualifiedResponse {
+    CertificateNonceResponseFrame frame;
+    std::array<unsigned char, 32> signing_key{};
+    std::array<unsigned char, 32> host_commitment{};
+    purify::accountable::CoalitionCoreDigest coalition_core{};
+    purify::Bytes slot;
+    purify::Bytes body;
+    std::array<unsigned char, 32> response{};
+    std::array<unsigned char, 32> key_list_hash{};
+    bool aggregate_was_negated = false;
+    std::vector<Point> roster_keys;
+    std::vector<std::array<unsigned char, 32>> coefficients;
+    std::vector<PublicKey> hosts;
+    std::vector<CertificateNoncePublicLeafDescriptor> leaves;
+};
+
+class QualifiedPublicResponse {
+public:
+    static Result<std::unique_ptr<QualifiedPublicResponse>>
+    create(DecodedQualifiedResponse decoded, purify_secp_context* secp_context)
+    {
+        auto result = std::unique_ptr<QualifiedPublicResponse>(
+            new QualifiedPublicResponse(std::move(decoded)));
+        PURIFY_ASSIGN_OR_RETURN(auto roster,
+                                SigningRoster::aggregate(
+                                    result->decoded_.roster_keys, secp_context),
+                                "certificate_parent_test:qualified_roster");
+        if (roster.signing_key() != result->decoded_.signing_key ||
+            roster.key_list_hash() != result->decoded_.key_list_hash ||
+            roster.aggregate_was_negated() !=
+                result->decoded_.aggregate_was_negated ||
+            roster.members().size() != result->decoded_.coefficients.size()) {
+            return purify::unexpected_error(
+                purify::ErrorCode::BindingMismatch,
+                "certificate_parent_test:qualified_roster_binding");
+        }
+        for (std::size_t index = 0; index < roster.members().size(); ++index) {
+            if (roster.members()[index].public_key !=
+                    result->decoded_.roster_keys[index] ||
+                roster.members()[index].coefficient.to_bytes_be() !=
+                    result->decoded_.coefficients[index]) {
+                return purify::unexpected_error(
+                    purify::ErrorCode::BindingMismatch,
+                    "certificate_parent_test:qualified_member_binding");
+            }
+        }
+        PURIFY_ASSIGN_OR_RETURN(auto bound_roster,
+                                purify::accountable::bind_nonce_hosts(
+                                    std::move(roster),
+                                    result->decoded_.coalition_core,
+                                    result->decoded_.hosts, secp_context),
+                                "certificate_parent_test:qualified_hosts");
+        if (bound_roster.nonce_host_commitment() !=
+            result->decoded_.host_commitment) {
+            return purify::unexpected_error(
+                purify::ErrorCode::BindingMismatch,
+                "certificate_parent_test:qualified_host_binding");
+        }
+        result->roster_.emplace(std::move(bound_roster));
+        result->context_.emplace(ConflictContext{
+            result->decoded_.signing_key, result->decoded_.host_commitment,
+            result->decoded_.coalition_core, result->decoded_.slot});
+        PURIFY_ASSIGN_OR_RETURN(
+            auto response,
+            ScalarSignature::deserialize(result->decoded_.response),
+            "certificate_parent_test:qualified_response");
+        result->response_.emplace(std::move(response));
+        PURIFY_ASSIGN_OR_RETURN(
+            auto authorization,
+            CertificateNonceResponseAuthorization::create(
+                result->decoded_.frame, *result->roster_, *result->context_,
+                result->decoded_.hosts, result->decoded_.body,
+                *result->response_, secp_context),
+            "certificate_parent_test:qualified_authorization");
+        result->authorization_.emplace(std::move(authorization));
+        return result;
+    }
+
+    CertificateNonceRecursiveResponseView view() const
+    {
+        return CertificateNonceRecursiveResponseView(
+            *authorization_, *context_, decoded_.hosts, decoded_.body,
+            *response_, decoded_.leaves);
+    }
+
+    CertificateNoncePublicLeafDescriptor& first_leaf()
+    {
+        return decoded_.leaves.front();
+    }
+
+private:
+    explicit QualifiedPublicResponse(DecodedQualifiedResponse decoded)
+        : decoded_(std::move(decoded))
+    {}
+
+    DecodedQualifiedResponse decoded_;
+    std::optional<NonceHostBoundSigningRoster> roster_;
+    std::optional<ConflictContext> context_;
+    std::optional<ScalarSignature> response_;
+    std::optional<CertificateNonceResponseAuthorization> authorization_;
+};
+
+struct QualifiedManifestFixture {
+    CertificateNonceRecursiveManifestResolution manifest;
+    CertificateNonceRecursiveManifestResolution changed_manifest;
+};
+
+Result<purify::Bytes> read_qualified_witness()
+{
+    std::ifstream input(PURIFY_TEST_CERTIFICATE_PARENT_WITNESS_V3_PATH,
+                        std::ios::binary | std::ios::ate);
+    if (!input.is_open()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::IoOpenFailed,
+            "certificate_parent_test:qualified_witness_open");
+    }
+    const auto end = input.tellg();
+    if (end != static_cast<std::streamoff>(kQualifiedWitnessSize)) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InvalidFixedSize,
+            "certificate_parent_test:qualified_witness_size");
+    }
+    purify::Bytes bytes(kQualifiedWitnessSize);
+    input.seekg(0);
+    input.read(reinterpret_cast<char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+    if (input.gcount() != static_cast<std::streamsize>(bytes.size()) ||
+        input.peek() != std::ifstream::traits_type::eof()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::UnexpectedSize,
+            "certificate_parent_test:qualified_witness_read");
+    }
+    std::array<unsigned char, 32> digest{};
+    purify_sha256(digest.data(), bytes.data(), bytes.size());
+    if (digest != purify::UInt256::from_hex("36a4806d937edd496f28464248256512"
+                                            "d45e51e25e36b5b6c184e991b88c9d46")
+                      .to_bytes_be()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BindingMismatch,
+            "certificate_parent_test:qualified_witness_digest");
+    }
+    return bytes;
+}
+
+Result<DecodedQualifiedResponse> decode_qualified_response(
+    std::span<const unsigned char> encoded,
+    const purify::bppp::accumulation::Digest& context_digest,
+    std::uint64_t response_ordinal, purify_secp_context* secp_context)
+{
+    FixtureCursor cursor(encoded);
+    PURIFY_ASSIGN_OR_RETURN(const auto version, cursor.u8(),
+                            "certificate_parent_test:qualified_version");
+    PURIFY_ASSIGN_OR_RETURN(const auto scope, cursor.u8(),
+                            "certificate_parent_test:qualified_scope");
+    PURIFY_ASSIGN_OR_RETURN(const auto member_capacity, cursor.u32(),
+                            "certificate_parent_test:qualified_capacity");
+    if (version != 1 ||
+        scope != static_cast<unsigned char>(
+                     CertificateNonceParentScope::AccountableTopic) ||
+        member_capacity !=
+            CertificateNonceParentPublicInputs::kMemberBatchCapacity) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BindingMismatch,
+            "certificate_parent_test:qualified_public_frame");
+    }
+
+    DecodedQualifiedResponse result;
+    PURIFY_ASSIGN_OR_RETURN(const auto encoded_context, cursor.array<32>(),
+                            "certificate_parent_test:qualified_context");
+    PURIFY_ASSIGN_OR_RETURN(result.frame.total_responses, cursor.u64(),
+                            "certificate_parent_test:qualified_response_count");
+    PURIFY_ASSIGN_OR_RETURN(
+        result.frame.response_ordinal, cursor.u64(),
+        "certificate_parent_test:qualified_response_ordinal");
+    PURIFY_ASSIGN_OR_RETURN(
+        result.frame.electorate_index, cursor.u32(),
+        "certificate_parent_test:qualified_electorate_index");
+    PURIFY_ASSIGN_OR_RETURN(
+        result.frame.electorate_weight, cursor.u64(),
+        "certificate_parent_test:qualified_electorate_weight");
+    result.frame.certificate_context_digest = encoded_context;
+    result.frame.scope = CertificateNonceParentScope::AccountableTopic;
+    if (encoded_context != context_digest ||
+        result.frame.total_responses != kQualifiedResponseCount ||
+        result.frame.response_ordinal != response_ordinal ||
+        result.frame.electorate_weight == 0) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BindingMismatch,
+            "certificate_parent_test:qualified_response_frame");
+    }
+
+    PURIFY_ASSIGN_OR_RETURN(result.signing_key, cursor.array<32>(),
+                            "certificate_parent_test:qualified_signing_key");
+    PURIFY_ASSIGN_OR_RETURN(
+        result.host_commitment, cursor.array<32>(),
+        "certificate_parent_test:qualified_host_commitment");
+    PURIFY_ASSIGN_OR_RETURN(result.coalition_core, cursor.array<32>(),
+                            "certificate_parent_test:qualified_coalition_core");
+    PURIFY_ASSIGN_OR_RETURN(const auto slot_size, cursor.u64(),
+                            "certificate_parent_test:qualified_slot_size");
+    if (slot_size == 0 || slot_size > cursor.remaining()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InvalidFixedSize,
+            "certificate_parent_test:qualified_slot");
+    }
+    PURIFY_ASSIGN_OR_RETURN(const auto slot,
+                            cursor.take(static_cast<std::size_t>(slot_size)),
+                            "certificate_parent_test:qualified_slot");
+    result.slot.assign(slot.begin(), slot.end());
+    PURIFY_ASSIGN_OR_RETURN(const auto body_size, cursor.u64(),
+                            "certificate_parent_test:qualified_body_size");
+    if (body_size > cursor.remaining()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InvalidFixedSize,
+            "certificate_parent_test:qualified_body");
+    }
+    PURIFY_ASSIGN_OR_RETURN(const auto body,
+                            cursor.take(static_cast<std::size_t>(body_size)),
+                            "certificate_parent_test:qualified_body");
+    result.body.assign(body.begin(), body.end());
+    PURIFY_ASSIGN_OR_RETURN(
+        result.response, cursor.array<32>(),
+        "certificate_parent_test:qualified_scalar_response");
+    PURIFY_ASSIGN_OR_RETURN(result.key_list_hash, cursor.array<32>(),
+                            "certificate_parent_test:qualified_key_list_hash");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto aggregate_was_negated, cursor.u8(),
+        "certificate_parent_test:qualified_aggregate_parity");
+    if (aggregate_was_negated > 1) {
+        return purify::unexpected_error(
+            purify::ErrorCode::RangeViolation,
+            "certificate_parent_test:qualified_aggregate_parity");
+    }
+    result.aggregate_was_negated = aggregate_was_negated != 0;
+    PURIFY_ASSIGN_OR_RETURN(const auto member_count, cursor.u32(),
+                            "certificate_parent_test:qualified_member_count");
+    if (member_count != kQualifiedMemberCount) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InvalidFixedSize,
+            "certificate_parent_test:qualified_member_count");
+    }
+
+    result.roster_keys.reserve(member_count);
+    result.coefficients.reserve(member_count);
+    result.hosts.reserve(member_count);
+    result.leaves.reserve(member_count);
+    for (std::uint32_t member = 0; member < member_count; ++member) {
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto member_ordinal, cursor.u32(),
+            "certificate_parent_test:qualified_member_ordinal");
+        if (member_ordinal != member) {
+            return purify::unexpected_error(
+                purify::ErrorCode::BindingMismatch,
+                "certificate_parent_test:qualified_member_order");
+        }
+        PURIFY_ASSIGN_OR_RETURN(const auto roster_key, cursor.array<33>(),
+                                "certificate_parent_test:qualified_roster_key");
+        result.roster_keys.push_back(roster_key);
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto coefficient, cursor.array<32>(),
+            "certificate_parent_test:qualified_coefficient");
+        result.coefficients.push_back(coefficient);
+        PURIFY_ASSIGN_OR_RETURN(const auto serialized_host, cursor.array<96>(),
+                                "certificate_parent_test:qualified_host");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto host, PublicKey::deserialize(serialized_host, secp_context),
+            "certificate_parent_test:qualified_host");
+        result.hosts.push_back(std::move(host));
+
+        CertificateNoncePublicLeafDescriptor descriptor;
+        PURIFY_ASSIGN_OR_RETURN(
+            descriptor.leaf_binding, cursor.array<32>(),
+            "certificate_parent_test:qualified_leaf_binding");
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto proof_digest, cursor.array<32>(),
+            "certificate_parent_test:qualified_proof_digest");
+        (void)proof_digest;
+        PURIFY_ASSIGN_OR_RETURN(
+            descriptor.circuit_precommitment, cursor.array<32>(),
+            "certificate_parent_test:qualified_precommitment");
+        PURIFY_ASSIGN_OR_RETURN(descriptor.nonce_point, cursor.array<33>(),
+                                "certificate_parent_test:qualified_nonce");
+        result.leaves.push_back(descriptor);
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto aggregate_nonce, cursor.array<33>(),
+        "certificate_parent_test:qualified_aggregate_nonce");
+    (void)aggregate_nonce;
+    if (cursor.remaining() != 0) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InvalidFixedSize,
+            "certificate_parent_test:qualified_statement_trailing");
+    }
+    return result;
+}
+
+Result<QualifiedManifestFixture>
+qualified_manifest_fixture(const CertificateNonceParentAccumulator& accumulator,
+                           purify_secp_context* secp_context)
+{
+    PURIFY_ASSIGN_OR_RETURN(const auto witness, read_qualified_witness(),
+                            "certificate_parent_test:qualified_witness");
+    FixtureCursor cursor(witness);
+    constexpr std::array<unsigned char, 16> magic{'P', 'u', 'r', 'i', 'f', 'y',
+                                                  '/', 'C', 'e', 'r', 't', 'J',
+                                                  'W', 'i', 't', '3'};
+    PURIFY_ASSIGN_OR_RETURN(const auto encoded_magic, cursor.array<16>(),
+                            "certificate_parent_test:qualified_magic");
+    PURIFY_ASSIGN_OR_RETURN(const auto raw_generator_digest, cursor.array<32>(),
+                            "certificate_parent_test:qualified_raw_generators");
+    PURIFY_ASSIGN_OR_RETURN(const auto basis_digest, cursor.array<32>(),
+                            "certificate_parent_test:qualified_basis");
+    PURIFY_ASSIGN_OR_RETURN(const auto context_digest, cursor.array<32>(),
+                            "certificate_parent_test:qualified_context");
+    PURIFY_ASSIGN_OR_RETURN(const auto response_count, cursor.u64(),
+                            "certificate_parent_test:qualified_response_count");
+    if (encoded_magic != magic ||
+        raw_generator_digest !=
+            purify::UInt256::from_hex("44ab48d4ab2fdbb95eeed572e9e0a6c4"
+                                      "69dbc1a32116ebd918b487ca5ea60582")
+                .to_bytes_be() ||
+        basis_digest != accumulator.leaves().basis().digest() ||
+        context_digest !=
+            purify::UInt256::from_hex("7bcb06b8538ccc9c79fd2f595bbbee9f"
+                                      "08c0d829a97ccd92fc3175eb379039f5")
+                .to_bytes_be() ||
+        response_count != kQualifiedResponseCount) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BindingMismatch,
+            "certificate_parent_test:qualified_header");
+    }
+
+    std::vector<std::unique_ptr<QualifiedPublicResponse>> responses;
+    responses.reserve(response_count);
+    for (std::uint64_t ordinal = 0; ordinal < response_count; ++ordinal) {
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto statement_size, cursor.u64(),
+            "certificate_parent_test:qualified_statement_size");
+        if (statement_size > cursor.remaining()) {
+            return purify::unexpected_error(
+                purify::ErrorCode::InvalidFixedSize,
+                "certificate_parent_test:qualified_statement_size");
+        }
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto statement,
+            cursor.take(static_cast<std::size_t>(statement_size)),
+            "certificate_parent_test:qualified_statement");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto decoded,
+            decode_qualified_response(statement, context_digest, ordinal,
+                                      secp_context),
+            "certificate_parent_test:qualified_statement");
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto proof_count, cursor.u32(),
+            "certificate_parent_test:qualified_proof_count");
+        if (proof_count != decoded.leaves.size()) {
+            return purify::unexpected_error(
+                purify::ErrorCode::BindingMismatch,
+                "certificate_parent_test:qualified_proof_count");
+        }
+        const auto proof_bytes =
+            static_cast<std::size_t>(proof_count) * kQualifiedMemberProofSize;
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto ignored_proofs, cursor.take(proof_bytes),
+            "certificate_parent_test:qualified_member_proofs");
+        (void)ignored_proofs;
+        PURIFY_ASSIGN_OR_RETURN(
+            auto response,
+            QualifiedPublicResponse::create(std::move(decoded), secp_context),
+            "certificate_parent_test:qualified_public_response");
+        responses.push_back(std::move(response));
+    }
+    if (cursor.remaining() != 0) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InvalidFixedSize,
+            "certificate_parent_test:qualified_witness_trailing");
+    }
+
+    std::vector<CertificateNonceRecursiveResponseView> views;
+    views.reserve(responses.size());
+    for (const auto& response : responses) {
+        views.push_back(response->view());
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto manifest,
+        purify::puresign_plusplus::certificate_nonce_recursive_manifest(
+            accumulator.leaves(), context_digest, views, secp_context),
+        "certificate_parent_test:qualified_manifest");
+
+    responses.front()->first_leaf().leaf_binding.back() ^= 1;
+    views.clear();
+    for (const auto& response : responses) {
+        views.push_back(response->view());
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto changed_manifest,
+        purify::puresign_plusplus::certificate_nonce_recursive_manifest(
+            accumulator.leaves(), context_digest, views, secp_context),
+        "certificate_parent_test:changed_qualified_manifest");
+    return QualifiedManifestFixture{std::move(manifest),
+                                    std::move(changed_manifest)};
+}
+
+#if defined(PURIFY_HAS_CERTIFICATE_PARENT_VERIFIER)
+Result<std::array<unsigned char, purify::puresign_plusplus::
+                                     CertificateParentVerifier::kProofSize>>
+read_qualified_proof(const char* path)
+{
+    using Proof = std::array<
+        unsigned char,
+        purify::puresign_plusplus::CertificateParentVerifier::kProofSize>;
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input.is_open()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::IoOpenFailed,
+            "certificate_parent_test:qualified_proof_open");
+    }
+    if (input.tellg() != static_cast<std::streamoff>(Proof{}.size())) {
+        return purify::unexpected_error(
+            purify::ErrorCode::InvalidFixedSize,
+            "certificate_parent_test:qualified_proof_size");
+    }
+    Proof proof{};
+    input.seekg(0);
+    input.read(reinterpret_cast<char*>(proof.data()),
+               static_cast<std::streamsize>(proof.size()));
+    if (input.gcount() != static_cast<std::streamsize>(proof.size()) ||
+        input.peek() != std::ifstream::traits_type::eof()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::UnexpectedSize,
+            "certificate_parent_test:qualified_proof_read");
+    }
+    std::array<unsigned char, 32> digest{};
+    purify_sha256(digest.data(), proof.data(), proof.size());
+    if (digest != purify::UInt256::from_hex("887eb27a8893078734a57fb497ed9f9aa"
+                                            "dff03803454e419d497f0650727babb")
+                      .to_bytes_be()) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BindingMismatch,
+            "certificate_parent_test:qualified_proof_digest");
+    }
+    return proof;
+}
+#endif
 
 Result<std::pair<FieldElement, Point>> even_secret_and_point(
     FieldElement scalar, purify_secp_context* secp_context)
@@ -544,30 +1069,74 @@ void test_native_certificate_parent(TestContext& ctx)
         changed_manifest->manifest() != public_manifest->manifest(),
         "public certificate manifest binds each leaf descriptor");
 
+    auto qualified = qualified_manifest_fixture(
+        *accumulator, secp.get());
+    expect_ok(ctx, qualified,
+              "qualified public certificate fixture reconstructs");
+    if (!qualified) return;
+    auto qualified_frame = purify::puresign_plusplus::
+        serialize_certificate_parent_public_frame(qualified->manifest);
+    expect_ok(ctx, qualified_frame,
+              "qualified public certificate frame serializes");
+    if (!qualified_frame) return;
+    std::array<unsigned char, 32> qualified_frame_digest{};
+    purify_sha256(
+        qualified_frame_digest.data(), qualified_frame->data(),
+        qualified_frame->size());
+    ctx.expect(
+        qualified_frame_digest ==
+            purify::UInt256::from_hex(
+                "9057d923d70e4b600eb9e7f085a32f4a"
+                "1eb245e6188dde6a0b8147a0ad816196")
+                .to_bytes_be(),
+        "qualified public certificate frame matches qualification");
+    ctx.expect(
+        qualified->changed_manifest.manifest() !=
+            qualified->manifest.manifest(),
+        "qualified public certificate manifest binds every leaf");
+
 #if defined(PURIFY_HAS_CERTIFICATE_PARENT_VERIFIER)
     ctx.expect(
         !purify::puresign_plusplus::CertificateParentVerifier::load(""),
         "certificate verifier rejects an empty artifact path");
     const char* verifier_artifact = std::getenv(
-        "PURIFY_CERTIFICATE_PARENT_VERIFIER_ARTIFACT");
+        "PURIFY_TEST_CERTIFICATE_PARENT_VERIFIER_ARTIFACT");
+    const char* proof_path = std::getenv(
+        "PURIFY_TEST_CERTIFICATE_PARENT_PROOF");
     const bool has_artifact =
         verifier_artifact != nullptr && *verifier_artifact != '\0';
-    if (has_artifact) {
-        std::array<
-            unsigned char,
-            purify::puresign_plusplus::CertificateParentVerifier::
-                kProofSize>
-            invalid_proof{};
+    const bool has_proof =
+        proof_path != nullptr && *proof_path != '\0';
+    ctx.expect(
+        has_artifact == has_proof,
+        "qualified verifier resources are configured together");
+    if (has_artifact && has_proof) {
+        auto proof = read_qualified_proof(proof_path);
+        expect_ok(ctx, proof,
+                  "qualified certificate proof loads and authenticates");
+        if (!proof) return;
         auto verifier = purify::puresign_plusplus::
             CertificateParentVerifier::load(verifier_artifact);
         expect_ok(ctx, verifier,
                   "qualified certificate verifier artifact loads");
         if (!verifier) return;
+        expect_ok(ctx,
+                  verifier->verify(
+                      qualified->manifest, *proof, *accumulator,
+                      secp.get()),
+                  "qualified recursive certificate proof verifies");
         ctx.expect(
             !verifier->verify(
-                *public_manifest, invalid_proof, *accumulator,
+                qualified->changed_manifest, *proof, *accumulator,
                 secp.get()),
-            "recursive verifier rejects an unauthenticated proof");
+            "recursive verifier rejects a changed public manifest");
+        auto changed_proof = *proof;
+        changed_proof.back() ^= 1;
+        ctx.expect(
+            !verifier->verify(
+                qualified->manifest, changed_proof, *accumulator,
+                secp.get()),
+            "recursive verifier rejects a changed proof");
     }
 #endif
 #endif

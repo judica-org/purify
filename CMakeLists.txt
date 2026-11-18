@@ -1077,6 +1077,7 @@ if(PURIFY_BUILD_TESTS)
     target_compile_definitions(purify_tests PRIVATE
         "PURIFY_TEST_CONSTRUCTION_PARENT_WIT4_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_accepted.wit4\""
         "PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_WIT4_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_nondeciding.wit4\""
+        "PURIFY_TEST_CERTIFICATE_PARENT_WITNESS_V3_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/rust/construction-parent/tests/vectors/certificate_joined_witness_v3.bin\""
     )
 
     if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)

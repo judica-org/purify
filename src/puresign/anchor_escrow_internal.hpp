@@ -13,9 +13,9 @@ namespace purify::accountable {
  * a stronger proof capability.
  *
  * This deliberately remains private to the library. Public callers must use
- * either recover_escrowed_anchor(), which verifies the child proof, or a
- * VerifiedConstructionReceipt, which authenticates the same relation through
- * its construction parent.
+ * either recover_distributed_escrowed_anchor(), which verifies the child
+ * proof, or a VerifiedConstructionReceipt, which authenticates the same
+ * relation through its construction parent.
  */
 [[nodiscard]] Result<AnchorPunishmentKey>
 recover_authenticated_anchor_ciphertext(

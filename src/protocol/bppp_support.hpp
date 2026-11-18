@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "bppp_bridge.h"
+#include "byte_io.hpp"
 #include "checked_size.hpp"
 #include "purify/bppp.hpp"
 #include "secure_cleanup.hpp"
@@ -44,6 +45,7 @@ struct SecretNormArgInputs : NormArgInputs {
 };
 
 using ::purify::detail::CheckedSize;
+using ::purify::detail::append_u64_le;
 
 using ::purify::detail::WipeOnDestruction;
 
@@ -80,9 +82,6 @@ std::span<unsigned char> writable_byte_span(std::vector<ByteArray> &values) {
   return {reinterpret_cast<unsigned char *>(bytes.data()), bytes.size()};
 }
 
-/** @brief Returns true when a bridge call signals success. */
-bool require_ok(int ok);
-
 struct ResolvedBpppGeneratorBackend {
   std::span<const unsigned char> serialized_bytes{};
   std::size_t generator_count = 0;
@@ -95,14 +94,6 @@ ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
     purify_secp_context *secp_context);
 
 Result<std::size_t> round_up_power_of_two(std::size_t value);
-
-template <typename Allocator>
-void append_u64_le(std::vector<unsigned char, Allocator> &out,
-                   std::uint64_t value) {
-  for (int i = 0; i < 8; ++i) {
-    out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-  }
-}
 
 Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
                                            const TaggedHash& tag,

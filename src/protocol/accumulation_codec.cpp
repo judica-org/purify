@@ -16,36 +16,13 @@
 
 #include "accumulation_ipa.hpp"
 #include "accumulation_support.hpp"
+#include "byte_io.hpp"
 
 namespace purify::bppp::accumulation {
 
 // Helpers shared between the translation units of this module live in internal.
 using namespace internal;
-
-Result<Bytes> serialize_step(const Basis& basis, const StepProof& proof,
-                             purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.dimension(), proof, context));
-    Bytes out;
-    out.reserve(66 * log2_dimension(basis.dimension()) + 66);
-    out.push_back(1);
-    append_ipa(out, proof);
-    return out;
-}
-
-Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> encoded,
-                             purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    if (encoded.size() != 66 * log2_dimension(basis.dimension()) + 66) {
-        return unexpected_error(ErrorCode::InvalidFixedSize);
-    }
-    if (encoded[0] != 1) {
-        return unexpected_error(ErrorCode::UnsupportedSymbol);
-    }
-    return parse_ipa<StepProof>(
-        basis.dimension(), encoded.subspan(1), context);
-}
+using ::purify::detail::take_bytes;
 
 Result<Bytes> serialize_algebraic_step(
     const Basis& basis, const AlgebraicStepProof& proof,
@@ -75,8 +52,7 @@ Result<AlgebraicStepProof> parse_algebraic_step(
     if (encoded[0] != 2) {
         return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
-    return parse_ipa<AlgebraicStepProof>(
-        basis.dimension(), encoded.subspan(1), context);
+    return parse_ipa(basis.dimension(), encoded.subspan(1), context);
 }
 
 Result<Bytes> serialize_root_claim(const Basis& basis,
@@ -105,18 +81,14 @@ Result<PendingClaim> parse_root_claim(
     }
 
     PointBytes point{};
-    std::copy_n(encoded.begin(), point.size(), point.begin());
+    take_bytes(encoded, point);
     ScalarBytes scalar{};
-    std::copy_n(encoded.begin() + static_cast<std::ptrdiff_t>(point.size()),
-                scalar.size(), scalar.begin());
+    take_bytes(encoded, scalar);
     PURIFY_ASSIGN_OR_RETURN(auto scale, FieldElement::try_from_bytes32(scalar));
     std::vector<FieldElement> factors;
     factors.reserve(factor_count);
-    std::size_t offset = point.size() + scalar.size();
     for (std::size_t i = 0; i < factor_count; ++i) {
-        std::copy_n(encoded.begin() + static_cast<std::ptrdiff_t>(offset),
-                    scalar.size(), scalar.begin());
-        offset += scalar.size();
+        take_bytes(encoded, scalar);
         PURIFY_ASSIGN_OR_RETURN(auto factor,
                                 FieldElement::try_from_bytes32(scalar));
         factors.push_back(factor);
@@ -127,39 +99,6 @@ Result<PendingClaim> parse_root_claim(
     return out;
 }
 
-Result<Bytes> serialize_norm_reduction(const Basis& basis, const NormReductionProof& proof,
-                                       purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation));
-    (void)evaluation;
-    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.l_vec_len(), proof.coefficient_opening, context));
-    Bytes out;
-    out.reserve(66 * log2_dimension(basis.l_vec_len()) + 98);
-    out.push_back(1);
-    append(out, proof.coefficient_evaluation);
-    append_ipa(out, proof.coefficient_opening);
-    return out;
-}
-
-Result<NormReductionProof> parse_norm_reduction(const Basis& basis, std::span<const unsigned char> encoded,
-                                               purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    if (encoded.size() != 66 * log2_dimension(basis.l_vec_len()) + 98) {
-        return unexpected_error(ErrorCode::InvalidFixedSize);
-    }
-    if (encoded[0] != 1) {
-        return unexpected_error(ErrorCode::UnsupportedSymbol);
-    }
-    NormReductionProof proof;
-    std::copy_n(encoded.data() + 1, 32, proof.coefficient_evaluation.begin());
-    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation));
-    (void)evaluation;
-    PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening,
-                            parse_ipa<StepProof>(basis.l_vec_len(), encoded.subspan(33), context));
-    return proof;
-}
-
 Result<Bytes> serialize_algebraic_norm_reduction(
     const Basis& basis,
     const AlgebraicNormReductionProof& proof,
@@ -167,9 +106,8 @@ Result<Bytes> serialize_algebraic_norm_reduction(
     PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.dimension()));
     PURIFY_RETURN_IF_ERROR(validate_algebraic_dimension(basis.l_vec_len()));
-    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(
-                                                 proof.coefficient_evaluation));
-    (void)evaluation;
+    PURIFY_RETURN_IF_ERROR(
+        FieldElement::try_from_bytes32(proof.coefficient_evaluation));
     PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(
         basis.l_vec_len(), proof.coefficient_opening, context));
     Bytes out;
@@ -197,16 +135,12 @@ parse_algebraic_norm_reduction(
         return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
     AlgebraicNormReductionProof proof;
-    std::copy_n(
-        encoded.data() + 1, 32,
-        proof.coefficient_evaluation.begin());
-    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(
-                                                 proof.coefficient_evaluation));
-    (void)evaluation;
+    auto remaining = encoded.subspan(1);
+    take_bytes(remaining, proof.coefficient_evaluation);
+    PURIFY_RETURN_IF_ERROR(
+        FieldElement::try_from_bytes32(proof.coefficient_evaluation));
     PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening,
-                            parse_ipa<AlgebraicStepProof>(basis.l_vec_len(),
-                                                          encoded.subspan(33),
-                                                          context));
+                            parse_ipa(basis.l_vec_len(), remaining, context));
     return proof;
 }
 

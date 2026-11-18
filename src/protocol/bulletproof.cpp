@@ -10,7 +10,9 @@
 #include "purify/bulletproof.hpp"
 #include "purify/secret.hpp"
 #include "bulletproof_internal.hpp"
+#include "bulletproof_circuit_view.hpp"
 #include "bppp_bridge.h"
+#include "byte_io.hpp"
 #include "checked_size.hpp"
 #include "secure_cleanup.hpp"
 
@@ -109,6 +111,10 @@ purify_bulletproof_backend_resources* ExperimentalBulletproofBackendCache::get_o
 }  // namespace purify
 
 namespace {
+
+using ::purify::detail::append_u32_le;
+using ::purify::detail::append_u64_le;
+using ::purify::detail::read_u32_le;
 
 using purify::Expr;
 using purify::ErrorCode;
@@ -234,18 +240,6 @@ Result<FieldElement> evaluate_known(const Expr& expr, const ResolvedValues& valu
     return out;
 }
 
-void append_u32_le(Bytes& out, std::uint32_t value) {
-    for (int i = 0; i < 4; ++i) {
-        out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-    }
-}
-
-void append_u64_le(Bytes& out, std::uint64_t value) {
-    for (int i = 0; i < 8; ++i) {
-        out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-    }
-}
-
 Status append_symbol_digest(Bytes& out, const purify::Symbol& symbol) {
     using SymbolRank = std::underlying_type_t<purify::SymbolKind>;
     append_u64_le(out, static_cast<std::uint64_t>(static_cast<SymbolRank>(symbol.kind)));
@@ -267,17 +261,6 @@ Status append_expr_digest(Bytes& out, const purify::Expr& expr) {
     return {};
 }
 
-std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes, std::size_t offset) {
-    std::uint32_t value = 0;
-    if (offset > bytes.size() || bytes.size() - offset < 4) {
-        return std::nullopt;
-    }
-    for (int i = 0; i < 4; ++i) {
-        value |= static_cast<std::uint32_t>(bytes[offset + i]) << (8 * i);
-    }
-    return value;
-}
-
 Bytes flatten_scalars32(std::span<const FieldElement> values) {
     Bytes out;
     best_effort_reserve_mul(out, values.size(), 32);
@@ -289,7 +272,7 @@ Bytes flatten_scalars32(std::span<const FieldElement> values) {
 }
 
 template <typename RowEntriesFn>
-Status append_row_family_digest_generic(Bytes& out, std::size_t row_count, const RowEntriesFn& row_entries) {
+Status append_row_family_digest(Bytes& out, std::size_t row_count, const RowEntriesFn& row_entries) {
     PURIFY_ASSIGN_OR_RETURN(const auto& encoded_row_count, narrow_size_to_u64(row_count));
     append_u64_le(out, encoded_row_count);
     for (std::size_t i = 0; i < row_count; ++i) {
@@ -306,81 +289,30 @@ Status append_row_family_digest_generic(Bytes& out, std::size_t row_count, const
     return {};
 }
 
-Result<Bytes> circuit_binding_digest(const purify::NativeBulletproofCircuit& circuit,
-                                     std::span<const unsigned char> statement_binding) {
+template <typename Circuit>
+Result<Bytes> circuit_binding_digest(const Circuit& circuit, std::span<const unsigned char> statement_binding) {
     static const purify::TaggedHash kCircuitBindingTag("Purify/ExperimentalBulletproof/CircuitV1");
     if (!circuit.has_valid_shape()) {
         return unexpected_error(ErrorCode::InvalidDimensions);
     }
+    const auto view = purify::detail::circuit_view(circuit);
     std::size_t reserve_size = 0;
-    if (!(CheckedSize(circuit.c.size()) * 32 + 64).store(reserve_size)) {
+    if (!(CheckedSize(view.constants.size()) * 32 + 64).store(reserve_size)) {
         return unexpected_error(ErrorCode::Overflow);
     }
 
     Bytes serialized;
     serialized.reserve(reserve_size);
-    PURIFY_ASSIGN_OR_RETURN(const auto& encoded_n_gates, narrow_size_to_u64(circuit.n_gates));
-    PURIFY_ASSIGN_OR_RETURN(const auto& encoded_n_commitments, narrow_size_to_u64(circuit.n_commitments));
-    PURIFY_ASSIGN_OR_RETURN(const auto& encoded_n_bits, narrow_size_to_u64(circuit.n_bits));
-    PURIFY_ASSIGN_OR_RETURN(const auto& encoded_constant_count, narrow_size_to_u64(circuit.c.size()));
-    append_u64_le(serialized, encoded_n_gates);
-    append_u64_le(serialized, encoded_n_commitments);
-    append_u64_le(serialized, encoded_n_bits);
-    append_u64_le(serialized, encoded_constant_count);
-    PURIFY_RETURN_IF_ERROR(append_row_family_digest_generic(serialized, circuit.wl.size(), [&](std::size_t i) {
-        return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wl[i].entries);
-    }));
-    PURIFY_RETURN_IF_ERROR(append_row_family_digest_generic(serialized, circuit.wr.size(), [&](std::size_t i) {
-        return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wr[i].entries);
-    }));
-    PURIFY_RETURN_IF_ERROR(append_row_family_digest_generic(serialized, circuit.wo.size(), [&](std::size_t i) {
-        return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wo[i].entries);
-    }));
-    PURIFY_RETURN_IF_ERROR(append_row_family_digest_generic(serialized, circuit.wv.size(), [&](std::size_t i) {
-        return std::span<const purify::NativeBulletproofCircuitTerm>(circuit.wv[i].entries);
-    }));
-    for (const FieldElement& constant : circuit.c) {
-        auto bytes = constant.to_bytes_be();
-        serialized.insert(serialized.end(), bytes.begin(), bytes.end());
+    for (const std::size_t size : {view.gate_count, view.commitment_count, view.bit_count, view.constants.size()}) {
+        PURIFY_ASSIGN_OR_RETURN(const auto encoded_size, narrow_size_to_u64(size));
+        append_u64_le(serialized, encoded_size);
     }
-    PURIFY_ASSIGN_OR_RETURN(const auto& encoded_binding_size, narrow_size_to_u64(statement_binding.size()));
-    append_u64_le(serialized, encoded_binding_size);
-    serialized.insert(serialized.end(), statement_binding.begin(), statement_binding.end());
-    std::array<unsigned char, 32> digest =
-        kCircuitBindingTag.digest(std::span<const unsigned char>(serialized.data(), serialized.size()));
-    return Bytes(digest.begin(), digest.end());
-}
-
-Result<Bytes> circuit_binding_digest(const PackedCircuit& circuit, std::span<const unsigned char> statement_binding) {
-    static const purify::TaggedHash kCircuitBindingTag("Purify/ExperimentalBulletproof/CircuitV1");
-    if (!circuit.has_valid_shape()) {
-        return unexpected_error(ErrorCode::InvalidDimensions);
-    }
-    std::size_t reserve_size = 0;
-    if (!(CheckedSize(circuit.constraint_count()) * 32 + 64).store(reserve_size)) {
-        return unexpected_error(ErrorCode::Overflow);
-    }
-
-    Bytes serialized;
-    serialized.reserve(reserve_size);
-    PURIFY_ASSIGN_OR_RETURN(const auto& encoded_n_gates, narrow_size_to_u64(circuit.n_gates()));
-    PURIFY_ASSIGN_OR_RETURN(const auto& encoded_n_commitments, narrow_size_to_u64(circuit.n_commitments()));
-    PURIFY_ASSIGN_OR_RETURN(const auto& encoded_n_bits, narrow_size_to_u64(circuit.n_bits()));
-    PURIFY_ASSIGN_OR_RETURN(const auto& encoded_constraint_count, narrow_size_to_u64(circuit.constraint_count()));
-    append_u64_le(serialized, encoded_n_gates);
-    append_u64_le(serialized, encoded_n_commitments);
-    append_u64_le(serialized, encoded_n_bits);
-    append_u64_le(serialized, encoded_constraint_count);
-    PURIFY_RETURN_IF_ERROR(append_row_family_digest_generic(
-        serialized, circuit.n_gates(), [&](std::size_t i) { return circuit.left_row(i).entries_view(); }));
-    PURIFY_RETURN_IF_ERROR(append_row_family_digest_generic(
-        serialized, circuit.n_gates(), [&](std::size_t i) { return circuit.right_row(i).entries_view(); }));
-    PURIFY_RETURN_IF_ERROR(append_row_family_digest_generic(
-        serialized, circuit.n_gates(), [&](std::size_t i) { return circuit.output_row(i).entries_view(); }));
-    PURIFY_RETURN_IF_ERROR(append_row_family_digest_generic(
-        serialized, circuit.n_commitments(), [&](std::size_t i) { return circuit.commitment_row(i).entries_view(); }));
-    for (const FieldElement& constant : circuit.constants()) {
-        auto bytes = constant.to_bytes_be();
+    PURIFY_RETURN_IF_ERROR(append_row_family_digest(serialized, view.gate_count, view.left_entries));
+    PURIFY_RETURN_IF_ERROR(append_row_family_digest(serialized, view.gate_count, view.right_entries));
+    PURIFY_RETURN_IF_ERROR(append_row_family_digest(serialized, view.gate_count, view.output_entries));
+    PURIFY_RETURN_IF_ERROR(append_row_family_digest(serialized, view.commitment_count, view.commitment_entries));
+    for (const FieldElement& constant : view.constants) {
+        const auto bytes = constant.to_bytes_be();
         serialized.insert(serialized.end(), bytes.begin(), bytes.end());
     }
     PURIFY_ASSIGN_OR_RETURN(const auto& encoded_binding_size, narrow_size_to_u64(statement_binding.size()));
@@ -810,16 +742,6 @@ Result<Bytes> BulletproofAssignmentData::serialize() const {
 
     Bytes out;
     out.reserve(serialized_size);
-    auto append_u32_le = [&](std::uint32_t value) {
-        for (int i = 0; i < 4; ++i) {
-            out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-        }
-    };
-    auto append_u64_le = [&](std::uint64_t value) {
-        for (int i = 0; i < 8; ++i) {
-            out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-        }
-    };
     auto write_column = [&](std::span<const FieldElement> column) {
         for (const FieldElement& value : column) {
             out.push_back(static_cast<unsigned char>(0x20));
@@ -828,9 +750,9 @@ Result<Bytes> BulletproofAssignmentData::serialize() const {
         }
     };
 
-    append_u32_le(1);
-    append_u32_le(static_cast<std::uint32_t>(commitments.size()));
-    append_u64_le(static_cast<std::uint64_t>(left.size()));
+    append_u32_le(out, 1);
+    append_u32_le(out, static_cast<std::uint32_t>(commitments.size()));
+    append_u64_le(out, static_cast<std::uint64_t>(left.size()));
     write_column(left);
     write_column(right);
     write_column(output);

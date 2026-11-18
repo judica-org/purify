@@ -16,6 +16,7 @@
 
 #include "accumulation_support.hpp"
 #include "bppp_bridge.h"
+#include "byte_io.hpp"
 #include "purify/accumulation.hpp"
 #include "sha256_transcript.hpp"
 
@@ -23,9 +24,9 @@ namespace purify::bppp::accumulation {
 
 namespace internal {
 
-template <typename Proof>
-Status validate_ipa_encoding(std::size_t dimension, const Proof& proof,
-                             purify_secp_context* context) {
+inline Status validate_ipa_encoding(std::size_t dimension,
+                                    const AlgebraicStepProof& proof,
+                                    purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context));
     if (!is_power_of_two_size(dimension)) {
         return unexpected_error(ErrorCode::InvalidDimensions);
@@ -34,8 +35,7 @@ Status validate_ipa_encoding(std::size_t dimension, const Proof& proof,
     if (proof.left.size() != rounds || proof.right.size() != rounds) {
         return unexpected_error(ErrorCode::SizeMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar));
-    (void)terminal;
+    PURIFY_RETURN_IF_ERROR(FieldElement::try_from_bytes32(proof.terminal_scalar));
     const auto is_canonical_point = [](const PointBytes& point) {
         return purify_bppp_public_point_validate(point.data()) != 0;
     };
@@ -51,8 +51,7 @@ Status validate_ipa_encoding(std::size_t dimension, const Proof& proof,
     return {};
 }
 
-template <typename Proof>
-void append_ipa(Bytes& out, const Proof& proof) {
+inline void append_ipa(Bytes& out, const AlgebraicStepProof& proof) {
     for (std::size_t round = 0; round < proof.left.size(); ++round) {
         append(out, proof.left[round]);
         append(out, proof.right[round]);
@@ -61,48 +60,33 @@ void append_ipa(Bytes& out, const Proof& proof) {
     append(out, proof.folded_generator);
 }
 
-template <typename Proof>
-Result<Proof> parse_ipa(std::size_t dimension,
-                       std::span<const unsigned char> encoded,
-                       purify_secp_context* context) {
+inline Result<AlgebraicStepProof> parse_ipa(
+    std::size_t dimension, std::span<const unsigned char> encoded,
+    purify_secp_context* context) {
     const auto rounds = log2_dimension(dimension);
     if (encoded.size() != 66 * rounds + 65) {
         return unexpected_error(ErrorCode::InvalidFixedSize);
     }
-    Proof proof;
+    AlgebraicStepProof proof;
     proof.left.resize(rounds);
     proof.right.resize(rounds);
-    std::size_t offset = 0;
+    using ::purify::detail::take_bytes;
     for (std::size_t round = 0; round < rounds; ++round) {
-        std::copy_n(encoded.data() + offset, 33, proof.left[round].begin());
-        offset += 33;
-        std::copy_n(encoded.data() + offset, 33, proof.right[round].begin());
-        offset += 33;
+        take_bytes(encoded, proof.left[round]);
+        take_bytes(encoded, proof.right[round]);
     }
-    std::copy_n(encoded.data() + offset, 32, proof.terminal_scalar.begin());
-    offset += 32;
-    std::copy_n(encoded.data() + offset, 33, proof.folded_generator.begin());
+    take_bytes(encoded, proof.terminal_scalar);
+    take_bytes(encoded, proof.folded_generator);
     PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(dimension, proof, context));
     return proof;
 }
 
 PolynomialTerm geometric_tensor(const FieldElement& x, std::size_t dimension);
 
-Result<StepProof> prove_ipa(
-    std::span<const PointBytes> basis, std::vector<FieldElement> a,
-    const PolynomialTerm& weights, const PointBytes& opening_base,
-    Digest transcript, purify_secp_context* context);
-
 struct IpaVerification {
     PolynomialTerm folded;
     PointBytes residual;
 };
-
-Result<PolynomialTerm> verify_ipa(
-    std::size_t dimension, const StepProof& proof,
-    const PolynomialTerm& weights, const PointBytes& commitment,
-    const FieldElement& evaluation, const PointBytes& opening_base,
-    Digest transcript, purify_secp_context* context);
 
 Result<AlgebraicStepProof> prove_algebraic_ipa(
     std::span<const PointBytes> basis, std::vector<FieldElement> a,

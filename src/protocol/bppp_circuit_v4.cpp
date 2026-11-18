@@ -279,7 +279,7 @@ candidate::prepare_circuit_zk_norm_arg_v4_impl(
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
-    bool externalize_commitments, ExperimentalCircuitBackend *cache) {
+    bool externalize_commitments, ExperimentalCircuitBackend *) {
   PURIFY_RETURN_IF_ERROR(validate_circuit_proof_v4_inputs(
       circuit, public_commitments, secp_context, externalize_commitments));
   if (publication.proof.norm_proof.empty()) {
@@ -315,7 +315,7 @@ candidate::prepare_circuit_zk_norm_arg_v4_impl(
                           build_circuit_norm_arg_public_data(
                               circuit, statement_binding,
                               publication.proof.raw_commitment, secp_context,
-                              externalize_commitments, cache, &challenges));
+                              externalize_commitments, &challenges));
   if (generator_backend_cache_key(public_data->raw_generators) !=
       raw_generator_digest) {
     return unexpected_error(ErrorCode::InternalMismatch);
@@ -531,7 +531,7 @@ derive_circuit_norm_parent_constants_v4_impl(
   PURIFY_ASSIGN_OR_RETURN(
       const auto public_data,
       build_circuit_norm_arg_public_data_from_challenges(
-          circuit, secp_context, true, nullptr, challenges));
+          circuit, secp_context, true, challenges));
   if (generator_backend_cache_key(public_data->raw_generators) !=
       raw_generator_digest) {
     return unexpected_error(ErrorCode::InternalMismatch);

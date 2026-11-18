@@ -355,9 +355,7 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
     const PointBytes *raw_commitment,
     purify_secp_context *secp_context,
     bool externalize_commitments = false,
-    ExperimentalCircuitBackend *cache = nullptr,
     const CircuitNormArgChallenges *explicit_challenges = nullptr) {
-  (void)cache;
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   if (!circuit.has_valid_shape()) {
     return unexpected_error(ErrorCode::InvalidDimensions);
@@ -394,21 +392,19 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
     const PointBytes &raw_commitment,
     purify_secp_context *secp_context,
     bool externalize_commitments,
-    ExperimentalCircuitBackend *cache,
     const CircuitNormArgChallenges *explicit_challenges) {
   return build_circuit_norm_arg_public_data_impl(
       circuit, statement_binding, &raw_commitment, secp_context,
-      externalize_commitments, cache, explicit_challenges);
+      externalize_commitments, explicit_challenges);
 }
 
 Result<CircuitNormArgPublicDataPtr>
 build_circuit_norm_arg_public_data_from_challenges(
     const NativeBulletproofCircuit &circuit,
     purify_secp_context *secp_context, bool externalize_commitments,
-    ExperimentalCircuitBackend *cache,
     const CircuitNormArgChallenges &explicit_challenges) {
   return build_circuit_norm_arg_public_data_impl(
-      circuit, {}, nullptr, secp_context, externalize_commitments, cache,
+      circuit, {}, nullptr, secp_context, externalize_commitments,
       &explicit_challenges);
 }
 
@@ -419,7 +415,6 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments,
-    ExperimentalCircuitBackend *cache,
     const CircuitNormArgChallenges *explicit_challenges) {
   if (assignment.left.size() != circuit.n_gates ||
       assignment.right.size() != circuit.n_gates ||
@@ -431,7 +426,7 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
   PURIFY_ASSIGN_OR_RETURN(const auto &public_data,
                           build_circuit_norm_arg_public_data(
                               circuit, statement_binding, raw_commitment,
-                              secp_context, externalize_commitments, cache,
+                              secp_context, externalize_commitments,
                               explicit_challenges));
 
   CircuitNormArgReduction out;

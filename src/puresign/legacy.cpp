@@ -19,11 +19,15 @@
 #include <optional>
 
 #include "bulletproof_internal.hpp"
+#include "byte_io.hpp"
 #include "checked_size.hpp"
 #include "detail/core_impl.hpp"
 #include "purify/bppp.hpp"
 
 namespace purify::puresign {
+
+using ::purify::detail::append_u32_le;
+using ::purify::detail::read_u32_le;
 
 struct Backend::Ops {
     static constexpr std::string_view kMessageProofTag = "PureSign/Proof/Message/V1";
@@ -66,27 +70,6 @@ struct Backend::Ops {
                                                           secp_context);
     }
 };
-
-namespace {
-
-void append_u32_le(Bytes& out, std::uint32_t value) {
-    for (int i = 0; i < 4; ++i) {
-        out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-    }
-}
-
-std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes, std::size_t offset) {
-    std::uint32_t value = 0;
-    if (offset > bytes.size() || bytes.size() - offset < 4) {
-        return std::nullopt;
-    }
-    for (int i = 0; i < 4; ++i) {
-        value |= static_cast<std::uint32_t>(bytes[offset + i]) << (8 * i);
-    }
-    return value;
-}
-
-}  // namespace
 
 Result<Bytes> NonceProof::serialize(purify_secp_context* secp_context) const {
     PURIFY_ASSIGN_OR_RETURN(auto match, Backend::Ops::matches_nonce(*this, secp_context));

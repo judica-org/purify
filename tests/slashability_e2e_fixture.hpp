@@ -18,8 +18,6 @@ namespace purify_test::slashability {
 
 struct CoalitionFixture {
     purify::accountable::NonceHostBoundSigningRoster registry_roster;
-    purify::accountable::RecoveryBoundSigningRoster recovery_roster;
-    purify::accountable::RecoveryRootSetupProof setup_proof;
     purify::accountable::CoalitionFormation formation;
     std::vector<purify::accountable::RecoveryRootContribution>
         contributions;

@@ -11,6 +11,7 @@
 
 #include "purify/api.hpp"
 #include "purify/bppp.hpp"
+#include "purify/detail/circuit_zk_norm_arg_proof_v4.hpp"
 #include "purify/puresign/accountable_roster.hpp"
 
 namespace purify::accountable {
@@ -106,7 +107,8 @@ class AnchorEscrowRecord {
 public:
     static constexpr unsigned char kSerializationVersion = 4;
     static constexpr std::size_t kNormProofSize = 974;
-    static constexpr std::size_t kProofPayloadSize = 1136;
+    static constexpr std::size_t kProofPayloadSize =
+        bppp::candidate::CircuitZkNormArgProofV4::kPrefixSize + kNormProofSize;
     static constexpr std::size_t kSerializedSize =
         1 + AnchorEscrowCiphertext::kSerializedSize + kProofPayloadSize;
 
@@ -132,12 +134,7 @@ private:
         purify_secp_context* secp_context) const;
 
     AnchorEscrowCiphertext ciphertext_{};
-    bppp::PointBytes raw_commitment_{};
-    bppp::PointBytes mask_commitment_{};
-    bppp::ScalarBytes t2_{};
-    std::array<unsigned char, 32> public_commitment_dlog_nonce_{};
-    bppp::ScalarBytes public_commitment_dlog_response_{};
-    Bytes norm_proof_;
+    bppp::candidate::CircuitZkNormArgProofV4 proof_;
 
     friend Result<AnchorEscrowRecord> create_anchor_escrow(
         const RecoveryBoundSigningRoster&, const UInt512&,
@@ -158,11 +155,7 @@ private:
     friend class ConstructionLeafAccumulator;
 };
 
-static_assert(AnchorEscrowRecord::kProofPayloadSize ==
-              2 * bppp::PointBytes{}.size() +
-                  2 * bppp::ScalarBytes{}.size() +
-                  std::array<unsigned char, 32>{}.size() +
-                  AnchorEscrowRecord::kNormProofSize);
+static_assert(AnchorEscrowRecord::kProofPayloadSize == 1136);
 static_assert(AnchorEscrowRecord::kSerializedSize == 1233);
 
 /**
@@ -187,25 +180,6 @@ static_assert(AnchorEscrowRecord::kSerializedSize == 1233);
 /** Verify the exact public statement carried by an anchor escrow. */
 [[nodiscard]] Result<bool> verify_anchor_escrow(
     const RecoveryBoundSigningRoster& roster,
-    const UInt512& advertised_anchor_root,
-    const AnchorPunishmentPublicKey& punishment_key,
-    const AnchorEscrowContextDigest& context_digest,
-    const AnchorEscrowRecord& record,
-    purify_secp_context* secp_context,
-    bppp::ExperimentalCircuitBackend* cache = nullptr);
-
-/**
- * After a coalition scalar is exposed, recover the anchor punishment key.
- *
- * This centralized path first checks that the scalar recovers the roster's
- * registered root, then verifies the escrow proof, decrypts the punishment
- * scalar, and checks its normalized even-Y BIP340 key against the exact
- * advertised punishment key. Distributed receipts use the separately typed
- * aggregate-bound recovery operation below.
- */
-[[nodiscard]] Result<AnchorPunishmentKey> recover_escrowed_anchor(
-    const RecoveryBoundSigningRoster& roster,
-    const FieldElement& exposed_signing_scalar,
     const UInt512& advertised_anchor_root,
     const AnchorPunishmentPublicKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,

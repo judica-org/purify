@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "bulletproof_circuit_view.hpp"
 #include "checked_size.hpp"
 #include "secure_cleanup.hpp"
 
@@ -36,6 +37,54 @@ using ::purify::detail::WipeOnDestruction;
 
 bool packed_row_count(std::size_t n_gates, std::size_t n_commitments, std::size_t& out) {
     return (CheckedSize(n_gates) * 3 + n_commitments).store(out);
+}
+
+template <bool Negate = false, typename RowEntries>
+void accumulate_circuit_rows(std::span<purify::FieldElement> sums,
+                             std::span<const purify::FieldElement> values,
+                             const RowEntries& row_entries) {
+    const auto add_row = [&](std::size_t i, const purify::FieldElement& value) {
+        for (const auto& entry : row_entries(i)) {
+            sums[entry.idx] = sums[entry.idx] + entry.scalar * value;
+        }
+    };
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if constexpr (Negate) {
+            auto negated = values[i].negate();
+            WipeOnDestruction wipe(negated);
+            add_row(i, negated);
+        } else {
+            add_row(i, values[i]);
+        }
+    }
+}
+
+template <typename Circuit>
+bool evaluate_circuit(const Circuit& circuit, const purify::BulletproofAssignmentData& assignment) {
+    if (!circuit.has_valid_shape()) {
+        return false;
+    }
+    const auto view = purify::detail::circuit_view(circuit);
+    if (assignment.left.size() != view.gate_count
+        || assignment.right.size() != view.gate_count
+        || assignment.output.size() != view.gate_count
+        || assignment.commitments.size() != view.commitment_count) {
+        return false;
+    }
+    for (std::size_t i = 0; i < view.gate_count; ++i) {
+        if (assignment.left[i] * assignment.right[i] != assignment.output[i]) {
+            return false;
+        }
+    }
+
+    // Shape validation already checked each sparse constraint index.
+    purify::detail::SecretVector<purify::FieldElement> sums(view.constants.size(), purify::FieldElement::zero());
+    accumulate_circuit_rows(sums, assignment.left, view.left_entries);
+    accumulate_circuit_rows(sums, assignment.right, view.right_entries);
+    accumulate_circuit_rows(sums, assignment.output, view.output_entries);
+    // Commitment coefficients are stored negated in both circuit layouts.
+    accumulate_circuit_rows<true>(sums, assignment.commitments, view.commitment_entries);
+    return std::equal(sums.begin(), sums.end(), view.constants.begin());
 }
 
 }  // namespace
@@ -108,63 +157,7 @@ void NativeBulletproofCircuit::add_commitment_term(std::size_t commitment_idx, s
 }
 
 bool NativeBulletproofCircuit::evaluate(const BulletproofAssignmentData& assignment) const {
-    if (!has_valid_shape()) {
-        return false;
-    }
-    if (assignment.left.size() != n_gates || assignment.right.size() != n_gates || assignment.output.size() != n_gates) {
-        return false;
-    }
-    if (assignment.commitments.size() != n_commitments) {
-        return false;
-    }
-
-    for (std::size_t i = 0; i < n_gates; ++i) {
-        if (assignment.left[i] * assignment.right[i] != assignment.output[i]) {
-            return false;
-        }
-    }
-
-    purify::detail::SecretVector<FieldElement> acc(c.size(), FieldElement::zero());
-    auto accumulate = [&](const std::vector<NativeBulletproofCircuitRow>& rows,
-                          std::span<const FieldElement> values,
-                          bool negate_values = false) {
-        if (rows.size() != values.size()) {
-            return false;
-        }
-        for (std::size_t i = 0; i < rows.size(); ++i) {
-            if (negate_values) {
-                FieldElement negated = values[i].negate();
-                WipeOnDestruction negated_wiper(negated);
-                for (const NativeBulletproofCircuitTerm& entry : rows[i].entries) {
-                    if (entry.idx >= acc.size()) {
-                        return false;
-                    }
-                    acc[entry.idx] = acc[entry.idx] + entry.scalar * negated;
-                }
-                continue;
-            }
-            for (const NativeBulletproofCircuitTerm& entry : rows[i].entries) {
-                if (entry.idx >= acc.size()) {
-                    return false;
-                }
-                acc[entry.idx] = acc[entry.idx] + entry.scalar * values[i];
-            }
-        }
-        return true;
-    };
-    if (!accumulate(wl, assignment.left) || !accumulate(wr, assignment.right) || !accumulate(wo, assignment.output)) {
-        return false;
-    }
-    if (!accumulate(wv, assignment.commitments, true)) {
-        return false;
-    }
-
-    for (std::size_t i = 0; i < c.size(); ++i) {
-        if (acc[i] != c[i]) {
-            return false;
-        }
-    }
-    return true;
+    return evaluate_circuit(*this, assignment);
 }
 
 void NativeBulletproofCircuit::add_row_term(std::vector<NativeBulletproofCircuitRow>& rows, std::size_t expected_size,
@@ -511,59 +504,7 @@ std::span<const FieldElement> NativeBulletproofCircuit::PackedWithSlack::constan
 }
 
 bool NativeBulletproofCircuit::PackedWithSlack::evaluate(const BulletproofAssignmentData& assignment) const {
-    if (!has_valid_shape()) {
-        return false;
-    }
-    if (assignment.left.size() != n_gates_ || assignment.right.size() != n_gates_ || assignment.output.size() != n_gates_) {
-        return false;
-    }
-    if (assignment.commitments.size() != n_commitments_) {
-        return false;
-    }
-    for (std::size_t i = 0; i < n_gates_; ++i) {
-        if (assignment.left[i] * assignment.right[i] != assignment.output[i]) {
-            return false;
-        }
-    }
-
-    purify::detail::SecretVector<FieldElement> acc(constraint_size_, FieldElement::zero());
-    const NativeBulletproofCircuitTerm* all_terms = term_data();
-    auto accumulate = [&](RowFamily family, std::size_t row_count,
-                          std::span<const FieldElement> values,
-                          bool negate_values = false) {
-        if (values.size() != row_count) {
-            return false;
-        }
-        for (std::size_t i = 0; i < row_count; ++i) {
-            const PackedRowHeader& header = row_header(family, i);
-            FieldElement factor = negate_values ? values[i].negate() : values[i];
-            WipeOnDestruction factor_wiper(factor);
-            if (header.size == 0) {
-                continue;
-            }
-            const NativeBulletproofCircuitTerm* row_terms = all_terms + header.offset;
-            for (std::size_t j = 0; j < header.size; ++j) {
-                const NativeBulletproofCircuitTerm& entry = row_terms[j];
-                if (entry.idx >= acc.size()) {
-                    return false;
-                }
-                acc[entry.idx] = acc[entry.idx] + (entry.scalar * factor);
-            }
-        }
-        return true;
-    };
-    if (!accumulate(RowFamily::Left, n_gates_, assignment.left)
-        || !accumulate(RowFamily::Right, n_gates_, assignment.right)
-        || !accumulate(RowFamily::Output, n_gates_, assignment.output)
-        || !accumulate(RowFamily::Commitment, n_commitments_, assignment.commitments, true)) {
-        return false;
-    }
-    for (std::size_t i = 0; i < constraint_size_; ++i) {
-        if (acc[i] != constant_data()[i]) {
-            return false;
-        }
-    }
-    return true;
+    return evaluate_circuit(*this, assignment);
 }
 
 Result<NativeBulletproofCircuit> NativeBulletproofCircuit::PackedWithSlack::unpack() const {

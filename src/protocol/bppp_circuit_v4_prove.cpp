@@ -192,18 +192,18 @@ Result<SecretBytes> derive_prover_seed_v4(
 
 /** The prover seed followed by the precommitment: the seed of the mask vectors. */
 Result<SecretBytes> derive_mask_seed_v4(const SecretBytes &seed,
-                                        const ScalarBytes &precommitment_bytes) {
-std::size_t mask_seed_size = 0;
-if (!(CheckedSize(seed.size()) + precommitment_bytes.size())
-         .store(mask_seed_size)) {
-  return unexpected_error(ErrorCode::Overflow);
-}
-SecretBytes mask_seed;
-mask_seed.reserve(mask_seed_size);
-mask_seed.insert(mask_seed.end(), seed.begin(), seed.end());
-mask_seed.insert(mask_seed.end(), precommitment_bytes.begin(),
-                 precommitment_bytes.end());
-assert(mask_seed.size() == mask_seed_size);
+                                       const ScalarBytes &precommitment_bytes) {
+  std::size_t mask_seed_size = 0;
+  if (!(CheckedSize(seed.size()) + precommitment_bytes.size())
+           .store(mask_seed_size)) {
+    return unexpected_error(ErrorCode::Overflow);
+  }
+  SecretBytes mask_seed;
+  mask_seed.reserve(mask_seed_size);
+  mask_seed.insert(mask_seed.end(), seed.begin(), seed.end());
+  mask_seed.insert(mask_seed.end(), precommitment_bytes.begin(),
+                   precommitment_bytes.end());
+  assert(mask_seed.size() == mask_seed_size);
   return mask_seed;
 }
 
@@ -267,7 +267,7 @@ attempt_circuit_zk_norm_arg_v4(const ProverRunV4 &run, std::uint64_t attempt) {
                           reduce_experimental_circuit_to_norm_arg(
                               circuit, assignment, *raw_commitment,
                               secp_context, statement_binding,
-                              externalize_commitments, cache, &challenges));
+                              externalize_commitments, &challenges));
   if (generator_backend_cache_key(hidden.public_data->raw_generators) !=
       raw_generator_digest) {
     return unexpected_error(ErrorCode::InternalMismatch);

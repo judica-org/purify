@@ -32,77 +32,11 @@ using namespace internal;
 namespace {
 
 const TaggedHash kBasisHash("Purify/BPPP/NormAccumBasisV2");
-const TaggedHash kClaimsHash("Purify/BPPP/AccumClaimsV1");
-const TaggedHash kBatchHash("Purify/BPPP/AccumBatchV1");
-const TaggedHash kEvaluationHash("Purify/BPPP/AccumEvaluationV1");
-const TaggedHash kOpeningBaseHash("Purify/BPPP/AccumOpeningBaseV1");
-const TaggedHash kOpeningHash("Purify/BPPP/AccumOpeningV1");
 
 constexpr std::size_t kMaxAlgebraicClaims = 1024;
 
 constexpr std::string_view kAlgebraicStepDomain =
     "Purify/BPPP/CandidateAccumStep/v1";
-
-struct StepContext {
-    FieldElement beta;
-    FieldElement x;
-    FieldElement y;
-    PointBytes commitment;
-    PointBytes opening_base;
-    Digest transcript;
-};
-
-Result<StepContext> make_step_context(const Basis& basis, std::span<const PendingClaim> claims,
-                                      purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    if (claims.empty()) {
-        return unexpected_error(ErrorCode::EmptyInput);
-    }
-    Bytes encoded;
-    append(encoded, basis.digest());
-    append_size(encoded, claims.size());
-    for (const auto& claim : claims) {
-        PURIFY_RETURN_IF_ERROR(validate_claim(basis, claim));
-        append(encoded, claim.point());
-        append_polynomial(encoded, claim.polynomial());
-    }
-    const auto claims_digest = kClaimsHash.digest(encoded);
-    StepContext out;
-    PURIFY_ASSIGN_OR_RETURN(out.beta, challenge(kBatchHash, claims_digest));
-    std::vector<PointBytes> commitments;
-    std::vector<FieldElement> weights;
-    commitments.reserve(claims.size());
-    weights.reserve(claims.size());
-    auto weight = FieldElement::one();
-    for (const auto& claim : claims) {
-        commitments.push_back(claim.point());
-        weights.push_back(weight);
-        weight = weight * out.beta;
-    }
-    PURIFY_ASSIGN_OR_RETURN(out.commitment, msm(commitments, weights, context));
-    encoded.clear();
-    append(encoded, claims_digest);
-    append(encoded, out.beta.to_bytes_be());
-    append(encoded, out.commitment);
-    PURIFY_ASSIGN_OR_RETURN(out.x, challenge(kEvaluationHash, encoded));
-    out.y = FieldElement::zero();
-    for (std::size_t i = 0; i < claims.size(); ++i) {
-        out.y = out.y + weights[i] * evaluate(claims[i].polynomial(), out.x);
-    }
-    append(encoded, out.x.to_bytes_be());
-    append(encoded, out.y.to_bytes_be());
-    // This independent generator is chosen AFTER the claimed evaluation is
-    // fixed. Hash-to-scalar times the standard generator is not a substitute.
-    const auto opening_seed = kOpeningBaseHash.digest(encoded);
-    if (purify_bppp_public_hash_to_point(context, opening_seed.data(), opening_seed.size(),
-                                        out.opening_base.data()) == 0) {
-        return unexpected_error(ErrorCode::BackendRejectedInput);
-    }
-    append(encoded, out.opening_base);
-    out.transcript = kOpeningHash.digest(encoded);
-    return out;
-}
 
 struct AlgebraicStepContext {
     FieldElement beta;
@@ -215,42 +149,6 @@ Result<Basis> Basis::create(std::size_t n_vec_len, std::size_t l_vec_len,
     return out;
 }
 
-Result<StepProof> prove_step(const Basis& basis, std::span<const PendingClaim> claims,
-                             purify_secp_context* context) {
-    PURIFY_ASSIGN_OR_RETURN(auto state, make_step_context(basis, claims, context));
-    std::vector<FieldElement> a(basis.dimension(), FieldElement::zero());
-    auto weight = FieldElement::one();
-    for (const auto& claim : claims) {
-        add_coefficients(a, claim.polynomial(), weight);
-        weight = weight * state.beta;
-    }
-    const auto weights = geometric_tensor(state.x, basis.dimension());
-    PURIFY_ASSIGN_OR_RETURN(
-        auto proof, prove_ipa(basis.points(), std::move(a), weights, state.opening_base, state.transcript, context));
-    // Check the aggregated short equation before returning a generated proof.
-    // This needs no additional fixed-basis MSM; batching is probabilistic.
-    PURIFY_ASSIGN_OR_RETURN(auto pending, verify_step(basis, claims, proof, context));
-    (void)pending;
-    return proof;
-}
-
-Result<PendingClaim> verify_step(const Basis& basis, std::span<const PendingClaim> claims,
-                                 const StepProof& proof, purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    const auto rounds = log2_dimension(basis.dimension());
-    if (proof.left.size() != rounds || proof.right.size() != rounds) {
-        return unexpected_error(ErrorCode::SizeMismatch);
-    }
-    PURIFY_ASSIGN_OR_RETURN(auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar));
-    (void)terminal;
-    PURIFY_ASSIGN_OR_RETURN(auto state, make_step_context(basis, claims, context));
-    const auto weights = geometric_tensor(state.x, basis.dimension());
-    PURIFY_ASSIGN_OR_RETURN(auto folded,
-                            verify_ipa(basis.dimension(), proof, weights, state.commitment, state.y,
-                                       state.opening_base, state.transcript, context));
-    return PendingClaim(basis.digest(), proof.folded_generator, {std::move(folded)});
-}
-
 Result<AlgebraicStepProof> prove_algebraic_step(
     const Basis& basis, std::span<const PendingClaim> claims,
     purify_secp_context* context) {
@@ -270,9 +168,8 @@ Result<AlgebraicStepProof> prove_algebraic_step(
         auto proof,
         prove_algebraic_ipa(basis.points(), std::move(coefficients), weights,
                             state.opening_base, state.transcript, 2, context));
-    PURIFY_ASSIGN_OR_RETURN(
-        auto pending, verify_algebraic_step(basis, claims, proof, context));
-    (void)pending;
+    PURIFY_RETURN_IF_ERROR(
+        verify_algebraic_step(basis, claims, proof, context));
     return proof;
 }
 
@@ -286,9 +183,8 @@ Result<PendingClaim> verify_algebraic_step(
         proof.right.size() != rounds) {
         return unexpected_error(ErrorCode::SizeMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar));
-    (void)terminal;
+    PURIFY_RETURN_IF_ERROR(
+        FieldElement::try_from_bytes32(proof.terminal_scalar));
     PURIFY_ASSIGN_OR_RETURN(
         auto state, make_algebraic_step_context(basis, claims, context));
     const auto weights =

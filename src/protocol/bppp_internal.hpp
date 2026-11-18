@@ -32,10 +32,7 @@ inline Result<FieldElement> canonical_sqrt_minus_one()
  */
 struct PreparedExperimentalCircuitZkNormArg {
     NormArgProof norm;
-    std::array<unsigned char, 32> raw_generator_digest{};
     std::array<unsigned char, 32> challenge_digest{};
-    FieldElement mul_scale = FieldElement::zero();
-    FieldElement mul_ratio = FieldElement::zero();
 };
 
 Result<std::optional<PreparedExperimentalCircuitZkNormArg>>
@@ -43,8 +40,7 @@ prepare_experimental_circuit_zk_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitZkNormArgProof& proof,
     purify_secp_context* secp_context,
-    std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitBackend* cache);
+    std::span<const unsigned char> statement_binding);
 
 Result<std::optional<PreparedExperimentalCircuitZkNormArg>>
 prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
@@ -52,7 +48,6 @@ prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
     const ExperimentalCircuitZkNormArgProof& proof,
     std::span<const PointBytes> public_commitments,
     purify_secp_context* secp_context,
-    std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitBackend* cache);
+    std::span<const unsigned char> statement_binding);
 
 } // namespace purify::bppp::detail

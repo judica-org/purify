@@ -230,28 +230,10 @@ int purify_bppp_verify_norm_arg_with_challenges(
     size_t gamma_count);
 
 /**
- * Prepares a pending polynomial-commitment claim from a public norm proof.
- *
- * Success checks encodings and computes the exact transcript and short group
- * equation. It does NOT verify the proof: the returned residual must still be
- * reduced using an authenticated coefficient opening and discharged by an
- * accumulator's final decider.
- * gamma_count must equal log2(n_vec_len); gammas32 may be NULL only when zero.
- * The residual uses canonical compressed SEC1, or 33 zero bytes for infinity.
- */
-int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
-                                     const unsigned char rho32[32],
-                                     const unsigned char* generators33, size_t generators_count,
-                                     const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
-                                     const unsigned char commitment33[33],
-                                     const unsigned char* proof, size_t proof_len,
-                                     unsigned char terminal_n32[32], unsigned char terminal_l32[32],
-                                     unsigned char* gammas32, size_t gamma_count,
-                                     unsigned char residual33[33]);
-
-/**
- * Prepares the same pending claim using protocol-authenticated challenges.
- * This does not verify the coefficient opening or discharge the claim.
+ * Prepares a pending polynomial commitment using protocol-authenticated
+ * challenges, one per norm round. The residual uses canonical compressed SEC1
+ * or 33 zero bytes for infinity. The caller must still authenticate the
+ * coefficient opening and discharge the claim with the final decider.
  */
 int purify_bppp_prepare_norm_arg_claim_with_challenges(
     purify_secp_context* context,

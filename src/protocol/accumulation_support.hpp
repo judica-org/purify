@@ -40,16 +40,10 @@ Status validate_algebraic_dimension(std::size_t dimension);
 
 FieldElement pow_size(FieldElement base, std::size_t exponent);
 
-Result<FieldElement> challenge(const TaggedHash& hash, std::span<const unsigned char> seed);
-
 Status validate_basis(const Basis& basis);
-
-Status validate_prepared(const Basis& basis, const PreparedNorm& norm);
 
 Status validate_algebraic_prepared(
     const Basis& basis, const AlgebraicPreparedNorm& norm);
-
-void append_polynomial(Bytes& encoded, std::span<const PolynomialTerm> polynomial);
 
 Status append_algebraic_point(
     candidate::Sha256Transcript& transcript, const PointBytes& point);

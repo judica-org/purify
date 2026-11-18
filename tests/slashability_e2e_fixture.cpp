@@ -232,16 +232,6 @@ Result<CoalitionFixture> make_all_evil_coalition(
             registry_roster.members()[i].coefficient *
                 member_secrets[i];
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto root, purify::accountable::derive_recovery_root(signing_scalar));
-    PURIFY_ASSIGN_OR_RETURN(
-        auto setup_proof,
-        purify::accountable::prove_recovery_root_setup(
-            registry_roster, root.public_key, signing_scalar, secp_context));
-    PURIFY_ASSIGN_OR_RETURN(
-        auto recovery_roster,
-        purify::accountable::verify_recovery_root_setup(
-            registry_roster, root.public_key, setup_proof, secp_context));
 
     std::vector<purify::accountable::RecoveryRootContribution>
         contributions;
@@ -262,8 +252,7 @@ Result<CoalitionFixture> make_all_evil_coalition(
             &contribution_cache));
 
     return CoalitionFixture{
-        std::move(registry_roster), std::move(recovery_roster),
-        std::move(setup_proof), std::move(formation),
+        std::move(registry_roster), std::move(formation),
         std::move(contributions), std::move(distributed_setup),
         signing_scalar,
         std::move(member_secrets), std::move(nonce_signers),

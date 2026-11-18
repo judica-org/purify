@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "byte_io.hpp"
 #include "checked_size.hpp"
 #include "purify/curve.hpp"
 
@@ -20,6 +21,7 @@ namespace purify::accountable {
 namespace {
 
 using ::purify::detail::CheckedSize;
+using ::purify::detail::append_u32_be;
 
 const TaggedHash kConstructionReceiptStatementHash(
     "Purify/Accountable/ConstructionReceiptStatement/v5");
@@ -76,13 +78,6 @@ Status validate_setup_entries(
         return unexpected_error(ErrorCode::BindingMismatch);
     }
     return {};
-}
-
-void append_u32_be(Bytes& out, std::uint32_t value) {
-    out.push_back(static_cast<unsigned char>((value >> 24) & 0xffU));
-    out.push_back(static_cast<unsigned char>((value >> 16) & 0xffU));
-    out.push_back(static_cast<unsigned char>((value >> 8) & 0xffU));
-    out.push_back(static_cast<unsigned char>(value & 0xffU));
 }
 
 std::uint32_t read_u32_be(std::span<const unsigned char, 4> encoded) {

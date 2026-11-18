@@ -21,12 +21,7 @@
 #include "bppp_support.hpp"
 #include "purify/secp_bridge.h"
 
-namespace purify::bppp {
-
-// Helpers shared between the translation units of this module live in detail.
-using namespace detail;
-
-namespace detail {
+namespace purify::bppp::detail {
 
 Result<PointBytes>
 commit_norm_arg_witness_only(const NormArgInputs &inputs,
@@ -67,13 +62,11 @@ commit_norm_arg_witness_only(const NormArgInputs &inputs,
                 resolved.generator_count,
                 n_vec.data(), inputs.n_vec.size(), l_vec.data(),
                 inputs.l_vec.size(), commitment.data());
-  if (!require_ok(ok)) {
+  if (ok == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return commitment;
 }
-
-} // namespace detail
 
 namespace {
 
@@ -86,17 +79,14 @@ Result<PointBytes> offset_commitment(const PointBytes &commitment,
       scalar32.value.data(),
       &::purify::detail::FieldElementAccess::raw(scalar));
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-  if (!require_ok(purify_bppp_offset_commitment(secp_context, commitment.data(),
-                                                scalar32.value.data(),
-                                                out.data()))) {
+  if (purify_bppp_offset_commitment(secp_context, commitment.data(),
+                                scalar32.value.data(), out.data()) == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
 }
 
 } // namespace
-
-namespace detail {
 
 Result<PointBytes> point_scale(const PointBytes &point,
                                const FieldElement &scalar,
@@ -107,9 +97,8 @@ Result<PointBytes> point_scale(const PointBytes &point,
       scalar32.value.data(),
       &::purify::detail::FieldElementAccess::raw(scalar));
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-  if (!require_ok(
-          purify_point_scale(secp_context, point.data(),
-                             scalar32.value.data(), out.data()))) {
+  if (purify_point_scale(secp_context, point.data(),
+                         scalar32.value.data(), out.data()) == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
@@ -124,9 +113,9 @@ Result<PointBytes> generator_scale(const PointBytes &generator,
       scalar32.value.data(),
       &::purify::detail::FieldElementAccess::raw(scalar));
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-  if (!require_ok(purify_bppp_scale_generator(
+  if (purify_bppp_scale_generator(
           secp_context, generator.data(), scalar32.value.data(),
-          out.data()))) {
+          out.data()) == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
@@ -136,8 +125,8 @@ Result<PointBytes> generator_to_point(const PointBytes &generator,
                                       purify_secp_context *secp_context) {
   PointBytes out{};
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-  if (!require_ok(purify_bppp_generator_to_point(
-          secp_context, generator.data(), out.data()))) {
+  if (purify_bppp_generator_to_point(
+          secp_context, generator.data(), out.data()) == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
@@ -148,14 +137,11 @@ Result<PointBytes> point_add(const PointBytes &lhs,
                              purify_secp_context *secp_context) {
   PointBytes out{};
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-  if (!require_ok(
-          purify_point_add(secp_context, lhs.data(), rhs.data(), out.data()))) {
+  if (purify_point_add(secp_context, lhs.data(), rhs.data(), out.data()) == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
 }
-
-} // namespace detail
 
 namespace {
 
@@ -164,8 +150,8 @@ Result<PointBytes> point_add_allow_infinity(
     purify_secp_context *secp_context) {
   PointBytes out{};
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-  if (!require_ok(purify_point_add_allow_infinity(
-          secp_context, lhs.data(), rhs.data(), out.data()))) {
+  if (purify_point_add_allow_infinity(
+          secp_context, lhs.data(), rhs.data(), out.data()) == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
@@ -173,15 +159,13 @@ Result<PointBytes> point_add_allow_infinity(
 
 } // namespace
 
-namespace detail {
-
 Result<PointBytes> point_subtract_allow_infinity(
     const PointBytes &lhs, const PointBytes &rhs,
     purify_secp_context *secp_context) {
   PointBytes out{};
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-  if (!require_ok(purify_point_subtract_allow_infinity(
-          secp_context, lhs.data(), rhs.data(), out.data()))) {
+  if (purify_point_subtract_allow_infinity(
+          secp_context, lhs.data(), rhs.data(), out.data()) == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return out;
@@ -198,8 +182,6 @@ Result<PointBytes> point_from_scalar_base(const FieldElement &scalar,
                               base_generator(secp_context),
                               base_generator(secp_context));
 }
-
-} // namespace detail
 
 namespace {
 
@@ -225,8 +207,6 @@ Result<PointBytes> add_scaled_points_allow_infinity(
 }
 
 } // namespace
-
-namespace detail {
 
 Result<PointBytes> circuit_anchored_offset_v4(
     const CircuitNormArgPublicData &public_data,
@@ -317,6 +297,4 @@ Result<PointBytes> combine_zk_commitments(const PointBytes &a_commitment,
   return offset_commitment(combined, challenge * challenge * t2, secp_context);
 }
 
-} // namespace detail
-
-} // namespace purify::bppp
+} // namespace purify::bppp::detail

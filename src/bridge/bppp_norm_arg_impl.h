@@ -562,7 +562,7 @@ int purify_bppp_verify_norm_arg_with_challenges(
         gammas32, gamma_count);
 }
 
-static int purify_bppp_prepare_norm_arg_claim_impl(
+int purify_bppp_prepare_norm_arg_claim_with_challenges(
     purify_secp_context* context,
     const unsigned char rho32[32],
     const unsigned char* generators33,
@@ -573,8 +573,7 @@ static int purify_bppp_prepare_norm_arg_claim_impl(
     const unsigned char commitment33[33],
     const unsigned char* proof,
     size_t proof_len,
-    const unsigned char* supplied_gammas32,
-    unsigned char* derived_gammas32,
+    const unsigned char* gammas32,
     size_t gamma_count,
     unsigned char terminal_n32[32],
     unsigned char terminal_l32[32],
@@ -585,7 +584,6 @@ static int purify_bppp_prepare_norm_arg_claim_impl(
     secp256k1_scalar rho, n, l, norm, *c_vec = NULL, *gammas = NULL;
     secp256k1_ge commit, residual;
     secp256k1_gej residual_j;
-    secp256k1_sha256 transcript;
     ec_mult_verify_cb_data1 equation;
     size_t expected_generators, generator_bytes, rounds, i;
     int ok = 0;
@@ -593,8 +591,7 @@ static int purify_bppp_prepare_norm_arg_claim_impl(
     if (ctx == NULL || rho32 == NULL || generators33 == NULL || c_vec32 == NULL ||
         commitment33 == NULL || proof == NULL || terminal_n32 == NULL ||
         terminal_l32 == NULL || residual33 == NULL ||
-        (gamma_count != 0 && supplied_gammas32 == NULL &&
-         derived_gammas32 == NULL)) {
+        gammas32 == NULL) {
         return 0;
     }
     /* Preserve the standalone norm verifier's supported relation exactly. */
@@ -624,27 +621,13 @@ static int purify_bppp_prepare_norm_arg_claim_impl(
         !purify_parse_scalar_array(c_vec32, c_vec_len, c_vec)) {
         goto cleanup;
     }
-    if (supplied_gammas32 != NULL) {
-        if (!purify_parse_scalar_array(
-                supplied_gammas32, rounds, gammas)) {
+    if (!purify_parse_scalar_array(gammas32, rounds, gammas)) {
+        goto cleanup;
+    }
+    for (i = 0; i < rounds; ++i) {
+        if (secp256k1_scalar_is_zero(&gammas[i])) {
             goto cleanup;
         }
-        for (i = 0; i < rounds; ++i) {
-            if (secp256k1_scalar_is_zero(&gammas[i])) {
-                goto cleanup;
-            }
-        }
-    } else {
-        if (!purify_norm_arg_commit_initial_data(
-                &transcript, &rho, gens, n_vec_len, c_vec, c_vec_len,
-                &commit)) {
-            goto cleanup;
-        }
-        for (i = 0; i < rounds; ++i) {
-            secp256k1_sha256_write(&transcript, proof + 65u * i, 65u);
-            secp256k1_bppp_challenge_scalar(&gammas[i], &transcript, 0);
-        }
-        secp256k1_sha256_clear(&transcript);
     }
 
     /* Remove only the weighted-norm base-generator contribution. This
@@ -671,10 +654,6 @@ static int purify_bppp_prepare_norm_arg_claim_impl(
     secp256k1_ge_serialize_ext(residual33, &residual);
     secp256k1_scalar_get_b32(terminal_n32, &n);
     secp256k1_scalar_get_b32(terminal_l32, &l);
-    for (i = 0; derived_gammas32 != NULL && i < rounds; ++i) {
-        secp256k1_scalar_get_b32(
-            derived_gammas32 + 32u * i, &gammas[i]);
-    }
     ok = 1;
 
 cleanup:
@@ -683,47 +662,6 @@ cleanup:
     if (gens != NULL) secp256k1_bppp_generators_destroy(ctx, gens);
     if (scratch != NULL) secp256k1_scratch_space_destroy(ctx, scratch);
     return ok;
-}
-
-int purify_bppp_prepare_norm_arg_claim(purify_secp_context* context,
-                                     const unsigned char rho32[32],
-                                     const unsigned char* generators33, size_t generators_count,
-                                     const unsigned char* c_vec32, size_t c_vec_len, size_t n_vec_len,
-                                     const unsigned char commitment33[33],
-                                     const unsigned char* proof, size_t proof_len,
-                                     unsigned char terminal_n32[32], unsigned char terminal_l32[32],
-                                     unsigned char* gammas32, size_t gamma_count,
-                                     unsigned char residual33[33]) {
-    return purify_bppp_prepare_norm_arg_claim_impl(
-        context, rho32, generators33, generators_count, c_vec32,
-        c_vec_len, n_vec_len, commitment33, proof, proof_len, NULL,
-        gammas32, gamma_count, terminal_n32, terminal_l32, residual33);
-}
-
-int purify_bppp_prepare_norm_arg_claim_with_challenges(
-    purify_secp_context* context,
-    const unsigned char rho32[32],
-    const unsigned char* generators33,
-    size_t generators_count,
-    const unsigned char* c_vec32,
-    size_t c_vec_len,
-    size_t n_vec_len,
-    const unsigned char commitment33[33],
-    const unsigned char* proof,
-    size_t proof_len,
-    const unsigned char* gammas32,
-    size_t gamma_count,
-    unsigned char terminal_n32[32],
-    unsigned char terminal_l32[32],
-    unsigned char residual33[33]) {
-    if (gammas32 == NULL) {
-        return 0;
-    }
-    return purify_bppp_prepare_norm_arg_claim_impl(
-        context, rho32, generators33, generators_count, c_vec32,
-        c_vec_len, n_vec_len, commitment33, proof, proof_len,
-        gammas32, NULL, gamma_count, terminal_n32, terminal_l32,
-        residual33);
 }
 
 #endif /* PURIFY_BRIDGE_BPPP_NORM_ARG_IMPL_H */

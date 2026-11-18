@@ -4,8 +4,8 @@ The accountable response API connects the ordered signing roster, exact
 PureSign++ deterministic-nonce proofs, scalar-only responses, and conflict
 extraction. The accepted-response path uses capability types with private
 constructors; a caller cannot promote an arbitrary nonce point or scalar into
-an accepted response. The optional recovery-root setup is not required for
-this path.
+an accepted response. This path works directly from a nonce-host-bound
+roster.
 
 ## Registered nonce hosts
 
@@ -25,9 +25,9 @@ the result to a typed one-shot `CoalitionFormation`. The lower-level
 `bind_nonce_hosts` accepts an already authenticated raw core for generic
 protocols and resolved registry data; it does not establish formation replay
 resistance. Both return `NonceHostBoundSigningRoster`, which retains the
-coalition core digest alongside the roster and host commitment. The optional
-recovery-root setup produces the stronger `RecoveryBoundSigningRoster`, which
-is also usable anywhere the base nonce-host-bound capability is required.
+coalition core digest alongside the roster and host commitment. Verified
+distributed recovery setup also supplies a `RecoveryBoundSigningRoster`
+usable anywhere the nonce-host-bound capability is required.
 
 ## Proof-attested full nonces
 
@@ -86,9 +86,9 @@ values. It requires identical `Q`, `U`, coalition core digest, slot, and exact
 full aggregate nonce, plus distinct bodies and challenges. It performs the
 public extraction equation and verifies the exact point `qG = Q`. Success
 returns an `ExposedCoalitionKey` containing the exact aggregate scalar and its
-registry bindings. Deployments that registered a recovery root can validate
-that scalar against the stronger `RecoveryBoundSigningRoster` before
-companion-key or anchor recovery.
+registry bindings. Distributed recovery checks that scalar against the
+verified signing key and uses the authenticated full companion-point
+aggregate to recover the companion key.
 
 The lower-level `reconstruct_nonce` and `recover_same_slot_key` helpers remain
 available for algebraic vectors. They do not create the accepted capability
@@ -99,15 +99,13 @@ types and must not be used as certificate-acceptance shortcuts.
 These APIs establish deterministic-nonce proof acceptance, exact response
 composition, and cryptographic conflict extraction. They do not by themselves
 establish registration authorization, member consent, semantic conflict,
-liability, durable pre-release signing state, or transport policy. Standalone
-centralized recovery APIs remain available, but the selected construction
-path aggregates public member contributions noninteractively and no setup
-process receives the aggregate scalar. Recovery setup is not a dependency of
-accountable response extraction. A final recursive certificate and the secret
-multiparty signing protocol also remain separate components.
+liability, durable pre-release signing state, or transport policy. The
+construction path aggregates public member contributions and keeps the
+aggregate scalar private during formation. The secret multiparty signing
+protocol remains separate.
 
 The focused tests cover honest singleton and multi-member flows, odd raw nonce
 parity, missing/swapped/reordered proofs and hosts, duplicate hosts, changed
 `Q`/`U`/core/slot, replay across separately bound cores with the same `Q` and
 `U`, opposite full-point parity, scalar-only aggregation, attempted fresh
-nonces by an all-malicious roster, typed extraction, and recovery-root opening.
+nonces by an all-malicious roster, and typed extraction.

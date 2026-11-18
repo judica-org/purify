@@ -1048,6 +1048,7 @@ if(PURIFY_BUILD_TESTS)
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
+        tests/certificate_nonce_parent_tests.cpp
         tests/circuit_soundness_tests.cpp
         tests/sha256_transcript_tests.cpp
         tests/sha256_circuit_transcript_tests.cpp
@@ -1207,6 +1208,11 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(aggregate_nonce_100)
     purify_add_cpp_suite_test(nonce_batch)
     purify_add_cpp_suite_test(nonce_certificate)
+    purify_add_cpp_suite_test(certificate_nonce_parent)
+    set_tests_properties(
+        purify.tests.certificate_nonce_parent
+        PROPERTIES RUN_SERIAL TRUE TIMEOUT 1800
+    )
 
     add_executable(purify_property_tests
         tests/purify_property_tests.cpp

@@ -107,6 +107,12 @@ jobs:
           fi
           printf '%s\n' "$dependencies" | grep -q '^purify-construction-statement '
 
+      # Fuzzing itself needs a nightly toolchain and is run by hand; this only
+      # keeps the targets compiling against the verifier's API.
+      - name: Check fuzz targets build
+        working-directory: rust/construction-parent/fuzz
+        run: cargo check --locked
+
       - name: Initialize required submodule
         run: git submodule update --init --depth 1 third_party/secp256k1-zkp
 

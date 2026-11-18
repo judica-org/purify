@@ -8,6 +8,7 @@
 #include "recovery_root_internal.hpp"
 #include "../protocol/algebraic_circuit_accumulation.hpp"
 #include "../protocol/algebraic_circuit_proof.hpp"
+#include "../protocol/circuit_zk_norm_arg_proof_v4_codec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -618,13 +619,9 @@ Status RecoveryRootContribution::validate_encoding(
     PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
     static constexpr std::size_t kRoundCount = 14;
     static_assert(kNormProofSize == 65 * kRoundCount + 64);
-    const bppp::candidate::CircuitZkNormArgProofV4 proof{
-        raw_commitment_, mask_commitment_, t2_,
-        public_commitment_dlog_nonce_,
-        public_commitment_dlog_response_, norm_proof_};
     return bppp::candidate::
         validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
-            proof, bppp::candidate::CircuitCommitmentModeV4::Public,
+            proof_, bppp::candidate::CircuitCommitmentModeV4::Public,
             kRoundCount, secp_context);
 }
 
@@ -636,14 +633,7 @@ Result<Bytes> RecoveryRootContribution::serialize(
     out.push_back(kSerializationVersion);
     const auto encoded_share = share_.serialize();
     out.insert(out.end(), encoded_share.begin(), encoded_share.end());
-    out.insert(out.end(), raw_commitment_.begin(), raw_commitment_.end());
-    out.insert(out.end(), mask_commitment_.begin(), mask_commitment_.end());
-    out.insert(out.end(), t2_.begin(), t2_.end());
-    out.insert(out.end(), public_commitment_dlog_nonce_.begin(),
-               public_commitment_dlog_nonce_.end());
-    out.insert(out.end(), public_commitment_dlog_response_.begin(),
-               public_commitment_dlog_response_.end());
-    out.insert(out.end(), norm_proof_.begin(), norm_proof_.end());
+    bppp::candidate::append_circuit_proof_body_v4(out, proof_);
     assert(out.size() == kSerializedSize);
     return out;
 }
@@ -651,10 +641,6 @@ Result<Bytes> RecoveryRootContribution::serialize(
 Result<RecoveryRootContribution> RecoveryRootContribution::deserialize(
     std::span<const unsigned char> encoded,
     purify_secp_context* secp_context) {
-    static constexpr std::size_t kProofOffset =
-        1 + RecoveryRootShare::kSerializedSize;
-    static constexpr std::size_t kNormOffset = kProofOffset + 162;
-    static_assert(kNormOffset + kNormProofSize == kSerializedSize);
     if (encoded.size() != kSerializedSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize);
     }
@@ -665,25 +651,8 @@ Result<RecoveryRootContribution> RecoveryRootContribution::deserialize(
                             RecoveryRootShare::deserialize(encoded.subspan(
                                 1, RecoveryRootShare::kSerializedSize)));
     RecoveryRootContribution out(std::move(share));
-    std::size_t offset = kProofOffset;
-    std::copy_n(encoded.begin() + offset, out.raw_commitment_.size(),
-                out.raw_commitment_.begin());
-    offset += out.raw_commitment_.size();
-    std::copy_n(encoded.begin() + offset, out.mask_commitment_.size(),
-                out.mask_commitment_.begin());
-    offset += out.mask_commitment_.size();
-    std::copy_n(encoded.begin() + offset, out.t2_.size(), out.t2_.begin());
-    offset += out.t2_.size();
-    std::copy_n(encoded.begin() + offset,
-                out.public_commitment_dlog_nonce_.size(),
-                out.public_commitment_dlog_nonce_.begin());
-    offset += out.public_commitment_dlog_nonce_.size();
-    std::copy_n(encoded.begin() + offset,
-                out.public_commitment_dlog_response_.size(),
-                out.public_commitment_dlog_response_.begin());
-    offset += out.public_commitment_dlog_response_.size();
-    assert(offset == kNormOffset);
-    out.norm_proof_.assign(encoded.begin() + offset, encoded.end());
+    out.proof_ = bppp::candidate::read_circuit_proof_body_v4(
+        encoded.last<kProofSerializedSize>());
     PURIFY_RETURN_IF_ERROR(out.validate_encoding(secp_context));
     return out;
 }
@@ -764,14 +733,7 @@ Result<RecoveryRootContribution> prove_recovery_root_contribution(
         bppp::candidate::prove_circuit_zk_norm_arg_v4_with_public_commitments(
             circuit, assignment, prover_seed.value, outputs, secp_context,
             binding, cache));
-    contribution.raw_commitment_ = publication.proof.raw_commitment;
-    contribution.mask_commitment_ = publication.proof.mask_commitment;
-    contribution.t2_ = publication.proof.t2;
-    contribution.public_commitment_dlog_nonce_ =
-        publication.proof.public_commitment_dlog_nonce;
-    contribution.public_commitment_dlog_response_ =
-        publication.proof.public_commitment_dlog_response;
-    contribution.norm_proof_ = std::move(publication.proof.norm_proof);
+    contribution.proof_ = std::move(publication.proof);
     PURIFY_RETURN_IF_ERROR(contribution.validate_encoding(secp_context));
     return contribution;
 }
@@ -792,15 +754,10 @@ Result<bool> verify_recovery_root_contribution(
     PURIFY_ASSIGN_OR_RETURN(const auto weighted,
                             weighted_member_point(roster, member_index, secp_context));
     const std::array<PointBytes, 1> outputs{weighted};
-    bppp::candidate::CircuitZkNormArgProofV4 proof{
-        contribution.raw_commitment_, contribution.mask_commitment_,
-        contribution.t2_, contribution.public_commitment_dlog_nonce_,
-        contribution.public_commitment_dlog_response_,
-        contribution.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
         bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-            circuit, std::move(proof), outputs, secp_context, binding));
+            circuit, contribution.proof_, outputs, secp_context, binding));
     return bppp::candidate::
         verify_circuit_zk_norm_arg_v4_with_public_commitments(
             circuit, publication, outputs, secp_context, binding, cache);
@@ -889,15 +846,10 @@ ConstructionLeafAccumulator::prepare(
     PURIFY_ASSIGN_OR_RETURN(const auto weighted,
                             weighted_member_point(roster, member_index, secp_context));
     const std::array<PointBytes, 1> outputs{weighted};
-    bppp::candidate::CircuitZkNormArgProofV4 proof{
-        contribution.raw_commitment_, contribution.mask_commitment_,
-        contribution.t2_, contribution.public_commitment_dlog_nonce_,
-        contribution.public_commitment_dlog_response_,
-        contribution.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
         bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-            circuit, std::move(proof), outputs, secp_context, binding));
+            circuit, contribution.proof_, outputs, secp_context, binding));
     const auto circuit_precommitment = publication.precommitment.bytes();
     PURIFY_ASSIGN_OR_RETURN(auto prepared,
                             bppp::candidate::prepare_circuit_zk_norm_arg_v4_with_public_commitments(
@@ -917,13 +869,9 @@ Status RecoveryRootSetupProof::validate_encoding(
     PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
     static constexpr std::size_t kRoundCount = 12;
     static_assert(kNormProofSize == 65 * kRoundCount + 64);
-    const bppp::candidate::CircuitZkNormArgProofV4 proof{
-        raw_commitment_, mask_commitment_, t2_,
-        public_commitment_dlog_nonce_,
-        public_commitment_dlog_response_, norm_proof_};
     return bppp::candidate::
         validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
-            proof, bppp::candidate::CircuitCommitmentModeV4::Public,
+            proof_, bppp::candidate::CircuitCommitmentModeV4::Public,
             kRoundCount, secp_context);
 }
 
@@ -933,15 +881,7 @@ Result<Bytes> RecoveryRootSetupProof::serialize(
     Bytes out;
     out.reserve(kSerializedSize);
     out.push_back(kSerializationVersion);
-    out.insert(out.end(), raw_commitment_.begin(), raw_commitment_.end());
-    out.insert(out.end(), mask_commitment_.begin(), mask_commitment_.end());
-    out.insert(out.end(), t2_.begin(), t2_.end());
-    out.insert(out.end(), public_commitment_dlog_nonce_.begin(),
-               public_commitment_dlog_nonce_.end());
-    out.insert(out.end(),
-               public_commitment_dlog_response_.begin(),
-               public_commitment_dlog_response_.end());
-    out.insert(out.end(), norm_proof_.begin(), norm_proof_.end());
+    bppp::candidate::append_circuit_proof_body_v4(out, proof_);
     assert(out.size() == kSerializedSize);
     return out;
 }
@@ -949,8 +889,6 @@ Result<Bytes> RecoveryRootSetupProof::serialize(
 Result<RecoveryRootSetupProof> RecoveryRootSetupProof::deserialize(
     std::span<const unsigned char> encoded,
     purify_secp_context* secp_context) {
-    constexpr std::size_t header_size = 163;
-    static_assert(header_size + kNormProofSize == kSerializedSize);
     if (encoded.size() != kSerializedSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize);
     }
@@ -958,17 +896,8 @@ Result<RecoveryRootSetupProof> RecoveryRootSetupProof::deserialize(
         return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
     RecoveryRootSetupProof out;
-    std::copy_n(encoded.begin() + 1, 33,
-                out.raw_commitment_.begin());
-    std::copy_n(encoded.begin() + 34, 33,
-                out.mask_commitment_.begin());
-    std::copy_n(encoded.begin() + 67, 32,
-                out.t2_.begin());
-    std::copy_n(encoded.begin() + 99, 32,
-                out.public_commitment_dlog_nonce_.begin());
-    std::copy_n(encoded.begin() + 131, 32,
-                out.public_commitment_dlog_response_.begin());
-    out.norm_proof_.assign(encoded.begin() + header_size, encoded.end());
+    out.proof_ = bppp::candidate::read_circuit_proof_body_v4(
+        encoded.last<kSerializedSize - 1>());
     PURIFY_RETURN_IF_ERROR(out.validate_encoding(secp_context));
     return out;
 }
@@ -1035,14 +964,7 @@ Result<RecoveryRootSetupProof> prove_recovery_root_setup(
             circuit, assignment, secret_prover_seed.value, outputs,
             secp_context, binding, cache));
     RecoveryRootSetupProof proof;
-    proof.raw_commitment_ = publication.proof.raw_commitment;
-    proof.mask_commitment_ = publication.proof.mask_commitment;
-    proof.t2_ = publication.proof.t2;
-    proof.public_commitment_dlog_nonce_ =
-        publication.proof.public_commitment_dlog_nonce;
-    proof.public_commitment_dlog_response_ =
-        publication.proof.public_commitment_dlog_response;
-    proof.norm_proof_ = std::move(publication.proof.norm_proof);
+    proof.proof_ = std::move(publication.proof);
     return proof;
 }
 
@@ -1070,14 +992,10 @@ RecoveryRootSetupAccumulator::prepare(
     PURIFY_ASSIGN_OR_RETURN(const auto& circuit, public_setup_circuit(recovery_root));
     PURIFY_ASSIGN_OR_RETURN(const auto& binding, setup_binding(roster, recovery_root));
     const std::array<PointBytes, 1> outputs{roster_point(roster)};
-    bppp::candidate::CircuitZkNormArgProofV4 circuit_proof{
-        proof.raw_commitment_, proof.mask_commitment_, proof.t2_,
-        proof.public_commitment_dlog_nonce_,
-        proof.public_commitment_dlog_response_, proof.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
         bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-            circuit, std::move(circuit_proof), outputs, secp_context, binding));
+            circuit, proof.proof_, outputs, secp_context, binding));
     PURIFY_ASSIGN_OR_RETURN(auto prepared,
                             bppp::candidate::prepare_circuit_zk_norm_arg_v4_with_public_commitments(
                                 circuit, publication, outputs, secp_context, binding, cache));
@@ -1098,14 +1016,10 @@ Result<RecoveryBoundSigningRoster> verify_recovery_root_setup(
     PURIFY_ASSIGN_OR_RETURN(const auto& circuit, public_setup_circuit(recovery_root));
     PURIFY_ASSIGN_OR_RETURN(const auto& binding, setup_binding(roster, recovery_root));
     const std::array<PointBytes, 1> outputs{roster_point(roster)};
-    bppp::candidate::CircuitZkNormArgProofV4 circuit_proof{
-        proof.raw_commitment_, proof.mask_commitment_, proof.t2_,
-        proof.public_commitment_dlog_nonce_,
-        proof.public_commitment_dlog_response_, proof.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
         bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-            circuit, std::move(circuit_proof), outputs, secp_context, binding));
+            circuit, proof.proof_, outputs, secp_context, binding));
     PURIFY_ASSIGN_OR_RETURN(const auto& root_valid,
                             bppp::candidate::verify_circuit_zk_norm_arg_v4_with_public_commitments(
                                 circuit, publication, outputs, secp_context, binding));

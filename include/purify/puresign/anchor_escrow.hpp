@@ -11,6 +11,7 @@
 
 #include "purify/api.hpp"
 #include "purify/bppp.hpp"
+#include "purify/detail/circuit_zk_norm_arg_proof_v4.hpp"
 #include "purify/puresign/accountable_roster.hpp"
 
 namespace purify::accountable {
@@ -106,7 +107,8 @@ class AnchorEscrowRecord {
 public:
     static constexpr unsigned char kSerializationVersion = 4;
     static constexpr std::size_t kNormProofSize = 974;
-    static constexpr std::size_t kProofPayloadSize = 1136;
+    static constexpr std::size_t kProofPayloadSize =
+        bppp::candidate::CircuitZkNormArgProofV4::kPrefixSize + kNormProofSize;
     static constexpr std::size_t kSerializedSize =
         1 + AnchorEscrowCiphertext::kSerializedSize + kProofPayloadSize;
 
@@ -132,12 +134,7 @@ private:
         purify_secp_context* secp_context) const;
 
     AnchorEscrowCiphertext ciphertext_{};
-    bppp::PointBytes raw_commitment_{};
-    bppp::PointBytes mask_commitment_{};
-    bppp::ScalarBytes t2_{};
-    std::array<unsigned char, 32> public_commitment_dlog_nonce_{};
-    bppp::ScalarBytes public_commitment_dlog_response_{};
-    Bytes norm_proof_;
+    bppp::candidate::CircuitZkNormArgProofV4 proof_;
 
     friend Result<AnchorEscrowRecord> create_anchor_escrow(
         const RecoveryBoundSigningRoster&, const UInt512&,
@@ -158,11 +155,7 @@ private:
     friend class ConstructionLeafAccumulator;
 };
 
-static_assert(AnchorEscrowRecord::kProofPayloadSize ==
-              2 * bppp::PointBytes{}.size() +
-                  2 * bppp::ScalarBytes{}.size() +
-                  std::array<unsigned char, 32>{}.size() +
-                  AnchorEscrowRecord::kNormProofSize);
+static_assert(AnchorEscrowRecord::kProofPayloadSize == 1136);
 static_assert(AnchorEscrowRecord::kSerializedSize == 1233);
 
 /**

@@ -10,29 +10,10 @@
 #include <utility>
 #include <vector>
 
+#include "purify/detail/circuit_zk_norm_arg_proof_v4.hpp"
 #include "sha256_circuit_transcript.hpp"
 
 namespace purify::bppp::candidate {
-
-/**
- * V4 wire proof, intentionally distinct from the V3 proof.
- *
- * Native BP++ proofs use the backend's finite initial-commitment language.
- * Raw A, S, derived A_anch/P, public-mode commitment points, and every
- * intermediate public batch operation therefore must stay finite.
- * Reconstructed Cc and Q_off may use canonical zero33 identity encoding.
- * The constrained leaf permits more algebraic identity fixtures, but this
- * producer/verifier pair intentionally exposes the finite native subset
- * until the underlying norm encoding supports infinity.
- */
-struct CircuitZkNormArgProofV4 {
-  PointBytes raw_commitment{};
-  PointBytes mask_commitment{};
-  ScalarBytes t2{};
-  std::array<unsigned char, 32> public_commitment_dlog_nonce{};
-  ScalarBytes public_commitment_dlog_response{};
-  Bytes norm_proof;
-};
 
 /** Public precommitment and the proof whose transcript it fixes. */
 struct CircuitZkNormArgPublicationV4 {

@@ -11,6 +11,7 @@
 
 #include "purify/api.hpp"
 #include "purify/bppp.hpp"
+#include "purify/detail/circuit_zk_norm_arg_proof_v4.hpp"
 #include "purify/puresign/accountable_roster.hpp"
 
 namespace purify::accountable {
@@ -144,7 +145,7 @@ public:
     static constexpr unsigned char kSerializationVersion = 1;
     static constexpr std::size_t kNormProofSize = 974;
     static constexpr std::size_t kProofSerializedSize =
-        162 + kNormProofSize;
+        bppp::candidate::CircuitZkNormArgProofV4::kPrefixSize + kNormProofSize;
     static constexpr std::size_t kSerializedSize =
         1 + RecoveryRootShare::kSerializedSize + kProofSerializedSize;
 
@@ -173,12 +174,7 @@ private:
         purify_secp_context* secp_context) const;
 
     RecoveryRootShare share_;
-    bppp::PointBytes raw_commitment_{};
-    bppp::PointBytes mask_commitment_{};
-    bppp::ScalarBytes t2_{};
-    std::array<unsigned char, 32> public_commitment_dlog_nonce_{};
-    bppp::ScalarBytes public_commitment_dlog_response_{};
-    Bytes norm_proof_;
+    bppp::candidate::CircuitZkNormArgProofV4 proof_;
 
     friend Result<RecoveryRootContribution>
     prove_recovery_root_contribution(
@@ -274,7 +270,8 @@ class RecoveryRootSetupProof {
 public:
     static constexpr unsigned char kSerializationVersion = 2;
     static constexpr std::size_t kNormProofSize = 844;
-    static constexpr std::size_t kSerializedSize = 163 + kNormProofSize;
+    static constexpr std::size_t kSerializedSize =
+        1 + bppp::candidate::CircuitZkNormArgProofV4::kPrefixSize + kNormProofSize;
 
     RecoveryRootSetupProof(const RecoveryRootSetupProof&) = default;
     RecoveryRootSetupProof& operator=(const RecoveryRootSetupProof&) = default;
@@ -294,12 +291,7 @@ private:
     [[nodiscard]] Status validate_encoding(
         purify_secp_context* secp_context) const;
 
-    bppp::PointBytes raw_commitment_{};
-    bppp::PointBytes mask_commitment_{};
-    bppp::ScalarBytes t2_{};
-    std::array<unsigned char, 32> public_commitment_dlog_nonce_{};
-    bppp::ScalarBytes public_commitment_dlog_response_{};
-    Bytes norm_proof_;
+    bppp::candidate::CircuitZkNormArgProofV4 proof_;
 
     friend Result<RecoveryRootSetupProof> prove_recovery_root_setup(
         const NonceHostBoundSigningRoster&, const UInt512&,

@@ -6,6 +6,7 @@
 #include "purify/puresign/construction_leaf_accumulation.hpp"
 #include "../protocol/algebraic_circuit_accumulation.hpp"
 #include "../protocol/algebraic_circuit_proof.hpp"
+#include "../protocol/circuit_zk_norm_arg_proof_v4_codec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -335,13 +336,9 @@ Status AnchorEscrowRecord::validate_encoding(
     PURIFY_RETURN_IF_ERROR(validate_public_points(ciphertext_.ephemeral_key));
     static constexpr std::size_t kRoundCount = 14;
     static_assert(kNormProofSize == 65 * kRoundCount + 64);
-    const bppp::candidate::CircuitZkNormArgProofV4 proof{
-        raw_commitment_, mask_commitment_, t2_,
-        public_commitment_dlog_nonce_,
-        public_commitment_dlog_response_, norm_proof_};
     return bppp::candidate::
         validate_circuit_zk_norm_arg_proof_v4_fixed_encoding(
-            proof, bppp::candidate::CircuitCommitmentModeV4::Public,
+            proof_, bppp::candidate::CircuitCommitmentModeV4::Public,
             kRoundCount, secp_context);
 }
 
@@ -353,14 +350,7 @@ Result<Bytes> AnchorEscrowRecord::serialize(
     out.push_back(kSerializationVersion);
     const auto encrypted = ciphertext_bytes(ciphertext_);
     out.insert(out.end(), encrypted.begin(), encrypted.end());
-    out.insert(out.end(), raw_commitment_.begin(), raw_commitment_.end());
-    out.insert(out.end(), mask_commitment_.begin(), mask_commitment_.end());
-    out.insert(out.end(), t2_.begin(), t2_.end());
-    out.insert(out.end(), public_commitment_dlog_nonce_.begin(),
-               public_commitment_dlog_nonce_.end());
-    out.insert(out.end(), public_commitment_dlog_response_.begin(),
-               public_commitment_dlog_response_.end());
-    out.insert(out.end(), norm_proof_.begin(), norm_proof_.end());
+    bppp::candidate::append_circuit_proof_body_v4(out, proof_);
     assert(out.size() == kSerializedSize);
     return out;
 }
@@ -381,27 +371,10 @@ Result<AnchorEscrowRecord> AnchorEscrowRecord::deserialize(
     offset += 64;
     std::array<unsigned char, 32> masked{};
     std::copy_n(encoded.begin() + offset, masked.size(), masked.begin());
-    offset += masked.size();
     PURIFY_ASSIGN_OR_RETURN(out.ciphertext_.masked_scalar,
                             FieldElement::try_from_bytes32(masked));
-    std::copy_n(encoded.begin() + offset, out.raw_commitment_.size(),
-                out.raw_commitment_.begin());
-    offset += out.raw_commitment_.size();
-    std::copy_n(encoded.begin() + offset, out.mask_commitment_.size(),
-                out.mask_commitment_.begin());
-    offset += out.mask_commitment_.size();
-    std::copy_n(encoded.begin() + offset, out.t2_.size(),
-                out.t2_.begin());
-    offset += out.t2_.size();
-    std::copy_n(encoded.begin() + offset,
-                out.public_commitment_dlog_nonce_.size(),
-                out.public_commitment_dlog_nonce_.begin());
-    offset += out.public_commitment_dlog_nonce_.size();
-    std::copy_n(encoded.begin() + offset,
-                out.public_commitment_dlog_response_.size(),
-                out.public_commitment_dlog_response_.begin());
-    offset += out.public_commitment_dlog_response_.size();
-    out.norm_proof_.assign(encoded.begin() + offset, encoded.end());
+    out.proof_ = bppp::candidate::read_circuit_proof_body_v4(
+        encoded.last<kProofPayloadSize>());
     PURIFY_RETURN_IF_ERROR(out.validate_encoding(secp_context));
     return out;
 }
@@ -487,14 +460,7 @@ Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
             binding, cache));
     AnchorEscrowRecord record;
     record.ciphertext_ = ciphertext;
-    record.raw_commitment_ = publication.proof.raw_commitment;
-    record.mask_commitment_ = publication.proof.mask_commitment;
-    record.t2_ = publication.proof.t2;
-    record.public_commitment_dlog_nonce_ =
-        publication.proof.public_commitment_dlog_nonce;
-    record.public_commitment_dlog_response_ =
-        publication.proof.public_commitment_dlog_response;
-    record.norm_proof_ = std::move(publication.proof.norm_proof);
+    record.proof_ = std::move(publication.proof);
     PURIFY_RETURN_IF_ERROR(record.validate_encoding(secp_context));
     return record;
 }
@@ -518,14 +484,10 @@ Result<bool> verify_anchor_escrow(
                                            context_digest, record.ciphertext_));
     const std::array<PointBytes, 1> outputs{
         punishment_point(punishment_key)};
-    bppp::candidate::CircuitZkNormArgProofV4 proof{
-        record.raw_commitment_, record.mask_commitment_, record.t2_,
-        record.public_commitment_dlog_nonce_,
-        record.public_commitment_dlog_response_, record.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
         bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-            circuit, std::move(proof), outputs, secp_context, binding));
+            circuit, record.proof_, outputs, secp_context, binding));
     return bppp::candidate::
         verify_circuit_zk_norm_arg_v4_with_public_commitments(
             circuit, publication, outputs, secp_context, binding, cache);
@@ -616,14 +578,10 @@ ConstructionLeafAccumulator::prepare(
                                            context_digest, record.ciphertext_));
     const std::array<PointBytes, 1> outputs{
         punishment_point(punishment_key)};
-    bppp::candidate::CircuitZkNormArgProofV4 proof{
-        record.raw_commitment_, record.mask_commitment_, record.t2_,
-        record.public_commitment_dlog_nonce_,
-        record.public_commitment_dlog_response_, record.norm_proof_};
     PURIFY_ASSIGN_OR_RETURN(
         auto publication,
         bppp::candidate::reconstruct_circuit_zk_norm_arg_publication_v4_with_public_commitments(
-            circuit, std::move(proof), outputs, secp_context, binding));
+            circuit, record.proof_, outputs, secp_context, binding));
     const auto circuit_precommitment =
         publication.precommitment.bytes();
     PURIFY_ASSIGN_OR_RETURN(auto prepared,

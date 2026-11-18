@@ -721,7 +721,7 @@ void test_puresign_plusplus_message_signing(TestContext& ctx) {
         expect_error(ctx,
                      purify::puresign_plusplus::NonceProof::deserialize(
                          zero_dlog_response, context.get()),
-                     ErrorCode::BackendRejectedInput,
+                     ErrorCode::RangeViolation,
                      "PureSign++ NonceProof rejects a zero DLog response");
 
         Bytes noncanonical_dlog_response = *nonce_proof_bytes;

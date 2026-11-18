@@ -107,6 +107,150 @@ bool is_zero(const bppp::accumulation::Digest& digest) {
         digest, [](unsigned char byte) { return byte == 0; });
 }
 
+Status validate_recursive_member_frame(
+    const CertificateNonceResponseAuthorization& authorization,
+    std::uint32_t member_ordinal)
+{
+    const auto& frame = authorization.frame();
+    const auto member_digests = authorization.member_digests();
+    if (frame.total_responses == 0 ||
+        frame.total_responses >
+            CertificateNonceParentAccumulator::kMaxResponses ||
+        frame.response_ordinal >= frame.total_responses ||
+        member_digests.empty() ||
+        member_digests.size() >
+            CertificateNonceParentPublicInputs::kMemberBatchCapacity ||
+        member_ordinal >= member_digests.size()) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_recursive:member_frame");
+    }
+    return {};
+}
+
+Status validate_recursive_public_response(
+    const CertificateNonceRecursiveResponseView& response)
+{
+    const auto hosts = response.ordered_hosts();
+    const auto leaves = response.ordered_leaves();
+    const auto member_digests =
+        response.authorization().member_digests();
+    if (hosts.empty() ||
+        hosts.size() >
+            CertificateNonceParentPublicInputs::kMemberBatchCapacity ||
+        hosts.size() != leaves.size() ||
+        hosts.size() != member_digests.size()) {
+        return unexpected_error(
+            ErrorCode::SizeMismatch,
+            "certificate_nonce_recursive:public_response_members");
+    }
+
+    std::set<bppp::accumulation::Digest> unique_leaf_bindings;
+    for (const auto& leaf : leaves) {
+        if (!unique_leaf_bindings.insert(leaf.leaf_binding).second) {
+            return unexpected_error(
+                ErrorCode::BindingMismatch,
+                "certificate_nonce_recursive:public_response_leaf");
+        }
+    }
+    return validate_recursive_member_frame(
+        response.authorization(), 0);
+}
+
+Result<bppp::accumulation::Digest>
+recursive_member_digest_from_derived_constants(
+    const CertificateNonceResponseAuthorization& authorization,
+    std::uint32_t member_ordinal, const PublicKey& host,
+    std::span<const unsigned char> topic,
+    const CertificateNonceLeafParentConstants& constants,
+    const bppp::accumulation::Digest& leaf_binding)
+{
+    const auto& frame = authorization.frame();
+    const auto member_digests = authorization.member_digests();
+    const auto host_bytes = host.serialize();
+    if (host_bytes.size() != PublicKey::kSerializedSize) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "certificate_nonce_recursive:member_host");
+    }
+
+    Bytes encoded;
+    encoded.reserve(kRecursiveMemberMessageSize);
+    append_u64(encoded, frame.response_ordinal);
+    append_u32(encoded, member_ordinal);
+    append(encoded, member_digests[member_ordinal]);
+    append(encoded, host_bytes);
+    append(encoded, topic);
+    append(encoded, constants.circuit_binding_digest);
+    append(encoded, constants.coefficient_commitment);
+    append(encoded, constants.anchored_offset);
+    append(encoded, leaf_binding);
+    assert(encoded.size() == kRecursiveMemberMessageSize);
+    return kRecursiveMemberHash.digest(encoded);
+}
+
+Result<bppp::accumulation::Digest>
+recursive_member_digest_from_public_descriptor(
+    const CertificateNonceLeafAccumulator& leaf_accumulator,
+    const CertificateNonceResponseAuthorization& authorization,
+    std::uint32_t member_ordinal, const PublicKey& host,
+    const CertificateNoncePublicLeafDescriptor& descriptor,
+    std::span<const unsigned char> topic,
+    const TopicProofCache& cache,
+    purify_secp_context* secp_context)
+{
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto constants,
+        leaf_accumulator.derive_parent_constants_from_public_data(
+            host, cache, descriptor.circuit_precommitment,
+            descriptor.nonce_point, secp_context),
+        "certificate_nonce_recursive:public_member_constants");
+    return recursive_member_digest_from_derived_constants(
+        authorization, member_ordinal, host, topic, constants,
+        descriptor.leaf_binding);
+}
+
+Result<std::vector<bppp::accumulation::Digest>>
+recursive_response_step_digests_from_validated(
+    const CertificateNonceLeafAccumulator& leaf_accumulator,
+    const CertificateNonceRecursiveResponseView& response,
+    purify_secp_context* secp_context)
+{
+    const auto hosts = response.ordered_hosts();
+    const auto leaves = response.ordered_leaves();
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto topic,
+        accountable::nonce_evaluation_input(
+            response.context(), secp_context),
+        "certificate_nonce_recursive:public_response_topic");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto cache, TopicProofCache::build(topic),
+        "certificate_nonce_recursive:public_response_cache");
+
+    std::vector<bppp::accumulation::Digest> step_digests;
+    step_digests.reserve(hosts.size());
+    for (std::size_t member_index = 0;
+         member_index < hosts.size(); ++member_index) {
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto member_digest,
+            recursive_member_digest_from_public_descriptor(
+                leaf_accumulator, response.authorization(),
+                static_cast<std::uint32_t>(member_index),
+                hosts[member_index], leaves[member_index], topic,
+                cache, secp_context),
+            "certificate_nonce_recursive:public_response_member");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto step_digest,
+            certificate_nonce_recursive_step_digest(
+                response.authorization(), response.context(),
+                response.canonical_body(), response.response(),
+                member_digest, secp_context),
+            "certificate_nonce_recursive:public_response_step");
+        step_digests.push_back(std::move(step_digest));
+    }
+    return step_digests;
+}
+
 Status validate_authorization_inputs(
     const CertificateNonceResponseFrame& frame,
     const accountable::NonceHostBoundSigningRoster& roster,
@@ -569,29 +713,16 @@ certificate_nonce_recursive_member_digest(
     const accountable::ConflictContext& context,
     purify_secp_context* secp_context)
 {
-    const auto& frame = authorization.frame();
-    const auto member_digests = authorization.member_digests();
-    if (frame.total_responses == 0 ||
-        frame.total_responses >
-            CertificateNonceParentAccumulator::kMaxResponses ||
-        frame.response_ordinal >= frame.total_responses ||
-        member_digests.empty() ||
-        member_digests.size() >
-            CertificateNonceParentPublicInputs::kMemberBatchCapacity ||
-        member_ordinal >= member_digests.size()) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "certificate_nonce_recursive:member_frame");
-    }
-
-    const auto host_bytes = host.serialize();
+    PURIFY_RETURN_IF_ERROR(
+        validate_recursive_member_frame(
+            authorization, member_ordinal),
+        "certificate_nonce_recursive:member_frame");
     const auto purify_host = host.purify_pubkey.to_bytes_be();
     PURIFY_ASSIGN_OR_RETURN(
         const auto topic,
         accountable::nonce_evaluation_input(context, secp_context),
         "certificate_nonce_recursive:member_topic");
-    if (host_bytes.size() != PublicKey::kSerializedSize ||
-        leaf.nonce_host() != purify_host ||
+    if (leaf.nonce_host() != purify_host ||
         leaf.topic().size() != topic.size() ||
         !std::equal(
             leaf.topic().begin(), leaf.topic().end(), topic.begin())) {
@@ -599,21 +730,34 @@ certificate_nonce_recursive_member_digest(
             ErrorCode::BindingMismatch,
             "certificate_nonce_recursive:member_binding");
     }
+    return recursive_member_digest_from_derived_constants(
+        authorization, member_ordinal, host, topic,
+        leaf.parent_constants(), leaf.binding_digest());
+}
 
-    const auto& constants = leaf.parent_constants();
-    Bytes encoded;
-    encoded.reserve(kRecursiveMemberMessageSize);
-    append_u64(encoded, frame.response_ordinal);
-    append_u32(encoded, member_ordinal);
-    append(encoded, member_digests[member_ordinal]);
-    append(encoded, host_bytes);
-    append(encoded, topic);
-    append(encoded, constants.circuit_binding_digest);
-    append(encoded, constants.coefficient_commitment);
-    append(encoded, constants.anchored_offset);
-    append(encoded, leaf.binding_digest());
-    assert(encoded.size() == kRecursiveMemberMessageSize);
-    return kRecursiveMemberHash.digest(encoded);
+Result<bppp::accumulation::Digest>
+certificate_nonce_recursive_member_digest(
+    const CertificateNonceLeafAccumulator& leaf_accumulator,
+    const CertificateNonceResponseAuthorization& authorization,
+    std::uint32_t member_ordinal, const PublicKey& host,
+    const CertificateNoncePublicLeafDescriptor& descriptor,
+    const accountable::ConflictContext& context,
+    purify_secp_context* secp_context)
+{
+    PURIFY_RETURN_IF_ERROR(
+        validate_recursive_member_frame(
+            authorization, member_ordinal),
+        "certificate_nonce_recursive:public_member_frame");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto topic,
+        accountable::nonce_evaluation_input(context, secp_context),
+        "certificate_nonce_recursive:public_member_topic");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto cache, TopicProofCache::build(topic),
+        "certificate_nonce_recursive:public_member_cache");
+    return recursive_member_digest_from_public_descriptor(
+        leaf_accumulator, authorization, member_ordinal, host,
+        descriptor, topic, cache, secp_context);
 }
 
 Result<bppp::accumulation::Digest>
@@ -656,6 +800,19 @@ certificate_nonce_recursive_step_digest(
     append(encoded, challenge_scalar);
     assert(encoded.size() == kRecursiveStepMessageSize);
     return kRecursiveStepHash.digest(encoded);
+}
+
+Result<std::vector<bppp::accumulation::Digest>>
+certificate_nonce_recursive_response_step_digests(
+    const CertificateNonceLeafAccumulator& leaf_accumulator,
+    const CertificateNonceRecursiveResponseView& response,
+    purify_secp_context* secp_context)
+{
+    PURIFY_RETURN_IF_ERROR(
+        validate_recursive_public_response(response),
+        "certificate_nonce_recursive:public_response");
+    return recursive_response_step_digests_from_validated(
+        leaf_accumulator, response, secp_context);
 }
 
 Result<CertificateNonceRecursiveManifest>
@@ -703,6 +860,84 @@ certificate_nonce_recursive_manifest_step(
     auto manifest = kRecursiveManifestStepHash.digest(encoded);
     manifest[0] &= 0x7f;
     return CertificateNonceRecursiveManifest(manifest);
+}
+
+Result<CertificateNonceRecursiveManifestResolution>
+certificate_nonce_recursive_manifest(
+    const CertificateNonceLeafAccumulator& leaf_accumulator,
+    const bppp::accumulation::Digest& certificate_context_digest,
+    std::span<const CertificateNonceRecursiveResponseView>
+        ordered_responses,
+    purify_secp_context* secp_context)
+{
+    if (!size_fits_u64(ordered_responses.size()) ||
+        ordered_responses.empty() ||
+        ordered_responses.size() >
+            CertificateNonceParentAccumulator::kMaxResponses) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_recursive:public_manifest_responses");
+    }
+    const auto total_responses =
+        static_cast<std::uint64_t>(ordered_responses.size());
+    std::size_t total_steps = 0;
+    for (std::size_t response_index = 0;
+         response_index < ordered_responses.size(); ++response_index) {
+        const auto& response = ordered_responses[response_index];
+        const auto& frame = response.authorization().frame();
+        if (frame.certificate_context_digest !=
+                certificate_context_digest ||
+            frame.total_responses != total_responses ||
+            frame.response_ordinal !=
+                static_cast<std::uint64_t>(response_index)) {
+            return unexpected_error(
+                ErrorCode::BindingMismatch,
+                "certificate_nonce_recursive:public_manifest_frame");
+        }
+        PURIFY_RETURN_IF_ERROR(
+            validate_recursive_public_response(response),
+            "certificate_nonce_recursive:public_manifest_response");
+        const auto member_count = response.ordered_hosts().size();
+        if (!checked_add_size(
+                total_steps, member_count, total_steps)) {
+            return unexpected_error(
+                ErrorCode::Overflow,
+                "certificate_nonce_recursive:public_manifest_steps");
+        }
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto manifest,
+        certificate_nonce_recursive_manifest_seed(
+            certificate_context_digest, total_responses),
+        "certificate_nonce_recursive:public_manifest_seed");
+
+    std::vector<bppp::accumulation::Digest> step_digests;
+    step_digests.reserve(total_steps);
+    for (std::size_t response_index = 0;
+         response_index < ordered_responses.size(); ++response_index) {
+        const auto& response = ordered_responses[response_index];
+        const auto& frame = response.authorization().frame();
+        PURIFY_ASSIGN_OR_RETURN(
+            auto response_steps,
+            recursive_response_step_digests_from_validated(
+                leaf_accumulator, response, secp_context),
+            "certificate_nonce_recursive:public_manifest_response");
+        for (std::size_t member_index = 0;
+             member_index < response_steps.size(); ++member_index) {
+            PURIFY_ASSIGN_OR_RETURN(
+                manifest,
+                certificate_nonce_recursive_manifest_step(
+                    manifest, frame.response_ordinal,
+                    static_cast<std::uint32_t>(member_index),
+                    response_steps[member_index]),
+                "certificate_nonce_recursive:public_manifest_member");
+            step_digests.push_back(
+                std::move(response_steps[member_index]));
+        }
+    }
+    return CertificateNonceRecursiveManifestResolution(
+        certificate_context_digest, total_responses,
+        std::move(step_digests), std::move(manifest));
 }
 
 Result<CertificateNonceAuthorizationManifest>

@@ -26,6 +26,17 @@ struct CertificateNonceLeafParentConstants {
         const CertificateNonceLeafParentConstants&) = default;
 };
 
+/** Public material that identifies one certificate nonce leaf. */
+struct CertificateNoncePublicLeafDescriptor {
+    bppp::ScalarBytes circuit_precommitment{};
+    bppp::PointBytes nonce_point{};
+    bppp::accumulation::Digest leaf_binding{};
+
+    friend bool operator==(
+        const CertificateNoncePublicLeafDescriptor&,
+        const CertificateNoncePublicLeafDescriptor&) = default;
+};
+
 /** One outer-authenticated certificate nonce proof pending reduction. */
 class PreparedCertificateNonceLeaf {
 public:
@@ -69,6 +80,14 @@ public:
     [[nodiscard]] const bppp::accumulation::Digest& binding_digest()
         const noexcept {
         return binding_digest_;
+    }
+
+    /** Proof-free public descriptor for recursive manifest resolution. */
+    [[nodiscard]] CertificateNoncePublicLeafDescriptor
+    public_descriptor() const noexcept
+    {
+        return {
+            circuit_precommitment_, nonce_point_, binding_digest_};
     }
 
     [[nodiscard]] const bppp::accumulation::AlgebraicPreparedNorm& norm()

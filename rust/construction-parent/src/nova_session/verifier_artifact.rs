@@ -97,6 +97,21 @@ pub(crate) const QUALIFIED_SHA256_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT:
     ],
 );
 
+/// Exact certificate verifier state emitted by setup-only qualification.
+///
+/// The ordinary artifact SHA-256 is
+/// `34ddb2b620d786fa6fa3fa19d146986cac6bc765f94ff5ce83003d717ca3aa22`.
+pub(crate) const QUALIFIED_CERTIFICATE_PARENT_VERIFIER_ARTIFACT:
+    ExpectedDirectNovaVerifierArtifact = ExpectedDirectNovaVerifierArtifact::new(
+    696_190_360,
+    3_253_731_904,
+    [
+        0x9f, 0x6b, 0x98, 0x2b, 0x5e, 0x52, 0xa3, 0x1f, 0x57, 0xf3, 0x1b, 0xb0, 0x3d, 0xb5, 0x4b,
+        0x08, 0x7d, 0xfc, 0x3f, 0x94, 0x5c, 0x20, 0x0a, 0x5d, 0x66, 0x55, 0x7e, 0xe7, 0xf9, 0x0d,
+        0xae, 0x9e,
+    ],
+);
+
 #[derive(Debug, Error)]
 pub(crate) enum DirectNovaVerifierArtifactError {
     #[cfg(any(test, feature = "prover"))]
@@ -204,5 +219,40 @@ impl<const ARITY: usize, C: StepCircuit<DirectNovaScalar>> SelectedNovaVerifier<
             expected: expected_suite,
             inner: NovaVerifier::from_loaded_key(verifier_key, proof_shape, metadata)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qualified_certificate_vk2_identity_is_frozen() {
+        assert_eq!(MAX_COMPRESSED_PAYLOAD_LENGTH, 2_000_000_000);
+        assert_eq!(MAX_DECODED_PAYLOAD_LENGTH, 4_000_000_000);
+        assert_eq!(
+            QUALIFIED_CERTIFICATE_PARENT_VERIFIER_ARTIFACT.encoded_length(),
+            696_190_360
+        );
+        assert_eq!(
+            QUALIFIED_CERTIFICATE_PARENT_VERIFIER_ARTIFACT.decoded_payload_length(),
+            3_253_731_904
+        );
+        assert_eq!(
+            QUALIFIED_CERTIFICATE_PARENT_VERIFIER_ARTIFACT.digest(),
+            [
+                0x9f, 0x6b, 0x98, 0x2b, 0x5e, 0x52, 0xa3, 0x1f, 0x57, 0xf3, 0x1b, 0xb0, 0x3d, 0xb5,
+                0x4b, 0x08, 0x7d, 0xfc, 0x3f, 0x94, 0x5c, 0x20, 0x0a, 0x5d, 0x66, 0x55, 0x7e, 0xe7,
+                0xf9, 0x0d, 0xae, 0x9e,
+            ]
+        );
+        assert!(
+            QUALIFIED_CERTIFICATE_PARENT_VERIFIER_ARTIFACT.encoded_length()
+                <= MAX_COMPRESSED_PAYLOAD_LENGTH as u64
+        );
+        assert!(
+            QUALIFIED_CERTIFICATE_PARENT_VERIFIER_ARTIFACT.decoded_payload_length()
+                <= MAX_DECODED_PAYLOAD_LENGTH as u64
+        );
     }
 }

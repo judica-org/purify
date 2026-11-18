@@ -586,6 +586,32 @@ pub(crate) static QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE: ExpectedDirectNovaSu
         QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID,
     );
 
+const QUALIFIED_CERTIFICATE_PARENT_RELATION_ID: [u8; 32] = [
+    0xf5, 0xa3, 0x14, 0x75, 0x8f, 0x53, 0x15, 0xd9, 0x19, 0x89, 0x49, 0x3b, 0x31, 0xa7, 0x97, 0x7a,
+    0xde, 0x72, 0x0f, 0x29, 0x67, 0xb4, 0x6e, 0x75, 0x6b, 0xce, 0x63, 0x8e, 0x18, 0x76, 0x08, 0x1b,
+];
+const QUALIFIED_CERTIFICATE_PARENT_PP_DIGEST: [u8; 32] = [
+    0x06, 0x97, 0xca, 0x2f, 0xa2, 0x15, 0xb5, 0xef, 0xf3, 0x17, 0x8c, 0x2c, 0x10, 0xe6, 0x2b, 0x9e,
+    0x80, 0xd5, 0x6e, 0xed, 0x12, 0x16, 0x61, 0xaf, 0x1a, 0xd8, 0x53, 0x26, 0x73, 0x6b, 0xb3, 0x03,
+];
+const QUALIFIED_CERTIFICATE_PARENT_SUITE_ID: DirectNovaSuiteId = DirectNovaSuiteId::new([
+    0x21, 0xd8, 0xc4, 0x1e, 0x26, 0xe9, 0x16, 0xe3, 0xee, 0x15, 0xd4, 0x5e, 0x35, 0x6e, 0x91, 0x3e,
+    0x69, 0x58, 0xf7, 0xe7, 0x06, 0x68, 0x12, 0x31, 0x79, 0xe4, 0x30, 0x00, 0xfd, 0x5e, 0x2c, 0x8b,
+]);
+pub(crate) const QUALIFIED_CERTIFICATE_PARENT_PROOF_LENGTH: usize = 15_268;
+
+/// Exact certificate-parent profile selected by production qualification.
+pub(crate) static QUALIFIED_CERTIFICATE_PARENT_NOVA_SUITE: ExpectedDirectNovaSuite =
+    ExpectedDirectNovaSuite::new(
+        CERTIFICATE_PARENT_NOVA_APPLICATION,
+        QUALIFIED_CERTIFICATE_PARENT_RELATION_ID,
+        QUALIFIED_CERTIFICATE_PARENT_PP_DIGEST,
+        FrozenNovaDimensions::new(9_617_365, 9_575_269),
+        FrozenNovaDimensions::new(728_974, 728_211),
+        FrozenNovaProofMetrics::new(QUALIFIED_CERTIFICATE_PARENT_PROOF_LENGTH as u64, 152),
+        QUALIFIED_CERTIFICATE_PARENT_SUITE_ID,
+    );
+
 /// A generic suite promoted through one exact local selection profile.
 #[cfg(test)]
 pub(crate) struct SelectedNovaSessionSuite<const ARITY: usize, C: NovaSessionStep<ARITY>> {
@@ -859,6 +885,16 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaSessionSuite<ARI
     /// exact selected verifier.
     pub(crate) fn into_verifier(self) -> SelectedNovaVerifier<ARITY, C> {
         self.verifier
+    }
+
+    /// Split one setup-only qualification into its two artifact payloads.
+    ///
+    /// Production code cannot call this test-only API or perform setup. Each
+    /// returned component remains selected by the exact supplied suite.
+    pub(crate) fn into_artifact_parts(
+        self,
+    ) -> (SelectedNovaProver<ARITY, C>, SelectedNovaVerifier<ARITY, C>) {
+        (self.prover, self.verifier)
     }
 }
 
@@ -1319,6 +1355,50 @@ mod tests {
             CERTIFICATE_PARENT_NOVA_APPLICATION.suite_id_tag,
             QUALIFIED_CONSTRUCTION_APPLICATION.suite_id_tag
         );
+    }
+
+    #[test]
+    fn qualified_certificate_parent_suite_frame_is_frozen() {
+        use crate::certificate_profile::CERTIFICATE_RECURRENCE_STATE_ARITY;
+
+        assert_eq!(
+            *crate::nova_certificate_recurrence::QUALIFIED_CERTIFICATE_PARENT_RELATION_ID.bytes(),
+            QUALIFIED_CERTIFICATE_PARENT_RELATION_ID
+        );
+        let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
+            NovaR1csDimensions::new(9_617_365, 9_575_269),
+            NovaR1csDimensions::new(728_974, 728_211),
+            CERTIFICATE_RECURRENCE_STATE_ARITY,
+        )
+        .expect("qualified certificate proof shape");
+        assert_eq!(
+            proof_shape.encoded_len(),
+            QUALIFIED_CERTIFICATE_PARENT_PROOF_LENGTH
+        );
+        assert_eq!(proof_shape.sequence_count(), 152);
+
+        let metadata = DirectNovaSuiteMetadata {
+            relation_id: DirectRelationId::from_frozen_bytes(
+                QUALIFIED_CERTIFICATE_PARENT_RELATION_ID,
+            ),
+            public_parameter_digest: QUALIFIED_CERTIFICATE_PARENT_PP_DIGEST,
+            primary_constraints: 9_617_365,
+            primary_variables: 9_575_269,
+            secondary_constraints: 728_974,
+            secondary_variables: 728_211,
+            proof_length: proof_shape.encoded_len(),
+            codec_sequence_count: proof_shape.sequence_count(),
+        };
+        let suite_id = metadata
+            .suite_id::<CERTIFICATE_RECURRENCE_STATE_ARITY>(
+                &proof_shape,
+                CERTIFICATE_PARENT_NOVA_APPLICATION,
+            )
+            .expect("qualified certificate suite ID");
+        assert_eq!(suite_id, QUALIFIED_CERTIFICATE_PARENT_SUITE_ID);
+        QUALIFIED_CERTIFICATE_PARENT_NOVA_SUITE
+            .validate::<CERTIFICATE_RECURRENCE_STATE_ARITY>(&metadata, &proof_shape)
+            .expect("qualified certificate suite profile");
     }
 
     const TEST_EXPECTED_SUITE: ExpectedDirectNovaSuite = ExpectedDirectNovaSuite::new(

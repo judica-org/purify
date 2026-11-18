@@ -496,8 +496,13 @@ mod tests {
 
     use super::*;
     use crate::certificate_nonce_proof::CertificateLeafParentConstantsWitness;
+    use crate::certificate_parent_input::CertificateParentInputs;
+    use crate::certificate_profile::{RECORD_MANIFEST_INDEX, RESPONSE_ORDINAL_INDEX};
+    use crate::certificate_recursive_manifest::{recursive_manifest_seed, recursive_manifest_step};
+    use crate::certificate_response_relation::native_step_digest;
     use crate::construction_parent_prover_binding::CheckingWitnessCs;
     use crate::nova_relation_identity::direct_step_relation_shape;
+    use crate::secp_native::coordinate_field_value;
 
     const GENERATOR: [u8; 33] = [
         0x02, 0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce, 0x87,
@@ -661,6 +666,89 @@ mod tests {
             ),
             expected,
         );
+    }
+
+    #[test]
+    fn external_manifest_rejects_rogue_parent_constants() {
+        let context = [0x66; 32];
+        let authorization = [0x11; 32];
+        let host = [0x22; 96];
+        let topic = [0x33; 32];
+        let leaf_binding = [0x55; 32];
+        let response_binding = [0x77; 32];
+        let signing_key = [0x78; 32];
+        let response = [0x88; 32];
+        let challenge = [0x99; 32];
+        let constants = CertificateLeafParentConstantsWitness {
+            circuit_binding_digest: [0x44; 32],
+            coefficient_commitment: SecpEncodedPointWitness::parse(GENERATOR).expect("generator"),
+            anchored_offset: SecpEncodedPointWitness::identity(),
+        };
+        let seed = recursive_manifest_seed(context, 1).expect("manifest seed");
+        let accepted_record =
+            native_member_record_digest(0, 0, authorization, host, topic, constants, leaf_binding);
+        let accepted_step = native_step_digest(
+            accepted_record,
+            response_binding,
+            1,
+            signing_key,
+            response,
+            challenge,
+        );
+        let accepted_manifest =
+            recursive_manifest_step(seed, 0, 0, accepted_step).expect("accepted manifest");
+        let inputs = CertificateParentInputs::new(context, 1, 1, accepted_manifest)
+            .expect("external certificate frame");
+        let mut accepted_final = *inputs.initial_state();
+        accepted_final[RECORD_MANIFEST_INDEX] =
+            coordinate_field_value(accepted_manifest).expect("manifest field");
+        accepted_final[RESPONSE_ORDINAL_INDEX] = Scalar::from(1);
+        inputs
+            .validate_authenticated_final_state(accepted_final)
+            .expect("matching external manifest");
+
+        let mut changed_binding = constants;
+        changed_binding.circuit_binding_digest[0] ^= 1;
+        let mut changed_coefficient = constants;
+        changed_coefficient.coefficient_commitment =
+            alternate_point(changed_coefficient.coefficient_commitment);
+        let mut changed_offset = constants;
+        changed_offset.anchored_offset = alternate_point(changed_offset.anchored_offset);
+
+        // The leaf binding stays fixed here deliberately. Each otherwise
+        // witness-selected parent constant must still change the public
+        // record manifest checked after recursive proof verification.
+        for rogue_constants in [changed_binding, changed_coefficient, changed_offset] {
+            let rogue_record = native_member_record_digest(
+                0,
+                0,
+                authorization,
+                host,
+                topic,
+                rogue_constants,
+                leaf_binding,
+            );
+            assert_ne!(rogue_record, accepted_record);
+            let rogue_step = native_step_digest(
+                rogue_record,
+                response_binding,
+                1,
+                signing_key,
+                response,
+                challenge,
+            );
+            assert_ne!(rogue_step, accepted_step);
+            let rogue_manifest =
+                recursive_manifest_step(seed, 0, 0, rogue_step).expect("rogue manifest");
+            assert_ne!(rogue_manifest, accepted_manifest);
+
+            let mut rogue_final = accepted_final;
+            rogue_final[RECORD_MANIFEST_INDEX] =
+                coordinate_field_value(rogue_manifest).expect("rogue manifest field");
+            assert!(inputs
+                .validate_authenticated_final_state(rogue_final)
+                .is_err());
+        }
     }
 
     #[test]

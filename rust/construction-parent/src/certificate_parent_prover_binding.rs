@@ -101,6 +101,27 @@ impl BoundCertificateParentWitness {
     pub(crate) const fn pending_root(&self) -> &[u8; CERTIFICATE_ROOT_BYTES] {
         &self.pending_root
     }
+
+    #[cfg(test)]
+    pub(crate) fn trusted_setup_step(&self) -> Option<CertificateParentStep> {
+        self.steps.first().cloned()
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        [Scalar; CERTIFICATE_RECURRENCE_STATE_ARITY],
+        [Scalar; CERTIFICATE_RECURRENCE_STATE_ARITY],
+        Vec<CertificateParentStep>,
+        [u8; CERTIFICATE_ROOT_BYTES],
+    ) {
+        (
+            self.initial_state,
+            self.final_state,
+            self.steps,
+            self.pending_root,
+        )
+    }
 }
 
 impl CertificateLinearJoinedWitness {

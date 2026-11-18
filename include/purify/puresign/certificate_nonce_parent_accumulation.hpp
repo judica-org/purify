@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <ranges>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -120,6 +123,21 @@ certificate_nonce_recursive_member_digest(
     purify_secp_context* secp_context);
 
 /**
+ * Derive the same member digest from proof-free public leaf material.
+ *
+ * Parent constants are recomputed from the host, accountable topic, and
+ * descriptor. Callers cannot supply constants recovered from a raw proof.
+ */
+[[nodiscard]] Result<bppp::accumulation::Digest>
+certificate_nonce_recursive_member_digest(
+    const CertificateNonceLeafAccumulator& leaf_accumulator,
+    const CertificateNonceResponseAuthorization& authorization,
+    std::uint32_t member_ordinal, const PublicKey& host,
+    const CertificateNoncePublicLeafDescriptor& descriptor,
+    const accountable::ConflictContext& context,
+    purify_secp_context* secp_context);
+
+/**
  * Derive the response relation digest consumed by one recursive step.
  *
  * This is framing, not authorization verification. The response binding is
@@ -136,6 +154,108 @@ certificate_nonce_recursive_step_digest(
     const accountable::ScalarSignature& response,
     const bppp::accumulation::Digest& member_digest,
     purify_secp_context* secp_context);
+
+/**
+ * Borrowed proof-free inputs for one ordered certificate response.
+ *
+ * Owning input ranges must be lvalues. Rvalue ranges are admitted only when
+ * the standard marks them as borrowed, as it does for std::span.
+ */
+class CertificateNonceRecursiveResponseView
+{
+public:
+    template <
+        std::ranges::contiguous_range Hosts,
+        std::ranges::contiguous_range Body,
+        std::ranges::contiguous_range Leaves>
+        requires std::ranges::sized_range<Hosts> &&
+                 std::ranges::sized_range<Body> &&
+                 std::ranges::sized_range<Leaves> &&
+                 std::same_as<
+                     std::ranges::range_value_t<Hosts>, PublicKey> &&
+                 std::same_as<
+                     std::ranges::range_value_t<Body>, unsigned char> &&
+                 std::same_as<
+                     std::ranges::range_value_t<Leaves>,
+                     CertificateNoncePublicLeafDescriptor> &&
+                 (std::is_lvalue_reference_v<Hosts> ||
+                  std::ranges::borrowed_range<Hosts>) &&
+                 (std::is_lvalue_reference_v<Body> ||
+                  std::ranges::borrowed_range<Body>) &&
+                 (std::is_lvalue_reference_v<Leaves> ||
+                  std::ranges::borrowed_range<Leaves>)
+    CertificateNonceRecursiveResponseView(
+        const CertificateNonceResponseAuthorization& authorization,
+        const accountable::ConflictContext& context,
+        Hosts&& ordered_hosts, Body&& canonical_body,
+        const accountable::ScalarSignature& response,
+        Leaves&& ordered_leaves)
+        : authorization_(&authorization), context_(&context),
+          ordered_hosts_(ordered_hosts), canonical_body_(canonical_body),
+          response_(&response), ordered_leaves_(ordered_leaves)
+    {
+    }
+    template <typename Hosts, typename Body, typename Leaves>
+    CertificateNonceRecursiveResponseView(
+        const CertificateNonceResponseAuthorization&&,
+        const accountable::ConflictContext&,
+        Hosts&&, Body&&,
+        const accountable::ScalarSignature&,
+        Leaves&&) = delete;
+    template <typename Hosts, typename Body, typename Leaves>
+    CertificateNonceRecursiveResponseView(
+        const CertificateNonceResponseAuthorization&,
+        const accountable::ConflictContext&&,
+        Hosts&&, Body&&,
+        const accountable::ScalarSignature&,
+        Leaves&&) = delete;
+    template <typename Hosts, typename Body, typename Leaves>
+    CertificateNonceRecursiveResponseView(
+        const CertificateNonceResponseAuthorization&,
+        const accountable::ConflictContext&,
+        Hosts&&, Body&&,
+        const accountable::ScalarSignature&&,
+        Leaves&&) = delete;
+
+    [[nodiscard]] const CertificateNonceResponseAuthorization&
+    authorization() const noexcept
+    {
+        return *authorization_;
+    }
+    [[nodiscard]] const accountable::ConflictContext& context()
+        const noexcept
+    {
+        return *context_;
+    }
+    [[nodiscard]] std::span<const PublicKey> ordered_hosts()
+        const noexcept
+    {
+        return ordered_hosts_;
+    }
+    [[nodiscard]] std::span<const unsigned char> canonical_body()
+        const noexcept
+    {
+        return canonical_body_;
+    }
+    [[nodiscard]] const accountable::ScalarSignature& response()
+        const noexcept
+    {
+        return *response_;
+    }
+    [[nodiscard]] std::span<const CertificateNoncePublicLeafDescriptor>
+    ordered_leaves() const noexcept
+    {
+        return ordered_leaves_;
+    }
+
+private:
+    const CertificateNonceResponseAuthorization* authorization_;
+    const accountable::ConflictContext* context_;
+    std::span<const PublicKey> ordered_hosts_;
+    std::span<const unsigned char> canonical_body_;
+    const accountable::ScalarSignature* response_;
+    std::span<const CertificateNoncePublicLeafDescriptor> ordered_leaves_;
+};
 
 /** Canonical low-255-bit manifest value for recursive member records. */
 class CertificateNonceRecursiveManifest
@@ -167,6 +287,56 @@ private:
         std::uint32_t, const bppp::accumulation::Digest&);
 };
 
+/** Public recursive step digests and their final ordered manifest. */
+class CertificateNonceRecursiveManifestResolution
+{
+public:
+    [[nodiscard]] const bppp::accumulation::Digest&
+    certificate_context_digest() const noexcept
+    {
+        return certificate_context_digest_;
+    }
+    [[nodiscard]] std::uint64_t total_responses() const noexcept
+    {
+        return total_responses_;
+    }
+    [[nodiscard]] std::span<const bppp::accumulation::Digest>
+    step_digests() const noexcept
+    {
+        return step_digests_;
+    }
+    [[nodiscard]] const CertificateNonceRecursiveManifest& manifest()
+        const noexcept
+    {
+        return manifest_;
+    }
+
+private:
+    CertificateNonceRecursiveManifestResolution(
+        bppp::accumulation::Digest certificate_context_digest,
+        std::uint64_t total_responses,
+        std::vector<bppp::accumulation::Digest> step_digests,
+        CertificateNonceRecursiveManifest manifest)
+        : certificate_context_digest_(certificate_context_digest),
+          total_responses_(total_responses),
+          step_digests_(std::move(step_digests)),
+          manifest_(std::move(manifest))
+    {
+    }
+
+    bppp::accumulation::Digest certificate_context_digest_{};
+    std::uint64_t total_responses_ = 0;
+    std::vector<bppp::accumulation::Digest> step_digests_;
+    CertificateNonceRecursiveManifest manifest_;
+
+    friend Result<CertificateNonceRecursiveManifestResolution>
+    certificate_nonce_recursive_manifest(
+        const CertificateNonceLeafAccumulator&,
+        const bppp::accumulation::Digest&,
+        std::span<const CertificateNonceRecursiveResponseView>,
+        purify_secp_context*);
+};
+
 /** Seed the recursive record manifest for one certificate trace. */
 [[nodiscard]] Result<CertificateNonceRecursiveManifest>
 certificate_nonce_recursive_manifest_seed(
@@ -179,6 +349,22 @@ certificate_nonce_recursive_manifest_step(
     const CertificateNonceRecursiveManifest& prior,
     std::uint64_t response_ordinal, std::uint32_t member_ordinal,
     const bppp::accumulation::Digest& step_digest);
+
+/** Derive every recursive step digest for one public response. */
+[[nodiscard]] Result<std::vector<bppp::accumulation::Digest>>
+certificate_nonce_recursive_response_step_digests(
+    const CertificateNonceLeafAccumulator& leaf_accumulator,
+    const CertificateNonceRecursiveResponseView& response,
+    purify_secp_context* secp_context);
+
+/** Resolve a complete ordered public response sequence and manifest. */
+[[nodiscard]] Result<CertificateNonceRecursiveManifestResolution>
+certificate_nonce_recursive_manifest(
+    const CertificateNonceLeafAccumulator& leaf_accumulator,
+    const bppp::accumulation::Digest& certificate_context_digest,
+    std::span<const CertificateNonceRecursiveResponseView>
+        ordered_responses,
+    purify_secp_context* secp_context);
 
 /** One canonical 255-bit field encoding for an ordered member manifest. */
 using CertificateNonceAuthorizationManifest = bppp::ScalarBytes;

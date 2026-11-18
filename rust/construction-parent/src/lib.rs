@@ -25,6 +25,8 @@ mod certificate_nonce_proof;
 mod certificate_parent_input;
 #[cfg(any(test, feature = "prover"))]
 mod certificate_parent_prover_binding;
+#[cfg(test)]
+mod certificate_parent_qualification;
 mod certificate_profile;
 #[cfg(any(test, feature = "prover"))]
 mod certificate_recurrence;

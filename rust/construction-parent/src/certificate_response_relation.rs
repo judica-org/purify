@@ -212,7 +212,7 @@ fn parse_signing_key(encoded: [u8; 32]) -> Result<SecpEncodedPointWitness, Relat
     SecpEncodedPointWitness::parse(point)
 }
 
-fn native_step_digest(
+pub(crate) fn native_step_digest(
     member_record_digest: [u8; 32],
     response_binding: [u8; 32],
     member_count: u32,

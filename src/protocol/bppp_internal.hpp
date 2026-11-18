@@ -32,10 +32,7 @@ inline Result<FieldElement> canonical_sqrt_minus_one()
  */
 struct PreparedExperimentalCircuitZkNormArg {
     NormArgProof norm;
-    std::array<unsigned char, 32> raw_generator_digest{};
     std::array<unsigned char, 32> challenge_digest{};
-    FieldElement mul_scale = FieldElement::zero();
-    FieldElement mul_ratio = FieldElement::zero();
 };
 
 Result<std::optional<PreparedExperimentalCircuitZkNormArg>>

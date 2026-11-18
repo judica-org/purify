@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -23,9 +24,9 @@ namespace purify::bppp::accumulation {
 
 namespace internal {
 
-template <typename Proof>
-Status validate_ipa_encoding(std::size_t dimension, const Proof& proof,
-                             purify_secp_context* context) {
+inline Status validate_ipa_encoding(std::size_t dimension,
+                                    const AlgebraicStepProof& proof,
+                                    purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context));
     if (!is_power_of_two_size(dimension)) {
         return unexpected_error(ErrorCode::InvalidDimensions);
@@ -51,8 +52,7 @@ Status validate_ipa_encoding(std::size_t dimension, const Proof& proof,
     return {};
 }
 
-template <typename Proof>
-void append_ipa(Bytes& out, const Proof& proof) {
+inline void append_ipa(Bytes& out, const AlgebraicStepProof& proof) {
     for (std::size_t round = 0; round < proof.left.size(); ++round) {
         append(out, proof.left[round]);
         append(out, proof.right[round]);
@@ -61,15 +61,14 @@ void append_ipa(Bytes& out, const Proof& proof) {
     append(out, proof.folded_generator);
 }
 
-template <typename Proof>
-Result<Proof> parse_ipa(std::size_t dimension,
-                       std::span<const unsigned char> encoded,
-                       purify_secp_context* context) {
+inline Result<AlgebraicStepProof> parse_ipa(
+    std::size_t dimension, std::span<const unsigned char> encoded,
+    purify_secp_context* context) {
     const auto rounds = log2_dimension(dimension);
     if (encoded.size() != 66 * rounds + 65) {
         return unexpected_error(ErrorCode::InvalidFixedSize);
     }
-    Proof proof;
+    AlgebraicStepProof proof;
     proof.left.resize(rounds);
     proof.right.resize(rounds);
     std::size_t offset = 0;
@@ -88,21 +87,10 @@ Result<Proof> parse_ipa(std::size_t dimension,
 
 PolynomialTerm geometric_tensor(const FieldElement& x, std::size_t dimension);
 
-Result<StepProof> prove_ipa(
-    std::span<const PointBytes> basis, std::vector<FieldElement> a,
-    const PolynomialTerm& weights, const PointBytes& opening_base,
-    Digest transcript, purify_secp_context* context);
-
 struct IpaVerification {
     PolynomialTerm folded;
     PointBytes residual;
 };
-
-Result<PolynomialTerm> verify_ipa(
-    std::size_t dimension, const StepProof& proof,
-    const PolynomialTerm& weights, const PointBytes& commitment,
-    const FieldElement& evaluation, const PointBytes& opening_base,
-    Digest transcript, purify_secp_context* context);
 
 Result<AlgebraicStepProof> prove_algebraic_ipa(
     std::span<const PointBytes> basis, std::vector<FieldElement> a,

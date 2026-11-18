@@ -1,41 +1,49 @@
 # Algebraic accumulation V2
 
-This suite is a distinct typed protocol. It does not reinterpret version-1
-proofs. `AlgebraicStepProof` and `AlgebraicNormReductionProof` are separate
-C++ types. Their codecs require version byte `0x02`. The older untyped
-SHA-256 suite retains separate types and version byte `0x01`; it is not a
-compatibility path for V4 receipts.
+Algebraic accumulation reduces ordered V4 norm obligations to one fixed-basis
+multiscalar multiplication (MSM). A pending claim `(T, f)` represents the
+equation `T = MSM(K, coefficients(f))`. Application acceptance requires
+authenticating the transitions that produced the claim and calling
+`decide()` to check the equation. The
+[construction receipt](construction-receipt.md#parent-relation-and-acceptance)
+authenticates those transitions with a recursive parent proof.
 
-This suite reduces authenticated obligations to one final native
-decision. It does not recursively prove their ancestry or turn
-independently published child proofs into one constant-size receipt.
-Native equation batching keeps the child proof payloads even when it
-shares a final multiscalar multiplication.
+## Basis and V4 preparation
 
-All points are parsed as canonical compressed SEC1, or the unique 33-byte
-zero identity, before transcript absorption. Scalars are canonical
-secp256k1 group scalars. Byte strings, scalars, points, and integers use the
-typed byte frames in `Sha256Transcript`.
+A basis fixes nonzero power-of-two norm and linear lengths `g >= h`, a
+semantic domain, and `D = 2*g` points `K = (G_i, H_i, padding)` from the
+deterministic generator stream. The basis digest is tagged SHA-256 under
+`Purify/BPPP/NormAccumBasisV2` over the length-prefixed domain, `g`, `h`,
+and all `D` compressed SEC1 points. The length and dimensions are LE64.
 
-The coefficient reduction accepts only `AlgebraicPreparedNorm`. Its
-`prepared_binding` is the canonical nonzero scalar emitted by V4. The
-SHA digest carried by `PreparedNorm` is not part of this suite. There is
-no public factory which binds caller-supplied prepared components or a
-caller-selected V4 scalar.
+[V4 preparation](sha256-circuit-transcript-v4.md#native-boundary-and-constrained-requirements)
+authenticates the outer proof and produces the nonzero `prepared_binding`.
+The accumulation adapter matches the exact raw basis points and their
+digest, reconstructs the inner norm residual, and commits to the exact
+canonical coefficient vector `c` as `Cc = <c, H>`. The reduction transcript
+binds the application-selected semantic domain via the basis digest.
 
-The internal V4 adapter consumes an opaque
-`PreparedCircuitZkNormArgV4`. It checks every raw generator and its
-transcript digest, replays the explicit-gamma residual, recomputes the
-coefficient commitment, and emits the two compact polynomial terms required by
-a constrained parent.
-The purpose-owned caller selects the `Basis` semantic digest; V4 itself
-authenticates the raw points, not arbitrary application-domain text.
+A compact term `(scale, offset, factors)` denotes
+`scale * X^offset * product_j(1 + factors[j] * X^(2^j))`.
+Write `B` for the standard generator, `a,b` for the terminal norm scalars,
+`gamma_j` for the round challenges, and `C` for the combined commitment.
+The residual `T` and the two raw-basis polynomial terms are given below.
 
-Prepared objects may be reused. Safety comes from the exact bridge and
-the reduction transcript's semantic-digest binding, not single use.
-Outer preparation and adaptation are not acceptance. Successful
-reduction verification, every authenticated step, and final `decide()`
-remain mandatory.
+```text
+T = C + sum_j(gamma_j X_j + (gamma_j^2 - 1) R_j) - a^2 rho^(2g) B
+f_G(X) = a rho^g lambda^-1 (1 + gamma_0 s^-1 X)
+         product_(j>=1)(1 + gamma_j z^(-2^(j-1)) X^(2^j))
+f_H(X) = b product_(j<log2(h))(1 + gamma_j X^(2^j))
+f(X)   = f_G(X) + X^g f_H(X)
+```
+
+Here `lambda` and `z` are the V4 multiplication scale and ratio, and `s`
+is the fixed even square root of -1. The pending equation still includes
+the coefficient opening described below.
+
+All transcript points are canonical compressed SEC1 or the unique 33-byte
+zero identity. Scalars are canonical secp256k1 group scalars. Byte strings,
+scalars, points, and integers use the typed frames in `Sha256Transcript`.
 
 ## Opening base
 
@@ -63,7 +71,7 @@ non-mutating `OBAS` fork. The exact pair derivation is shared with
 
 ## Coefficient reduction transcript
 
-The transcript order is:
+The transcript absorbs the following fields in order.
 
 1. bytes `Purify/BPPP/CandidateNormReduction/v2`;
 2. bytes basis digest;
@@ -79,14 +87,18 @@ The transcript order is:
     claim, typed norm polynomial, and typed folded polynomial;
 11. derive the fusion scalar at index `round_count`.
 
-The fusion scalar combines the original norm obligation and authenticated
-coefficient-opening obligation into one pending claim. A successful short
-verification is not final acceptance; `decide()` must still discharge the
-resulting fixed-basis obligation.
+The coefficient opening uses the `H` slice of the basis. Its public tensor
+weights are `w_i = product_j gamma_j^bit_j(i)` for `0 <= i < h`.
+The IPA checks the short equation for `Cc + e U`, where `e = <c,w>`.
+The norm claim then has point `T0 = T - b e B` and polynomial `f`.
+The coefficient-opening claim has point `H_final` and polynomial
+`X^g s_H`, where `s_H` encodes the IPA's generator-folding weights.
+The final challenge `chi` binds both obligations. Reduction returns
+`(T0 + chi H_final, f + chi X^g s_H)` as one pending claim.
 
 ## Accumulation-step transcript
 
-This order is the normative transcript for a future constrained parent:
+The transcript absorbs the following fields in order.
 
 1. bytes `Purify/BPPP/CandidateAccumStep/v1`;
 2. bytes basis digest;
@@ -109,8 +121,47 @@ Algebraic prepared binding, coefficient reduction, and accumulation steps all
 reject bases requiring more than 24 full-basis IPA rounds. Accumulation steps
 also enforce the parent relation's limit of 1,024 claims.
 
-The terminal scalar and folded generator are checked by the short group
-equation. The folded generator becomes the next pending claim.
+The step combines the ordered claims into `C = sum_i beta^i T_i` and
+`f = sum_i beta^i f_i`. With `y = f(x)`, it verifies an IPA for
+`C + y U` over `K` and evaluation weights `(1, x, ..., x^(D-1))`.
+The folded generator and its weight polynomial form the new pending claim.
+
+## Inner-product opening
+
+Both openings use half-splitting on witness scalars `v`, public weights
+`w`, and the applicable basis slice `K`. Each round uses these equations.
+
+```text
+L  = <v_L, K_R> + <v_L, w_R> U
+R  = <v_R, K_L> + <v_R, w_L> U
+v' = t v_L + t^-1 v_R
+w' = t^-1 w_L + t w_R
+K' = t^-1 K_L + t K_R
+P' = t^2 L + P + t^-2 R
+```
+
+Here `t` is the challenge derived after absorbing `L,R`. The verifier
+checks `P_final = v_final * (K_final + w_final U)`. The term encoding the
+remaining generator obligation has scale `product(t^-1)` and factors
+`t^2` in reverse round order. The coefficient reduction places that term
+at offset `g`, and the accumulation step uses offset zero.
+
+## Wire encodings and decision
+
+Both proof codecs require version byte `0x02`. The basis fixes the
+round count and exact length.
+
+```text
+step      = 0x02 || (L33 || R33)[log2(D)] || terminal32 || folded_point33
+reduction = 0x02 || evaluation32 || (L33 || R33)[log2(h)] ||
+            terminal32 || folded_point33
+root      = point33 || scale32 || factors32[log2(D)]
+```
+
+The root is a single term at offset zero. Its codec imports the basis
+from the caller and validates only its shape and encodings. Receipt
+verification authenticates the root and its ancestry before
+`decide()` expands the coefficients and checks the fixed-basis MSM.
 
 ## Cross-language fixture
 

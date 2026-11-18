@@ -84,17 +84,6 @@ FieldElement pow_size(FieldElement base, std::size_t exponent) {
     return out;
 }
 
-Result<FieldElement> challenge(const TaggedHash& hash, std::span<const unsigned char> seed) {
-    Bytes input(seed.begin(), seed.end());
-    for (std::size_t counter = 0; counter < 256; ++counter) {
-        input.resize(seed.size());
-        append_size(input, counter);
-        auto candidate = FieldElement::try_from_bytes32(hash.digest(input));
-        if (candidate.has_value() && !candidate->is_zero()) return candidate;
-    }
-    return unexpected_error(ErrorCode::InternalMismatch);
-}
-
 Status validate_basis(const Basis& basis) {
     std::size_t dimension = 0;
     std::size_t generators = 0;
@@ -104,20 +93,6 @@ Status validate_basis(const Basis& basis) {
         !(CheckedSize(basis.n_vec_len()) * 2).store(dimension) ||
         !(CheckedSize(basis.n_vec_len()) + basis.l_vec_len()).store(generators) ||
         basis.dimension() != dimension || basis.norm_generators().size() != generators) {
-        return unexpected_error(ErrorCode::InvalidDimensions);
-    }
-    return {};
-}
-
-Status validate_prepared(const Basis& basis, const PreparedNorm& norm) {
-    if (norm.basis_digest() != basis.digest()) {
-        return unexpected_error(ErrorCode::BindingMismatch);
-    }
-    const auto& g = norm.polynomial()[0];
-    const auto& h = norm.polynomial()[1];
-    if (norm.c_vec().size() != basis.l_vec_len() || g.offset != 0 || h.offset != basis.n_vec_len() ||
-        g.factors.size() != log2_dimension(basis.n_vec_len()) ||
-        h.factors.size() != log2_dimension(basis.l_vec_len())) {
         return unexpected_error(ErrorCode::InvalidDimensions);
     }
     return {};
@@ -141,16 +116,6 @@ Status validate_algebraic_prepared(
         return unexpected_error(ErrorCode::InvalidDimensions);
     }
     return {};
-}
-
-void append_polynomial(Bytes& encoded, std::span<const PolynomialTerm> polynomial) {
-    append_size(encoded, polynomial.size());
-    for (const auto& term : polynomial) {
-        append(encoded, term.scale.to_bytes_be());
-        append_size(encoded, term.offset);
-        append_size(encoded, term.factors.size());
-        for (const auto& factor : term.factors) append(encoded, factor.to_bytes_be());
-    }
 }
 
 Status append_algebraic_point(

@@ -22,31 +22,6 @@ namespace purify::bppp::accumulation {
 // Helpers shared between the translation units of this module live in internal.
 using namespace internal;
 
-Result<Bytes> serialize_step(const Basis& basis, const StepProof& proof,
-                             purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.dimension(), proof, context));
-    Bytes out;
-    out.reserve(66 * log2_dimension(basis.dimension()) + 66);
-    out.push_back(1);
-    append_ipa(out, proof);
-    return out;
-}
-
-Result<StepProof> parse_step(const Basis& basis, std::span<const unsigned char> encoded,
-                             purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    if (encoded.size() != 66 * log2_dimension(basis.dimension()) + 66) {
-        return unexpected_error(ErrorCode::InvalidFixedSize);
-    }
-    if (encoded[0] != 1) {
-        return unexpected_error(ErrorCode::UnsupportedSymbol);
-    }
-    return parse_ipa<StepProof>(
-        basis.dimension(), encoded.subspan(1), context);
-}
-
 Result<Bytes> serialize_algebraic_step(
     const Basis& basis, const AlgebraicStepProof& proof,
     purify_secp_context* context) {
@@ -75,8 +50,7 @@ Result<AlgebraicStepProof> parse_algebraic_step(
     if (encoded[0] != 2) {
         return unexpected_error(ErrorCode::UnsupportedSymbol);
     }
-    return parse_ipa<AlgebraicStepProof>(
-        basis.dimension(), encoded.subspan(1), context);
+    return parse_ipa(basis.dimension(), encoded.subspan(1), context);
 }
 
 Result<Bytes> serialize_root_claim(const Basis& basis,
@@ -127,39 +101,6 @@ Result<PendingClaim> parse_root_claim(
     return out;
 }
 
-Result<Bytes> serialize_norm_reduction(const Basis& basis, const NormReductionProof& proof,
-                                       purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation));
-    (void)evaluation;
-    PURIFY_RETURN_IF_ERROR(validate_ipa_encoding(basis.l_vec_len(), proof.coefficient_opening, context));
-    Bytes out;
-    out.reserve(66 * log2_dimension(basis.l_vec_len()) + 98);
-    out.push_back(1);
-    append(out, proof.coefficient_evaluation);
-    append_ipa(out, proof.coefficient_opening);
-    return out;
-}
-
-Result<NormReductionProof> parse_norm_reduction(const Basis& basis, std::span<const unsigned char> encoded,
-                                               purify_secp_context* context) {
-    PURIFY_RETURN_IF_ERROR(require_secp_context(context));
-    PURIFY_RETURN_IF_ERROR(validate_basis(basis));
-    if (encoded.size() != 66 * log2_dimension(basis.l_vec_len()) + 98) {
-        return unexpected_error(ErrorCode::InvalidFixedSize);
-    }
-    if (encoded[0] != 1) {
-        return unexpected_error(ErrorCode::UnsupportedSymbol);
-    }
-    NormReductionProof proof;
-    std::copy_n(encoded.data() + 1, 32, proof.coefficient_evaluation.begin());
-    PURIFY_ASSIGN_OR_RETURN(auto evaluation, FieldElement::try_from_bytes32(proof.coefficient_evaluation));
-    (void)evaluation;
-    PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening,
-                            parse_ipa<StepProof>(basis.l_vec_len(), encoded.subspan(33), context));
-    return proof;
-}
-
 Result<Bytes> serialize_algebraic_norm_reduction(
     const Basis& basis,
     const AlgebraicNormReductionProof& proof,
@@ -204,9 +145,8 @@ parse_algebraic_norm_reduction(
                                                  proof.coefficient_evaluation));
     (void)evaluation;
     PURIFY_ASSIGN_OR_RETURN(proof.coefficient_opening,
-                            parse_ipa<AlgebraicStepProof>(basis.l_vec_len(),
-                                                          encoded.subspan(33),
-                                                          context));
+                            parse_ipa(basis.l_vec_len(), encoded.subspan(33),
+                                      context));
     return proof;
 }
 

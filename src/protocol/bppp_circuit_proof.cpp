@@ -18,7 +18,6 @@
 #include <string_view>
 #include <utility>
 
-#include "bppp_backend_cache.hpp"
 #include "bppp_circuit_reduction.hpp"
 #include "bppp_internal.hpp"
 #include "bppp_masking.hpp"
@@ -461,15 +460,11 @@ finish_prepared_circuit_proof(
   out.norm.n_vec_len = public_data->n_vec_len;
   out.norm.commitment = commitment;
   out.norm.proof = proof.proof;
-  out.raw_generator_digest =
-      generator_backend_cache_key(public_data->raw_generators);
   assert(public_data->challenge_digest.size() ==
          out.challenge_digest.size());
   std::copy(public_data->challenge_digest.begin(),
             public_data->challenge_digest.end(),
             out.challenge_digest.begin());
-  out.mul_scale = public_data->mul_scale;
-  out.mul_ratio = public_data->mul_ratio;
   return out;
 }
 

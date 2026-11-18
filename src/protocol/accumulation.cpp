@@ -168,9 +168,8 @@ Result<AlgebraicStepProof> prove_algebraic_step(
         auto proof,
         prove_algebraic_ipa(basis.points(), std::move(coefficients), weights,
                             state.opening_base, state.transcript, 2, context));
-    PURIFY_ASSIGN_OR_RETURN(
-        auto pending, verify_algebraic_step(basis, claims, proof, context));
-    (void)pending;
+    PURIFY_RETURN_IF_ERROR(
+        verify_algebraic_step(basis, claims, proof, context));
     return proof;
 }
 
@@ -184,9 +183,8 @@ Result<PendingClaim> verify_algebraic_step(
         proof.right.size() != rounds) {
         return unexpected_error(ErrorCode::SizeMismatch);
     }
-    PURIFY_ASSIGN_OR_RETURN(
-        auto terminal, FieldElement::try_from_bytes32(proof.terminal_scalar));
-    (void)terminal;
+    PURIFY_RETURN_IF_ERROR(
+        FieldElement::try_from_bytes32(proof.terminal_scalar));
     PURIFY_ASSIGN_OR_RETURN(
         auto state, make_algebraic_step_context(basis, claims, context));
     const auto weights =

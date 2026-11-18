@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <numeric>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -387,11 +388,9 @@ prove_algebraic_norm_reduction(
         basis.l_vec_len(), FieldElement::zero());
     add_coefficients(
         expanded_weights, tensor, FieldElement::one());
-    auto evaluation = FieldElement::zero();
-    for (std::size_t i = 0; i < coefficients.size(); ++i) {
-        evaluation = evaluation +
-            coefficients[i] * expanded_weights[i];
-    }
+    const auto evaluation = std::inner_product(
+        coefficients.begin(), coefficients.end(), expanded_weights.begin(),
+        FieldElement::zero());
 
     AlgebraicNormReductionProof proof;
     proof.coefficient_evaluation = evaluation.to_bytes_be();
@@ -404,9 +403,8 @@ prove_algebraic_norm_reduction(
         proof.coefficient_opening,
         prove_algebraic_ipa(h_basis, std::move(coefficients), state.weights,
                             state.opening_base, state.transcript, 0, context));
-    PURIFY_ASSIGN_OR_RETURN(auto pending, verify_algebraic_norm_reduction(
-                                              basis, norm, proof, context));
-    (void)pending;
+    PURIFY_RETURN_IF_ERROR(
+        verify_algebraic_norm_reduction(basis, norm, proof, context));
     return proof;
 }
 

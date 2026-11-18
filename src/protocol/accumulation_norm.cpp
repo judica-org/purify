@@ -337,12 +337,12 @@ prepare_experimental_circuit_zk_norm_arg(
     const ExperimentalCircuitZkNormArgProof& proof,
     purify_secp_context* context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitBackend* cache) {
+    ExperimentalCircuitBackend*) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context));
     PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     PURIFY_ASSIGN_OR_RETURN(
         auto prepared, detail::prepare_experimental_circuit_zk_norm_arg(
-                           circuit, proof, context, statement_binding, cache));
+                           circuit, proof, context, statement_binding));
     if (!prepared.has_value()) {
         return unexpected_error(ErrorCode::EquationMismatch);
     }
@@ -362,15 +362,14 @@ prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
     std::span<const PointBytes> public_commitments,
     purify_secp_context* context,
     std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitBackend* cache) {
+    ExperimentalCircuitBackend*) {
     PURIFY_RETURN_IF_ERROR(require_secp_context(context));
     PURIFY_RETURN_IF_ERROR(validate_basis(basis));
     PURIFY_ASSIGN_OR_RETURN(
         auto prepared,
         detail::
             prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
-                circuit, proof, public_commitments, context, statement_binding,
-                cache));
+                circuit, proof, public_commitments, context, statement_binding));
     if (!prepared.has_value()) {
         return unexpected_error(ErrorCode::EquationMismatch);
     }

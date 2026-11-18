@@ -140,10 +140,6 @@ protected:
 private:
     friend struct detail::ExperimentalCircuitBackendAccess;
 
-    [[nodiscard]] virtual std::shared_ptr<const void> find_public_data_impl(
-        const std::array<unsigned char, 32>& key) const = 0;
-    virtual void insert_public_data_impl(std::array<unsigned char, 32> key,
-                                         std::shared_ptr<const void> value) = 0;
     [[nodiscard]] virtual purify_bppp_backend_resources* get_or_create_backend_resources_impl(
         std::span<const PointBytes> generators,
         purify_secp_context* secp_context) = 0;
@@ -152,12 +148,6 @@ private:
 /** @brief Internal access helpers for experimental BPPP backend implementations. */
 namespace detail {
 struct ExperimentalCircuitBackendAccess {
-    [[nodiscard]] static std::shared_ptr<const void> find_public_data(
-        const ExperimentalCircuitBackend* backend,
-        const std::array<unsigned char, 32>& key);
-    static void insert_public_data(ExperimentalCircuitBackend* backend,
-                                   std::array<unsigned char, 32> key,
-                                   std::shared_ptr<const void> value);
     [[nodiscard]] static purify_bppp_backend_resources* get_or_create_backend_resources(
         ExperimentalCircuitBackend* backend,
         std::span<const PointBytes> generators,
@@ -181,10 +171,6 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 
-    [[nodiscard]] std::shared_ptr<const void> find_public_data_impl(
-        const std::array<unsigned char, 32>& key) const override;
-    void insert_public_data_impl(std::array<unsigned char, 32> key,
-                                 std::shared_ptr<const void> value) override;
     [[nodiscard]] purify_bppp_backend_resources* get_or_create_backend_resources_impl(
         std::span<const PointBytes> generators,
         purify_secp_context* secp_context) override;
@@ -192,7 +178,7 @@ private:
     friend class ExperimentalCircuitCache;
 };
 
-/** @brief Caller-owned cache for reusable experimental circuit reduction and BPPP backend data. */
+/** @brief Caller-owned cache for BPPP generator resources. */
 class ExperimentalCircuitCache final : public ExperimentalCircuitBackend {
 public:
     ExperimentalCircuitCache();
@@ -208,18 +194,13 @@ public:
      * @brief Clones one warmed backend-resource line for thread-local use.
      *
      * If a warmed backend entry matching `generators` exists, it is deep-cloned so the returned
-     * line has its own scratch space and mutable generator scratch buffers for that one entry. No
-     * public reduction data is copied into the clone. If no warmed entry matches, the returned
-     * line is empty.
+     * line has its own scratch space and mutable generator scratch buffers for that one entry.
+     * If no warmed entry matches, the returned line is empty.
      *
      * @return A thread-local one-line clone, or a backend/internal error if duplication fails.
      */
     [[nodiscard]] Result<ExperimentalCircuitCacheLine> clone_line_for_thread(
         std::span<const PointBytes> generators) const;
-    /** @brief Looks up opaque cached reduction data by digest key. */
-    [[nodiscard]] std::shared_ptr<const void> find_public_data(const std::array<unsigned char, 32>& key) const;
-    /** @brief Stores opaque cached reduction data by digest key. */
-    void insert_public_data(std::array<unsigned char, 32> key, std::shared_ptr<const void> value);
     /** @brief Returns cached backend resources for this generator set, creating them on first use. */
     [[nodiscard]] purify_bppp_backend_resources* get_or_create_backend_resources(
         std::span<const PointBytes> generators,
@@ -229,10 +210,6 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 
-    [[nodiscard]] std::shared_ptr<const void> find_public_data_impl(
-        const std::array<unsigned char, 32>& key) const override;
-    void insert_public_data_impl(std::array<unsigned char, 32> key,
-                                 std::shared_ptr<const void> value) override;
     [[nodiscard]] purify_bppp_backend_resources* get_or_create_backend_resources_impl(
         std::span<const PointBytes> generators,
         purify_secp_context* secp_context) override;

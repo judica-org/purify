@@ -267,7 +267,7 @@ attempt_circuit_zk_norm_arg_v4(const ProverRunV4 &run, std::uint64_t attempt) {
                           reduce_experimental_circuit_to_norm_arg(
                               circuit, assignment, *raw_commitment,
                               secp_context, statement_binding,
-                              externalize_commitments, cache, &challenges));
+                              externalize_commitments, &challenges));
   if (generator_backend_cache_key(hidden.public_data->raw_generators) !=
       raw_generator_digest) {
     return unexpected_error(ErrorCode::InternalMismatch);

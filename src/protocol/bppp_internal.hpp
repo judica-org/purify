@@ -43,8 +43,7 @@ prepare_experimental_circuit_zk_norm_arg(
     const NativeBulletproofCircuit& circuit,
     const ExperimentalCircuitZkNormArgProof& proof,
     purify_secp_context* secp_context,
-    std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitBackend* cache);
+    std::span<const unsigned char> statement_binding);
 
 Result<std::optional<PreparedExperimentalCircuitZkNormArg>>
 prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
@@ -52,7 +51,6 @@ prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
     const ExperimentalCircuitZkNormArgProof& proof,
     std::span<const PointBytes> public_commitments,
     purify_secp_context* secp_context,
-    std::span<const unsigned char> statement_binding,
-    ExperimentalCircuitBackend* cache);
+    std::span<const unsigned char> statement_binding);
 
 } // namespace purify::bppp::detail

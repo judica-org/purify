@@ -81,14 +81,12 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data(
     const PointBytes &raw_commitment,
     purify_secp_context *secp_context,
     bool externalize_commitments = false,
-    ExperimentalCircuitBackend *cache = nullptr,
     const CircuitNormArgChallenges *explicit_challenges = nullptr);
 
 Result<CircuitNormArgPublicDataPtr>
 build_circuit_norm_arg_public_data_from_challenges(
     const NativeBulletproofCircuit &circuit,
     purify_secp_context *secp_context, bool externalize_commitments,
-    ExperimentalCircuitBackend *cache,
     const CircuitNormArgChallenges &explicit_challenges);
 
 Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
@@ -98,7 +96,6 @@ Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding,
     bool externalize_commitments = false,
-    ExperimentalCircuitBackend *cache = nullptr,
     const CircuitNormArgChallenges *explicit_challenges = nullptr);
 
 SecretNormArgInputs

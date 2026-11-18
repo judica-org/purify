@@ -494,7 +494,7 @@ void test_public_commitment_dlog_rejects_raw_basis_attack(TestContext& ctx)
     auto prepared = purify::bppp::detail::
         prepare_experimental_circuit_zk_norm_arg_with_public_commitments(
             attack->circuit, attack->honest_proof, exact_outputs,
-            context.get(), attack->statement, nullptr);
+            context.get(), attack->statement);
     ctx.expect(prepared.has_value() && prepared->has_value(),
                "honest V3 proof prepares its public norm statement");
     if (!prepared.has_value() || !prepared->has_value()) return;

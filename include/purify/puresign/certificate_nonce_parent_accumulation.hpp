@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <bit>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -744,6 +745,11 @@ private:
 class CertificateNonceParentAccumulator {
 public:
     static constexpr std::size_t kTreeFanout = 16;
+    static constexpr std::size_t kRootClaimRounds = std::bit_width(
+        2 * CertificateNonceLeafAccumulator::kNormVectorLength) - 1;
+    static constexpr std::size_t kRootClaimSerializedSize =
+        33 + 32 + kRootClaimRounds * 32;
+    static_assert(kRootClaimSerializedSize == 481);
     /** Largest response sequence admitted by certificate framing. */
     static constexpr std::uint64_t kMaxResponses{
         std::uint64_t{1} << 60};

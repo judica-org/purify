@@ -36,7 +36,6 @@ pub(crate) const CERTIFICATE_TREE_FANOUT: u64 = 16;
 pub(crate) const CERTIFICATE_MAX_RESPONSES: u64 = 1 << 60;
 
 pub(crate) const CERTIFICATE_NONCE_PROOF_BYTES: usize = 1_072;
-pub(crate) const CERTIFICATE_LEAF_DESCRIPTOR_BYTES: usize = 32 + 32 + 33 + 33;
 pub(crate) const CERTIFICATE_REDUCTION_PROOF_BYTES: usize = 890;
 pub(crate) const CERTIFICATE_STEP_PROOF_BYTES: usize = 924;
 

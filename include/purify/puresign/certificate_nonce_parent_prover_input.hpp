@@ -9,11 +9,27 @@
 
 #pragma once
 
+#include <array>
 #include <span>
 
 #include "purify/puresign/certificate_nonce_parent_accumulation.hpp"
 
 namespace purify::puresign_plusplus {
+
+/** Fixed external public frame consumed by the certificate prover. */
+inline constexpr std::size_t kCertificateParentPublicFrameSize = 96;
+using CertificateParentPublicFrame =
+    std::array<unsigned char, kCertificateParentPublicFrameSize>;
+
+/**
+ * Serialize independently resolved public certificate facts for proving.
+ *
+ * Every field comes from the private-constructor manifest resolution. The
+ * frame contains no proof- or peer-supplied context, count, or manifest.
+ */
+[[nodiscard]] Result<CertificateParentPublicFrame>
+serialize_certificate_parent_public_frame(
+    const CertificateNonceRecursiveManifestResolution& resolution);
 
 /** Exact public response and raw nonce proofs joined for proving. */
 class CertificateNonceResponseProverView

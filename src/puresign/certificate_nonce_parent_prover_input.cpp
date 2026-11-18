@@ -4,7 +4,9 @@
 
 #include "purify/puresign/certificate_nonce_parent_prover_input.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -20,6 +22,10 @@ constexpr std::array<unsigned char, 16> kJoinedWitnessMagic{
 constexpr std::array<unsigned char, 16> kLinearJoinedWitnessMagic{
     'P', 'u', 'r', 'i', 'f', 'y', '/', 'C',
     'e', 'r', 't', 'J', 'W', 'i', 't', '3'};
+constexpr std::array<unsigned char, 16>
+    kCertificateParentPublicFrameMagic{
+        'P', 'u', 'r', 'i', 'f', 'y', '/', 'C',
+        'e', 'r', 't', 'P', 'u', 'b', '1', 0};
 constexpr std::size_t kDigestSize = 32;
 constexpr std::size_t kPointSize = 33;
 constexpr std::size_t kParentConstantsSize =
@@ -34,6 +40,10 @@ constexpr std::size_t kLinearMemberSize =
     kParentConstantsSize + NonceProof::kSerializedSize +
     CertificateNonceLinearReceipt::kReductionSerializedSize +
     CertificateNonceLinearReceipt::kStepSerializedSize;
+static_assert(
+    kCertificateParentPublicFrameMagic.size() + 2 * kDigestSize +
+        2 * sizeof(std::uint64_t) ==
+    kCertificateParentPublicFrameSize);
 static_assert(kLinearHeaderSize == 120);
 static_assert(kLinearMemberSize == 2'984);
 
@@ -80,6 +90,41 @@ Status add_size(std::size_t& total, std::size_t value)
 }
 
 } // namespace
+
+Result<CertificateParentPublicFrame>
+serialize_certificate_parent_public_frame(
+    const CertificateNonceRecursiveManifestResolution& resolution)
+{
+    const auto step_count = resolution.step_digests().size();
+    if (!size_fits_u64(step_count)) {
+        return unexpected_error(
+            ErrorCode::Overflow,
+            "certificate_parent_public_frame:step_count");
+    }
+
+    CertificateParentPublicFrame frame{};
+    std::size_t offset = 0;
+    const auto append = [&](std::span<const unsigned char> bytes) {
+        assert(bytes.size() <= frame.size() - offset);
+        std::copy(bytes.begin(), bytes.end(), frame.begin() + offset);
+        offset += bytes.size();
+    };
+    const auto append_u64 = [&](std::uint64_t value) {
+        assert(sizeof(value) <= frame.size() - offset);
+        for (unsigned int shift = 56; shift != 0; shift -= 8) {
+            frame[offset++] = static_cast<unsigned char>(value >> shift);
+        }
+        frame[offset++] = static_cast<unsigned char>(value);
+    };
+
+    append(kCertificateParentPublicFrameMagic);
+    append(resolution.certificate_context_digest());
+    append_u64(resolution.total_responses());
+    append_u64(static_cast<std::uint64_t>(step_count));
+    append(resolution.manifest().bytes());
+    assert(offset == frame.size());
+    return frame;
+}
 
 Result<Bytes> serialize_accepted_certificate_nonce_parent_witness(
     const CertificateNonceParentAccumulator& accumulator,

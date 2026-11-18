@@ -629,9 +629,11 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
         purify_construction_parent_backend
     )
     target_sources(purify PRIVATE
+        src/puresign/certificate_parent_verifier.cpp
         src/puresign/construction_parent_verifier.cpp
     )
     target_compile_definitions(purify PUBLIC
+        PURIFY_HAS_CERTIFICATE_PARENT_VERIFIER=1
         PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
     )
     install(FILES "${PURIFY_CONSTRUCTION_PARENT_LIBRARY}"

@@ -33,7 +33,7 @@ use crate::{scalar_to_canonical, RelationError, Scalar};
 
 /// Failure while binding canonical CertJWit3 data to the certificate relation.
 #[derive(Debug, Eq, Error, PartialEq)]
-pub(crate) enum CertificateParentWitnessBindingError {
+pub enum CertificateParentWitnessBindingError {
     #[error("malformed certificate parent witness state: {0}")]
     State(&'static str),
     #[error("certificate parent witness count mismatch: expected {expected}, actual {actual}")]
@@ -83,6 +83,7 @@ pub(crate) struct BoundCertificateParentWitness {
     final_state: [Scalar; CERTIFICATE_RECURRENCE_STATE_ARITY],
     steps: Vec<CertificateParentStep>,
     pending_root: [u8; CERTIFICATE_ROOT_BYTES],
+    public_inputs: CertificateParentInputs,
 }
 
 impl BoundCertificateParentWitness {
@@ -120,6 +121,24 @@ impl BoundCertificateParentWitness {
             self.final_state,
             self.steps,
             self.pending_root,
+        )
+    }
+
+    pub(crate) fn into_prover_parts(
+        self,
+    ) -> (
+        [Scalar; CERTIFICATE_RECURRENCE_STATE_ARITY],
+        [Scalar; CERTIFICATE_RECURRENCE_STATE_ARITY],
+        Vec<CertificateParentStep>,
+        [u8; CERTIFICATE_ROOT_BYTES],
+        CertificateParentInputs,
+    ) {
+        (
+            self.initial_state,
+            self.final_state,
+            self.steps,
+            self.pending_root,
+            self.public_inputs,
         )
     }
 }
@@ -253,6 +272,7 @@ impl CertificateLinearJoinedWitness {
             final_state: expected_input,
             steps,
             pending_root,
+            public_inputs: inputs,
         })
     }
 }

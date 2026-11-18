@@ -4,6 +4,7 @@
 
 #include "purify/puresign/construction_parent_verifier.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -24,6 +25,15 @@ static_assert(detail::kConstructionParentDescriptorSize ==
               PURIFY_CONSTRUCTION_PARENT_DESCRIPTOR_SIZE);
 static_assert(ConstructionReceiptEnvelope::kParentProofSize ==
               PURIFY_CONSTRUCTION_PARENT_PROOF_SIZE);
+static_assert(sizeof(purify_construction_parent_statement) ==
+              PURIFY_CONSTRUCTION_PARENT_STATEMENT_SIZE);
+
+/** Copies one fixed-width statement field; a width mismatch does not compile. */
+template <std::size_t N>
+void copy_field(std::uint8_t (&out)[N],
+                const std::array<unsigned char, N>& in) {
+    std::copy(in.begin(), in.end(), out);
+}
 
 Unexpected<Error> load_error(
     purify_construction_parent_status status) {
@@ -32,15 +42,13 @@ Unexpected<Error> load_error(
         return unexpected_error(ErrorCode::RangeViolation);
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_OPEN_FAILED:
         return unexpected_error(ErrorCode::IoOpenFailed);
-    case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_REJECTED:
-        return unexpected_error(ErrorCode::InternalMismatch);
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_SNAPSHOT_FAILED:
         return unexpected_error(ErrorCode::IoWriteFailed);
+    case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_REJECTED:
     case PURIFY_CONSTRUCTION_PARENT_PROOF_REJECTED:
-    case PURIFY_CONSTRUCTION_PARENT_BUFFER_TOO_SMALL:
     case PURIFY_CONSTRUCTION_PARENT_INTERNAL_ERROR:
     case PURIFY_CONSTRUCTION_PARENT_OK:
-        return unexpected_error(ErrorCode::InternalMismatch);
+        break;
     }
     return unexpected_error(ErrorCode::InternalMismatch);
 }
@@ -49,16 +57,14 @@ Unexpected<Error> verify_error(
     purify_construction_parent_status status) {
     switch (status) {
     case PURIFY_CONSTRUCTION_PARENT_MALFORMED:
-        return unexpected_error(ErrorCode::BackendRejectedInput);
     case PURIFY_CONSTRUCTION_PARENT_PROOF_REJECTED:
         return unexpected_error(ErrorCode::BackendRejectedInput);
-    case PURIFY_CONSTRUCTION_PARENT_BUFFER_TOO_SMALL:
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_OPEN_FAILED:
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_REJECTED:
     case PURIFY_CONSTRUCTION_PARENT_ARTIFACT_SNAPSHOT_FAILED:
     case PURIFY_CONSTRUCTION_PARENT_INTERNAL_ERROR:
     case PURIFY_CONSTRUCTION_PARENT_OK:
-        return unexpected_error(ErrorCode::InternalMismatch);
+        break;
     }
     return unexpected_error(ErrorCode::InternalMismatch);
 }
@@ -149,16 +155,22 @@ Result<VerifiedConstructionReceipt> ConstructionParentVerifier::verify(
     std::array<unsigned char,
                ConstructionReceiptAccumulator::kRootClaimSerializedSize>
         pending_root{};
-    const auto& basis_digest = leaves.basis().digest();
-    const auto recovery_root = setup.recovery_root().to_bytes_be();
+    purify_construction_parent_statement statement{};
+    copy_field(statement.construction_statement_digest,
+               inputs.statement_digest);
+    copy_field(statement.resolved_setup_record_digest,
+               setup.resolved_digest().bytes());
+    copy_field(statement.recovery_root, setup.recovery_root().to_bytes_be());
+    copy_field(statement.native_basis_digest, leaves.basis().digest());
+    copy_field(statement.native_raw_generator_digest,
+               inputs.raw_generator_digest);
+    statement.setup_leaf_count = inputs.setup_count;
+    statement.anchor_leaf_count = inputs.anchor_count;
     const Bytes& proof = envelope.parent_proof();
-    const auto status = purify_construction_parent_verify(
-        impl_->verifier, inputs.statement_digest.data(),
-        setup.resolved_digest().bytes().data(), recovery_root.data(),
-        basis_digest.data(), inputs.raw_generator_digest.data(),
-        inputs.setup_count, inputs.anchor_count, inputs.descriptors.data(),
+    const auto status = purify_construction_parent_authenticate_root(
+        impl_->verifier, &statement, inputs.descriptors.data(),
         inputs.descriptors.size(), proof.data(), proof.size(),
-        pending_root.data(), pending_root.size());
+        pending_root.data());
     if (status != PURIFY_CONSTRUCTION_PARENT_OK) {
         return verify_error(status);
     }

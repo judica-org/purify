@@ -5,7 +5,7 @@
 //! parameters, or prover key, and it cannot perform setup or proving.
 
 use std::io::{self, Read, Seek};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use nova_snark::{
     errors::NovaError,
@@ -214,10 +214,12 @@ impl Verifier {
             });
         }
 
+        // The lock only serializes calls and guards no data, so a panic in an
+        // earlier call leaves nothing to distrust.
         let _guard = self
             .operation
             .lock()
-            .expect("direct Nova suite operation mutex poisoned");
+            .unwrap_or_else(PoisonError::into_inner);
         self.pool.install(|| {
             let shape = self.proof_shape.as_fixed_serde_shape();
             let compressed = shape.decode_canonical::<CompressedProof>(proof)?;

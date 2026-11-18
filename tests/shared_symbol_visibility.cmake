@@ -16,7 +16,7 @@ endif()
 
 foreach(private_symbol IN ITEMS
         purify_construction_parent_verifier_load
-        purify_construction_parent_verify
+        purify_construction_parent_authenticate_root
         purify_construction_parent_verifier_destroy)
     string(FIND "${global_symbols}" "${private_symbol}" symbol_offset)
     if(NOT symbol_offset EQUAL -1)

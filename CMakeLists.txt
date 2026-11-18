@@ -377,6 +377,8 @@ add_library(purify
     src/api/c_api.cpp
     src/api/api.cpp
     src/protocol/bulletproof.cpp
+    src/protocol/bulletproof_circuit.cpp
+    src/protocol/bulletproof_gadgets.cpp
     src/protocol/nonce_batch.cpp
     src/support/curve.cpp
     src/protocol/expr.cpp
@@ -809,6 +811,8 @@ if(PURIFY_BUILD_BENCH)
         src/api/c_api.cpp
         src/api/api.cpp
         src/protocol/bulletproof.cpp
+        src/protocol/bulletproof_circuit.cpp
+        src/protocol/bulletproof_gadgets.cpp
         src/protocol/nonce_batch.cpp
         src/support/curve.cpp
         src/protocol/expr.cpp

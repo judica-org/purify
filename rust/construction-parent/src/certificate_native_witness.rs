@@ -101,11 +101,11 @@ impl CertificateNativeReceiptWitness {
                 .map_err(|_| RelationError::Malformed("certificate native member count"))?;
             let mut reductions = Vec::with_capacity(member_count_usize);
             for _ in 0..member_count_usize {
-                reductions.push(parse_reduction(
+                reductions.push(parse_certificate_reduction(
                     cursor.array::<CERTIFICATE_REDUCTION_PROOF_BYTES>()?,
                 )?);
             }
-            let step = parse_step(cursor.array::<CERTIFICATE_STEP_PROOF_BYTES>()?)?;
+            let step = parse_certificate_step(cursor.array::<CERTIFICATE_STEP_PROOF_BYTES>()?)?;
             responses.push(CertificateNativeResponseWitness {
                 boundary,
                 statement_digest,
@@ -125,7 +125,9 @@ impl CertificateNativeReceiptWitness {
         }
         let mut tree_steps = Vec::with_capacity(tree_step_count_usize);
         for _ in 0..tree_step_count_usize {
-            tree_steps.push(parse_step(cursor.array::<CERTIFICATE_STEP_PROOF_BYTES>()?)?);
+            tree_steps.push(parse_certificate_step(
+                cursor.array::<CERTIFICATE_STEP_PROOF_BYTES>()?,
+            )?);
         }
         cursor.finish()?;
         Ok(Self {
@@ -148,7 +150,7 @@ impl CertificateNativeReceiptWitness {
     }
 }
 
-fn parse_reduction(
+pub(crate) fn parse_certificate_reduction(
     encoded: [u8; CERTIFICATE_REDUCTION_PROOF_BYTES],
 ) -> Result<CandidateNormReductionProofWitness, RelationError> {
     if encoded[0] != REDUCTION_VERSION {
@@ -203,7 +205,7 @@ fn parse_reduction(
     })
 }
 
-fn parse_step(
+pub(crate) fn parse_certificate_step(
     encoded: [u8; CERTIFICATE_STEP_PROOF_BYTES],
 ) -> Result<CandidateStepProofWitness, RelationError> {
     if encoded[0] != STEP_VERSION {

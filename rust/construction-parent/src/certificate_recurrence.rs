@@ -10,6 +10,10 @@ use crate::candidate::CandidateRootClaim;
 use crate::certificate_profile::{
     CERTIFICATE_MAX_RESPONSES, CERTIFICATE_MEMBER_BATCH_CAPACITY,
     CERTIFICATE_RECURRENCE_STATE_ARITY, CERTIFICATE_ROOT_ROUNDS, CERTIFICATE_ROOT_STATE_ARITY,
+    CONTEXT_HIGH_INDEX, CONTEXT_LOW_INDEX, MEMBER_COUNT_INDEX, MEMBER_ORDINAL_INDEX,
+    NONCE_PREFIX_INDEX, NONCE_X_INDEX, RECORD_MANIFEST_INDEX, RESPONSE_BINDING_INDEX,
+    RESPONSE_ORDINAL_INDEX, ROOT_FACTORS_START, ROOT_PREFIX_INDEX, ROOT_SCALE_INDEX, ROOT_X_INDEX,
+    TOTAL_RESPONSES_INDEX,
 };
 use crate::certificate_recursive_manifest::recursive_manifest_seed;
 use crate::secp_native::{
@@ -17,21 +21,6 @@ use crate::secp_native::{
     SecpScalarWitness,
 };
 use crate::{RelationError, Scalar};
-
-pub(crate) const ROOT_PREFIX_INDEX: usize = 0;
-pub(crate) const ROOT_X_INDEX: usize = 1;
-pub(crate) const ROOT_SCALE_INDEX: usize = 2;
-pub(crate) const ROOT_FACTORS_START: usize = 3;
-pub(crate) const CONTEXT_HIGH_INDEX: usize = CERTIFICATE_ROOT_STATE_ARITY;
-pub(crate) const CONTEXT_LOW_INDEX: usize = CONTEXT_HIGH_INDEX + 1;
-pub(crate) const TOTAL_RESPONSES_INDEX: usize = CONTEXT_LOW_INDEX + 1;
-pub(crate) const NONCE_PREFIX_INDEX: usize = TOTAL_RESPONSES_INDEX + 1;
-pub(crate) const NONCE_X_INDEX: usize = NONCE_PREFIX_INDEX + 1;
-pub(crate) const RECORD_MANIFEST_INDEX: usize = NONCE_X_INDEX + 1;
-pub(crate) const RESPONSE_ORDINAL_INDEX: usize = RECORD_MANIFEST_INDEX + 1;
-pub(crate) const MEMBER_ORDINAL_INDEX: usize = RESPONSE_ORDINAL_INDEX + 1;
-pub(crate) const MEMBER_COUNT_INDEX: usize = MEMBER_ORDINAL_INDEX + 1;
-pub(crate) const RESPONSE_BINDING_INDEX: usize = MEMBER_COUNT_INDEX + 1;
 
 /// Exact public state carried between homogeneous certificate-member steps.
 #[derive(Clone, Debug, Eq, PartialEq)]

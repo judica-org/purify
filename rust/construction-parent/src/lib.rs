@@ -22,14 +22,14 @@ mod certificate_member_leaf;
 mod certificate_native_witness;
 #[cfg(any(test, feature = "prover"))]
 mod certificate_nonce_proof;
-#[cfg(any(test, feature = "prover"))]
+mod certificate_parent_input;
 mod certificate_profile;
 #[cfg(any(test, feature = "prover"))]
 mod certificate_recurrence;
-#[cfg(any(test, feature = "prover"))]
 mod certificate_recursive_manifest;
 #[cfg(any(test, feature = "prover"))]
 mod certificate_response_relation;
+mod certificate_root;
 #[cfg(any(test, feature = "prover"))]
 mod circuit_norm;
 #[cfg(any(test, feature = "prover"))]

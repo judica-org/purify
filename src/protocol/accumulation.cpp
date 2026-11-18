@@ -1242,6 +1242,20 @@ Result<PendingClaim> parse_root_claim(
     return out;
 }
 
+Result<PendingClaim> canonical_zero_claim(const Basis& basis) {
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(
+        validate_algebraic_dimension(basis.dimension()),
+        "accumulation:zero_claim_dimension");
+    return PendingClaim(
+        basis.digest(), PointBytes{},
+        {PolynomialTerm{
+            FieldElement::zero(), 0,
+            std::vector<FieldElement>(
+                log2_dimension(basis.dimension()),
+                FieldElement::zero())}});
+}
+
 Result<Bytes> serialize_norm_reduction(const Basis& basis, const NormReductionProof& proof,
                                        purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");

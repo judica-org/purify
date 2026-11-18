@@ -61,17 +61,42 @@ pub(crate) fn recursive_manifest_step(
 mod tests {
     use super::*;
 
+    fn encode_hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
     #[test]
     fn recursive_manifest_is_ordered_and_canonical() {
         let seed = recursive_manifest_seed([0x11; 32], 2).expect("manifest seed");
         let first = recursive_manifest_step(seed, 0, 0, [0x22; 32]).expect("first record");
         let second = recursive_manifest_step(first, 0, 1, [0x33; 32]).expect("second record");
         let reordered = recursive_manifest_step(first, 1, 0, [0x33; 32]).expect("reordered record");
+        let alternate_prior =
+            recursive_manifest_step(seed, 1, 0, [0x22; 32]).expect("alternate prior");
+        let changed_prior =
+            recursive_manifest_step(alternate_prior, 0, 1, [0x33; 32]).expect("changed prior");
 
+        assert_eq!(
+            encode_hex(&seed),
+            "2d0bb6c8254e72de3989292fd006aa7f091fd6b2f3c2a80ce721c6e647cb47e3",
+        );
+        assert_eq!(
+            encode_hex(&first),
+            "3a84a6d47d7f6ffb2e103602bf93bf65a18db0733436302a635cecd1a2c9432c",
+        );
+        assert_eq!(
+            encode_hex(&second),
+            "4d0d41244c51fab3a31baac488adee3afc287436de90a6c1df0f9a45b6568271",
+        );
+        assert_eq!(
+            encode_hex(&reordered),
+            "5ec611346c927e6c0098c98358596f7de9aadbd08483976a67fb51a9a3317e35",
+        );
         assert_eq!(seed[0] & 0x80, 0);
         assert_eq!(first[0] & 0x80, 0);
         assert_eq!(second[0] & 0x80, 0);
         assert_ne!(second, reordered);
+        assert_ne!(second, changed_prior);
         assert_ne!(first, second);
     }
 

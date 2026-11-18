@@ -23,13 +23,11 @@ use crate::certificate_member_leaf::{
 };
 use crate::certificate_profile::{
     CERTIFICATE_PARENT_BASIS_DIGEST, CERTIFICATE_RECURRENCE_STATE_ARITY, CERTIFICATE_ROOT_ROUNDS,
-    CERTIFICATE_ROOT_STATE_ARITY,
-};
-use crate::certificate_recurrence::{
-    CertificateRecurrenceStateWitness, CONTEXT_HIGH_INDEX, CONTEXT_LOW_INDEX, MEMBER_COUNT_INDEX,
+    CERTIFICATE_ROOT_STATE_ARITY, CONTEXT_HIGH_INDEX, CONTEXT_LOW_INDEX, MEMBER_COUNT_INDEX,
     MEMBER_ORDINAL_INDEX, NONCE_PREFIX_INDEX, NONCE_X_INDEX, RECORD_MANIFEST_INDEX,
     RESPONSE_BINDING_INDEX, RESPONSE_ORDINAL_INDEX, TOTAL_RESPONSES_INDEX,
 };
+use crate::certificate_recurrence::CertificateRecurrenceStateWitness;
 use crate::certificate_recursive_manifest::MANIFEST_STEP_TAG;
 use crate::certificate_response_relation::{
     CertificateResponseRelationWitness, CERTIFICATE_RECURSIVE_STEP_TAG,

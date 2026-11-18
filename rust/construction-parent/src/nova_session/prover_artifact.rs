@@ -268,8 +268,9 @@ mod tests {
 
     use super::*;
     use crate::nova_session::{
-        ConstructionManifestVersion, ConstructionNativeDecisionVersion, ConstructionPayloadVersion,
-        ConstructionStatementVersion, DirectNovaConstructionVersions, NovaSessionSuite,
+        ApplicationManifestVersion, ApplicationNativeDecisionVersion, ApplicationPayloadVersion,
+        ApplicationStatementVersion, DirectNovaApplicationProfile, DirectNovaApplicationVersions,
+        NovaSessionSuite,
     };
     use crate::Scalar;
 
@@ -460,11 +461,14 @@ mod tests {
     }
 
     const TINY_ARITY: usize = 1;
-    const TINY_VERSIONS: DirectNovaConstructionVersions = DirectNovaConstructionVersions::new(
-        ConstructionPayloadVersion::new(1),
-        ConstructionStatementVersion::new(1),
-        ConstructionManifestVersion::new(1),
-        ConstructionNativeDecisionVersion::new(1),
+    const TINY_APPLICATION: DirectNovaApplicationProfile = DirectNovaApplicationProfile::new(
+        b"Purify/Test/ProverArtifactNovaSuite/v1",
+        DirectNovaApplicationVersions::new(
+            ApplicationPayloadVersion::new(1),
+            ApplicationStatementVersion::new(1),
+            ApplicationManifestVersion::new(1),
+            ApplicationNativeDecisionVersion::new(1),
+        ),
     );
     const TINY_RELATION: DirectRelationId = DirectRelationId::from_frozen_bytes([0x42; 32]);
 
@@ -524,7 +528,7 @@ mod tests {
             input: initial_state,
         })
         .expect("setup tiny prover")
-        .select_generated_for_qualification(TINY_VERSIONS)
+        .select_generated_for_qualification(TINY_APPLICATION)
         .expect("select tiny prover");
         let expected = suite.expected();
         let verifier = suite.verifier;

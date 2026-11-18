@@ -105,6 +105,81 @@ private:
     std::vector<bppp::accumulation::Digest> member_digests_;
 };
 
+/**
+ * Derive the recursive record digest for one authenticated nonce leaf.
+ *
+ * The Purify half of the supplied host must equal the leaf nonce host, and
+ * the leaf topic must equal the nonce input recomputed from the context.
+ */
+[[nodiscard]] Result<bppp::accumulation::Digest>
+certificate_nonce_recursive_member_digest(
+    const CertificateNonceResponseAuthorization& authorization,
+    std::uint32_t member_ordinal, const PublicKey& host,
+    const PreparedCertificateNonceLeaf& leaf,
+    const accountable::ConflictContext& context,
+    purify_secp_context* secp_context);
+
+/**
+ * Derive the response relation digest consumed by one recursive step.
+ *
+ * This is framing, not authorization verification. The response binding is
+ * hashed in full beside the supplied signing key, scalar response, and the
+ * challenge recomputed from the supplied context and body. A mismatched set
+ * therefore derives a different value from the verifier-recomputed manifest;
+ * callers must compare that manifest before accepting the recursive result.
+ */
+[[nodiscard]] Result<bppp::accumulation::Digest>
+certificate_nonce_recursive_step_digest(
+    const CertificateNonceResponseAuthorization& authorization,
+    const accountable::ConflictContext& context,
+    std::span<const unsigned char> canonical_body,
+    const accountable::ScalarSignature& response,
+    const bppp::accumulation::Digest& member_digest,
+    purify_secp_context* secp_context);
+
+/** Canonical low-255-bit manifest value for recursive member records. */
+class CertificateNonceRecursiveManifest
+{
+public:
+    [[nodiscard]] const bppp::ScalarBytes& bytes() const noexcept
+    {
+        return bytes_;
+    }
+
+    friend bool operator==(
+        const CertificateNonceRecursiveManifest&,
+        const CertificateNonceRecursiveManifest&) = default;
+
+private:
+    explicit CertificateNonceRecursiveManifest(bppp::ScalarBytes bytes)
+        : bytes_(bytes)
+    {
+    }
+
+    bppp::ScalarBytes bytes_{};
+
+    friend Result<CertificateNonceRecursiveManifest>
+    certificate_nonce_recursive_manifest_seed(
+        const bppp::accumulation::Digest&, std::uint64_t);
+    friend Result<CertificateNonceRecursiveManifest>
+    certificate_nonce_recursive_manifest_step(
+        const CertificateNonceRecursiveManifest&, std::uint64_t,
+        std::uint32_t, const bppp::accumulation::Digest&);
+};
+
+/** Seed the recursive record manifest for one certificate trace. */
+[[nodiscard]] Result<CertificateNonceRecursiveManifest>
+certificate_nonce_recursive_manifest_seed(
+    const bppp::accumulation::Digest& certificate_context_digest,
+    std::uint64_t total_responses);
+
+/** Append one recursive step digest at its exact canonical position. */
+[[nodiscard]] Result<CertificateNonceRecursiveManifest>
+certificate_nonce_recursive_manifest_step(
+    const CertificateNonceRecursiveManifest& prior,
+    std::uint64_t response_ordinal, std::uint32_t member_ordinal,
+    const bppp::accumulation::Digest& step_digest);
+
 /** One canonical 255-bit field encoding for an ordered member manifest. */
 using CertificateNonceAuthorizationManifest = bppp::ScalarBytes;
 
@@ -180,6 +255,10 @@ public:
         const noexcept {
         return member_nonces_;
     }
+    [[nodiscard]] std::span<const bppp::accumulation::Digest>
+    recursive_step_digests() const noexcept {
+        return recursive_step_digests_;
+    }
 
 private:
     CertificateNonceParentPublicInputs(
@@ -188,14 +267,16 @@ private:
         CertificateNonceResponseAuthorization authorization,
         bppp::PointBytes aggregate_nonce,
         std::vector<bppp::accumulation::Digest> leaf_bindings,
-        std::vector<bppp::PointBytes> member_nonces)
+        std::vector<bppp::PointBytes> member_nonces,
+        std::vector<bppp::accumulation::Digest> recursive_step_digests)
         : frame_(std::move(frame)),
           canonical_bytes_(std::move(canonical_bytes)),
           statement_digest_(statement_digest),
           authorization_(std::move(authorization)),
           aggregate_nonce_(aggregate_nonce),
           leaf_bindings_(std::move(leaf_bindings)),
-          member_nonces_(std::move(member_nonces)) {}
+          member_nonces_(std::move(member_nonces)),
+          recursive_step_digests_(std::move(recursive_step_digests)) {}
 
     CertificateNonceResponseFrame frame_;
     Bytes canonical_bytes_;
@@ -204,6 +285,7 @@ private:
     bppp::PointBytes aggregate_nonce_{};
     std::vector<bppp::accumulation::Digest> leaf_bindings_;
     std::vector<bppp::PointBytes> member_nonces_;
+    std::vector<bppp::accumulation::Digest> recursive_step_digests_;
 };
 
 /** Linear public witness for one response-level accumulation step. */
@@ -322,6 +404,57 @@ parse_certificate_nonce_native_receipt(
     std::span<const unsigned char> encoded,
     purify_secp_context* secp_context);
 
+/** One reduction and bound two-claim transition in the linear receipt. */
+struct CertificateNonceLinearMemberProof {
+    bppp::accumulation::AlgebraicNormReductionProof reduction;
+    bppp::accumulation::AlgebraicStepProof accumulation;
+};
+
+/** Ordered member transitions for one canonical certificate response. */
+struct CertificateNonceLinearResponseProof {
+    std::vector<CertificateNonceLinearMemberProof> members;
+};
+
+/**
+ * Native proof chain matching the homogeneous certificate recurrence.
+ *
+ * The first transition consumes the canonical zero claim. Every later
+ * transition consumes the preceding root and one authenticated nonce leaf.
+ * This remains unaccepted until verify_linear_receipt() replays the complete
+ * chain and calls the native decision exactly once.
+ */
+class CertificateNonceLinearReceipt {
+public:
+    static constexpr std::size_t kReductionSerializedSize = 890;
+    static constexpr std::size_t kStepSerializedSize = 924;
+
+    [[nodiscard]] static Result<CertificateNonceLinearReceipt> create(
+        bppp::accumulation::Digest certificate_context_digest,
+        std::vector<CertificateNonceLinearResponseProof> responses);
+
+    [[nodiscard]] const bppp::accumulation::Digest&
+    certificate_context_digest() const noexcept {
+        return certificate_context_digest_;
+    }
+    [[nodiscard]] std::span<const CertificateNonceLinearResponseProof>
+    responses() const noexcept
+    {
+        return responses_;
+    }
+
+private:
+    CertificateNonceLinearReceipt(
+        bppp::accumulation::Digest certificate_context_digest,
+        std::vector<CertificateNonceLinearResponseProof> responses)
+        : certificate_context_digest_(certificate_context_digest),
+          responses_(std::move(responses))
+    {
+    }
+
+    bppp::accumulation::Digest certificate_context_digest_{};
+    std::vector<CertificateNonceLinearResponseProof> responses_;
+};
+
 /** Borrowed exact public material for one ordered response proof. */
 class CertificateNonceResponseVerificationView
 {
@@ -425,8 +558,8 @@ private:
 class CertificateNonceParentAccumulator {
 public:
     static constexpr std::size_t kTreeFanout = 16;
-    /** Largest range whose canonical fanout tree fits uint64_t framing. */
-    static constexpr std::uint64_t kMaxTreeResponses{
+    /** Largest response sequence admitted by certificate framing. */
+    static constexpr std::uint64_t kMaxResponses{
         std::uint64_t{1} << 60};
 
     CertificateNonceParentAccumulator(
@@ -478,6 +611,20 @@ public:
     /** Replay and discharge every proof in one canonical native receipt. */
     [[nodiscard]] Status verify_native_receipt(
         const CertificateNonceNativeReceipt& receipt,
+        std::span<const CertificateNonceResponseVerificationView>
+            ordered_responses,
+        purify_secp_context* secp_context) const;
+
+    /** Build the exact one-member-at-a-time native recurrence witness. */
+    [[nodiscard]] Result<CertificateNonceLinearReceipt>
+    prove_linear_receipt(
+        std::span<const CertificateNonceResponseVerificationView>
+            ordered_responses,
+        purify_secp_context* secp_context) const;
+
+    /** Replay the complete linear chain and decide its final pending root. */
+    [[nodiscard]] Status verify_linear_receipt(
+        const CertificateNonceLinearReceipt& receipt,
         std::span<const CertificateNonceResponseVerificationView>
             ordered_responses,
         purify_secp_context* secp_context) const;

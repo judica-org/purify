@@ -187,6 +187,7 @@ private:
     friend Result<PendingClaim> parse_root_claim(
         const Basis&, std::span<const unsigned char>,
         purify_secp_context*);
+    friend Result<PendingClaim> canonical_zero_claim(const Basis&);
     friend class purify::accountable::ConstructionReceiptAccumulator;
 };
 
@@ -258,6 +259,15 @@ Result<Bytes> serialize_root_claim(const Basis& basis,
 Result<PendingClaim> parse_root_claim(
     const Basis& basis, std::span<const unsigned char> encoded,
     purify_secp_context* context);
+
+/**
+ * Return the basis-bound algebraic identity used before a first linear step.
+ *
+ * The claim has the same one-term, full-round root shape returned by an
+ * accumulation step. It is still only a pending claim; callers must retain
+ * every authenticated transition and pass the final root to decide().
+ */
+Result<PendingClaim> canonical_zero_claim(const Basis& basis);
 
 /** Parses the norm transcript and computes C_c from its exact required public coefficients. */
 Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,

@@ -17,6 +17,13 @@ namespace {
 
 constexpr unsigned char kPublicInputVersion = 1;
 constexpr unsigned char kTreeNodeVersion = 1;
+constexpr std::size_t kRecursiveMemberMessageSize =
+    8 + 4 + 32 + 96 + 32 + 32 + 33 + 33 + 32;
+constexpr std::size_t kRecursiveStepMessageSize =
+    32 + 32 + 4 + 32 + 32 + 32;
+constexpr std::size_t kRecursiveManifestSeedMessageSize = 32 + 8;
+constexpr std::size_t kRecursiveManifestStepMessageSize =
+    32 + 8 + 4 + 32;
 constexpr std::array<unsigned char, 16> kNativeReceiptMagic{
     'P', 'u', 'r', 'i', 'f', 'y', '/', 'C',
     'e', 'r', 't', 'W', 'i', 't', '/', '1'};
@@ -28,6 +35,15 @@ static_assert(
 static_assert(
     CertificateNonceNativeReceipt::kStepSerializedSize ==
     66 * 13 + 66);
+static_assert(PublicKey::kSerializedSize == 96);
+static_assert(bppp::PointBytes{}.size() == 33);
+static_assert(bppp::accumulation::Digest{}.size() == 32);
+static_assert(
+    CertificateNonceLinearReceipt::kReductionSerializedSize ==
+    66 * 12 + 98);
+static_assert(
+    CertificateNonceLinearReceipt::kStepSerializedSize ==
+    66 * 13 + 66);
 const TaggedHash kResponseStatementHash(
     "Purify/Accountable/CertificateNonceResponse/v1");
 const TaggedHash kResponseAuthorizationHash(
@@ -38,6 +54,14 @@ const TaggedHash kResponseAuthorizationBindingHash(
     "Purify/Accountable/CertificateResponseBinding/v1");
 const TaggedHash kMemberAuthorizationHash(
     "Purify/Accountable/CertificateMemberAuthorization/v1");
+const TaggedHash kRecursiveMemberHash(
+    "Purify/Accountable/CertificateRecursiveMember/v1");
+const TaggedHash kRecursiveStepHash(
+    "Purify/Accountable/CertificateRecursiveStep/v1");
+const TaggedHash kRecursiveManifestSeedHash(
+    "Purify/Accountable/CertificateRecursiveManifest/v1/init");
+const TaggedHash kRecursiveManifestStepHash(
+    "Purify/Accountable/CertificateRecursiveManifest/v1/member");
 const TaggedHash kAuthorizationManifestSeedHash(
     "Purify/Accountable/CertificateAuthorizationManifest/v1/init");
 const TaggedHash kAuthorizationManifestStepHash(
@@ -94,7 +118,7 @@ Status validate_authorization_inputs(
     if (is_zero(frame.certificate_context_digest) ||
         frame.total_responses == 0 ||
         frame.total_responses >
-            CertificateNonceParentAccumulator::kMaxTreeResponses ||
+            CertificateNonceParentAccumulator::kMaxResponses ||
         frame.response_ordinal >= frame.total_responses ||
         frame.electorate_weight == 0) {
         return unexpected_error(
@@ -230,7 +254,8 @@ Status match_inputs_and_leaves(
     const CertificateNonceParentPublicInputs& inputs,
     std::span<const PreparedCertificateNonceLeaf> leaves) {
     if (inputs.leaf_bindings().size() != leaves.size() ||
-        inputs.member_nonces().size() != leaves.size()) {
+        inputs.member_nonces().size() != leaves.size() ||
+        inputs.recursive_step_digests().size() != leaves.size()) {
         return unexpected_error(
             ErrorCode::SizeMismatch,
             "certificate_nonce_parent:leaf_count");
@@ -276,7 +301,7 @@ Result<std::size_t> native_tree_proof_count(
 {
     if (response_count == 0 ||
         response_count >
-            CertificateNonceParentAccumulator::kMaxTreeResponses) {
+            CertificateNonceParentAccumulator::kMaxResponses) {
         return unexpected_error(
             ErrorCode::RangeViolation,
             "certificate_nonce_native:response_count");
@@ -329,6 +354,70 @@ Status validate_native_receipt_shape(
         }
     }
     return {};
+}
+
+Status validate_linear_receipt_shape(
+    const bppp::accumulation::Digest& context_digest,
+    std::span<const CertificateNonceLinearResponseProof> responses)
+{
+    if (is_zero(context_digest) || responses.empty() ||
+        responses.size() >
+            CertificateNonceParentAccumulator::kMaxResponses) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_linear:response_count");
+    }
+    for (const auto& response : responses) {
+        if (response.members.empty() ||
+            response.members.size() >
+                CertificateNonceParentPublicInputs::
+                    kMemberBatchCapacity) {
+            return unexpected_error(
+                ErrorCode::RangeViolation,
+                "certificate_nonce_linear:member_count");
+        }
+    }
+    return {};
+}
+
+Result<bppp::accumulation::Digest> validate_linear_public_inputs(
+    std::span<const CertificateNonceResponseVerificationView>
+        ordered_responses)
+{
+    if (ordered_responses.empty() ||
+        ordered_responses.size() >
+            CertificateNonceParentAccumulator::kMaxResponses) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_linear:public_responses");
+    }
+    const auto context_digest = ordered_responses.front()
+                                    .inputs()
+                                    .frame()
+                                    .certificate_context_digest;
+    if (is_zero(context_digest)) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_linear:context_digest");
+    }
+    for (std::size_t index = 0; index < ordered_responses.size(); ++index) {
+        const auto& view = ordered_responses[index];
+        const auto& frame = view.inputs().frame();
+        if (frame.certificate_context_digest != context_digest ||
+            frame.total_responses !=
+                static_cast<std::uint64_t>(ordered_responses.size()) ||
+            frame.response_ordinal !=
+                static_cast<std::uint64_t>(index)) {
+            return unexpected_error(
+                ErrorCode::BindingMismatch,
+                "certificate_nonce_linear:response_frame");
+        }
+        PURIFY_RETURN_IF_ERROR(
+            match_inputs_and_leaves(
+                view.inputs(), view.ordered_leaves()),
+            "certificate_nonce_linear:response_inputs");
+    }
+    return context_digest;
 }
 
 Result<ParentMetadata> parent_metadata(
@@ -472,6 +561,150 @@ CertificateNonceResponseAuthorization::create(
         response_binding, std::move(member_digests));
 }
 
+Result<bppp::accumulation::Digest>
+certificate_nonce_recursive_member_digest(
+    const CertificateNonceResponseAuthorization& authorization,
+    std::uint32_t member_ordinal, const PublicKey& host,
+    const PreparedCertificateNonceLeaf& leaf,
+    const accountable::ConflictContext& context,
+    purify_secp_context* secp_context)
+{
+    const auto& frame = authorization.frame();
+    const auto member_digests = authorization.member_digests();
+    if (frame.total_responses == 0 ||
+        frame.total_responses >
+            CertificateNonceParentAccumulator::kMaxResponses ||
+        frame.response_ordinal >= frame.total_responses ||
+        member_digests.empty() ||
+        member_digests.size() >
+            CertificateNonceParentPublicInputs::kMemberBatchCapacity ||
+        member_ordinal >= member_digests.size()) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_recursive:member_frame");
+    }
+
+    const auto host_bytes = host.serialize();
+    const auto purify_host = host.purify_pubkey.to_bytes_be();
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto topic,
+        accountable::nonce_evaluation_input(context, secp_context),
+        "certificate_nonce_recursive:member_topic");
+    if (host_bytes.size() != PublicKey::kSerializedSize ||
+        leaf.nonce_host() != purify_host ||
+        leaf.topic().size() != topic.size() ||
+        !std::equal(
+            leaf.topic().begin(), leaf.topic().end(), topic.begin())) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "certificate_nonce_recursive:member_binding");
+    }
+
+    const auto& constants = leaf.parent_constants();
+    Bytes encoded;
+    encoded.reserve(kRecursiveMemberMessageSize);
+    append_u64(encoded, frame.response_ordinal);
+    append_u32(encoded, member_ordinal);
+    append(encoded, member_digests[member_ordinal]);
+    append(encoded, host_bytes);
+    append(encoded, topic);
+    append(encoded, constants.circuit_binding_digest);
+    append(encoded, constants.coefficient_commitment);
+    append(encoded, constants.anchored_offset);
+    append(encoded, leaf.binding_digest());
+    assert(encoded.size() == kRecursiveMemberMessageSize);
+    return kRecursiveMemberHash.digest(encoded);
+}
+
+Result<bppp::accumulation::Digest>
+certificate_nonce_recursive_step_digest(
+    const CertificateNonceResponseAuthorization& authorization,
+    const accountable::ConflictContext& context,
+    std::span<const unsigned char> canonical_body,
+    const accountable::ScalarSignature& response,
+    const bppp::accumulation::Digest& member_digest,
+    purify_secp_context* secp_context)
+{
+    const auto& frame = authorization.frame();
+    const auto member_digests = authorization.member_digests();
+    if (frame.total_responses == 0 ||
+        frame.total_responses >
+            CertificateNonceParentAccumulator::kMaxResponses ||
+        frame.response_ordinal >= frame.total_responses ||
+        member_digests.empty() ||
+        member_digests.size() >
+            CertificateNonceParentPublicInputs::kMemberBatchCapacity) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_recursive:step_frame");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto challenge,
+        accountable::signature_challenge(
+            context, canonical_body, secp_context),
+        "certificate_nonce_recursive:step_challenge");
+    const auto response_scalar = response.serialize();
+    const auto challenge_scalar = challenge.to_bytes_be();
+
+    Bytes encoded;
+    encoded.reserve(kRecursiveStepMessageSize);
+    append(encoded, member_digest);
+    append(encoded, authorization.response_binding());
+    append_u32(encoded, static_cast<std::uint32_t>(member_digests.size()));
+    append(encoded, context.signing_key);
+    append(encoded, response_scalar);
+    append(encoded, challenge_scalar);
+    assert(encoded.size() == kRecursiveStepMessageSize);
+    return kRecursiveStepHash.digest(encoded);
+}
+
+Result<CertificateNonceRecursiveManifest>
+certificate_nonce_recursive_manifest_seed(
+    const bppp::accumulation::Digest& certificate_context_digest,
+    std::uint64_t total_responses)
+{
+    if (is_zero(certificate_context_digest) || total_responses == 0 ||
+        total_responses >
+            CertificateNonceParentAccumulator::kMaxResponses) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_recursive:manifest_seed");
+    }
+    Bytes encoded;
+    encoded.reserve(kRecursiveManifestSeedMessageSize);
+    append(encoded, certificate_context_digest);
+    append_u64(encoded, total_responses);
+    assert(encoded.size() == kRecursiveManifestSeedMessageSize);
+    auto manifest = kRecursiveManifestSeedHash.digest(encoded);
+    manifest[0] &= 0x7f;
+    return CertificateNonceRecursiveManifest(manifest);
+}
+
+Result<CertificateNonceRecursiveManifest>
+certificate_nonce_recursive_manifest_step(
+    const CertificateNonceRecursiveManifest& prior,
+    std::uint64_t response_ordinal, std::uint32_t member_ordinal,
+    const bppp::accumulation::Digest& step_digest)
+{
+    if ((prior.bytes()[0] & 0x80) != 0 ||
+        member_ordinal >=
+            CertificateNonceParentPublicInputs::kMemberBatchCapacity) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_recursive:manifest_step");
+    }
+    Bytes encoded;
+    encoded.reserve(kRecursiveManifestStepMessageSize);
+    append(encoded, prior.bytes());
+    append_u64(encoded, response_ordinal);
+    append_u32(encoded, member_ordinal);
+    append(encoded, step_digest);
+    assert(encoded.size() == kRecursiveManifestStepMessageSize);
+    auto manifest = kRecursiveManifestStepHash.digest(encoded);
+    manifest[0] &= 0x7f;
+    return CertificateNonceRecursiveManifest(manifest);
+}
+
 Result<CertificateNonceAuthorizationManifest>
 certificate_nonce_authorization_manifest_seed(
     const bppp::accumulation::Digest& certificate_context_digest,
@@ -479,7 +712,7 @@ certificate_nonce_authorization_manifest_seed(
 {
     if (is_zero(certificate_context_digest) || total_responses == 0 ||
         total_responses >
-            CertificateNonceParentAccumulator::kMaxTreeResponses) {
+            CertificateNonceParentAccumulator::kMaxResponses) {
         return unexpected_error(
             ErrorCode::RangeViolation,
             "certificate_nonce_authorization:manifest_seed");
@@ -589,6 +822,19 @@ CertificateNonceNativeReceipt::create(
     return CertificateNonceNativeReceipt(
         certificate_context_digest, std::move(responses),
         std::move(tree_proofs));
+}
+
+Result<CertificateNonceLinearReceipt>
+CertificateNonceLinearReceipt::create(
+    bppp::accumulation::Digest certificate_context_digest,
+    std::vector<CertificateNonceLinearResponseProof> responses)
+{
+    PURIFY_RETURN_IF_ERROR(
+        validate_linear_receipt_shape(
+            certificate_context_digest, responses),
+        "certificate_nonce_linear:shape");
+    return CertificateNonceLinearReceipt(
+        certificate_context_digest, std::move(responses));
 }
 
 Result<std::size_t> certificate_nonce_native_receipt_size(
@@ -786,7 +1032,7 @@ parse_certificate_nonce_native_receipt(
     offset += sizeof(std::uint64_t);
     if (response_count_u64 == 0 ||
         response_count_u64 >
-            CertificateNonceParentAccumulator::kMaxTreeResponses ||
+            CertificateNonceParentAccumulator::kMaxResponses ||
         response_count_u64 >
             std::numeric_limits<std::size_t>::max()) {
         return unexpected_error(
@@ -984,6 +1230,25 @@ CertificateNonceParentPublicInputs::create(
             "certificate_nonce_parent:response_nonce");
     }
 
+    std::vector<bppp::accumulation::Digest> recursive_step_digests;
+    recursive_step_digests.reserve(ordered_leaves.size());
+    for (std::size_t index = 0; index < ordered_leaves.size(); ++index) {
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto member_digest,
+            certificate_nonce_recursive_member_digest(
+                authorization, static_cast<std::uint32_t>(index),
+                ordered_hosts[index], ordered_leaves[index], context,
+                secp_context),
+            "certificate_nonce_parent:recursive_member");
+        PURIFY_ASSIGN_OR_RETURN(
+            auto step_digest,
+            certificate_nonce_recursive_step_digest(
+                authorization, context, canonical_body, response,
+                member_digest, secp_context),
+            "certificate_nonce_parent:recursive_step");
+        recursive_step_digests.push_back(std::move(step_digest));
+    }
+
     Bytes encoded;
     append_authorization_prefix(
         encoded, frame, roster, context, canonical_body, response,
@@ -1004,7 +1269,8 @@ CertificateNonceParentPublicInputs::create(
         std::move(frame), std::move(encoded), statement_digest,
         std::move(authorization),
         aggregate_nonce, std::move(leaf_bindings),
-        std::move(member_nonces));
+        std::move(member_nonces),
+        std::move(recursive_step_digests));
 }
 
 Result<CertificateNonceParentAccumulator>
@@ -1227,6 +1493,138 @@ Status CertificateNonceParentAccumulator::verify_native_receipt(
             "certificate_nonce_native:tree_shape");
     }
     return decide_root(current.front(), secp_context);
+}
+
+Result<CertificateNonceLinearReceipt>
+CertificateNonceParentAccumulator::prove_linear_receipt(
+    std::span<const CertificateNonceResponseVerificationView>
+        ordered_responses,
+    purify_secp_context* secp_context) const
+{
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(
+            secp_context, "certificate_nonce_linear:context"),
+        "certificate_nonce_linear:context");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto context_digest,
+        validate_linear_public_inputs(ordered_responses),
+        "certificate_nonce_linear:public_inputs");
+    PURIFY_ASSIGN_OR_RETURN(
+        auto root,
+        bppp::accumulation::canonical_zero_claim(leaves_.basis()),
+        "certificate_nonce_linear:zero_claim");
+
+    std::vector<CertificateNonceLinearResponseProof> responses;
+    responses.reserve(ordered_responses.size());
+    for (const auto& view : ordered_responses) {
+        CertificateNonceLinearResponseProof response;
+        response.members.reserve(view.ordered_leaves().size());
+        for (std::size_t member_index = 0;
+             member_index < view.ordered_leaves().size();
+             ++member_index) {
+            const auto& leaf = view.ordered_leaves()[member_index];
+            PURIFY_ASSIGN_OR_RETURN(
+                auto reduction,
+                bppp::accumulation::prove_algebraic_norm_reduction(
+                    leaves_.basis(), leaf.norm(), secp_context),
+                "certificate_nonce_linear:prove_reduction");
+            PURIFY_ASSIGN_OR_RETURN(
+                auto leaf_claim,
+                bppp::accumulation::verify_algebraic_norm_reduction(
+                    leaves_.basis(), leaf.norm(), reduction,
+                    secp_context),
+                "certificate_nonce_linear:verify_reduction");
+            const std::array claims{root, std::move(leaf_claim)};
+            const auto& step_digest =
+                view.inputs().recursive_step_digests()[member_index];
+            PURIFY_ASSIGN_OR_RETURN(
+                auto accumulation,
+                bppp::accumulation::prove_bound_algebraic_step(
+                    leaves_.basis(), claims, step_digest,
+                    secp_context),
+                "certificate_nonce_linear:prove_step");
+            PURIFY_ASSIGN_OR_RETURN(
+                auto next_root,
+                bppp::accumulation::verify_bound_algebraic_step(
+                    leaves_.basis(), claims, step_digest,
+                    accumulation, secp_context),
+                "certificate_nonce_linear:verify_step");
+            root = std::move(next_root);
+            response.members.push_back({std::move(reduction), std::move(accumulation)});
+        }
+        responses.push_back(std::move(response));
+    }
+    PURIFY_RETURN_IF_ERROR(
+        bppp::accumulation::decide(
+            leaves_.basis(), root, secp_context),
+        "certificate_nonce_linear:decide");
+    return CertificateNonceLinearReceipt::create(
+        context_digest, std::move(responses));
+}
+
+Status CertificateNonceParentAccumulator::verify_linear_receipt(
+    const CertificateNonceLinearReceipt& receipt,
+    std::span<const CertificateNonceResponseVerificationView>
+        ordered_responses,
+    purify_secp_context* secp_context) const
+{
+    PURIFY_RETURN_IF_ERROR(
+        require_secp_context(
+            secp_context, "certificate_nonce_linear:context"),
+        "certificate_nonce_linear:context");
+    PURIFY_RETURN_IF_ERROR(
+        validate_linear_receipt_shape(
+            receipt.certificate_context_digest(),
+            receipt.responses()),
+        "certificate_nonce_linear:shape");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto context_digest,
+        validate_linear_public_inputs(ordered_responses),
+        "certificate_nonce_linear:public_inputs");
+    if (context_digest != receipt.certificate_context_digest() ||
+        receipt.responses().size() != ordered_responses.size()) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "certificate_nonce_linear:receipt_frame");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto root,
+        bppp::accumulation::canonical_zero_claim(leaves_.basis()),
+        "certificate_nonce_linear:zero_claim");
+    for (std::size_t response_index = 0;
+         response_index < ordered_responses.size();
+         ++response_index) {
+        const auto& view = ordered_responses[response_index];
+        const auto& proof = receipt.responses()[response_index];
+        if (proof.members.size() != view.ordered_leaves().size()) {
+            return unexpected_error(
+                ErrorCode::SizeMismatch,
+                "certificate_nonce_linear:member_count");
+        }
+        for (std::size_t member_index = 0;
+             member_index < view.ordered_leaves().size();
+             ++member_index) {
+            const auto& leaf = view.ordered_leaves()[member_index];
+            const auto& member_proof = proof.members[member_index];
+            PURIFY_ASSIGN_OR_RETURN(
+                auto leaf_claim,
+                bppp::accumulation::verify_algebraic_norm_reduction(
+                    leaves_.basis(), leaf.norm(),
+                    member_proof.reduction, secp_context),
+                "certificate_nonce_linear:verify_reduction");
+            const std::array claims{root, std::move(leaf_claim)};
+            PURIFY_ASSIGN_OR_RETURN(
+                auto next_root,
+                bppp::accumulation::verify_bound_algebraic_step(
+                    leaves_.basis(), claims,
+                    view.inputs().recursive_step_digests()[member_index],
+                    member_proof.accumulation, secp_context),
+                "certificate_nonce_linear:verify_step");
+            root = std::move(next_root);
+        }
+    }
+    return bppp::accumulation::decide(
+        leaves_.basis(), root, secp_context);
 }
 
 } // namespace purify::puresign_plusplus

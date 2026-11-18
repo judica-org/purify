@@ -1,8 +1,8 @@
-//! Frozen dimensions and framing for the certificate-parent witness profile.
+//! Frozen dimensions and framing for the certificate-parent profile.
 //!
-//! These constants describe the native certificate accumulator. They do not
-//! select a Nova relation, authenticate a witness, or make a parsed native
-//! receipt a compact proof.
+//! These constants cover both the native certificate accumulator and the
+//! qualified recurrence relation. Dimensions alone do not select or
+//! authenticate a Nova suite, witness, or proof.
 
 use crate::RelationError;
 
@@ -12,7 +12,22 @@ pub(crate) const CERTIFICATE_LEAF_ROUNDS: usize = 12;
 
 pub(crate) const CERTIFICATE_ROOT_ROUNDS: usize = 13;
 pub(crate) const CERTIFICATE_ROOT_STATE_ARITY: usize = 3 + CERTIFICATE_ROOT_ROUNDS;
+pub(crate) const CERTIFICATE_ROOT_BYTES: usize = 33 + 32 + 32 * CERTIFICATE_ROOT_ROUNDS;
 pub(crate) const CERTIFICATE_RECURRENCE_STATE_ARITY: usize = CERTIFICATE_ROOT_STATE_ARITY + 10;
+pub(crate) const ROOT_PREFIX_INDEX: usize = 0;
+pub(crate) const ROOT_X_INDEX: usize = 1;
+pub(crate) const ROOT_SCALE_INDEX: usize = 2;
+pub(crate) const ROOT_FACTORS_START: usize = 3;
+pub(crate) const CONTEXT_HIGH_INDEX: usize = CERTIFICATE_ROOT_STATE_ARITY;
+pub(crate) const CONTEXT_LOW_INDEX: usize = CONTEXT_HIGH_INDEX + 1;
+pub(crate) const TOTAL_RESPONSES_INDEX: usize = CONTEXT_LOW_INDEX + 1;
+pub(crate) const NONCE_PREFIX_INDEX: usize = TOTAL_RESPONSES_INDEX + 1;
+pub(crate) const NONCE_X_INDEX: usize = NONCE_PREFIX_INDEX + 1;
+pub(crate) const RECORD_MANIFEST_INDEX: usize = NONCE_X_INDEX + 1;
+pub(crate) const RESPONSE_ORDINAL_INDEX: usize = RECORD_MANIFEST_INDEX + 1;
+pub(crate) const MEMBER_ORDINAL_INDEX: usize = RESPONSE_ORDINAL_INDEX + 1;
+pub(crate) const MEMBER_COUNT_INDEX: usize = MEMBER_ORDINAL_INDEX + 1;
+pub(crate) const RESPONSE_BINDING_INDEX: usize = MEMBER_COUNT_INDEX + 1;
 pub(crate) const CERTIFICATE_RECURRENCE_RELATION_AUXILIARY: usize = 7_485_953;
 pub(crate) const CERTIFICATE_RECURRENCE_RELATION_CONSTRAINTS: usize = 7_525_946;
 

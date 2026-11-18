@@ -4,29 +4,39 @@
 //! Parsing those bytes here preserves their exact response/proof/receipt joins,
 //! but does not inherit that acceptance or verify any cryptographic relation.
 
+use crate::candidate::CandidateStepProofWitness;
 use crate::certificate_authorization::{
     authorization_manifest_seed, authorization_manifest_step, member_authorization_digest,
     nonce_proof_digest, response_authorization_digest, response_binding_digest,
     response_common_digest, response_statement_digest, RESPONSE_MEMBER_DESCRIPTOR_BYTES,
 };
-use crate::certificate_native_witness::CertificateNativeReceiptWitness;
+use crate::certificate_native_witness::{
+    parse_certificate_reduction, parse_certificate_step, CertificateNativeReceiptWitness,
+};
 use crate::certificate_nonce_proof::CertificateLeafParentConstantsWitness;
 use crate::certificate_profile::{
     CertificateResponseBoundary, CertificateWitnessFrame, CERTIFICATE_LEAF_ROUNDS,
     CERTIFICATE_MAX_RESPONSES, CERTIFICATE_MEMBER_BATCH_CAPACITY, CERTIFICATE_NONCE_PROOF_BYTES,
-    CERTIFICATE_PARENT_RAW_GENERATOR_DIGEST,
+    CERTIFICATE_PARENT_BASIS_DIGEST, CERTIFICATE_PARENT_RAW_GENERATOR_DIGEST,
+    CERTIFICATE_REDUCTION_PROOF_BYTES, CERTIFICATE_STEP_PROOF_BYTES,
 };
+use crate::circuit_norm::CandidateNormReductionProofWitness;
 use crate::circuit_transcript::CircuitPointPairWitnessV4;
 use crate::secp_native::{canonical_scalar_value, SecpEncodedPointWitness, SecpScalarWitness};
 use crate::RelationError;
 
 const MAGIC: &[u8; 16] = b"Purify/CertJWit2";
+const LINEAR_MAGIC: &[u8; 16] = b"Purify/CertJWit3";
 const PUBLIC_INPUT_VERSION: u8 = 1;
 const ACCOUNTABLE_TOPIC_SCOPE: u8 = 1;
 const NONCE_PROOF_VERSION: u8 = 4;
 
 const MEMBER_STATEMENT_BYTES: usize = RESPONSE_MEMBER_DESCRIPTOR_BYTES + 32 + 32 + 32 + 33;
 const MEMBER_PARENT_CONSTANT_BYTES: usize = 32 + 33 + 33;
+const LINEAR_MEMBER_PROOF_BYTES: usize = MEMBER_PARENT_CONSTANT_BYTES
+    + CERTIFICATE_NONCE_PROOF_BYTES
+    + CERTIFICATE_REDUCTION_PROOF_BYTES
+    + CERTIFICATE_STEP_PROOF_BYTES;
 const MINIMUM_STATEMENT_BYTES: usize = 575;
 const MINIMUM_JOINED_RESPONSE_BYTES: usize =
     8 + MINIMUM_STATEMENT_BYTES + 4 + MEMBER_PARENT_CONSTANT_BYTES + CERTIFICATE_NONCE_PROOF_BYTES;
@@ -220,7 +230,7 @@ impl CertificateJoinedWitness {
                 ));
             }
             let statement_bytes = cursor.take(statement_length)?;
-            let parsed = parse_response_statement(statement_bytes, response_count, ordinal)?;
+            let mut parsed = parse_response_statement(statement_bytes, response_count, ordinal)?;
 
             let proof_count = cursor.u32()?;
             if proof_count != parsed.boundary.member_count() {
@@ -241,53 +251,16 @@ impl CertificateJoinedWitness {
             }
 
             let mut members = Vec::with_capacity(proof_count_usize);
-            for parsed_member in parsed.members {
+            for parsed_member in std::mem::take(&mut parsed.members) {
                 let parent_constants = CertificateLeafParentConstantsWitness {
                     circuit_binding_digest: cursor.array::<32>()?,
                     coefficient_commitment: SecpEncodedPointWitness::parse(cursor.array::<33>()?)?,
                     anchored_offset: SecpEncodedPointWitness::parse(cursor.array::<33>()?)?,
                 };
                 let nonce_proof = cursor.array::<CERTIFICATE_NONCE_PROOF_BYTES>()?;
-                let proof_nonce = parse_nonce_proof(&nonce_proof)?;
-                if proof_nonce != parsed_member.nonce_point
-                    || nonce_proof_digest(&nonce_proof) != parsed_member.proof_digest
-                {
-                    return Err(RelationError::Malformed(
-                        "certificate joined nonce proof binding",
-                    ));
-                }
-                members.push(CertificateJoinedMemberWitness {
-                    roster_public_key: parsed_member.roster_public_key,
-                    coefficient: parsed_member.coefficient,
-                    host: parsed_member.host,
-                    leaf_binding: parsed_member.leaf_binding,
-                    proof_digest: parsed_member.proof_digest,
-                    circuit_precommitment: parsed_member.circuit_precommitment,
-                    nonce_point: parsed_member.nonce_point,
-                    authorization_digest: parsed_member.authorization_digest,
-                    parent_constants,
-                    nonce_proof,
-                });
+                members.push(joined_member(parsed_member, parent_constants, nonce_proof)?);
             }
-            responses.push(CertificateJoinedResponseWitness {
-                boundary: parsed.boundary,
-                electorate_index: parsed.electorate_index,
-                electorate_weight: parsed.electorate_weight,
-                signing_key: parsed.signing_key,
-                host_commitment: parsed.host_commitment,
-                coalition_core_digest: parsed.coalition_core_digest,
-                slot: parsed.slot,
-                canonical_body: parsed.canonical_body,
-                response: parsed.response,
-                key_list_hash: parsed.key_list_hash,
-                aggregate_was_negated: parsed.aggregate_was_negated,
-                common_digest: parsed.common_digest,
-                authorization_digest: parsed.authorization_digest,
-                response_binding: parsed.response_binding,
-                statement_digest: parsed.statement_digest,
-                members,
-                aggregate_nonce: parsed.aggregate_nonce,
-            });
+            responses.push(joined_response(parsed, members));
         }
 
         let receipt_length = cursor.usize_u64("certificate joined receipt length")?;
@@ -358,6 +331,151 @@ impl CertificateJoinedWitness {
     }
 }
 
+/// One native reduction and bound transition for an exact response member.
+pub(crate) struct CertificateLinearMemberProofWitness {
+    reduction: CandidateNormReductionProofWitness,
+    bound_step: CandidateStepProofWitness,
+}
+
+impl CertificateLinearMemberProofWitness {
+    pub(crate) const fn reduction(&self) -> &CandidateNormReductionProofWitness {
+        &self.reduction
+    }
+
+    pub(crate) const fn bound_step(&self) -> &CandidateStepProofWitness {
+        &self.bound_step
+    }
+}
+
+/// One response statement, its raw leaves, and one transition per member.
+pub(crate) struct CertificateLinearResponseWitness {
+    response: CertificateJoinedResponseWitness,
+    member_proofs: Vec<CertificateLinearMemberProofWitness>,
+}
+
+impl CertificateLinearResponseWitness {
+    pub(crate) const fn response(&self) -> &CertificateJoinedResponseWitness {
+        &self.response
+    }
+
+    pub(crate) fn member_proofs(&self) -> &[CertificateLinearMemberProofWitness] {
+        &self.member_proofs
+    }
+}
+
+/// Strict syntax decoder for the linear certificate recurrence witness.
+///
+/// The header fixes the raw-generator set, native accumulation basis,
+/// certificate context, and response count. Each response then carries its
+/// canonical statement followed by one raw V4 proof, reduction, and bound
+/// two-claim step per member. There is no detached receipt or tree suffix.
+///
+/// Parsing proves nothing. The recurrence must verify every raw leaf,
+/// reduction, and bound transition before native code decides the final root.
+pub(crate) struct CertificateLinearJoinedWitness {
+    frame: CertificateWitnessFrame,
+    responses: Vec<CertificateLinearResponseWitness>,
+}
+
+impl CertificateLinearJoinedWitness {
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, RelationError> {
+        let mut cursor = Cursor::new(bytes);
+        if cursor.array::<16>()? != *LINEAR_MAGIC {
+            return Err(RelationError::Malformed("certificate linear witness magic"));
+        }
+        if cursor.array::<32>()? != CERTIFICATE_PARENT_RAW_GENERATOR_DIGEST {
+            return Err(RelationError::Malformed(
+                "certificate linear raw generator digest",
+            ));
+        }
+        if cursor.array::<32>()? != CERTIFICATE_PARENT_BASIS_DIGEST {
+            return Err(RelationError::Malformed("certificate linear basis digest"));
+        }
+        let context_digest = cursor.array::<32>()?;
+        let response_count = cursor.u64()?;
+        let frame = CertificateWitnessFrame::new(context_digest, response_count)?;
+        let response_count_usize = usize::try_from(response_count)
+            .map_err(|_| RelationError::Malformed("certificate linear response count"))?;
+        let minimum_response_bytes = 8usize
+            .checked_add(MINIMUM_STATEMENT_BYTES)
+            .and_then(|size| size.checked_add(4))
+            .and_then(|size| size.checked_add(LINEAR_MEMBER_PROOF_BYTES))
+            .expect("fixed certificate linear response size fits usize");
+        if response_count_usize > cursor.remaining() / minimum_response_bytes {
+            return Err(RelationError::Malformed(
+                "certificate linear response bytes",
+            ));
+        }
+
+        let mut responses = Vec::with_capacity(response_count_usize);
+        for ordinal in 0..response_count {
+            let statement_length = cursor.usize_u64("certificate linear statement length")?;
+            if statement_length < MINIMUM_STATEMENT_BYTES {
+                return Err(RelationError::Malformed(
+                    "certificate linear statement length",
+                ));
+            }
+            let mut parsed =
+                parse_response_statement(cursor.take(statement_length)?, response_count, ordinal)?;
+            if parsed.boundary.frame() != frame {
+                return Err(RelationError::Malformed(
+                    "certificate linear response frame",
+                ));
+            }
+
+            let proof_count = cursor.u32()?;
+            if proof_count != parsed.boundary.member_count() {
+                return Err(RelationError::Malformed("certificate linear proof count"));
+            }
+            let proof_count_usize = usize::try_from(proof_count)
+                .map_err(|_| RelationError::Malformed("certificate linear proof count"))?;
+            let proof_bytes = proof_count_usize
+                .checked_mul(LINEAR_MEMBER_PROOF_BYTES)
+                .ok_or(RelationError::Malformed("certificate linear member bytes"))?;
+            if cursor.remaining() < proof_bytes {
+                return Err(RelationError::Malformed(
+                    "truncated certificate linear member bytes",
+                ));
+            }
+
+            let mut members = Vec::with_capacity(proof_count_usize);
+            let mut member_proofs = Vec::with_capacity(proof_count_usize);
+            for parsed_member in std::mem::take(&mut parsed.members) {
+                let parent_constants = CertificateLeafParentConstantsWitness {
+                    circuit_binding_digest: cursor.array::<32>()?,
+                    coefficient_commitment: SecpEncodedPointWitness::parse(cursor.array::<33>()?)?,
+                    anchored_offset: SecpEncodedPointWitness::parse(cursor.array::<33>()?)?,
+                };
+                let nonce_proof = cursor.array::<CERTIFICATE_NONCE_PROOF_BYTES>()?;
+                let reduction = parse_certificate_reduction(
+                    cursor.array::<CERTIFICATE_REDUCTION_PROOF_BYTES>()?,
+                )?;
+                let bound_step =
+                    parse_certificate_step(cursor.array::<CERTIFICATE_STEP_PROOF_BYTES>()?)?;
+                members.push(joined_member(parsed_member, parent_constants, nonce_proof)?);
+                member_proofs.push(CertificateLinearMemberProofWitness {
+                    reduction,
+                    bound_step,
+                });
+            }
+            responses.push(CertificateLinearResponseWitness {
+                response: joined_response(parsed, members),
+                member_proofs,
+            });
+        }
+        cursor.finish()?;
+        Ok(Self { frame, responses })
+    }
+
+    pub(crate) const fn frame(&self) -> CertificateWitnessFrame {
+        self.frame
+    }
+
+    pub(crate) fn responses(&self) -> &[CertificateLinearResponseWitness] {
+        &self.responses
+    }
+}
+
 struct ParsedResponseStatement {
     boundary: CertificateResponseBoundary,
     electorate_index: u32,
@@ -387,6 +505,57 @@ struct ParsedResponseMember {
     circuit_precommitment: SecpScalarWitness,
     nonce_point: SecpEncodedPointWitness,
     authorization_digest: [u8; 32],
+}
+
+fn joined_member(
+    parsed: ParsedResponseMember,
+    parent_constants: CertificateLeafParentConstantsWitness,
+    nonce_proof: [u8; CERTIFICATE_NONCE_PROOF_BYTES],
+) -> Result<CertificateJoinedMemberWitness, RelationError> {
+    let proof_nonce = parse_nonce_proof(&nonce_proof)?;
+    if proof_nonce != parsed.nonce_point || nonce_proof_digest(&nonce_proof) != parsed.proof_digest
+    {
+        return Err(RelationError::Malformed(
+            "certificate joined nonce proof binding",
+        ));
+    }
+    Ok(CertificateJoinedMemberWitness {
+        roster_public_key: parsed.roster_public_key,
+        coefficient: parsed.coefficient,
+        host: parsed.host,
+        leaf_binding: parsed.leaf_binding,
+        proof_digest: parsed.proof_digest,
+        circuit_precommitment: parsed.circuit_precommitment,
+        nonce_point: parsed.nonce_point,
+        authorization_digest: parsed.authorization_digest,
+        parent_constants,
+        nonce_proof,
+    })
+}
+
+fn joined_response(
+    parsed: ParsedResponseStatement,
+    members: Vec<CertificateJoinedMemberWitness>,
+) -> CertificateJoinedResponseWitness {
+    CertificateJoinedResponseWitness {
+        boundary: parsed.boundary,
+        electorate_index: parsed.electorate_index,
+        electorate_weight: parsed.electorate_weight,
+        signing_key: parsed.signing_key,
+        host_commitment: parsed.host_commitment,
+        coalition_core_digest: parsed.coalition_core_digest,
+        slot: parsed.slot,
+        canonical_body: parsed.canonical_body,
+        response: parsed.response,
+        key_list_hash: parsed.key_list_hash,
+        aggregate_was_negated: parsed.aggregate_was_negated,
+        common_digest: parsed.common_digest,
+        authorization_digest: parsed.authorization_digest,
+        response_binding: parsed.response_binding,
+        statement_digest: parsed.statement_digest,
+        members,
+        aggregate_nonce: parsed.aggregate_nonce,
+    }
 }
 
 fn parse_response_statement(
@@ -714,10 +883,6 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::certificate_profile::{
-        CERTIFICATE_PARENT_BASIS_DIGEST, CERTIFICATE_REDUCTION_PROOF_BYTES,
-        CERTIFICATE_STEP_PROOF_BYTES,
-    };
 
     const GENERATOR_X: [u8; 32] = [
         0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce, 0x87, 0x0b,
@@ -873,6 +1038,52 @@ mod tests {
         }
     }
 
+    struct LinearFixture {
+        encoded: Vec<u8>,
+        statement_start: usize,
+        proof_count_offset: usize,
+        proof_start: usize,
+        reduction_start: usize,
+        step_start: usize,
+    }
+
+    fn linear_fixture() -> LinearFixture {
+        let proof = nonce_proof();
+        let (statement, _) = response_statement(&proof);
+        let mut reduction = [0; CERTIFICATE_REDUCTION_PROOF_BYTES];
+        reduction[0] = 2;
+        let mut step = [0; CERTIFICATE_STEP_PROOF_BYTES];
+        step[0] = 2;
+
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(LINEAR_MAGIC);
+        encoded.extend_from_slice(&CERTIFICATE_PARENT_RAW_GENERATOR_DIGEST);
+        encoded.extend_from_slice(&CERTIFICATE_PARENT_BASIS_DIGEST);
+        encoded.extend_from_slice(&CONTEXT);
+        push_u64(&mut encoded, 1);
+        push_u64(&mut encoded, statement.len() as u64);
+        let statement_start = encoded.len();
+        encoded.extend_from_slice(&statement);
+        let proof_count_offset = encoded.len();
+        push_u32(&mut encoded, 1);
+        append_parent_constants(&mut encoded, parent_constants());
+        let proof_start = encoded.len();
+        encoded.extend_from_slice(&proof);
+        let reduction_start = encoded.len();
+        encoded.extend_from_slice(&reduction);
+        let step_start = encoded.len();
+        encoded.extend_from_slice(&step);
+        assert_eq!(encoded.len(), 120 + 12 + statement.len() + 2_984);
+        LinearFixture {
+            encoded,
+            statement_start,
+            proof_count_offset,
+            proof_start,
+            reduction_start,
+            step_start,
+        }
+    }
+
     #[test]
     fn parses_exact_response_proof_and_receipt_joins() {
         let fixture = fixture();
@@ -920,6 +1131,99 @@ mod tests {
         assert_eq!(member.nonce_point().encoded, generator());
         assert_ne!(member.authorization_digest(), [0; 32]);
         assert_eq!(member.parent_constants(), parent_constants());
+    }
+
+    #[test]
+    fn parses_exact_linear_response_member_transitions() {
+        let fixture = linear_fixture();
+        let witness = CertificateLinearJoinedWitness::parse(&fixture.encoded)
+            .expect("canonical linear certificate witness");
+        assert_eq!(fixture.encoded.len(), 3_693);
+        assert_eq!(witness.frame().certificate_context_digest(), CONTEXT);
+        assert_eq!(witness.frame().total_responses(), 1);
+        assert_eq!(witness.responses().len(), 1);
+
+        let response = &witness.responses()[0];
+        assert_eq!(response.response().boundary().ordinal(), 0);
+        assert_eq!(response.response().members().len(), 1);
+        assert_eq!(response.member_proofs().len(), 1);
+        assert_eq!(response.member_proofs()[0].reduction().left.len(), 12);
+        assert_eq!(response.member_proofs()[0].bound_step().left.len(), 13);
+    }
+
+    #[test]
+    fn rejects_noncanonical_linear_framing_and_proofs() {
+        let fixture = linear_fixture();
+
+        let mut wrong_magic = fixture.encoded.clone();
+        wrong_magic[0] ^= 1;
+        assert!(CertificateLinearJoinedWitness::parse(&wrong_magic).is_err());
+
+        let mut wrong_raw_generator = fixture.encoded.clone();
+        wrong_raw_generator[16] ^= 1;
+        assert!(CertificateLinearJoinedWitness::parse(&wrong_raw_generator).is_err());
+
+        let mut wrong_basis = fixture.encoded.clone();
+        wrong_basis[48] ^= 1;
+        assert!(CertificateLinearJoinedWitness::parse(&wrong_basis).is_err());
+
+        let mut empty_context = fixture.encoded.clone();
+        empty_context[80..112].fill(0);
+        assert!(CertificateLinearJoinedWitness::parse(&empty_context).is_err());
+
+        let mut empty_responses = fixture.encoded.clone();
+        empty_responses[112..120].fill(0);
+        assert!(CertificateLinearJoinedWitness::parse(&empty_responses).is_err());
+
+        let mut impossible_responses = fixture.encoded.clone();
+        impossible_responses[112..120]
+            .copy_from_slice(&(CERTIFICATE_MAX_RESPONSES + 1).to_be_bytes());
+        assert!(CertificateLinearJoinedWitness::parse(&impossible_responses).is_err());
+
+        let mut short_statement = fixture.encoded.clone();
+        short_statement[120..128]
+            .copy_from_slice(&((MINIMUM_STATEMENT_BYTES - 1) as u64).to_be_bytes());
+        assert!(CertificateLinearJoinedWitness::parse(&short_statement).is_err());
+
+        let mut oversized_statement = fixture.encoded.clone();
+        oversized_statement[120..128].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert!(CertificateLinearJoinedWitness::parse(&oversized_statement).is_err());
+
+        let mut mismatched_context = fixture.encoded.clone();
+        let statement_context = fixture.statement_start + 1 + 1 + 4;
+        mismatched_context[statement_context] ^= 1;
+        assert!(CertificateLinearJoinedWitness::parse(&mismatched_context).is_err());
+
+        let mut mismatched_response_count = fixture.encoded.clone();
+        let statement_response_count = statement_context + 32;
+        mismatched_response_count[statement_response_count..statement_response_count + 8]
+            .copy_from_slice(&2u64.to_be_bytes());
+        assert!(CertificateLinearJoinedWitness::parse(&mismatched_response_count).is_err());
+
+        let mut wrong_count = fixture.encoded.clone();
+        wrong_count[fixture.proof_count_offset..fixture.proof_count_offset + 4]
+            .copy_from_slice(&0u32.to_be_bytes());
+        assert!(CertificateLinearJoinedWitness::parse(&wrong_count).is_err());
+
+        let mut wrong_nonce_proof = fixture.encoded.clone();
+        wrong_nonce_proof[fixture.proof_start] = 3;
+        assert!(CertificateLinearJoinedWitness::parse(&wrong_nonce_proof).is_err());
+
+        let mut wrong_reduction = fixture.encoded.clone();
+        wrong_reduction[fixture.reduction_start] = 1;
+        assert!(CertificateLinearJoinedWitness::parse(&wrong_reduction).is_err());
+
+        let mut wrong_step = fixture.encoded.clone();
+        wrong_step[fixture.step_start] = 1;
+        assert!(CertificateLinearJoinedWitness::parse(&wrong_step).is_err());
+
+        let mut truncated = fixture.encoded.clone();
+        truncated.pop();
+        assert!(CertificateLinearJoinedWitness::parse(&truncated).is_err());
+
+        let mut trailing = fixture.encoded;
+        trailing.push(0);
+        assert!(CertificateLinearJoinedWitness::parse(&trailing).is_err());
     }
 
     #[test]

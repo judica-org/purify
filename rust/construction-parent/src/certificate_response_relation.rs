@@ -197,10 +197,41 @@ fn native_step_digest(
 mod tests {
     use super::*;
 
+    fn decode_hex<const N: usize>(encoded: &str) -> [u8; N] {
+        assert_eq!(encoded.len(), 2 * N);
+        std::array::from_fn(|index| {
+            u8::from_str_radix(&encoded[2 * index..2 * index + 2], 16).expect("test vector hex")
+        })
+    }
+
+    #[test]
+    fn recursive_step_digest_matches_cpp_fixture() {
+        let digest = native_step_digest(
+            decode_hex("2f42294f02933d5b2433b589b75248d0a8a66e4e98bed8944a93f880f81f9324"),
+            decode_hex("dc55a5419605986f3a34892b22e9065b01d59b82d4845528644dd78f52e37735"),
+            2,
+            decode_hex("f1bc4f8667aba3063730ba53f1a4bb69ab70a2e374a219a02fc0dc4bb2f3e8f4"),
+            decode_hex("2adf2ca4d5f40b657258cb96f766350491b897d97fc33301e7175f1a3ad28415"),
+            decode_hex("c8ee29177efac3570ff32abd505f8b9ab62ce43a7699b1de059f32ecd35f19d7"),
+        );
+        assert_eq!(
+            digest,
+            decode_hex("a35626ac841c3d110bd75f062640a9aaed72662a49b0cccbd8b8e0704926c252",),
+        );
+    }
+
     #[test]
     fn recursive_step_digest_binds_every_response_field() {
         let expected = native_step_digest(
             [0x11; 32], [0x22; 32], 3, [0x33; 32], [0x44; 32], [0x55; 32],
+        );
+        assert_eq!(
+            expected,
+            [
+                0x4d, 0xd5, 0xf6, 0x84, 0x60, 0x06, 0xe7, 0x94, 0x69, 0xa1, 0x09, 0x6f, 0xd3, 0xa5,
+                0x3e, 0xda, 0xc7, 0x1f, 0x17, 0xaf, 0xf0, 0xc2, 0x3f, 0xab, 0xfe, 0x27, 0x71, 0x8e,
+                0x8c, 0xe7, 0x48, 0x7c,
+            ],
         );
         let mut inputs = [[0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32], [0x55; 32]];
         for index in 0..inputs.len() {

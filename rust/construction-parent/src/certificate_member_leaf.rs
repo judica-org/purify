@@ -455,6 +455,47 @@ mod tests {
         0x48, 0xd5,
     ];
 
+    fn decode_hex<const N: usize>(encoded: &str) -> [u8; N] {
+        assert_eq!(encoded.len(), 2 * N);
+        std::array::from_fn(|index| {
+            u8::from_str_radix(&encoded[2 * index..2 * index + 2], 16).expect("test vector hex")
+        })
+    }
+
+    #[test]
+    fn native_member_record_matches_cpp_fixture() {
+        let parent_constants = CertificateLeafParentConstantsWitness {
+            circuit_binding_digest: decode_hex(
+                "7b3bfc9496164ff840ba510baf986a814971e77a3c7fd71c650a9efe1edbd7d6",
+            ),
+            coefficient_commitment: SecpEncodedPointWitness::parse(decode_hex(
+                "03c7abaebd9aea5d6b3284c5d06ea172253bab5c2d6f3d8d35a65c53c148d85efa",
+            ))
+            .expect("coefficient commitment"),
+            anchored_offset: SecpEncodedPointWitness::parse(decode_hex(
+                "0287b61ac5ba54700467325a16440f1f01fcab2775b55a986ad21c9c94fb629e0c",
+            ))
+            .expect("anchored offset"),
+        };
+        let digest = native_member_record_digest(
+            0,
+            0,
+            decode_hex("79be0a07ab0749bc19cb8d2fd43b4f43fc9485d8e7bb366a6fce34b0bce1792b"),
+            decode_hex(concat!(
+                "512c8cb338e95981ddd219b66efb4c32ebe7bd448e8505d97e6d9b1e0b1acddb",
+                "b3495a9d3a8dc4697c58182b76b9c7c8c443224d184cca14793c063c8db759ed",
+                "1cc53d5f2f31ae932eb89e40a2621ae44d47a513841be6c7f17224aa83a7d6e9",
+            )),
+            decode_hex("9cbf85439bcbb4aac1a81824d7c1a5433b8c031af38270ef22acaf6bf544cc36"),
+            parent_constants,
+            decode_hex("d3eb172784ede6e7cc5ee50b40e70cc132a6d80769db5726afb9f90df32b70e0"),
+        );
+        assert_eq!(
+            digest,
+            decode_hex("2f42294f02933d5b2433b589b75248d0a8a66e4e98bed8944a93f880f81f9324",),
+        );
+    }
+
     #[test]
     fn native_member_record_framing_is_pinned() {
         let parent_constants = CertificateLeafParentConstantsWitness {
@@ -462,7 +503,72 @@ mod tests {
             coefficient_commitment: SecpEncodedPointWitness::parse(GENERATOR).expect("generator"),
             anchored_offset: SecpEncodedPointWitness::identity(),
         };
+        let expected = native_member_record_digest(
+            5,
+            7,
+            [0x11; 32],
+            [0x22; 96],
+            [0x33; 32],
+            parent_constants,
+            [0x55; 32],
+        );
         assert_eq!(
+            expected,
+            [
+                0x6f, 0x99, 0x41, 0x3e, 0x24, 0xbd, 0x81, 0xa4, 0x3f, 0x69, 0x13, 0x9e, 0x56, 0x8e,
+                0x8a, 0x4c, 0x0d, 0x8d, 0x22, 0x0d, 0x1a, 0x49, 0x0a, 0x0b, 0x81, 0x4a, 0x85, 0xa5,
+                0x25, 0x8b, 0x8f, 0x1b,
+            ],
+        );
+
+        let mut changed_host = [0x22; 96];
+        changed_host[95] ^= 1;
+        assert_ne!(
+            native_member_record_digest(
+                5,
+                7,
+                [0x11; 32],
+                changed_host,
+                [0x33; 32],
+                parent_constants,
+                [0x55; 32],
+            ),
+            expected,
+        );
+
+        let mut changed_topic = [0x33; 32];
+        changed_topic[31] ^= 1;
+        assert_ne!(
+            native_member_record_digest(
+                5,
+                7,
+                [0x11; 32],
+                [0x22; 96],
+                changed_topic,
+                parent_constants,
+                [0x55; 32],
+            ),
+            expected,
+        );
+
+        let mut changed_constants = parent_constants;
+        changed_constants.circuit_binding_digest[31] ^= 1;
+        assert_ne!(
+            native_member_record_digest(
+                5,
+                7,
+                [0x11; 32],
+                [0x22; 96],
+                [0x33; 32],
+                changed_constants,
+                [0x55; 32],
+            ),
+            expected,
+        );
+
+        let mut changed_binding = [0x55; 32];
+        changed_binding[31] ^= 1;
+        assert_ne!(
             native_member_record_digest(
                 5,
                 7,
@@ -470,13 +576,33 @@ mod tests {
                 [0x22; 96],
                 [0x33; 32],
                 parent_constants,
+                changed_binding,
+            ),
+            expected,
+        );
+        assert_ne!(
+            native_member_record_digest(
+                6,
+                7,
+                [0x11; 32],
+                [0x22; 96],
+                [0x33; 32],
+                parent_constants,
                 [0x55; 32],
             ),
-            [
-                0x6f, 0x99, 0x41, 0x3e, 0x24, 0xbd, 0x81, 0xa4, 0x3f, 0x69, 0x13, 0x9e, 0x56, 0x8e,
-                0x8a, 0x4c, 0x0d, 0x8d, 0x22, 0x0d, 0x1a, 0x49, 0x0a, 0x0b, 0x81, 0x4a, 0x85, 0xa5,
-                0x25, 0x8b, 0x8f, 0x1b,
-            ],
+            expected,
+        );
+        assert_ne!(
+            native_member_record_digest(
+                5,
+                8,
+                [0x11; 32],
+                [0x22; 96],
+                [0x33; 32],
+                parent_constants,
+                [0x55; 32],
+            ),
+            expected,
         );
     }
 

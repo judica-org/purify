@@ -34,6 +34,100 @@ struct CertificateNonceResponseFrame {
         CertificateNonceParentScope::AccountableTopic;
 };
 
+/** Public authorization facts for one compact-certificate response. */
+class CertificateNonceResponseAuthorization {
+public:
+    /**
+     * Bind the response facts an application resolves without nonce proofs.
+     *
+     * The full response digest binds the trace frame, scalar response,
+     * accountable context, roster, and ordered nonce hosts. The common digest
+     * omits individual roster entries. Per-member digests bind one exact
+     * roster entry and host to the full response so a recursive step need not
+     * absorb every member. None of these digests verifies a nonce proof or the
+     * scalar-response equation.
+     */
+    [[nodiscard]] static Result<CertificateNonceResponseAuthorization>
+    create(
+        CertificateNonceResponseFrame frame,
+        const accountable::NonceHostBoundSigningRoster& roster,
+        const accountable::ConflictContext& context,
+        std::span<const PublicKey> ordered_hosts,
+        std::span<const unsigned char> canonical_body,
+        const accountable::ScalarSignature& response,
+        purify_secp_context* secp_context);
+
+    [[nodiscard]] const CertificateNonceResponseFrame& frame()
+        const noexcept
+    {
+        return frame_;
+    }
+    [[nodiscard]] const bppp::accumulation::Digest& common_digest()
+        const noexcept
+    {
+        return common_digest_;
+    }
+    [[nodiscard]] const bppp::accumulation::Digest& response_digest()
+        const noexcept
+    {
+        return response_digest_;
+    }
+    [[nodiscard]] const bppp::accumulation::Digest& response_binding()
+        const noexcept
+    {
+        return response_binding_;
+    }
+    [[nodiscard]] std::span<const bppp::accumulation::Digest>
+    member_digests() const noexcept
+    {
+        return member_digests_;
+    }
+
+private:
+    CertificateNonceResponseAuthorization(
+        CertificateNonceResponseFrame frame,
+        bppp::accumulation::Digest common_digest,
+        bppp::accumulation::Digest response_digest,
+        bppp::accumulation::Digest response_binding,
+        std::vector<bppp::accumulation::Digest> member_digests)
+        : frame_(std::move(frame)),
+          common_digest_(common_digest),
+          response_digest_(response_digest),
+          response_binding_(response_binding),
+          member_digests_(std::move(member_digests))
+    {
+    }
+
+    CertificateNonceResponseFrame frame_;
+    bppp::accumulation::Digest common_digest_{};
+    bppp::accumulation::Digest response_digest_{};
+    bppp::accumulation::Digest response_binding_{};
+    std::vector<bppp::accumulation::Digest> member_digests_;
+};
+
+/** One canonical 255-bit field encoding for an ordered member manifest. */
+using CertificateNonceAuthorizationManifest = bppp::ScalarBytes;
+
+/** Seed the ordered authorization manifest for one certificate trace. */
+[[nodiscard]] Result<CertificateNonceAuthorizationManifest>
+certificate_nonce_authorization_manifest_seed(
+    const bppp::accumulation::Digest& certificate_context_digest,
+    std::uint64_t total_responses);
+
+/** Append one response member at its exact canonical position. */
+[[nodiscard]] Result<CertificateNonceAuthorizationManifest>
+certificate_nonce_authorization_manifest_step(
+    const CertificateNonceAuthorizationManifest& prior,
+    std::uint64_t response_ordinal, std::uint32_t member_ordinal,
+    const bppp::accumulation::Digest& member_digest);
+
+/** Derive the final manifest from a complete ordered response sequence. */
+[[nodiscard]] Result<CertificateNonceAuthorizationManifest>
+certificate_nonce_authorization_manifest(
+    const bppp::accumulation::Digest& certificate_context_digest,
+    std::uint64_t total_responses,
+    std::span<const CertificateNonceResponseAuthorization> responses);
+
 /**
  * Canonical public statement for one proof-backed scalar response.
  *
@@ -69,6 +163,11 @@ public:
         const noexcept {
         return statement_digest_;
     }
+    [[nodiscard]] const CertificateNonceResponseAuthorization&
+    authorization() const noexcept
+    {
+        return authorization_;
+    }
     [[nodiscard]] const bppp::PointBytes& aggregate_nonce()
         const noexcept {
         return aggregate_nonce_;
@@ -86,12 +185,14 @@ private:
     CertificateNonceParentPublicInputs(
         CertificateNonceResponseFrame frame, Bytes canonical_bytes,
         bppp::accumulation::Digest statement_digest,
+        CertificateNonceResponseAuthorization authorization,
         bppp::PointBytes aggregate_nonce,
         std::vector<bppp::accumulation::Digest> leaf_bindings,
         std::vector<bppp::PointBytes> member_nonces)
         : frame_(std::move(frame)),
           canonical_bytes_(std::move(canonical_bytes)),
           statement_digest_(statement_digest),
+          authorization_(std::move(authorization)),
           aggregate_nonce_(aggregate_nonce),
           leaf_bindings_(std::move(leaf_bindings)),
           member_nonces_(std::move(member_nonces)) {}
@@ -99,6 +200,7 @@ private:
     CertificateNonceResponseFrame frame_;
     Bytes canonical_bytes_;
     bppp::accumulation::Digest statement_digest_{};
+    CertificateNonceResponseAuthorization authorization_;
     bppp::PointBytes aggregate_nonce_{};
     std::vector<bppp::accumulation::Digest> leaf_bindings_;
     std::vector<bppp::PointBytes> member_nonces_;

@@ -1237,6 +1237,12 @@ CertificateNonceLeafAccumulator::prepare(
         return unexpected_error(
             ErrorCode::EquationMismatch, "certificate_nonce_leaf:outer");
     }
+    const auto& transcript_input = prepared->transcript_input();
+    CertificateNonceLeafParentConstants parent_constants{
+        prepared->circuit_binding_digest(),
+        transcript_input.raw_generator_digest,
+        transcript_input.coefficient_commitment,
+        transcript_input.anchored_offset};
     PURIFY_ASSIGN_OR_RETURN(
         auto norm,
         bppp::accumulation::
@@ -1256,7 +1262,8 @@ CertificateNonceLeafAccumulator::prepare(
     });
     return PreparedCertificateNonceLeaf(
         circuit_precommitment, proof.commitment_point, nonce_host,
-        cache.topic, proof_digest, binding_digest, std::move(norm));
+        cache.topic, proof_digest, binding_digest,
+        std::move(parent_constants), std::move(norm));
 }
 
 }  // namespace purify::puresign_plusplus

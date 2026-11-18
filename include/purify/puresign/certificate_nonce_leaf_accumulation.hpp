@@ -72,6 +72,12 @@ public:
         return norm_;
     }
 
+    /** Exact verifier-derived constants consumed by the parent relation. */
+    [[nodiscard]] const CertificateNonceLeafParentConstants&
+    parent_constants() const noexcept {
+        return parent_constants_;
+    }
+
 private:
     PreparedCertificateNonceLeaf(
         bppp::ScalarBytes circuit_precommitment,
@@ -80,11 +86,14 @@ private:
         Bytes topic,
         bppp::accumulation::Digest proof_digest,
         bppp::accumulation::Digest binding_digest,
+        CertificateNonceLeafParentConstants parent_constants,
         bppp::accumulation::AlgebraicPreparedNorm norm)
         : circuit_precommitment_(circuit_precommitment),
           nonce_point_(nonce_point), nonce_host_(nonce_host),
           topic_(std::move(topic)), proof_digest_(proof_digest),
-          binding_digest_(binding_digest), norm_(std::move(norm)) {}
+          binding_digest_(binding_digest),
+          parent_constants_(std::move(parent_constants)),
+          norm_(std::move(norm)) {}
 
     bppp::ScalarBytes circuit_precommitment_{};
     bppp::PointBytes nonce_point_{};
@@ -92,6 +101,7 @@ private:
     Bytes topic_;
     bppp::accumulation::Digest proof_digest_{};
     bppp::accumulation::Digest binding_digest_{};
+    CertificateNonceLeafParentConstants parent_constants_;
     bppp::accumulation::AlgebraicPreparedNorm norm_;
 
     friend class CertificateNonceLeafAccumulator;

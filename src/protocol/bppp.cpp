@@ -3616,7 +3616,7 @@ candidate::prepare_circuit_zk_norm_arg_v4_impl(
   }
   return std::optional<candidate::PreparedCircuitZkNormArgV4>(
       candidate::PreparedCircuitZkNormArgV4(
-          shape, public_data->raw_generators,
+          shape, binding_digest, public_data->raw_generators,
           std::move(transcript_input),
           std::move(transcript_result), std::move(norm), residual));
 }

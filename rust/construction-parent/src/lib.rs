@@ -13,6 +13,14 @@ mod artifact_snapshot;
 #[cfg(any(test, feature = "prover"))]
 mod candidate;
 #[cfg(any(test, feature = "prover"))]
+mod certificate_authorization;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_joined_witness;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_native_witness;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_profile;
+#[cfg(any(test, feature = "prover"))]
 mod circuit_norm;
 #[cfg(any(test, feature = "prover"))]
 mod circuit_transcript;

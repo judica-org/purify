@@ -386,6 +386,7 @@ add_library(purify
     src/puresign/codecs/legacy.cpp
     src/puresign/bppp.cpp
     src/puresign/certificate_nonce_parent_accumulation.cpp
+    src/puresign/certificate_nonce_parent_prover_input.cpp
     src/puresign/codecs/bppp.cpp
     src/puresign/accountable.cpp
     src/puresign/coalition_formation.cpp
@@ -791,6 +792,7 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/codecs/legacy.cpp
         src/puresign/bppp.cpp
         src/puresign/certificate_nonce_parent_accumulation.cpp
+        src/puresign/certificate_nonce_parent_prover_input.cpp
         src/puresign/codecs/bppp.cpp
         src/puresign/accountable.cpp
         src/puresign/coalition_formation.cpp

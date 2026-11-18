@@ -30,6 +30,18 @@ static_assert(
     66 * 13 + 66);
 const TaggedHash kResponseStatementHash(
     "Purify/Accountable/CertificateNonceResponse/v1");
+const TaggedHash kResponseAuthorizationHash(
+    "Purify/Accountable/CertificateResponseAuthorization/v1");
+const TaggedHash kResponseAuthorizationCommonHash(
+    "Purify/Accountable/CertificateResponseCommon/v1");
+const TaggedHash kResponseAuthorizationBindingHash(
+    "Purify/Accountable/CertificateResponseBinding/v1");
+const TaggedHash kMemberAuthorizationHash(
+    "Purify/Accountable/CertificateMemberAuthorization/v1");
+const TaggedHash kAuthorizationManifestSeedHash(
+    "Purify/Accountable/CertificateAuthorizationManifest/v1/init");
+const TaggedHash kAuthorizationManifestStepHash(
+    "Purify/Accountable/CertificateAuthorizationManifest/v1/member");
 const TaggedHash kTreeNodeHash(
     "Purify/Accountable/CertificateNonceTreeNode/v1");
 
@@ -69,6 +81,118 @@ std::uint64_t read_u64(std::span<const unsigned char> encoded)
 bool is_zero(const bppp::accumulation::Digest& digest) {
     return std::ranges::all_of(
         digest, [](unsigned char byte) { return byte == 0; });
+}
+
+Status validate_authorization_inputs(
+    const CertificateNonceResponseFrame& frame,
+    const accountable::NonceHostBoundSigningRoster& roster,
+    const accountable::ConflictContext& context,
+    std::span<const PublicKey> ordered_hosts,
+    std::span<const unsigned char> canonical_body,
+    purify_secp_context* secp_context)
+{
+    if (is_zero(frame.certificate_context_digest) ||
+        frame.total_responses == 0 ||
+        frame.total_responses >
+            CertificateNonceParentAccumulator::kMaxTreeResponses ||
+        frame.response_ordinal >= frame.total_responses ||
+        frame.electorate_weight == 0) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_authorization:frame");
+    }
+    if (frame.scope !=
+        CertificateNonceParentScope::AccountableTopic) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "certificate_nonce_authorization:scope");
+    }
+    if (ordered_hosts.empty() ||
+        ordered_hosts.size() >
+            CertificateNonceParentPublicInputs::
+                kMemberBatchCapacity ||
+        roster.members().size() != ordered_hosts.size()) {
+        return unexpected_error(
+            ErrorCode::SizeMismatch,
+            "certificate_nonce_authorization:member_count");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto registered_hosts,
+        accountable::nonce_host_commitment(
+            roster, ordered_hosts, secp_context),
+        "certificate_nonce_authorization:host_commitment");
+    if (registered_hosts != roster.nonce_host_commitment() ||
+        context.host_commitment != registered_hosts ||
+        context.signing_key != roster.signing_key() ||
+        context.coalition_core_digest !=
+            roster.coalition_core_digest()) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "certificate_nonce_authorization:roster");
+    }
+    if (!size_fits_u64(context.slot.size()) ||
+        !size_fits_u64(canonical_body.size())) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_authorization:length");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto nonce_input,
+        accountable::nonce_evaluation_input(context, secp_context),
+        "certificate_nonce_authorization:nonce_input");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto challenge,
+        accountable::signature_challenge(
+            context, canonical_body, secp_context),
+        "certificate_nonce_authorization:challenge");
+    (void)nonce_input;
+    (void)challenge;
+    return {};
+}
+
+void append_authorization_prefix(
+    Bytes& encoded, const CertificateNonceResponseFrame& frame,
+    const accountable::NonceHostBoundSigningRoster& roster,
+    const accountable::ConflictContext& context,
+    std::span<const unsigned char> canonical_body,
+    const accountable::ScalarSignature& response,
+    std::size_t member_count)
+{
+    encoded.push_back(kPublicInputVersion);
+    encoded.push_back(static_cast<unsigned char>(frame.scope));
+    append_u32(
+        encoded, static_cast<std::uint32_t>(
+                     CertificateNonceParentPublicInputs::
+                         kMemberBatchCapacity));
+    append(encoded, frame.certificate_context_digest);
+    append_u64(encoded, frame.total_responses);
+    append_u64(encoded, frame.response_ordinal);
+    append_u32(encoded, frame.electorate_index);
+    append_u64(encoded, frame.electorate_weight);
+    append(encoded, context.signing_key);
+    append(encoded, context.host_commitment);
+    append(encoded, context.coalition_core_digest);
+    append_u64(encoded, static_cast<std::uint64_t>(context.slot.size()));
+    append(encoded, context.slot);
+    append_u64(
+        encoded, static_cast<std::uint64_t>(canonical_body.size()));
+    append(encoded, canonical_body);
+    append(encoded, response.serialize());
+    append(encoded, roster.key_list_hash());
+    encoded.push_back(
+        static_cast<unsigned char>(roster.aggregate_was_negated()));
+    append_u32(encoded, static_cast<std::uint32_t>(member_count));
+}
+
+void append_authorization_member(
+    Bytes& encoded, std::size_t index,
+    const accountable::SigningRosterMember& member,
+    const PublicKey& host)
+{
+    append_u32(encoded, static_cast<std::uint32_t>(index));
+    append(encoded, member.public_key);
+    append(encoded, member.coefficient.to_bytes_be());
+    append(encoded, host.serialize());
 }
 
 Result<bppp::PointBytes> sum_nonces(
@@ -292,6 +416,148 @@ Result<ParentMetadata> parent_metadata(
 }
 
 } // namespace
+
+Result<CertificateNonceResponseAuthorization>
+CertificateNonceResponseAuthorization::create(
+    CertificateNonceResponseFrame frame,
+    const accountable::NonceHostBoundSigningRoster& roster,
+    const accountable::ConflictContext& context,
+    std::span<const PublicKey> ordered_hosts,
+    std::span<const unsigned char> canonical_body,
+    const accountable::ScalarSignature& response,
+    purify_secp_context* secp_context)
+{
+    PURIFY_RETURN_IF_ERROR(
+        validate_authorization_inputs(
+            frame, roster, context, ordered_hosts, canonical_body,
+            secp_context),
+        "certificate_nonce_authorization:inputs");
+    Bytes prefix;
+    append_authorization_prefix(
+        prefix, frame, roster, context, canonical_body, response,
+        ordered_hosts.size());
+    const auto common_digest =
+        kResponseAuthorizationCommonHash.digest(prefix);
+
+    Bytes encoded = prefix;
+    for (std::size_t index = 0; index < ordered_hosts.size(); ++index) {
+        append_authorization_member(
+            encoded, index, roster.members()[index],
+            ordered_hosts[index]);
+    }
+    const auto response_digest =
+        kResponseAuthorizationHash.digest(encoded);
+
+    Bytes binding_bytes;
+    binding_bytes.reserve(common_digest.size() + response_digest.size());
+    append(binding_bytes, common_digest);
+    append(binding_bytes, response_digest);
+    const auto response_binding =
+        kResponseAuthorizationBindingHash.digest(binding_bytes);
+
+    std::vector<bppp::accumulation::Digest> member_digests;
+    member_digests.reserve(ordered_hosts.size());
+    for (std::size_t index = 0; index < ordered_hosts.size(); ++index) {
+        Bytes member_bytes;
+        append(member_bytes, response_binding);
+        append_u64(member_bytes, frame.response_ordinal);
+        append_authorization_member(
+            member_bytes, index, roster.members()[index],
+            ordered_hosts[index]);
+        member_digests.push_back(
+            kMemberAuthorizationHash.digest(member_bytes));
+    }
+    return CertificateNonceResponseAuthorization(
+        std::move(frame), common_digest, response_digest,
+        response_binding, std::move(member_digests));
+}
+
+Result<CertificateNonceAuthorizationManifest>
+certificate_nonce_authorization_manifest_seed(
+    const bppp::accumulation::Digest& certificate_context_digest,
+    std::uint64_t total_responses)
+{
+    if (is_zero(certificate_context_digest) || total_responses == 0 ||
+        total_responses >
+            CertificateNonceParentAccumulator::kMaxTreeResponses) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_authorization:manifest_seed");
+    }
+    Bytes encoded;
+    append(encoded, certificate_context_digest);
+    append_u64(encoded, total_responses);
+    auto manifest = kAuthorizationManifestSeedHash.digest(encoded);
+    manifest[0] &= 0x7f;
+    return manifest;
+}
+
+Result<CertificateNonceAuthorizationManifest>
+certificate_nonce_authorization_manifest_step(
+    const CertificateNonceAuthorizationManifest& prior,
+    std::uint64_t response_ordinal, std::uint32_t member_ordinal,
+    const bppp::accumulation::Digest& member_digest)
+{
+    if ((prior[0] & 0x80) != 0 ||
+        member_ordinal >=
+            CertificateNonceParentPublicInputs::kMemberBatchCapacity) {
+        return unexpected_error(
+            ErrorCode::RangeViolation,
+            "certificate_nonce_authorization:manifest_step");
+    }
+    Bytes encoded;
+    append(encoded, prior);
+    append_u64(encoded, response_ordinal);
+    append_u32(encoded, member_ordinal);
+    append(encoded, member_digest);
+    auto manifest = kAuthorizationManifestStepHash.digest(encoded);
+    manifest[0] &= 0x7f;
+    return manifest;
+}
+
+Result<CertificateNonceAuthorizationManifest>
+certificate_nonce_authorization_manifest(
+    const bppp::accumulation::Digest& certificate_context_digest,
+    std::uint64_t total_responses,
+    std::span<const CertificateNonceResponseAuthorization> responses)
+{
+    if (!size_fits_u64(responses.size()) ||
+        responses.size() != total_responses) {
+        return unexpected_error(
+            ErrorCode::SizeMismatch,
+            "certificate_nonce_authorization:manifest_responses");
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        auto manifest,
+        certificate_nonce_authorization_manifest_seed(
+            certificate_context_digest, total_responses),
+        "certificate_nonce_authorization:manifest_seed");
+    for (std::size_t response_index = 0;
+         response_index < responses.size(); ++response_index) {
+        const auto& authorization = responses[response_index];
+        const auto& frame = authorization.frame();
+        if (frame.certificate_context_digest !=
+                certificate_context_digest ||
+            frame.total_responses != total_responses ||
+            frame.response_ordinal != response_index) {
+            return unexpected_error(
+                ErrorCode::BindingMismatch,
+                "certificate_nonce_authorization:manifest_frame");
+        }
+        const auto member_digests = authorization.member_digests();
+        for (std::size_t member_index = 0;
+             member_index < member_digests.size(); ++member_index) {
+            PURIFY_ASSIGN_OR_RETURN(
+                manifest,
+                certificate_nonce_authorization_manifest_step(
+                    manifest, frame.response_ordinal,
+                    static_cast<std::uint32_t>(member_index),
+                    member_digests[member_index]),
+                "certificate_nonce_authorization:manifest_member");
+        }
+    }
+    return manifest;
+}
 
 Result<CertificateNonceNativeResponse>
 CertificateNonceNativeResponse::create(
@@ -667,43 +933,16 @@ CertificateNonceParentPublicInputs::create(
     const accountable::ScalarSignature& response,
     std::span<const PreparedCertificateNonceLeaf> ordered_leaves,
     purify_secp_context* secp_context) {
-    if (is_zero(frame.certificate_context_digest) ||
-        frame.total_responses == 0 ||
-        frame.total_responses >
-            CertificateNonceParentAccumulator::kMaxTreeResponses ||
-        frame.response_ordinal >= frame.total_responses ||
-        frame.electorate_weight == 0) {
-        return unexpected_error(
-            ErrorCode::RangeViolation,
-            "certificate_nonce_parent:frame");
-    }
-    if (frame.scope !=
-        CertificateNonceParentScope::AccountableTopic) {
-        return unexpected_error(
-            ErrorCode::BindingMismatch,
-            "certificate_nonce_parent:scope");
-    }
-    if (ordered_leaves.empty() ||
-        ordered_leaves.size() > kMemberBatchCapacity ||
-        ordered_hosts.size() != ordered_leaves.size() ||
-        roster.members().size() != ordered_leaves.size()) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto authorization,
+        CertificateNonceResponseAuthorization::create(
+            frame, roster, context, ordered_hosts, canonical_body,
+            response, secp_context),
+        "certificate_nonce_parent:authorization");
+    if (ordered_hosts.size() != ordered_leaves.size()) {
         return unexpected_error(
             ErrorCode::SizeMismatch,
             "certificate_nonce_parent:member_count");
-    }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto registered_hosts,
-        accountable::nonce_host_commitment(
-            roster, ordered_hosts, secp_context),
-        "certificate_nonce_parent:host_commitment");
-    if (registered_hosts != roster.nonce_host_commitment() ||
-        context.host_commitment != registered_hosts ||
-        context.signing_key != roster.signing_key() ||
-        context.coalition_core_digest !=
-            roster.coalition_core_digest()) {
-        return unexpected_error(
-            ErrorCode::BindingMismatch,
-            "certificate_nonce_parent:roster");
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto nonce_input,
@@ -746,35 +985,13 @@ CertificateNonceParentPublicInputs::create(
     }
 
     Bytes encoded;
-    encoded.push_back(kPublicInputVersion);
-    encoded.push_back(static_cast<unsigned char>(frame.scope));
-    append_u32(
-        encoded, static_cast<std::uint32_t>(kMemberBatchCapacity));
-    append(encoded, frame.certificate_context_digest);
-    append_u64(encoded, frame.total_responses);
-    append_u64(encoded, frame.response_ordinal);
-    append_u32(encoded, frame.electorate_index);
-    append_u64(encoded, frame.electorate_weight);
-    append(encoded, context.signing_key);
-    append(encoded, context.host_commitment);
-    append(encoded, context.coalition_core_digest);
-    append_u64(encoded, static_cast<std::uint64_t>(context.slot.size()));
-    append(encoded, context.slot);
-    append_u64(encoded, static_cast<std::uint64_t>(canonical_body.size()));
-    append(encoded, canonical_body);
-    append(encoded, response.serialize());
-    append(encoded, roster.key_list_hash());
-    encoded.push_back(
-        static_cast<unsigned char>(roster.aggregate_was_negated()));
-    append_u32(encoded,
-               static_cast<std::uint32_t>(ordered_leaves.size()));
+    append_authorization_prefix(
+        encoded, frame, roster, context, canonical_body, response,
+        ordered_leaves.size());
     for (std::size_t index = 0; index < ordered_leaves.size(); ++index) {
         const auto& member = roster.members()[index];
-        const auto host = ordered_hosts[index].serialize();
-        append_u32(encoded, static_cast<std::uint32_t>(index));
-        append(encoded, member.public_key);
-        append(encoded, member.coefficient.to_bytes_be());
-        append(encoded, host);
+        append_authorization_member(
+            encoded, index, member, ordered_hosts[index]);
         append(encoded, ordered_leaves[index].binding_digest());
         append(encoded, ordered_leaves[index].proof_digest());
         append(encoded,
@@ -785,6 +1002,7 @@ CertificateNonceParentPublicInputs::create(
     const auto statement_digest = kResponseStatementHash.digest(encoded);
     return CertificateNonceParentPublicInputs(
         std::move(frame), std::move(encoded), statement_digest,
+        std::move(authorization),
         aggregate_nonce, std::move(leaf_bindings),
         std::move(member_nonces));
 }

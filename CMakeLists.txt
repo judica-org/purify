@@ -399,6 +399,7 @@ add_library(purify
     src/protocol/bppp.cpp
     src/protocol/bppp_backend_cache.cpp
     src/protocol/bppp_support.cpp
+    src/protocol/bppp_masking.cpp
     src/protocol/bppp_points.cpp
     src/protocol/bppp_circuit_reduction.cpp
     src/protocol/bppp_public_commitments.cpp
@@ -833,6 +834,7 @@ if(PURIFY_BUILD_BENCH)
         src/protocol/bppp.cpp
         src/protocol/bppp_backend_cache.cpp
         src/protocol/bppp_support.cpp
+        src/protocol/bppp_masking.cpp
         src/protocol/bppp_points.cpp
         src/protocol/bppp_circuit_reduction.cpp
         src/protocol/bppp_public_commitments.cpp

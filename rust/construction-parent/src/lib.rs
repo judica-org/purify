@@ -23,6 +23,8 @@ mod certificate_native_witness;
 #[cfg(any(test, feature = "prover"))]
 mod certificate_nonce_proof;
 mod certificate_parent_input;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_parent_prover_binding;
 mod certificate_profile;
 #[cfg(any(test, feature = "prover"))]
 mod certificate_recurrence;

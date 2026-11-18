@@ -15,7 +15,10 @@
 use nova_snark::frontend::{ConstraintSystem, SynthesisError};
 use sha2::{Digest as _, Sha256};
 
-use crate::certificate_joined_witness::CertificateJoinedWitness;
+use crate::certificate_joined_witness::{
+    CertificateJoinedMemberWitness, CertificateJoinedResponseWitness, CertificateJoinedWitness,
+    CertificateLinearJoinedWitness,
+};
 use crate::certificate_nonce_proof::{certificate_leaf_shape, CertificateNonceProofWitnessV4};
 use crate::certificate_profile::{
     CERTIFICATE_NONCE_PROOF_BYTES, CERTIFICATE_PARENT_BASIS_DIGEST,
@@ -95,6 +98,60 @@ impl CertificateMemberLeafWitness {
                 "certificate native member ordinal",
             ))?
             .clone();
+        Self::from_response_member(
+            response,
+            member,
+            response_ordinal,
+            member_ordinal,
+            reduction,
+        )
+    }
+
+    pub(crate) fn from_linear(
+        joined: &CertificateLinearJoinedWitness,
+        response_ordinal: u64,
+        member_ordinal: u32,
+    ) -> Result<Self, RelationError> {
+        let response_index = usize::try_from(response_ordinal)
+            .map_err(|_| RelationError::Malformed("certificate response ordinal"))?;
+        let member_index = usize::try_from(member_ordinal)
+            .map_err(|_| RelationError::Malformed("certificate member ordinal"))?;
+        let linear_response = joined
+            .responses()
+            .get(response_index)
+            .ok_or(RelationError::Malformed("certificate response ordinal"))?;
+        let response = linear_response.response();
+        if response.boundary().ordinal() != response_ordinal {
+            return Err(RelationError::Malformed("certificate response boundary"));
+        }
+        let member = response
+            .members()
+            .get(member_index)
+            .ok_or(RelationError::Malformed("certificate member ordinal"))?;
+        let reduction = linear_response
+            .member_proofs()
+            .get(member_index)
+            .ok_or(RelationError::Malformed(
+                "certificate linear member ordinal",
+            ))?
+            .reduction()
+            .clone();
+        Self::from_response_member(
+            response,
+            member,
+            response_ordinal,
+            member_ordinal,
+            reduction,
+        )
+    }
+
+    fn from_response_member(
+        response: &CertificateJoinedResponseWitness,
+        member: &CertificateJoinedMemberWitness,
+        response_ordinal: u64,
+        member_ordinal: u32,
+        reduction: CandidateNormReductionProofWitness,
+    ) -> Result<Self, RelationError> {
         let host = member.host();
         let host_signing_key = parse_host_signing_key(host)?;
         let topic = accountable_nonce_topic(response)?;

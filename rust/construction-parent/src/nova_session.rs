@@ -1,8 +1,8 @@
 //! Serialized one-thread Nova lifecycle for one exact direct relation.
 //!
-//! This module owns the generic fixed-template mechanics and the one frozen
-//! construction-parent profile. Setup and proving compile only for
-//! qualification; production loads the profile's authenticated verifier key.
+//! This module owns generic fixed-template mechanics and locally selected
+//! application profiles. Setup compiles only for qualification; production
+//! loads an authenticated verifier key for one frozen profile.
 
 use std::sync::Mutex;
 
@@ -36,7 +36,7 @@ use crate::{
 
 mod artifact_codec;
 #[cfg(all(feature = "prover", not(target_pointer_width = "64")))]
-compile_error!("the construction-parent prover supports only 64-bit targets");
+compile_error!("the direct Nova prover supports only 64-bit targets");
 #[cfg(all(any(test, feature = "prover"), target_pointer_width = "64"))]
 pub(crate) mod prover_artifact;
 pub(crate) mod verifier_artifact;
@@ -547,6 +547,8 @@ pub(crate) const QUALIFIED_CONSTRUCTION_APPLICATION: DirectNovaApplicationProfil
 
 const CERTIFICATE_PARENT_VERSIONS: DirectNovaApplicationVersions =
     DirectNovaApplicationVersions::new(
+        // Compact certificate proof payload, public statement frame,
+        // recursive manifest semantics, and native certificate-root decision.
         ApplicationPayloadVersion::new(1),
         ApplicationStatementVersion::new(1),
         ApplicationManifestVersion::new(1),
@@ -616,7 +618,7 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
     }
 
     /// Promotes one freshly generated qualification suite under its exact
-    /// metadata and receipt-layer versions.
+    /// metadata and complete application profile.
     ///
     /// The leaked profile is scoped to the resource-gated test process. It is
     /// deliberately not reachable by the production artifact loader, which
@@ -928,9 +930,9 @@ impl<const ARITY: usize, C: StepCircuit<DirectNovaScalar>> SelectedNovaVerifier<
 
     /// Authenticates the recurrence output under this selected suite.
     ///
-    /// The returned state is not construction-receipt acceptance: the
-    /// construction wrapper must still bind its verifier-derived suffix and
-    /// complete the native final accumulation decision.
+    /// The returned state is not application acceptance: its native wrapper
+    /// must still bind the verifier-derived public frame and complete the
+    /// final accumulation decision.
     pub(crate) fn verify_final(
         &self,
         initial_state: &[DirectNovaScalar; ARITY],

@@ -882,6 +882,8 @@ impl<'a> Cursor<'a> {
 
 #[cfg(test)]
 mod tests {
+    use sha2::{Digest as _, Sha256};
+
     use super::*;
 
     const GENERATOR_X: [u8; 32] = [
@@ -1149,6 +1151,45 @@ mod tests {
         assert_eq!(response.member_proofs().len(), 1);
         assert_eq!(response.member_proofs()[0].reduction().left.len(), 12);
         assert_eq!(response.member_proofs()[0].bound_step().left.len(), 13);
+    }
+
+    #[test]
+    fn parses_real_linear_export_fixture() {
+        const ENCODED: &[u8] = include_bytes!("../tests/vectors/certificate_joined_witness_v3.bin");
+        const SHA256: [u8; 32] = [
+            0x36, 0xa4, 0x80, 0x6d, 0x93, 0x7e, 0xdd, 0x49, 0x6f, 0x28, 0x46, 0x42, 0x48, 0x25,
+            0x65, 0x12, 0xd4, 0x5e, 0x51, 0xe2, 0x5e, 0x36, 0xb5, 0xb6, 0xc1, 0x84, 0xe9, 0x91,
+            0xb8, 0x8c, 0x9d, 0x46,
+        ];
+        const CONTEXT_DIGEST: [u8; 32] = [
+            0x7b, 0xcb, 0x06, 0xb8, 0x53, 0x8c, 0xcc, 0x9c, 0x79, 0xfd, 0x2f, 0x59, 0x5b, 0xbb,
+            0xee, 0x9f, 0x08, 0xc0, 0xd8, 0x29, 0xa9, 0x7c, 0xcd, 0x92, 0xfc, 0x31, 0x75, 0xeb,
+            0x37, 0x90, 0x39, 0xf5,
+        ];
+        const FINAL_RECORD_MANIFEST: [u8; 32] = [
+            0x45, 0xe8, 0x14, 0x7f, 0x29, 0x3a, 0x6e, 0xdc, 0xf5, 0x0c, 0x17, 0x8d, 0x94, 0xa4,
+            0x73, 0x1b, 0x5e, 0x18, 0x78, 0x4c, 0x7b, 0x40, 0x4b, 0xa9, 0xc3, 0x57, 0xb9, 0xdb,
+            0x22, 0x4c, 0x1f, 0x9c,
+        ];
+
+        assert_eq!(ENCODED.len(), 14_608);
+        assert_eq!(<[u8; 32]>::from(Sha256::digest(ENCODED)), SHA256);
+        let witness = CertificateLinearJoinedWitness::parse(ENCODED)
+            .expect("real CertJWit3 exporter fixture");
+        assert_eq!(witness.frame().certificate_context_digest(), CONTEXT_DIGEST);
+        assert_eq!(witness.frame().total_responses(), 2);
+        assert_eq!(witness.responses().len(), 2);
+        let member_steps = witness
+            .responses()
+            .iter()
+            .map(|response| {
+                assert_eq!(response.response().members().len(), 2);
+                assert_eq!(response.member_proofs().len(), 2);
+                response.member_proofs().len()
+            })
+            .sum::<usize>();
+        assert_eq!(member_steps, 4);
+        assert_eq!(FINAL_RECORD_MANIFEST[0] & 0x80, 0);
     }
 
     #[test]

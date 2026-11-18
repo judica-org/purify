@@ -28,6 +28,11 @@ public:
           ordered_hosts_(ordered_hosts), ordered_proofs_(ordered_proofs)
     {
     }
+    CertificateNonceResponseProverView(
+        const CertificateNonceParentPublicInputs&,
+        accountable::ConflictContext&&,
+        std::span<const PublicKey>,
+        std::span<const NonceProof>) = delete;
 
     [[nodiscard]] const CertificateNonceParentPublicInputs& inputs()
         const noexcept
@@ -74,6 +79,22 @@ private:
 serialize_accepted_certificate_nonce_parent_witness(
     const CertificateNonceParentAccumulator& accumulator,
     const CertificateNonceNativeReceipt& receipt,
+    std::span<const CertificateNonceResponseProverView>
+        ordered_responses,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache = nullptr);
+
+/**
+ * Serialize the homogeneous linear receipt and its exact raw leaves.
+ *
+ * The CertJWit3 stream carries one reduction and one bound transition beside
+ * every raw leaf. It has no detached native receipt or tree suffix. Bytes are
+ * returned only after replay reaches the final native decision.
+ */
+[[nodiscard]] Result<Bytes>
+serialize_accepted_linear_certificate_nonce_parent_witness(
+    const CertificateNonceParentAccumulator& accumulator,
+    const CertificateNonceLinearReceipt& receipt,
     std::span<const CertificateNonceResponseProverView>
         ordered_responses,
     purify_secp_context* secp_context,

@@ -20,6 +20,10 @@ struct CertificateNonceLeafParentConstants {
     std::array<unsigned char, 32> raw_generator_digest{};
     bppp::PointBytes coefficient_commitment{};
     bppp::PointBytes anchored_offset{};
+
+    friend bool operator==(
+        const CertificateNonceLeafParentConstants&,
+        const CertificateNonceLeafParentConstants&) = default;
 };
 
 /** One outer-authenticated certificate nonce proof pending reduction. */
@@ -146,6 +150,22 @@ public:
         const TopicProofCache& cache,
         const NonceProof& proof,
         const bppp::ScalarBytes& circuit_precommitment,
+        purify_secp_context* secp_context) const;
+
+    /**
+     * Derive the same constants using only admitted public leaf data.
+     *
+     * The precommitment must be a canonical nonzero scalar and the nonce
+     * point must be a finite canonical compressed point. This path does not
+     * authenticate either value; the parent relation and public certificate
+     * manifest must bind both to the accepted leaf.
+     */
+    [[nodiscard]] Result<CertificateNonceLeafParentConstants>
+    derive_parent_constants_from_public_data(
+        const PublicKey& public_key,
+        const TopicProofCache& cache,
+        const bppp::ScalarBytes& circuit_precommitment,
+        const bppp::PointBytes& nonce_point,
         purify_secp_context* secp_context) const;
 
     [[nodiscard]] Result<PreparedCertificateNonceLeaf> prepare(

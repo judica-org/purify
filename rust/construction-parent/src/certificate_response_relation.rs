@@ -8,7 +8,9 @@
 use num_bigint::BigUint;
 use sha2::{Digest, Sha256};
 
-use crate::certificate_joined_witness::CertificateJoinedWitness;
+use crate::certificate_joined_witness::{
+    CertificateJoinedResponseWitness, CertificateJoinedWitness, CertificateLinearJoinedWitness,
+};
 use crate::secp_constants::SECP256K1_SCALAR_ORDER_BE;
 use crate::secp_native::{canonical_scalar_value, SecpEncodedPointWitness, SecpScalarWitness};
 use crate::RelationError;
@@ -43,6 +45,41 @@ impl CertificateResponseRelationWitness {
             .responses()
             .get(response_index)
             .ok_or(RelationError::Malformed("certificate response ordinal"))?;
+        Self::from_response(
+            response,
+            response_ordinal,
+            member_ordinal,
+            member_record_digest,
+        )
+    }
+
+    pub(crate) fn from_linear(
+        joined: &CertificateLinearJoinedWitness,
+        response_ordinal: u64,
+        member_ordinal: u32,
+        member_record_digest: [u8; 32],
+    ) -> Result<Self, RelationError> {
+        let response_index = usize::try_from(response_ordinal)
+            .map_err(|_| RelationError::Malformed("certificate response ordinal"))?;
+        let response = joined
+            .responses()
+            .get(response_index)
+            .ok_or(RelationError::Malformed("certificate response ordinal"))?
+            .response();
+        Self::from_response(
+            response,
+            response_ordinal,
+            member_ordinal,
+            member_record_digest,
+        )
+    }
+
+    fn from_response(
+        response: &CertificateJoinedResponseWitness,
+        response_ordinal: u64,
+        member_ordinal: u32,
+        member_record_digest: [u8; 32],
+    ) -> Result<Self, RelationError> {
         let boundary = response.boundary();
         if boundary.ordinal() != response_ordinal || member_ordinal >= boundary.member_count() {
             return Err(RelationError::Malformed(

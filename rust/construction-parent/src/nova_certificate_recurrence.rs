@@ -17,7 +17,7 @@ use nova_snark::{
 };
 
 use crate::candidate::CandidateStepProofWitness;
-use crate::certificate_joined_witness::CertificateJoinedWitness;
+use crate::certificate_joined_witness::{CertificateJoinedWitness, CertificateLinearJoinedWitness};
 use crate::certificate_member_leaf::{
     constrain_certificate_member_leaf, CertificateMemberLeafWitness, DirectCertificateMemberLeaf,
 };
@@ -77,6 +77,75 @@ impl CertificateParentStep {
         member_ordinal: u32,
         proof: CandidateStepProofWitness,
     ) -> Result<Self, RelationError> {
+        let leaf =
+            CertificateMemberLeafWitness::from_joined(joined, response_ordinal, member_ordinal)?;
+        let response = CertificateResponseRelationWitness::from_joined(
+            joined,
+            response_ordinal,
+            member_ordinal,
+            leaf.expected_record_digest(),
+        )?;
+        Self::from_parts(
+            state,
+            joined.frame(),
+            response_ordinal,
+            member_ordinal,
+            leaf,
+            response,
+            proof,
+        )
+    }
+
+    pub(crate) fn from_linear(
+        state: CertificateRecurrenceStateWitness,
+        joined: &CertificateLinearJoinedWitness,
+        response_ordinal: u64,
+        member_ordinal: u32,
+    ) -> Result<Self, RelationError> {
+        let response_index = usize::try_from(response_ordinal)
+            .map_err(|_| RelationError::Malformed("certificate response ordinal"))?;
+        let member_index = usize::try_from(member_ordinal)
+            .map_err(|_| RelationError::Malformed("certificate member ordinal"))?;
+        let proof = joined
+            .responses()
+            .get(response_index)
+            .ok_or(RelationError::Malformed("certificate response ordinal"))?
+            .member_proofs()
+            .get(member_index)
+            .ok_or(RelationError::Malformed(
+                "certificate linear member ordinal",
+            ))?
+            .bound_step()
+            .clone();
+        let leaf =
+            CertificateMemberLeafWitness::from_linear(joined, response_ordinal, member_ordinal)?;
+        let response = CertificateResponseRelationWitness::from_linear(
+            joined,
+            response_ordinal,
+            member_ordinal,
+            leaf.expected_record_digest(),
+        )?;
+        Self::from_parts(
+            state,
+            joined.frame(),
+            response_ordinal,
+            member_ordinal,
+            leaf,
+            response,
+            proof,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts(
+        state: CertificateRecurrenceStateWitness,
+        frame: crate::certificate_profile::CertificateWitnessFrame,
+        response_ordinal: u64,
+        member_ordinal: u32,
+        leaf: CertificateMemberLeafWitness,
+        response: CertificateResponseRelationWitness,
+        proof: CandidateStepProofWitness,
+    ) -> Result<Self, RelationError> {
         if proof.left.len() != CERTIFICATE_ROOT_ROUNDS
             || proof.right.len() != CERTIFICATE_ROOT_ROUNDS
         {
@@ -84,7 +153,6 @@ impl CertificateParentStep {
                 "certificate recurrence candidate proof",
             ));
         }
-        let frame = joined.frame();
         if state.certificate_context_digest != frame.certificate_context_digest()
             || state.total_responses != frame.total_responses()
             || state.response_ordinal != response_ordinal
@@ -94,14 +162,6 @@ impl CertificateParentStep {
                 "certificate recurrence immutable frame",
             ));
         }
-        let leaf =
-            CertificateMemberLeafWitness::from_joined(joined, response_ordinal, member_ordinal)?;
-        let response = CertificateResponseRelationWitness::from_joined(
-            joined,
-            response_ordinal,
-            member_ordinal,
-            leaf.expected_record_digest(),
-        )?;
         if state.member_count == 0 {
             if member_ordinal != 0 {
                 return Err(RelationError::Malformed(
@@ -128,6 +188,10 @@ impl CertificateParentStep {
 
     pub(crate) const fn input_state(&self) -> &[Scalar; CERTIFICATE_RECURRENCE_STATE_ARITY] {
         &self.input_state
+    }
+
+    pub(crate) const fn expected_step_digest(&self) -> [u8; 32] {
+        self.response.expected_step_digest()
     }
 
     fn synthesize_relation<CS: ConstraintSystem<Scalar>>(

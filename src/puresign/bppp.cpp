@@ -1132,12 +1132,6 @@ CertificateNonceLeafAccumulator::derive_parent_constants(
     const NonceProof& proof,
     const bppp::ScalarBytes& circuit_precommitment,
     purify_secp_context* secp_context) const {
-    PURIFY_RETURN_IF_ERROR(
-        validate_public_key_bundle(public_key, secp_context),
-        "certificate_nonce_leaf_parent:public_key");
-    PURIFY_RETURN_IF_ERROR(
-        validate_topic_proof_cache(cache),
-        "certificate_nonce_leaf_parent:cache");
     PURIFY_ASSIGN_OR_RETURN(
         const auto matches, nonce_proof_matches_nonce(proof, secp_context),
         "certificate_nonce_leaf_parent:nonce");
@@ -1146,6 +1140,24 @@ CertificateNonceLeafAccumulator::derive_parent_constants(
             ErrorCode::BindingMismatch,
             "certificate_nonce_leaf_parent:nonce");
     }
+    return derive_parent_constants_from_public_data(
+        public_key, cache, circuit_precommitment,
+        proof.commitment_point, secp_context);
+}
+
+Result<CertificateNonceLeafParentConstants>
+CertificateNonceLeafAccumulator::derive_parent_constants_from_public_data(
+    const PublicKey& public_key,
+    const TopicProofCache& cache,
+    const bppp::ScalarBytes& circuit_precommitment,
+    const bppp::PointBytes& nonce_point,
+    purify_secp_context* secp_context) const {
+    PURIFY_RETURN_IF_ERROR(
+        validate_public_key_bundle(public_key, secp_context),
+        "certificate_nonce_leaf_parent:public_key");
+    PURIFY_RETURN_IF_ERROR(
+        validate_topic_proof_cache(cache),
+        "certificate_nonce_leaf_parent:cache");
     PURIFY_ASSIGN_OR_RETURN(
         const auto circuit,
         cache.circuit_template.instantiate(public_key.purify_pubkey),
@@ -1161,7 +1173,7 @@ CertificateNonceLeafAccumulator::derive_parent_constants(
         "certificate_nonce_leaf_parent:precommitment");
     const Bytes statement_binding = proof_statement_binding(Scope::Topic);
     const std::array<bppp::PointBytes, 1> public_commitments{
-        proof.commitment_point};
+        nonce_point};
     PURIFY_ASSIGN_OR_RETURN(
         auto constants,
         bppp::candidate::

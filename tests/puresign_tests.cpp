@@ -77,7 +77,7 @@ struct PinnedSigningVectors {
  * Pins every derived value of one proof(R) backend: nonces, signatures, and the complete
  * serialized proof artifacts, with and without a reusable proof cache.
  */
-template <typename KeyPair, typename MessageProofCache, typename TopicProofCache>
+template <typename KeyPair, typename MessageProofCache, typename TopicProofCache, typename CallerCache>
 void expect_pinned_signing_vectors(TestContext& ctx, std::string_view backend,
                                    const PinnedSigningVectors& expected) {
     const std::string label(backend);
@@ -139,6 +139,30 @@ void expect_pinned_signing_vectors(TestContext& ctx, std::string_view backend,
                   expected.topic_nonce_proof_sha256, expected.topic_proven_signature_sha256, "topic");
     expect_bundle(*topic_proven_cached, expected.topic_nonce, expected.topic_signature,
                   expected.topic_nonce_proof_sha256, expected.topic_proven_signature_sha256, "cached topic");
+
+    // A caller-supplied backend cache may speed proving up but must not change a single byte.
+    CallerCache caller_cache;
+    auto message_proven_caller = key_pair->sign_message_with_proof(message, context.get(), &caller_cache);
+    auto topic_proven_caller = key_pair->sign_with_topic_proof(message, topic, context.get(), &caller_cache);
+    auto topic_proven_caller_cached =
+        key_pair->sign_with_topic_proof(message, *topic_cache, context.get(), &caller_cache);
+    expect_ok(ctx, message_proven_caller, label + " pinned vectors sign the message with a caller cache");
+    expect_ok(ctx, topic_proven_caller, label + " pinned vectors sign under the topic with a caller cache");
+    expect_ok(ctx, topic_proven_caller_cached,
+              label + " pinned vectors sign under the cached topic with a caller cache");
+    if (!message_proven_caller.has_value() || !topic_proven_caller.has_value() ||
+        !topic_proven_caller_cached.has_value()) {
+        return;
+    }
+    expect_bundle(*message_proven_caller, expected.message_nonce, expected.message_signature,
+                  expected.message_nonce_proof_sha256, expected.message_proven_signature_sha256,
+                  "caller-cache message");
+    expect_bundle(*topic_proven_caller, expected.topic_nonce, expected.topic_signature,
+                  expected.topic_nonce_proof_sha256, expected.topic_proven_signature_sha256,
+                  "caller-cache topic");
+    expect_bundle(*topic_proven_caller_cached, expected.topic_nonce, expected.topic_signature,
+                  expected.topic_nonce_proof_sha256, expected.topic_proven_signature_sha256,
+                  "caller-cache cached topic");
 
     // The proof-free paths must derive the same nonces and signatures.
     auto message_nonce = key_pair->prepare_message_nonce(message, context.get());
@@ -220,10 +244,13 @@ constexpr PinnedSigningVectors kBpppVectors{
 
 void test_puresign_pinned_signing_vectors(TestContext& ctx) {
     expect_pinned_signing_vectors<purify::puresign::KeyPair, purify::puresign::MessageProofCache,
-                                  purify::puresign::TopicProofCache>(ctx, "PureSign", kBulletproofVectors);
+                                  purify::puresign::TopicProofCache,
+                                  purify::ExperimentalBulletproofBackendCache>(ctx, "PureSign",
+                                                                               kBulletproofVectors);
     expect_pinned_signing_vectors<purify::puresign_plusplus::KeyPair,
                                   purify::puresign_plusplus::MessageProofCache,
-                                  purify::puresign_plusplus::TopicProofCache>(ctx, "PureSign++", kBpppVectors);
+                                  purify::puresign_plusplus::TopicProofCache,
+                                  purify::bppp::ExperimentalCircuitCache>(ctx, "PureSign++", kBpppVectors);
 }
 
 void test_puresign_message_signing(TestContext& ctx) {

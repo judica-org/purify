@@ -3,7 +3,7 @@
 use nova_snark::frontend::{ConstraintSystem, SynthesisError};
 
 use crate::gadgets::ops::Ops;
-use crate::gadgets::point::EncodedPoint;
+use crate::gadgets::point::{EncodedPoint, Point};
 use crate::gadgets::scalar::CanonicalScalar;
 use crate::gadgets::sha256::Transcript;
 use crate::gadgets::synthesis_error;
@@ -12,6 +12,7 @@ use crate::native::candidate::{
     CandidateStepProofWitness, MAX_CANDIDATE_CLAIMS, MAX_CANDIDATE_ROUNDS,
 };
 use crate::native::opening_generators::ACCUMULATION_OPENING_BASE_ROLE;
+use crate::native::secp::SecpEncodedPointWitness;
 use crate::relation::opening_base::constrain_transcript_opening_base;
 use statement::Scalar;
 
@@ -90,17 +91,74 @@ pub(crate) fn evaluate_candidate_term<CS: ConstraintSystem<Scalar>>(
         return Err(synthesis_error("candidate term factors"));
     }
     let mut ops = Ops::new(cs);
-    let mut value = match candidate_offset_power(ops.scope("offset"), powers, term.offset)? {
+    let scale = match candidate_offset_power(ops.scope("offset"), powers, term.offset)? {
         Some(offset) => ops.mul(&term.scale, &offset)?,
         None => term.scale.clone(),
     };
+    evaluate_tensor(&mut ops, &scale, &term.factors, powers)
+}
+
+/// `scale prod_j (1 + factors_j points_j)`.
+pub(crate) fn evaluate_tensor<CS: ConstraintSystem<Scalar>>(
+    ops: &mut Ops<CS>,
+    scale: &CanonicalScalar,
+    factors: &[CanonicalScalar],
+    points: &[CanonicalScalar],
+) -> Result<CanonicalScalar, SynthesisError> {
     let one = ops.constant(1)?;
-    for (factor, power) in term.factors.iter().zip(powers) {
-        let product = ops.mul(factor, power)?;
+    let mut value = scale.clone();
+    for (factor, point) in factors.iter().zip(points) {
+        let product = ops.mul(factor, point)?;
         let one_plus = ops.add(&one, &product)?;
         value = ops.mul(&value, &one_plus)?;
     }
     Ok(value)
+}
+
+/// The folded state of one logarithmic opening argument.
+pub(crate) struct FoldedOpening {
+    /// `commitment + sum_r (c_r^2 left_r + c_r^-2 right_r)`.
+    pub(crate) residual: Point,
+    /// `prod_r c_r^-1`.
+    pub(crate) scale: CanonicalScalar,
+    /// `c_r^2`, last round first.
+    pub(crate) factors: Vec<CanonicalScalar>,
+}
+
+/// Absorbs each round's two points, draws its challenge `c_r`, and folds the
+/// opening equation by it. Round `r` draws transcript challenge
+/// `first_challenge + r`.
+pub(crate) fn fold_opening_rounds<CS: ConstraintSystem<Scalar>>(
+    ops: &mut Ops<CS>,
+    transcript: &mut Transcript,
+    commitment: Point,
+    left: &[SecpEncodedPointWitness],
+    right: &[SecpEncodedPointWitness],
+    first_challenge: u64,
+) -> Result<FoldedOpening, SynthesisError> {
+    let rounds = left.len();
+    let mut residual = commitment;
+    let mut scale = ops.constant(1)?;
+    let mut factors = vec![ops.constant(0)?; rounds];
+    for (round, (left, right)) in left.iter().zip(right).enumerate() {
+        let left = ops.point(*left)?;
+        let right = ops.point(*right)?;
+        append_point(transcript, &left);
+        append_point(transcript, &right);
+        let challenge = ops.challenge(transcript, first_challenge + round as u64)?;
+        let inverse = ops.invert(&challenge)?;
+        let squared = ops.square(&challenge)?;
+        let inverse_squared = ops.square(&inverse)?;
+        scale = ops.mul(&scale, &inverse)?;
+        residual = ops.add_scaled(&residual, left.point(), &squared)?;
+        residual = ops.add_scaled(&residual, right.point(), &inverse_squared)?;
+        factors[rounds - 1 - round] = squared;
+    }
+    Ok(FoldedOpening {
+        residual,
+        scale,
+        factors,
+    })
 }
 
 pub(crate) fn append_polynomial(
@@ -232,48 +290,31 @@ pub(crate) fn install_constrained_candidate_step<CS: ConstraintSystem<Scalar>>(
     let encoded_opening = ops.encode(opening.clone())?;
     append_point(&mut transcript, &encoded_opening);
 
-    // Opening equation, folded one round at a time:
-    //   commitment + sum_r (c_r^2 left_r + c_r^-2 right_r)
-    //     + (y - terminal f(x)) opening - terminal folded_generator = 0
-    let mut residual = commitment;
-    let mut folded_scale = one.clone();
-    let mut folded_factors = vec![zero.clone(); rounds];
-    for round in 0..rounds {
-        let left = ops.point(proof.left[round])?;
-        let right = ops.point(proof.right[round])?;
-        append_point(&mut transcript, &left);
-        append_point(&mut transcript, &right);
-        let round_challenge = ops.challenge(&mut transcript, 2 + round as u64)?;
-        let inverse = ops.invert(&round_challenge)?;
-        let squared = ops.square(&round_challenge)?;
-        let inverse_squared = ops.square(&inverse)?;
-        folded_scale = ops.mul(&folded_scale, &inverse)?;
-        folded_factors[rounds - 1 - round] = squared.clone();
-        residual = ops.add_scaled(&residual, left.point(), &squared)?;
-        residual = ops.add_scaled(&residual, right.point(), &inverse_squared)?;
-    }
-
-    // f(x) = folded_scale prod_j (1 + folded_factor_j x^(2^j))
+    // Opening equation, with f the folded polynomial evaluated at x:
+    //   folded residual + (y - terminal f(x)) opening - terminal folded_generator = 0
+    let folded = fold_opening_rounds(
+        &mut ops,
+        &mut transcript,
+        commitment,
+        &proof.left,
+        &proof.right,
+        2,
+    )?;
     let terminal = ops.scalar(proof.terminal_scalar)?;
-    let mut final_evaluation = folded_scale.clone();
-    for (factor, power) in folded_factors.iter().zip(&powers) {
-        let product = ops.mul(factor, power)?;
-        let one_plus = ops.add(&one, &product)?;
-        final_evaluation = ops.mul(&final_evaluation, &one_plus)?;
-    }
+    let final_evaluation = evaluate_tensor(&mut ops, &folded.scale, &folded.factors, &powers)?;
     let terminal_evaluation = ops.mul(&terminal, &final_evaluation)?;
     let opening_scalar = ops.sub(&y, &terminal_evaluation)?;
     let negative_terminal = ops.sub(&zero, &terminal)?;
-    residual = ops.add_scaled(&residual, &opening, &opening_scalar)?;
+    let residual = ops.add_scaled(&folded.residual, &opening, &opening_scalar)?;
 
     let folded_generator = ops.point(proof.folded_generator)?;
-    residual = ops.add_scaled(&residual, folded_generator.point(), &negative_terminal)?;
+    let residual = ops.add_scaled(&residual, folded_generator.point(), &negative_terminal)?;
     ops.require_identity(&residual)?;
 
     Ok(CandidateRoot {
         point: folded_generator,
-        scale: folded_scale,
-        factors: folded_factors,
+        scale: folded.scale,
+        factors: folded.factors,
     })
 }
 

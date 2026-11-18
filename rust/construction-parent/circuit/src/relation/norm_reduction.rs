@@ -12,7 +12,9 @@ use crate::gadgets::synthesis_error;
 use crate::gadgets::transcript::{append_constant_bytes, append_point, append_scalar};
 use crate::native::circuit_norm::CandidateNormReductionProofWitness;
 use crate::native::opening_generators::REDUCTION_OPENING_BASE_ROLE;
-use crate::relation::candidate::{append_polynomial, PendingClaim, PolynomialTerm};
+use crate::relation::candidate::{
+    append_polynomial, evaluate_tensor, fold_opening_rounds, PendingClaim, PolynomialTerm,
+};
 use crate::relation::norm_leaf::PreparedNorm;
 use crate::relation::opening_base::constrain_transcript_opening_base;
 use statement::Scalar;
@@ -90,42 +92,27 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
     let opening_base = ops.encode(opening_base)?;
     append_point(&mut transcript, &opening_base);
 
-    // Opening equation, folded one round at a time:
-    //   commitment + sum_r (c_r^2 left_r + c_r^-2 right_r)
-    //     + (evaluation - terminal b) opening_base - terminal folded_generator = 0
-    let mut opening_residual = prepared.coefficient_commitment.point().clone();
-    let mut folded_scale = one.clone();
-    let mut folded_factors = vec![zero.clone(); rounds];
-    for round in 0..rounds {
-        let left = ops.point(proof.left[round])?;
-        let right = ops.point(proof.right[round])?;
-        append_point(&mut transcript, &left);
-        append_point(&mut transcript, &right);
-        let round_challenge = ops.challenge(&mut transcript, round as u64)?;
-        let inverse = ops.invert(&round_challenge)?;
-        let squared = ops.square(&round_challenge)?;
-        let inverse_squared = ops.square(&inverse)?;
-        folded_scale = ops.mul(&folded_scale, &inverse)?;
-        folded_factors[rounds - 1 - round] = squared.clone();
-        opening_residual = ops.add_scaled(&opening_residual, left.point(), &squared)?;
-        opening_residual = ops.add_scaled(&opening_residual, right.point(), &inverse_squared)?;
-    }
-
-    // b = folded_scale prod_r (1 + weight_r folded_factor_r)
+    // Opening equation, with b = folded_scale prod_r (1 + weight_r folded_factor_r):
+    //   folded residual + (evaluation - terminal b) opening_base
+    //     - terminal folded_generator = 0
+    let folded = fold_opening_rounds(
+        &mut ops,
+        &mut transcript,
+        prepared.coefficient_commitment.point().clone(),
+        &proof.left,
+        &proof.right,
+        0,
+    )?;
     let terminal = ops.scalar(proof.terminal_scalar)?;
-    let mut b_final = folded_scale.clone();
-    for (weight, factor) in weights.factors.iter().zip(&folded_factors) {
-        let product = ops.mul(weight, factor)?;
-        let one_plus_product = ops.add(&one, &product)?;
-        b_final = ops.mul(&b_final, &one_plus_product)?;
-    }
+    let b_final = evaluate_tensor(&mut ops, &folded.scale, &weights.factors, &folded.factors)?;
     let terminal_evaluation = ops.mul(&terminal, &b_final)?;
     let opening_scalar = ops.sub(&evaluation, &terminal_evaluation)?;
-    opening_residual = ops.add_scaled(&opening_residual, opening_base.point(), &opening_scalar)?;
+    let opening_residual =
+        ops.add_scaled(&folded.residual, opening_base.point(), &opening_scalar)?;
 
     let folded_generator = ops.point(proof.folded_generator)?;
     let negative_terminal = ops.sub(&zero, &terminal)?;
-    opening_residual = ops.add_scaled(
+    let opening_residual = ops.add_scaled(
         &opening_residual,
         folded_generator.point(),
         &negative_terminal,
@@ -141,9 +128,9 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
 
     // The pending claim fuses the norm point with the folded opening.
     let folded = PolynomialTerm {
-        scale: folded_scale,
+        scale: folded.scale,
         offset: n_vec_len,
-        factors: folded_factors,
+        factors: folded.factors,
     };
     append_scalar(&mut transcript, &terminal)?;
     append_point(&mut transcript, &folded_generator);

@@ -1,9 +1,10 @@
 use super::*;
 
 use ff::Field;
+use std::io::Cursor;
 
 use crate::construction_manifest::{
-    ConstructionManifestAnchor, ConstructionManifestSeed, ConstructionRoot,
+    ConstructionManifestLeaf, ConstructionManifestSeed, ConstructionRoot,
 };
 use crate::construction_profile::CONSTRUCTION_ROOT_ROUNDS;
 use crate::secp_constants::SECP256K1_SCALAR_ORDER_BE as SECP_ORDER;
@@ -27,26 +28,26 @@ fn root() -> ConstructionRoot {
     ConstructionRoot::parse(&encoded).expect("canonical construction root")
 }
 
-fn anchor(binding: u8) -> ConstructionManifestAnchor {
-    ConstructionManifestAnchor::new(
+fn leaf(binding: u8) -> ConstructionManifestLeaf {
+    ConstructionManifestLeaf::new(
         [binding; 32],
         SecpScalarWitness::from_u64(3).bytes,
         SecpEncodedPointWitness::identity().encoded,
         SecpEncodedPointWitness::identity().encoded,
     )
-    .expect("canonical construction manifest anchor")
+    .expect("canonical construction manifest leaf")
 }
 
-fn authenticated_state() -> ([Scalar; ANCHOR_RECURRENCE_STATE_ARITY], [Scalar; 2]) {
+fn authenticated_state() -> ([Scalar; CONSTRUCTION_RECURRENCE_STATE_ARITY], [Scalar; 2]) {
     let root = root();
-    let seed = ConstructionManifestSeed::new([0x31; 32], [0x52; 32], root.clone(), 2)
+    let seed = ConstructionManifestSeed::new([0x31; 32], [0x52; 32], [0x71; 64], 1, 1)
         .expect("construction manifest seed");
     let expected_suffix = seed
-        .derive_expected_final(&[anchor(0x61), anchor(0x62)])
+        .derive_expected_final(&[leaf(0x61), leaf(0x62)])
         .expect("expected construction final state")
         .state_suffix_fields()
         .expect("expected construction suffix");
-    let mut state = [Scalar::ZERO; ANCHOR_RECURRENCE_STATE_ARITY];
+    let mut state = [Scalar::ZERO; CONSTRUCTION_RECURRENCE_STATE_ARITY];
     state[..CONSTRUCTION_ROOT_STATE_ARITY].copy_from_slice(&root.state_fields());
     state[CONSTRUCTION_ROOT_STATE_ARITY..].copy_from_slice(&expected_suffix);
     (state, expected_suffix)
@@ -108,4 +109,14 @@ fn authenticated_final_state_rejects_malformed_pending_roots() {
             RelationError::Malformed("noncanonical secp scalar")
         ))
     ));
+}
+
+#[test]
+fn qualified_loader_authenticates_before_decoding() {
+    let mut artifact = Cursor::new(vec![0xa5; 16]);
+    assert!(matches!(
+        load_qualified_construction_parent_verifier(&mut artifact),
+        Err(DirectNovaVerifierArtifactError::Length)
+    ));
+    assert_eq!(artifact.position(), 16);
 }

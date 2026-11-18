@@ -10,6 +10,7 @@
 #pragma once
 
 #include "purify/puresign/anchor_escrow.hpp"
+#include "purify/puresign/recovery_root.hpp"
 
 namespace purify::accountable {
 
@@ -46,8 +47,20 @@ private:
     ResolvedConstructionSetupDigestBytes digest_{};
 };
 
-/** @brief One ordered anchor ciphertext and its exact V4 precommitment. */
-struct ConstructionReceiptEntry {
+/** One ordered recovery-share leaf and its exact V4 precommitment. */
+struct ConstructionReceiptSetupEntry {
+    ConstructionReceiptSetupEntry(
+        RecoveryRootShare recovery_share,
+        bppp::ScalarBytes precommitment)
+        : share(std::move(recovery_share)),
+          circuit_precommitment(precommitment) {}
+
+    RecoveryRootShare share;
+    bppp::ScalarBytes circuit_precommitment{};
+};
+
+/** One ordered anchor ciphertext and its exact V4 precommitment. */
+struct ConstructionReceiptAnchorEntry {
     AnchorEscrowCiphertext ciphertext{};
     bppp::ScalarBytes circuit_precommitment{};
 };
@@ -64,16 +77,21 @@ struct ConstructionReceiptEntry {
  */
 class ConstructionReceiptPayload {
 public:
-    static constexpr unsigned char kSerializationVersion = 2;
-    static constexpr std::size_t kFixedHeaderSize = 1 + 64 + 4;
-    static constexpr std::size_t kEntrySize =
+    static constexpr unsigned char kSerializationVersion = 4;
+    static constexpr std::size_t kFixedHeaderSize = 1 + 64 + 4 + 4;
+    static constexpr std::size_t kSetupEntrySize =
+        RecoveryRootShare::kSerializedSize +
+        bppp::ScalarBytes{}.size();
+    static constexpr std::size_t kAnchorEntrySize =
         AnchorEscrowCiphertext::kSerializedSize +
         bppp::ScalarBytes{}.size();
-    static_assert(kEntrySize == 224);
+    static_assert(kSetupEntrySize == 98);
+    static_assert(kAnchorEntrySize == 128);
 
     [[nodiscard]] static Result<ConstructionReceiptPayload> create(
         UInt512 recovery_root,
-        std::vector<ConstructionReceiptEntry> entries);
+        std::vector<ConstructionReceiptSetupEntry> setup_entries,
+        std::vector<ConstructionReceiptAnchorEntry> anchor_entries);
 
     [[nodiscard]] Bytes serialize() const;
 
@@ -84,24 +102,34 @@ public:
         return recovery_root_;
     }
 
-    [[nodiscard]] std::span<const ConstructionReceiptEntry>
-    entries() const noexcept {
-        return entries_;
+    [[nodiscard]] std::span<const ConstructionReceiptSetupEntry>
+    setup_entries() const noexcept {
+        return setup_entries_;
+    }
+
+    [[nodiscard]] std::span<const ConstructionReceiptAnchorEntry>
+    anchor_entries() const noexcept {
+        return anchor_entries_;
     }
 
     [[nodiscard]] std::size_t serialized_size() const noexcept {
-        return kFixedHeaderSize + entries_.size() * kEntrySize;
+        return kFixedHeaderSize +
+               setup_entries_.size() * kSetupEntrySize +
+               anchor_entries_.size() * kAnchorEntrySize;
     }
 
 private:
     ConstructionReceiptPayload(
         UInt512 recovery_root,
-        std::vector<ConstructionReceiptEntry> entries)
+        std::vector<ConstructionReceiptSetupEntry> setup_entries,
+        std::vector<ConstructionReceiptAnchorEntry> anchor_entries)
         : recovery_root_(recovery_root),
-          entries_(std::move(entries)) {}
+          setup_entries_(std::move(setup_entries)),
+          anchor_entries_(std::move(anchor_entries)) {}
 
     UInt512 recovery_root_{};
-    std::vector<ConstructionReceiptEntry> entries_;
+    std::vector<ConstructionReceiptSetupEntry> setup_entries_;
+    std::vector<ConstructionReceiptAnchorEntry> anchor_entries_;
 };
 
 /**

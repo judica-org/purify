@@ -7,9 +7,9 @@
 use crate::circuit_transcript::CircuitTranscriptShapeV4;
 use crate::secp_native::{SecpEncodedPointWitness, SecpScalarWitness};
 
-/// Varying public input for one production public-anchor leaf.
+/// Varying public input for one production construction leaf.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ManifestBoundAnchorLeafStatementV4 {
+pub(crate) struct ManifestBoundConstructionLeafStatementV4 {
     pub(crate) shape: CircuitTranscriptShapeV4,
     pub(crate) circuit_binding_digest: [u8; 32],
     pub(crate) raw_generator_digest: [u8; 32],

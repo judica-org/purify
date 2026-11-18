@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <system_error>
 #include <vector>
 
@@ -24,7 +25,37 @@ using purify_test::expect_ok;
 using purify_test::slashability::make_all_evil_coalition;
 using purify_test::slashability::make_native_accumulation_reference;
 using purify_test::slashability::expose_conflicting_coalition_key;
+using purify_test::slashability::
+    serialize_nondeciding_parent_prover_fixture;
 using purify_test::slashability::serialize_parent_prover_fixture;
+
+#if !defined(PURIFY_TEST_CONSTRUCTION_PARENT_WIT4_PATH)
+#error "construction-parent tests require the accepted Wit4 path"
+#endif
+#if !defined(PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_WIT4_PATH)
+#error "construction-parent tests require the nondeciding Wit4 path"
+#endif
+
+std::optional<purify::Bytes> load_checked_wit4(
+    TestContext& ctx, const char* path) {
+    constexpr std::size_t kFixtureSize = 17'587;
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    ctx.expect(input.is_open(), "checked construction Wit4 opens");
+    if (!input.is_open()) return std::nullopt;
+    const auto size = input.tellg();
+    ctx.expect(size == static_cast<std::streamoff>(kFixtureSize),
+               "checked construction Wit4 has exact size");
+    if (size != static_cast<std::streamoff>(kFixtureSize)) {
+        return std::nullopt;
+    }
+    input.seekg(0, std::ios::beg);
+    purify::Bytes fixture(kFixtureSize);
+    input.read(reinterpret_cast<char*>(fixture.data()),
+               static_cast<std::streamsize>(fixture.size()));
+    ctx.expect(input.good(), "checked construction Wit4 reads completely");
+    if (!input.good()) return std::nullopt;
+    return fixture;
+}
 
 #if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
 #if !defined(PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER)
@@ -76,8 +107,17 @@ accept_qualified_construction_parent(
         return std::nullopt;
     }
 
+    const char* proof_path = std::getenv(
+        "PURIFY_CONSTRUCTION_PARENT_QUALIFICATION_PROOF");
+    if (proof_path != nullptr) {
+        ctx.expect(proof_path[0] != '\0',
+                   "fresh qualification proof path is nonempty");
+        if (proof_path[0] == '\0') return std::nullopt;
+    } else {
+        proof_path = PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH;
+    }
     auto proof = load_parent_proof(
-        ctx, PURIFY_TEST_CONSTRUCTION_PARENT_PROOF_PATH);
+        ctx, proof_path);
     if (!proof) return std::nullopt;
     auto envelope =
         purify::accountable::ConstructionReceiptEnvelope::create(
@@ -93,7 +133,7 @@ accept_qualified_construction_parent(
     if (!verifier) return std::nullopt;
     auto accepted = verifier->verify(
         construction.setup, *envelope,
-        construction.resolved_entries, construction.accumulator.anchors(),
+        construction.resolved_entries, construction.accumulator.leaves(),
         secp_context);
     expect_ok(ctx, accepted,
               "two-anchor construction parent proof accepts");
@@ -116,7 +156,7 @@ accept_qualified_construction_parent(
         verifier->verify(
             construction.setup, *corrupted_envelope,
             construction.resolved_entries,
-            construction.accumulator.anchors(),
+            construction.accumulator.leaves(),
             secp_context),
         purify::ErrorCode::BackendRejectedInput,
         "changed construction parent proof is rejected");
@@ -127,18 +167,22 @@ accept_qualified_construction_parent(
         ctx,
         verifier->verify(
             construction.setup, *envelope, changed_reference,
-            construction.accumulator.anchors(), secp_context),
+            construction.accumulator.leaves(), secp_context),
         purify::ErrorCode::BackendRejectedInput,
         "construction parent proof cannot rebind an anchor reference");
 
-    std::vector<purify::accountable::ConstructionReceiptEntry>
+    std::vector<purify::accountable::ConstructionReceiptSetupEntry>
+        setup_entries(construction.payload.setup_entries().begin(),
+                      construction.payload.setup_entries().end());
+    std::vector<purify::accountable::ConstructionReceiptAnchorEntry>
         reordered_entries(
-            construction.payload.entries().begin(),
-            construction.payload.entries().end());
+            construction.payload.anchor_entries().begin(),
+            construction.payload.anchor_entries().end());
     std::swap(reordered_entries[0], reordered_entries[1]);
     auto reordered_payload =
         purify::accountable::ConstructionReceiptPayload::create(
             construction.payload.recovery_root(),
+            std::move(setup_entries),
             std::move(reordered_entries));
     expect_ok(ctx, reordered_payload,
               "reordered construction payload constructs");
@@ -155,7 +199,7 @@ accept_qualified_construction_parent(
         ctx,
         verifier->verify(
             construction.setup, *reordered_envelope,
-            reordered_resolved, construction.accumulator.anchors(),
+            reordered_resolved, construction.accumulator.leaves(),
             secp_context),
         purify::ErrorCode::BackendRejectedInput,
         "construction parent proof binds ordered anchors");
@@ -175,7 +219,7 @@ accept_qualified_construction_parent(
         verifier->verify(
             construction.setup, *nondeciding_envelope,
             construction.resolved_entries,
-            construction.accumulator.anchors(),
+            construction.accumulator.leaves(),
             secp_context),
         purify::ErrorCode::EquationMismatch,
         "recursive-valid nondeciding parent root is rejected");
@@ -326,6 +370,12 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
     if (!secp) return;
 
     auto coalition = make_all_evil_coalition(secp.get());
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+    expect_error(
+        ctx, coalition, purify::ErrorCode::UnsupportedSymbol,
+        "distributed coalition setup rejects legacy field hashes");
+    return;
+#endif
     expect_ok(ctx, coalition,
               "three-member all-evil coalition setup verifies");
     if (!coalition) return;
@@ -337,27 +387,25 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
 
     auto construction = make_native_accumulation_reference(
         *coalition, 2, secp.get());
-#if PURIFY_USE_LEGACY_FIELD_HASHES
-    expect_error(
-        ctx, construction, purify::ErrorCode::UnsupportedSymbol,
-        "SHA construction rejects the legacy field-hash suite");
-    return;
-#endif
     expect_ok(ctx, construction,
               "two-anchor native accumulation reference decides");
     if (!construction) return;
     ctx.expect(
-        construction->anchors.size() == 2 &&
+        construction->setup_leaves.size() == 3 &&
+            construction->anchors.size() == 2 &&
             construction->resolved_entries.size() == 2 &&
-            construction->payload.entries().size() == 2,
-        "construction retains both ordered anchor statements");
+            construction->payload.setup_entries().size() == 3 &&
+            construction->payload.anchor_entries().size() == 2,
+        "construction retains ordered setup and anchor statements");
     ctx.expect(
         construction->payload.serialized_size() ==
             purify::accountable::ConstructionReceiptPayload::
                 kFixedHeaderSize +
+                3 * purify::accountable::ConstructionReceiptPayload::
+                        kSetupEntrySize +
                 2 * purify::accountable::ConstructionReceiptPayload::
-                        kEntrySize,
-        "receipt payload carries two exact public anchor entries");
+                        kAnchorEntrySize,
+        "receipt payload carries exact setup and anchor entries");
     ctx.expect(
         std::any_of(construction->statement.begin(),
                     construction->statement.end(),
@@ -377,28 +425,193 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
         std::all_of(
             construction->anchors.begin(),
             construction->anchors.end(),
-            [](const auto& anchor) {
-                return anchor.reduction_proof.size() == 1'022 &&
-                       anchor.parent_step_proof.size() == 1'056;
+            [&](const auto& anchor) {
+                const auto reduction =
+                    purify::bppp::accumulation::
+                        serialize_algebraic_norm_reduction(
+                            construction->accumulator.leaves().basis(),
+                            anchor.reduction, secp.get());
+                const auto step =
+                    purify::bppp::accumulation::
+                        serialize_algebraic_step(
+                            construction->accumulator.leaves().basis(),
+                            anchor.parent_step, secp.get());
+                return reduction && reduction->size() == 1'022 &&
+                       step && step->size() == 1'056;
             }),
         "construction retains canonical recursive witness proofs");
+
+    std::vector<purify::accountable::ConstructionParentSetupWitness>
+        setup_witnesses;
+    std::vector<purify::accountable::ConstructionParentAnchorWitness>
+        anchor_witnesses;
+    setup_witnesses.reserve(construction->setup_leaves.size());
+    anchor_witnesses.reserve(construction->anchors.size());
+    for (const auto& leaf : construction->setup_leaves) {
+        setup_witnesses.push_back(
+            {leaf.contribution, leaf.reduction, leaf.parent_step});
+    }
+    for (const auto& anchor : construction->anchors) {
+        anchor_witnesses.push_back(
+            {anchor.record, anchor.reduction, anchor.parent_step});
+    }
+    auto missing_setup =
+        purify::accountable::
+            serialize_accepted_construction_parent_witness(
+                construction->setup, coalition->distributed_setup,
+                construction->payload,
+                construction->resolved_entries,
+                std::span{setup_witnesses}.first(
+                    setup_witnesses.size() - 1),
+                anchor_witnesses, construction->accumulator,
+                secp.get());
+    expect_error(ctx, missing_setup, purify::ErrorCode::SizeMismatch,
+                 "accepted Wit4 rejects a missing setup witness");
+    auto reordered_setup = setup_witnesses;
+    std::reverse(reordered_setup.begin(), reordered_setup.end());
+    auto reordered =
+        purify::accountable::
+            serialize_accepted_construction_parent_witness(
+                construction->setup, coalition->distributed_setup,
+                construction->payload,
+                construction->resolved_entries, reordered_setup,
+                anchor_witnesses, construction->accumulator,
+                secp.get());
+    expect_error(ctx, reordered, purify::ErrorCode::BindingMismatch,
+                 "accepted Wit4 rejects reordered setup witnesses");
+
     auto prover_fixture = serialize_parent_prover_fixture(
-        *construction, secp.get());
+        coalition->distributed_setup, *construction, secp.get());
     expect_ok(ctx, prover_fixture,
               "construction prover fixture serializes canonically");
     if (!prover_fixture) return;
+    constexpr std::size_t kProverHeaderSize =
+        16 + 32 + 32 + 64 + 4 + 4;
+    constexpr std::size_t kProverDescriptorSize = 130;
+    constexpr std::size_t kCompactRecordSize = 1'137;
+    constexpr std::size_t kSetupTranscriptOffset =
+        1 + purify::accountable::RecoveryRootShare::kSerializedSize;
+    constexpr std::size_t kAnchorTranscriptOffset =
+        1 + purify::accountable::AnchorEscrowCiphertext::kSerializedSize;
+    constexpr std::size_t kProverSetupSize =
+        kProverDescriptorSize + 33 + kCompactRecordSize +
+        1'022 + 1'056;
+    constexpr std::size_t kProverAnchorSize = kProverSetupSize;
+    constexpr std::size_t kAnchorPublicPrefixSize =
+        kProverDescriptorSize + 33 + 1;
+    constexpr std::size_t kFinalRootSize =
+        purify::accountable::ConstructionReceiptAccumulator::
+            kRootClaimSerializedSize;
     ctx.expect(
-        prover_fixture->size() == 8'314 &&
+        prover_fixture->size() == 17'587 &&
             std::equal(prover_fixture->begin(),
                        prover_fixture->begin() + 16,
                        std::array<unsigned char, 16>{
                            'P', 'u', 'r', 'i', 'f', 'y', '/', 'N',
-                           'o', 'v', 'a', '/', 'W', 'i', 't', '1'}
+                           'o', 'v', 'a', '/', 'W', 'i', 't', '4'}
                            .begin()),
-        "construction prover fixture has the exact v1 frame");
+        "construction prover fixture has the exact v4 frame");
+
+    auto full_setup_record =
+        construction->setup_leaves.front().contribution.serialize(
+            secp.get());
+    expect_ok(ctx, full_setup_record,
+              "setup typed record validates before compact framing");
+    auto full_anchor_record =
+        construction->anchors.front().record.serialize(secp.get());
+    expect_ok(ctx, full_anchor_record,
+              "anchor typed record validates before compact framing");
+    if (!full_setup_record || !full_anchor_record) return;
+    const auto setup_record_offset =
+        kProverHeaderSize + kProverDescriptorSize + 33;
+    const auto anchor_record_offset =
+        kProverHeaderSize +
+        construction->setup_leaves.size() * kProverSetupSize +
+        kProverDescriptorSize + 33;
+    const auto compact_record_matches =
+        [&](std::size_t encoded_offset,
+            const purify::Bytes& full_record,
+            std::size_t transcript_offset) {
+            return full_record.size() >= transcript_offset &&
+                   encoded_offset + kCompactRecordSize <=
+                       prover_fixture->size() &&
+                   (*prover_fixture)[encoded_offset] ==
+                       full_record.front() &&
+                   std::equal(
+                       full_record.begin() + transcript_offset,
+                       full_record.end(),
+                       prover_fixture->begin() + encoded_offset + 1,
+                       prover_fixture->begin() + encoded_offset +
+                           kCompactRecordSize);
+        };
+    ctx.expect(
+        compact_record_matches(setup_record_offset,
+                               *full_setup_record,
+                               kSetupTranscriptOffset) &&
+            compact_record_matches(anchor_record_offset,
+                                   *full_anchor_record,
+                                   kAnchorTranscriptOffset),
+        "Wit4 contains only validated typed-record transcripts");
     write_parent_prover_fixture_if_requested(
         ctx, *prover_fixture,
         "PURIFY_CONSTRUCTION_PARENT_PROVER_FIXTURE_OUT");
+    auto checked_prover_fixture = load_checked_wit4(
+        ctx, PURIFY_TEST_CONSTRUCTION_PARENT_WIT4_PATH);
+    if (!checked_prover_fixture) return;
+    ctx.expect(
+        *checked_prover_fixture == *prover_fixture,
+        "accepted construction Wit4 matches the qualified vector");
+
+    auto nondeciding_fixture =
+        serialize_nondeciding_parent_prover_fixture(
+            *coalition, *construction, secp.get());
+    expect_ok(ctx, nondeciding_fixture,
+              "nondeciding parent prover fixture constructs");
+    if (!nondeciding_fixture) return;
+    ctx.expect(
+        nondeciding_fixture->production_rejection ==
+            purify::ErrorCode::EquationMismatch,
+        "accepted Wit4 formatter rejects a false root at native decide");
+    const auto& nondeciding_bytes = nondeciding_fixture->encoded;
+    const auto setup_bytes =
+        construction->setup_leaves.size() * kProverSetupSize;
+    bool same_public_inputs =
+        nondeciding_bytes.size() == prover_fixture->size() &&
+        std::equal(
+            prover_fixture->begin(),
+            prover_fixture->begin() + kProverHeaderSize + setup_bytes,
+            nondeciding_bytes.begin());
+    for (std::size_t index = 0;
+         same_public_inputs &&
+         index < construction->anchors.size(); ++index) {
+        const auto anchor_offset =
+            kProverHeaderSize + setup_bytes +
+            index * kProverAnchorSize;
+        same_public_inputs = std::equal(
+            prover_fixture->begin() + anchor_offset,
+            prover_fixture->begin() + anchor_offset +
+                kAnchorPublicPrefixSize,
+            nondeciding_bytes.begin() + anchor_offset);
+    }
+    ctx.expect(
+        same_public_inputs,
+        "nondeciding witness preserves every public construction input");
+    ctx.expect(
+        nondeciding_bytes != *prover_fixture &&
+            !std::equal(
+                prover_fixture->end() - kFinalRootSize,
+                prover_fixture->end(),
+                nondeciding_bytes.end() - kFinalRootSize),
+        "nondeciding witness authenticates a distinct false root");
+    write_parent_prover_fixture_if_requested(
+        ctx, nondeciding_bytes,
+        "PURIFY_CONSTRUCTION_PARENT_NONDECIDING_PROVER_FIXTURE_OUT");
+    auto checked_nondeciding_fixture = load_checked_wit4(
+        ctx, PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_WIT4_PATH);
+    if (!checked_nondeciding_fixture) return;
+    ctx.expect(
+        *checked_nondeciding_fixture == nondeciding_bytes,
+        "nondeciding construction Wit4 matches the qualified vector");
 
     auto accepted_statement = construction->statement;
 #if defined(PURIFY_TEST_REQUIRES_CONSTRUCTION_PARENT_ARTIFACT)
@@ -434,8 +647,9 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
     for (std::size_t i = 0;
          i < construction->anchors.size(); ++i) {
         const auto& anchor = construction->anchors[i];
-        auto recovered = purify::accountable::recover_escrowed_anchor(
-            construction->setup.roster(), exposed->scalar(),
+        auto recovered =
+            purify::accountable::recover_distributed_escrowed_anchor(
+            coalition->distributed_setup, exposed->scalar(),
             anchor.recovery_key.public_key,
             anchor.punishment_key.public_key(), anchor.context,
             anchor.record, secp.get());
@@ -452,8 +666,8 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
             ctx, *recovered, i, secp.get());
         expect_error(
             ctx,
-            purify::accountable::recover_escrowed_anchor(
-                construction->setup.roster(),
+            purify::accountable::recover_distributed_escrowed_anchor(
+                coalition->distributed_setup,
                 exposed->scalar().negate(),
                 anchor.recovery_key.public_key,
                 anchor.punishment_key.public_key(), anchor.context,
@@ -464,8 +678,8 @@ void run_slashability_tests(TestContext& ctx, bool verify_parent) {
 
     expect_error(
         ctx,
-        purify::accountable::recover_escrowed_anchor(
-            construction->setup.roster(), exposed->scalar(),
+        purify::accountable::recover_distributed_escrowed_anchor(
+            coalition->distributed_setup, exposed->scalar(),
             construction->anchors[0].recovery_key.public_key,
             construction->anchors[0].punishment_key.public_key(),
             construction->anchors[0].context,

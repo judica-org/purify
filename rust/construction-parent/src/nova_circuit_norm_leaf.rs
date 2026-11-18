@@ -6,7 +6,9 @@
 
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
-use crate::circuit_norm::{CandidateNormReductionProofWitness, ManifestBoundAnchorLeafStatementV4};
+use crate::circuit_norm::{
+    CandidateNormReductionProofWitness, ManifestBoundConstructionLeafStatementV4,
+};
 use crate::circuit_transcript::{
     CircuitCommitmentModeV4, CircuitProofTranscriptWitnessV4, CircuitTranscriptShapeV4,
 };
@@ -40,7 +42,7 @@ pub(crate) struct DirectPreparedNorm {
     pub(crate) polynomial: Vec<DirectPolynomialTerm>,
 }
 
-pub(crate) struct DirectManifestBoundAnchorLeaf {
+pub(crate) struct DirectManifestBoundConstructionLeaf {
     pub(crate) claim: DirectPendingClaim,
     pub(crate) circuit_binding_digest: [NovaByte; 32],
     pub(crate) precommitment: CanonicalSecpScalar,
@@ -186,14 +188,11 @@ pub(crate) fn constrain_manifest_bound_public_dlog<CS: ConstraintSystem<Scalar>>
     generator: &DirectSecpPoint,
 ) -> Result<(), SynthesisError> {
     if transcript.public_commitments.len() != 1 {
-        return Err(synthesis_error("manifest-bound V4 anchor commitment count"));
+        return Err(synthesis_error(
+            "manifest-bound V4 construction leaf commitment count",
+        ));
     }
     constrain_public_commitment_batch(cs.namespace(|| "public commitment batch"), transcript)?;
-    Boolean::enforce_equal(
-        cs.namespace(|| "public commitment is even"),
-        transcript.public_commitments[0].odd(),
-        &Boolean::constant(false),
-    )?;
     let scaled = scale(
         cs.namespace(|| "scaled public commitment"),
         transcript.batched_public_commitment.point(),
@@ -346,17 +345,17 @@ pub(crate) fn allocate_standard_generator<CS: ConstraintSystem<Scalar>>(
     allocate_constant_point(cs, standard_generator())
 }
 
-/// Constrain one public anchor leaf and reduce it to a pending claim.
-pub(crate) fn constrain_manifest_bound_anchor_leaf<CS: ConstraintSystem<Scalar>>(
+/// Constrain one public construction leaf and reduce it to a pending claim.
+pub(crate) fn constrain_manifest_bound_construction_leaf<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    statement: ManifestBoundAnchorLeafStatementV4,
+    statement: ManifestBoundConstructionLeafStatementV4,
     transcript_witness: &CircuitProofTranscriptWitnessV4,
     reduction_proof: &CandidateNormReductionProofWitness,
-) -> Result<DirectManifestBoundAnchorLeaf, SynthesisError> {
+) -> Result<DirectManifestBoundConstructionLeaf, SynthesisError> {
     if statement.shape.mode != CircuitCommitmentModeV4::Public
         || statement.shape.commitment_count != 1
     {
-        return Err(synthesis_error("manifest-bound V4 anchor mode"));
+        return Err(synthesis_error("manifest-bound V4 construction leaf mode"));
     }
     let circuit_binding_digest = statement
         .circuit_binding_digest
@@ -394,7 +393,7 @@ pub(crate) fn constrain_manifest_bound_anchor_leaf<CS: ConstraintSystem<Scalar>>
         reduction_proof,
         &generator,
     )?;
-    Ok(DirectManifestBoundAnchorLeaf {
+    Ok(DirectManifestBoundConstructionLeaf {
         claim,
         circuit_binding_digest,
         precommitment: transcript.precommitment,
@@ -517,6 +516,24 @@ mod tests {
         })
     }
 
+    fn synthetic_odd_public_transcript<CS: ConstraintSystem<Scalar>>(
+        mut cs: CS,
+    ) -> Result<DirectCircuitTranscriptResultV4, SynthesisError> {
+        let mut transcript = synthetic_transcript(cs.namespace(|| "base transcript"), false)?;
+        let order = BigUint::from_bytes_be(&SECP256K1_SCALAR_ORDER_BE);
+        let minus_one = &order - BigUint::from(1u8);
+        let odd_value = scale_point_value(standard_generator(), &minus_one);
+        let odd = point(cs.namespace(|| "odd public commitment"), odd_value)?;
+        transcript.public_commitments = vec![odd.clone()];
+        transcript.batched_public_commitment = odd;
+        transcript.dlog_nonce = point(
+            cs.namespace(|| "odd proof nonce"),
+            add_point_values(standard_generator(), standard_generator()),
+        )?;
+        transcript.dlog_response = scalar(cs.namespace(|| "odd response"), 1)?;
+        Ok(transcript)
+    }
+
     fn synthesize_equations<CS: ConstraintSystem<Scalar>>(
         mut cs: CS,
         wrong_combined: bool,
@@ -575,8 +592,8 @@ mod tests {
         }
     }
 
-    fn leaf_statement(binding: [u8; 32]) -> ManifestBoundAnchorLeafStatementV4 {
-        ManifestBoundAnchorLeafStatementV4 {
+    fn leaf_statement(binding: [u8; 32]) -> ManifestBoundConstructionLeafStatementV4 {
+        ManifestBoundConstructionLeafStatementV4 {
             shape: leaf_shape(),
             circuit_binding_digest: binding,
             raw_generator_digest: TEST_GENERATORS,
@@ -648,7 +665,7 @@ mod tests {
     }
 
     fn assert_leaf_matches_reference(
-        direct: &DirectManifestBoundAnchorLeaf,
+        direct: &DirectManifestBoundConstructionLeaf,
         witness: &CircuitProofTranscriptWitnessV4,
     ) {
         assert_eq!(
@@ -772,9 +789,25 @@ mod tests {
         synthesize_equations(&mut second, true).expect("second shape");
         assert_eq!(first.num_inputs(), 1);
         assert_eq!(first.num_aux(), 52_370);
-        assert_eq!(first.num_constraints(), 54_112);
+        assert_eq!(first.num_constraints(), 54_111);
         assert_eq!(first.num_aux(), second.num_aux());
         assert_eq!(first.constraints, second.constraints);
+    }
+
+    #[test]
+    fn public_dlog_accepts_an_exact_odd_commitment() {
+        let mut cs = TestConstraintSystem::<Scalar>::new();
+        let transcript = synthetic_odd_public_transcript(cs.namespace(|| "odd transcript"))
+            .expect("odd public transcript");
+        let generator = allocate_standard_generator(cs.namespace(|| "standard generator"))
+            .expect("standard generator");
+        constrain_manifest_bound_public_dlog(
+            cs.namespace(|| "public dlog"),
+            &transcript,
+            &generator,
+        )
+        .expect("odd public DLog relation");
+        assert!(cs.is_satisfied());
     }
 
     #[test]
@@ -783,15 +816,19 @@ mod tests {
         let witness = leaf_witness(TEST_BINDING, 1);
         let reduction = zero_reduction();
         let mut direct_cs = WitnessCS::<Scalar>::with_capacity(0, 0);
-        let direct =
-            constrain_manifest_bound_anchor_leaf(&mut direct_cs, statement, &witness, &reduction)
-                .expect("direct manifest leaf");
+        let direct = constrain_manifest_bound_construction_leaf(
+            &mut direct_cs,
+            statement,
+            &witness,
+            &reduction,
+        )
+        .expect("direct manifest leaf");
 
         assert_leaf_matches_reference(&direct, &witness);
 
         let mut hidden = statement;
         hidden.shape.mode = CircuitCommitmentModeV4::Hidden;
-        assert!(constrain_manifest_bound_anchor_leaf(
+        assert!(constrain_manifest_bound_construction_leaf(
             WitnessCS::<Scalar>::with_capacity(0, 0),
             hidden,
             &witness,
@@ -804,7 +841,7 @@ mod tests {
     #[ignore = "run explicitly in release mode; composed leaf shape is large"]
     fn direct_manifest_leaf_shape_is_witness_independent() {
         let mut first = ShapeCS::<DirectNovaPrimaryEngine>::new();
-        constrain_manifest_bound_anchor_leaf(
+        constrain_manifest_bound_construction_leaf(
             &mut first,
             leaf_statement(TEST_BINDING),
             &leaf_witness(TEST_BINDING, 1),
@@ -812,12 +849,12 @@ mod tests {
         )
         .expect("first manifest leaf shape");
         let metrics = (first.num_inputs(), first.num_aux(), first.num_constraints());
-        assert_eq!(metrics, (1, 1_503_971, 1_508_966));
+        assert_eq!(metrics, (1, 1_503_971, 1_508_965));
         drop(first);
 
         let second_binding = [0x32; 32];
         let mut second = ShapeCS::<DirectNovaPrimaryEngine>::new();
-        constrain_manifest_bound_anchor_leaf(
+        constrain_manifest_bound_construction_leaf(
             &mut second,
             leaf_statement(second_binding),
             &leaf_witness(second_binding, 2),

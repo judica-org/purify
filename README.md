@@ -57,8 +57,8 @@ For multi-config generators such as Xcode, build benchmarks with `--config Relea
 
 ### Construction parent verifier
 
-The optional construction-parent verifier is a purpose-specific C++ API backed
-by the qualified transparent SHA-256 Nova profile. It is supported only in
+The optional construction-parent verifier is a purpose-specific C++ API for
+the transparent SHA-256 Nova profile. It is supported only in
 64-bit macOS and Linux builds. The ordinary Purify library may remain static;
 the verifier is an isolated Rust `cdylib`. Rust 1.98.1 is pinned for that
 backend:
@@ -83,18 +83,22 @@ exact size is platform-dependent. It exports only the three private load,
 verify, and destroy ABI entry points. The private ABI header is not installed;
 applications use `ConstructionParentVerifier` from the C++ library.
 
-The 693,735,316-byte verifier artifact remains an external deployment
-resource. `ConstructionParentVerifier::load()` accepts only its exact compiled
-length, suite, and tagged digest. The installed Rust backend contains only the
-verifier; setup, proving, and artifact writing compile only into its
-qualification tests. Deploy the artifact through an immutable, read-only
-snapshot so concurrent writes cannot waste verifier resources before
-authentication rejects the changed file.
+The release manifest pins separate verifier (`VK2`) and prover (`PK1`)
+artifacts by exact length and tagged SHA-256 digest. The verifier backend
+accepts only the selected VK2 identity; the purpose-specific prover accepts
+only the selected PK1 and VK2 identities. Stale centralized artifacts remain
+rejected. Both artifacts contain transparent public setup material and remain
+external deployment resources rather than files embedded in the library,
+prover executable, or repository. Do not deploy a manifest whose release
+status is not `accepted`. Each load first copies the complete artifact to an
+unlinked private file, so the configured temporary directory must have at
+least 694 MB of writable space. The standalone prover loads PK1 and VK2
+sequentially rather than retaining both snapshots.
 
 The ordinary CI job builds and tests the Rust, package, codec, and private
-symbol boundaries without downloading this artifact. It does not claim
-recursive proof acceptance. Artifact-backed acceptance is the explicit release
-gate below.
+symbol boundaries without downloading these artifacts. It does not claim
+recursive proof acceptance. Artifact-backed acceptance remains the explicit
+release gate.
 
 Run that release gate with the authenticated artifact:
 
@@ -113,10 +117,54 @@ ctest --test-dir build-parent --output-on-failure \
   -R '^(purify.tests.slashability_e2e|purify.tests.installed_package|purify.tests.private_construction_parent_symbols)$'
 ```
 
-This verifies a construction proof and completes the native accumulation
-decision before returning a verified receipt. Library verification does not
-activate consensus, authorize enrollment, or resolve the documented child
-proof, custody, confidentiality, and scaling requirements.
+Build the standalone purpose-specific prover separately:
+
+```sh
+cmake -S . -B build-prover \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPURIFY_BUILD_CONSTRUCTION_PARENT_PROVER=ON \
+  -DPURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=OFF \
+  -DPURIFY_BUILD_TESTS=OFF \
+  -DPURIFY_BUILD_CLI=OFF \
+  -DPURIFY_BUILD_BENCH=OFF \
+  -DPURIFY_BUILD_DOCS=OFF \
+  -DPURIFY_BUILD_FUZZ=OFF
+CARGO_BUILD_JOBS=1 cmake --build build-prover \
+  --target purify_construction_parent_prover
+cmake --install build-prover --prefix /opt/purify \
+  --component construction_parent_prover
+```
+
+The prover target has its own Cargo target directory and is opt-in. Enabling
+it does not add proving code to the verifier backend or ordinary Purify
+library. It is supported only on 64-bit macOS and Linux, and one build emits
+one target architecture.
+
+Produce one proof from a canonical Wit4 frame. Production callers obtain that
+frame from the accepted-only C++ formatter; the prover itself checks the
+qualified recursive relation and leaves native acceptance to the verifier:
+
+```sh
+/opt/purify/bin/purify-construction-parent-prover \
+  /path/to/sha256-parent-prover.pk1.zst \
+  /path/to/sha256-parent-verifier.nvk.zst \
+  /path/to/construction.wit4 \
+  /new/path/construction.proof
+```
+
+The output path must not exist. The prover checks and binds the complete Wit4
+input before opening either artifact, snapshots and authenticates both exact
+artifacts, consumes PK1 for folding, independently verifies the resulting
+state with VK2, and writes one synced 15,076-byte proof. Producing that proof
+is not receipt acceptance: the proof must still pass
+`ConstructionParentVerifier`, including the native final accumulation
+decision, before an application acts on the receipt.
+
+`ConstructionParentVerifier` verifies the recursive proof and completes the
+native accumulation decision before returning a verified receipt. This
+library acceptance does not activate consensus, authorize enrollment, or
+resolve the documented child-proof, custody, confidentiality, and scaling
+requirements.
 
 ### Using as a submodule
 

@@ -335,9 +335,9 @@ point33 || scale32 || factors32[log2(D)]
 ```
 
 The polynomial offset is implicitly zero. Its exact length is
-`65+32*log2(D)` bytes. The current anchor basis has `D=32768`, so its root
-claim is 545 bytes. The encoding intentionally omits a basis digest; the
-parent statement and receipt version must bind the exact basis supplied to
+`65+32*log2(D)` bytes. The selected construction-leaf basis has `D=32768`, so
+its root claim is 545 bytes. The encoding intentionally omits a basis digest;
+the parent statement and receipt version must bind the exact basis supplied to
 the parser.
 
 Parsing a root claim establishes only canonical point and scalar encodings
@@ -350,11 +350,12 @@ These openings are additional public transition data. Native verification
 retains them alongside the original child proofs; a final 1,122-byte step
 does not replace that history. The selected recurrence implements recursive
 authentication so this history can become a parent witness. The qualified
-two-anchor Nova lifecycle compresses that witness history. The qualified
-nondeciding proof authenticates a different pending root and demonstrates why
-the purpose-specific C++ acceptance layer completes the native decision.
-Neither the native helper nor recursive verification alone establishes
-acceptance.
+mixed parent compresses that witness history into a 15,076-byte proof. Its
+accepted and recursive-valid/nondeciding vectors pin the recursive boundary,
+and the external verifier artifact is authenticated separately. The
+purpose-specific C++ acceptance layer must still complete the native decision
+after recursive verification. Neither the native helper nor recursive
+verification alone establishes acceptance.
 
 ## Historical generic varying-coefficient measurements
 
@@ -461,16 +462,12 @@ the final step SHA256 is
 
 The selected parent authenticates the purpose-owned semantic digest and
 frontend constants, constrains V4 preparation, reduction, and every ordered
-accumulation transition, and binds exact registry coverage. The two-anchor
-recursive lifecycle and frozen external verifier identity are qualified. The
-backend ABI remains private, and the public C++ recursive-plus-native
-acceptance path is qualified by accepted and nondeciding proof vectors.
-Remaining work is specific: independently review the V4 leaf and composition
-arguments; implement distributed custody and share-preserving child proving;
-resolve the correlated-key confidentiality argument; qualify operation at 100
-to 1,000 anchors; and reduce or operationalize the roughly 662 MiB compressed,
-2.99 GiB decoded verifier. The native V4 adapter remains a component of that
-path, not receipt acceptance by itself.
+accumulation transition, and binds exact registry coverage. The relation,
+suite, public parameters, 15,076-byte proof shape, checked vectors, and
+external verifier identity are frozen as one qualified profile. The public
+C++ path accepts a receipt only after both recursive verification and the
+native V4 decision; the adapter remains a component of that path, not receipt
+acceptance by itself.
 
 The construction-specific V3 adapter previously demonstrated setup-proof
 preparation and safe zero-extension into the anchor basis. That

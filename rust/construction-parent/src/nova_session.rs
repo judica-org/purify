@@ -8,17 +8,16 @@ use std::sync::Mutex;
 
 #[cfg(test)]
 use ff::PrimeField;
+#[cfg(any(test, feature = "prover"))]
+use nova_snark::nova::{ProverKey, PublicParams, RecursiveSNARK};
+#[cfg(test)]
+use nova_snark::traits::snark::RelaxedR1CSSNARKTrait;
 use nova_snark::{
     errors::NovaError,
     nova::{CompressedSNARK, VerifierKey},
     provider::ipa_pc,
     spartan::snark::RelaxedR1CSSNARK,
     traits::circuit::StepCircuit,
-};
-#[cfg(test)]
-use nova_snark::{
-    nova::{ProverKey, PublicParams, RecursiveSNARK},
-    traits::snark::RelaxedR1CSSNARKTrait,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use sha2::{Digest, Sha256};
@@ -35,15 +34,20 @@ use crate::{
     },
 };
 
+mod artifact_codec;
+#[cfg(all(feature = "prover", not(target_pointer_width = "64")))]
+compile_error!("the construction-parent prover supports only 64-bit targets");
+#[cfg(all(any(test, feature = "prover"), target_pointer_width = "64"))]
+pub(crate) mod prover_artifact;
 pub(crate) mod verifier_artifact;
 
 type PrimaryEvaluationEngine = ipa_pc::EvaluationEngine<DirectNovaPrimaryEngine>;
 type SecondaryEvaluationEngine = ipa_pc::EvaluationEngine<DirectNovaSecondaryEngine>;
 type PrimarySnark = RelaxedR1CSSNARK<DirectNovaPrimaryEngine, PrimaryEvaluationEngine>;
 type SecondarySnark = RelaxedR1CSSNARK<DirectNovaSecondaryEngine, SecondaryEvaluationEngine>;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 type NovaPublicParams<C> = PublicParams<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, C>;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 type NovaRecursiveSnark<C> = RecursiveSNARK<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, C>;
 type NovaCompressedSnark<C> = CompressedSNARK<
     DirectNovaPrimaryEngine,
@@ -52,7 +56,7 @@ type NovaCompressedSnark<C> = CompressedSNARK<
     PrimarySnark,
     SecondarySnark,
 >;
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 type NovaProverKey<C> =
     ProverKey<DirectNovaPrimaryEngine, DirectNovaSecondaryEngine, C, PrimarySnark, SecondarySnark>;
 type NovaVerifierKey<C> = VerifierKey<
@@ -79,7 +83,7 @@ type VerifierOnlyKey<const ARITY: usize> = VerifierKey<
     SecondarySnark,
 >;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) trait NovaSessionStep<const ARITY: usize>: StepCircuit<DirectNovaScalar> {
     fn relation_id(&self) -> DirectRelationId;
     fn input_state(&self) -> &[DirectNovaScalar; ARITY];
@@ -143,6 +147,16 @@ impl DirectNovaConstructionVersions {
             native_decision,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) const fn values(self) -> (u32, u32, u32, u32) {
+        (
+            self.payload.value(),
+            self.statement.value(),
+            self.manifest.value(),
+            self.native_decision.value(),
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,10 +184,10 @@ pub(crate) enum DirectNovaSessionError {
     SuiteIdentity(&'static str),
     #[error("direct Nova selected suite mismatch: {0}")]
     SuiteMismatch(&'static str),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     #[error("direct Nova step relation mismatch")]
     StepRelation,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     #[error("direct Nova state continuity mismatch")]
     StateContinuity,
     #[error("direct Nova verified final state mismatch")]
@@ -281,9 +295,22 @@ fn direct_nova_thread_pool() -> Result<ThreadPool, DirectNovaSessionError> {
 
 #[cfg(test)]
 pub(crate) struct NovaSessionSuite<const ARITY: usize, C: NovaSessionStep<ARITY>> {
+    prover: NovaProver<ARITY, C>,
+    verifier: NovaVerifier<ARITY, C>,
+}
+
+/// Proving-only state for one fixed direct Nova suite.
+///
+/// This type owns the transparent public parameters and compression prover
+/// key. It deliberately cannot verify receipts and cannot select its own
+/// suite identity.
+#[cfg(any(test, feature = "prover"))]
+pub(crate) struct NovaProver<const ARITY: usize, C: NovaSessionStep<ARITY>> {
     public_params: NovaPublicParams<C>,
     prover_key: NovaProverKey<C>,
-    verifier: NovaVerifier<ARITY, C>,
+    proof_shape: NovaCompressedProofShape,
+    pool: ThreadPool,
+    operation: Mutex<()>,
 }
 
 /// Verification-only state for one fixed direct Nova suite.
@@ -365,7 +392,7 @@ impl ExpectedDirectNovaSuite {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "prover"))]
     pub(crate) const fn suite_id(&self) -> DirectNovaSuiteId {
         self.suite_id
     }
@@ -466,46 +493,46 @@ impl ExpectedDirectNovaSuite {
 }
 
 const QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION: ConstructionPayloadVersion =
-    ConstructionPayloadVersion::new(2);
+    ConstructionPayloadVersion::new(4);
 const QUALIFIED_CONSTRUCTION_STATEMENT_VERSION: ConstructionStatementVersion =
-    ConstructionStatementVersion::new(3);
+    ConstructionStatementVersion::new(5);
 const QUALIFIED_CONSTRUCTION_MANIFEST_VERSION: ConstructionManifestVersion =
-    ConstructionManifestVersion::new(2);
+    ConstructionManifestVersion::new(3);
 
 /// Candidate-decision v1 binds `CandidateAccumStep/v1` and the native linear
 /// decision over `point:33 || scale:32 || factors:15*32`, the current 545-byte
 /// construction-root semantics.
 const QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION: ConstructionNativeDecisionVersion =
     ConstructionNativeDecisionVersion::new(1);
-const QUALIFIED_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
+pub(crate) const QUALIFIED_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
     DirectNovaConstructionVersions::new(
         QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION,
         QUALIFIED_CONSTRUCTION_STATEMENT_VERSION,
         QUALIFIED_CONSTRUCTION_MANIFEST_VERSION,
         QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION,
     );
+
 const QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID: [u8; 32] = [
-    0x92, 0xee, 0x3f, 0x35, 0x72, 0xc6, 0xff, 0x1c, 0x9c, 0x41, 0xc7, 0x71, 0x99, 0x5c, 0xd7, 0x08,
-    0x81, 0xdb, 0x85, 0x44, 0x47, 0x2d, 0x87, 0xac, 0x00, 0xa5, 0x67, 0x5c, 0x99, 0x81, 0xbe, 0xde,
+    0xa6, 0x6c, 0x58, 0xa8, 0x6a, 0xfc, 0xe6, 0x4b, 0x2b, 0x69, 0xd5, 0x3e, 0x83, 0xd3, 0xd5, 0x43,
+    0x0d, 0x08, 0x0f, 0xaf, 0x0b, 0x68, 0x06, 0x4c, 0xad, 0xb3, 0xa6, 0xd8, 0xb4, 0x39, 0xee, 0xa9,
 ];
 const QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST: [u8; 32] = [
-    0x6d, 0xda, 0x88, 0x85, 0x55, 0x40, 0x99, 0xec, 0x7a, 0x18, 0x39, 0x18, 0xad, 0x48, 0x1e, 0x43,
-    0x0f, 0xd8, 0x4d, 0x7b, 0x60, 0x8a, 0xe9, 0x55, 0x58, 0x25, 0x97, 0x60, 0x51, 0x9a, 0x60, 0x00,
+    0x12, 0x4d, 0x07, 0x56, 0x20, 0x3e, 0xbf, 0x5b, 0x41, 0x6b, 0x6f, 0x12, 0x30, 0x35, 0x6e, 0xf9,
+    0x92, 0x1f, 0xb3, 0x05, 0x38, 0xa8, 0xf7, 0xfc, 0xeb, 0xb1, 0x06, 0x18, 0x19, 0x49, 0x71, 0x00,
 ];
 const QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID: DirectNovaSuiteId = DirectNovaSuiteId::new([
-    0xac, 0xd9, 0x9f, 0x11, 0x32, 0x0b, 0x56, 0x6f, 0x72, 0x71, 0xfe, 0x54, 0x99, 0x6f, 0xa0, 0x25,
-    0xc2, 0xc5, 0x71, 0x7e, 0x4d, 0x74, 0x33, 0xa6, 0xc3, 0x33, 0x23, 0x9a, 0xd8, 0xc8, 0x71, 0xa6,
+    0xcc, 0xba, 0x9e, 0xd4, 0xb0, 0xee, 0xc0, 0x37, 0xc8, 0xdc, 0x34, 0xbf, 0x33, 0xfd, 0x29, 0x2c,
+    0xc4, 0x76, 0x37, 0x5e, 0xc4, 0x70, 0x0a, 0x36, 0xc0, 0x70, 0xe3, 0x71, 0x0d, 0xd1, 0xa9, 0x02,
 ]);
 pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH: usize = 15_076;
 
-/// Resource-gated production qualification of the SHA-256 construction
-/// parent. This static selector does not activate receipt acceptance.
+/// Exact mixed construction-parent profile selected by qualification.
 pub(crate) static QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE: ExpectedDirectNovaSuite =
     ExpectedDirectNovaSuite::new(
         QUALIFIED_CONSTRUCTION_VERSIONS,
         QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
         QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
-        FrozenNovaDimensions::new(9_418_599, 9_372_280),
+        FrozenNovaDimensions::new(9_418_542, 9_372_224),
         FrozenNovaDimensions::new(728_974, 728_211),
         FrozenNovaProofMetrics::new(QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH as u64, 152),
         QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID,
@@ -514,8 +541,15 @@ pub(crate) static QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE: ExpectedDirectNovaSu
 /// A generic suite promoted through one exact local selection profile.
 #[cfg(test)]
 pub(crate) struct SelectedNovaSessionSuite<const ARITY: usize, C: NovaSessionStep<ARITY>> {
+    prover: SelectedNovaProver<ARITY, C>,
+    verifier: SelectedNovaVerifier<ARITY, C>,
+}
+
+/// A proving context promoted through one exact local profile.
+#[cfg(any(test, feature = "prover"))]
+pub(crate) struct SelectedNovaProver<const ARITY: usize, C: NovaSessionStep<ARITY>> {
     expected: &'static ExpectedDirectNovaSuite,
-    inner: NovaSessionSuite<ARITY, C>,
+    inner: NovaProver<ARITY, C>,
 }
 
 /// A verification-only context promoted through one exact local profile.
@@ -535,6 +569,40 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
         Self::setup_prepared(trusted_step)
     }
 
+    /// Promotes one freshly generated qualification suite under its exact
+    /// metadata and receipt-layer versions.
+    ///
+    /// The leaked profile is scoped to the resource-gated test process. It is
+    /// deliberately not reachable by the production artifact loader, which
+    /// remains pinned and fail-closed until these outputs are reviewed.
+    pub(crate) fn select_generated_for_qualification(
+        self,
+        construction_versions: DirectNovaConstructionVersions,
+    ) -> Result<SelectedNovaSessionSuite<ARITY, C>, DirectNovaSessionError> {
+        let metadata = self.verifier.metadata;
+        let suite_id =
+            metadata.suite_id::<ARITY>(&self.verifier.proof_shape, construction_versions)?;
+        let expected = Box::leak(Box::new(ExpectedDirectNovaSuite::new(
+            construction_versions,
+            *metadata.relation_id.bytes(),
+            metadata.public_parameter_digest,
+            FrozenNovaDimensions::new(
+                suite_u64(metadata.primary_constraints, "primary constraints")?,
+                suite_u64(metadata.primary_variables, "primary variables")?,
+            ),
+            FrozenNovaDimensions::new(
+                suite_u64(metadata.secondary_constraints, "secondary constraints")?,
+                suite_u64(metadata.secondary_variables, "secondary variables")?,
+            ),
+            FrozenNovaProofMetrics::new(
+                suite_u64(metadata.proof_length, "proof length")?,
+                suite_u32(metadata.codec_sequence_count, "codec sequence count")?,
+            ),
+            suite_id,
+        )));
+        self.select(expected)
+    }
+
     /// Qualifies a suite only after its relation and complete resulting
     /// metadata match one local profile. Production acceptance loads the
     /// resulting frozen verifier artifact; it never performs setup.
@@ -544,11 +612,7 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
     ) -> Result<SelectedNovaSessionSuite<ARITY, C>, DirectNovaSessionError> {
         expected.precheck_relation(trusted_step.relation_id())?;
         let suite = Self::setup_prepared(trusted_step)?;
-        expected.validate::<ARITY>(&suite.verifier.metadata, &suite.verifier.proof_shape)?;
-        Ok(SelectedNovaSessionSuite {
-            expected,
-            inner: suite,
-        })
+        suite.select(expected)
     }
 
     fn setup_prepared(trusted_step: C) -> Result<Self, DirectNovaSessionError> {
@@ -595,14 +659,20 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
                 ))
             })?;
 
+        let verifier_pool = direct_nova_thread_pool()?;
         Ok(Self {
-            public_params,
-            prover_key,
+            prover: NovaProver {
+                public_params,
+                prover_key,
+                proof_shape: proof_shape.clone(),
+                pool,
+                operation: Mutex::new(()),
+            },
             verifier: NovaVerifier {
                 verifier_key,
                 proof_shape,
                 metadata,
-                pool,
+                pool: verifier_pool,
                 operation: Mutex::new(()),
             },
         })
@@ -612,36 +682,21 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
         self.verifier.metadata()
     }
 
-    pub(crate) fn start(
-        &self,
-        initial_state: [DirectNovaScalar; ARITY],
-        expected_steps: usize,
-    ) -> Result<NovaProverSession<'_, ARITY, C>, DirectNovaSessionError> {
-        if expected_steps == 0 {
-            return Err(DirectNovaSessionError::StepCount {
-                expected: 1,
-                actual: 0,
-            });
-        }
-        Ok(NovaProverSession {
-            suite: self,
-            initial_state,
-            current_state: initial_state,
-            expected_steps,
-            completed_steps: 0,
-            recursive: None,
+    fn select(
+        self,
+        expected: &'static ExpectedDirectNovaSuite,
+    ) -> Result<SelectedNovaSessionSuite<ARITY, C>, DirectNovaSessionError> {
+        expected.validate::<ARITY>(&self.verifier.metadata, &self.verifier.proof_shape)?;
+        Ok(SelectedNovaSessionSuite {
+            prover: SelectedNovaProver {
+                expected,
+                inner: self.prover,
+            },
+            verifier: SelectedNovaVerifier {
+                expected,
+                inner: self.verifier,
+            },
         })
-    }
-
-    fn serialized<T: Send>(
-        &self,
-        operation: impl FnOnce() -> Result<T, DirectNovaSessionError> + Send,
-    ) -> Result<T, DirectNovaSessionError> {
-        self.verifier.serialized(operation)
-    }
-
-    fn into_verifier(self) -> NovaVerifier<ARITY, C> {
-        self.verifier
     }
 }
 
@@ -729,12 +784,12 @@ impl<const ARITY: usize, C: StepCircuit<DirectNovaScalar>> NovaVerifier<ARITY, C
 #[cfg(test)]
 impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaSessionSuite<ARITY, C> {
     pub(crate) const fn expected(&self) -> &'static ExpectedDirectNovaSuite {
-        self.expected
+        self.prover.expected()
     }
 
     #[cfg(test)]
     pub(crate) fn metadata(&self) -> DirectNovaSuiteMetadata {
-        self.inner.metadata()
+        self.verifier.metadata()
     }
 
     pub(crate) fn start(
@@ -742,16 +797,77 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaSessionSuite<ARI
         initial_state: [DirectNovaScalar; ARITY],
         expected_steps: usize,
     ) -> Result<NovaProverSession<'_, ARITY, C>, DirectNovaSessionError> {
-        self.inner.start(initial_state, expected_steps)
+        self.prover.start(initial_state, expected_steps)
+    }
+
+    /// Discard the setup verifier and retain only qualification prover state.
+    ///
+    /// The setup-only qualification must persist and reload this state before
+    /// it is used. Production code cannot perform transparent setup.
+    pub(crate) fn into_prover(self) -> SelectedNovaProver<ARITY, C> {
+        self.prover
     }
 
     /// Permanently releases every proving component while retaining the
     /// exact selected verifier.
     pub(crate) fn into_verifier(self) -> SelectedNovaVerifier<ARITY, C> {
-        SelectedNovaVerifier {
-            expected: self.expected,
-            inner: self.inner.into_verifier(),
+        self.verifier
+    }
+}
+
+#[cfg(any(test, feature = "prover"))]
+impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProver<ARITY, C> {
+    fn start(
+        &self,
+        initial_state: [DirectNovaScalar; ARITY],
+        expected_steps: usize,
+        relation_id: DirectRelationId,
+    ) -> Result<NovaProverSession<'_, ARITY, C>, DirectNovaSessionError> {
+        if expected_steps == 0 {
+            return Err(DirectNovaSessionError::StepCount {
+                expected: 1,
+                actual: 0,
+            });
         }
+        Ok(NovaProverSession {
+            prover: self,
+            relation_id,
+            initial_state,
+            current_state: initial_state,
+            expected_steps,
+            completed_steps: 0,
+            recursive: None,
+        })
+    }
+
+    fn serialized<T: Send>(
+        &self,
+        operation: impl FnOnce() -> Result<T, DirectNovaSessionError> + Send,
+    ) -> Result<T, DirectNovaSessionError> {
+        let _guard = self
+            .operation
+            .lock()
+            .expect("direct Nova prover operation mutex poisoned");
+        self.pool.install(operation)
+    }
+}
+
+#[cfg(any(test, feature = "prover"))]
+impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaProver<ARITY, C> {
+    pub(crate) const fn expected(&self) -> &'static ExpectedDirectNovaSuite {
+        self.expected
+    }
+
+    pub(crate) fn start(
+        &self,
+        initial_state: [DirectNovaScalar; ARITY],
+        expected_steps: usize,
+    ) -> Result<NovaProverSession<'_, ARITY, C>, DirectNovaSessionError> {
+        self.inner.start(
+            initial_state,
+            expected_steps,
+            DirectRelationId::from_frozen_bytes(self.expected.relation_id),
+        )
     }
 }
 
@@ -795,9 +911,10 @@ impl<const ARITY: usize, C: StepCircuit<DirectNovaScalar>> SelectedNovaVerifier<
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) struct NovaProverSession<'suite, const ARITY: usize, C: NovaSessionStep<ARITY>> {
-    suite: &'suite NovaSessionSuite<ARITY, C>,
+    prover: &'suite NovaProver<ARITY, C>,
+    relation_id: DirectRelationId,
     initial_state: [DirectNovaScalar; ARITY],
     current_state: [DirectNovaScalar; ARITY],
     expected_steps: usize,
@@ -805,7 +922,7 @@ pub(crate) struct NovaProverSession<'suite, const ARITY: usize, C: NovaSessionSt
     recursive: Option<NovaRecursiveSnark<C>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 fn validate_step_relation<const ARITY: usize, C: NovaSessionStep<ARITY>>(
     expected: DirectRelationId,
     step: &C,
@@ -816,7 +933,7 @@ fn validate_step_relation<const ARITY: usize, C: NovaSessionStep<ARITY>>(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "prover"))]
 impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProverSession<'_, ARITY, C> {
     /// Consumes the session on both success and failure, so a partially
     /// mutated Nova proof can never be retried as if the fold were atomic.
@@ -827,25 +944,25 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProverSession<'_, ARITY,
                 actual: self.completed_steps + 1,
             });
         }
-        validate_step_relation(self.suite.verifier.metadata.relation_id, &step)?;
+        validate_step_relation(self.relation_id, &step)?;
         if step.input_state() != &self.current_state {
             return Err(DirectNovaSessionError::StateContinuity);
         }
 
         let recursive = &mut self.recursive;
-        self.suite.serialized(|| {
+        self.prover.serialized(|| {
             if let Some(recursive) = recursive.as_mut() {
-                recursive.prove_step(&self.suite.public_params, &step)?;
+                recursive.prove_step(&self.prover.public_params, &step)?;
             } else {
                 let mut first = NovaRecursiveSnark::<C>::new(
-                    &self.suite.public_params,
+                    &self.prover.public_params,
                     &step,
                     &self.initial_state,
                 )?;
                 // `new` executes the first circuit with internal `i = 0`.
                 // The first prove call advances the counter to one without
                 // executing the circuit a second time.
-                first.prove_step(&self.suite.public_params, &step)?;
+                first.prove_step(&self.prover.public_params, &step)?;
                 if first.num_steps() != 1 {
                     return Err(DirectNovaSessionError::StepCount {
                         expected: 1,
@@ -880,9 +997,9 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProverSession<'_, ARITY,
             actual: 0,
         })?;
 
-        self.suite.serialized(|| {
+        self.prover.serialized(|| {
             let verified = recursive.verify(
-                &self.suite.public_params,
+                &self.prover.public_params,
                 self.completed_steps,
                 &self.initial_state,
             )?;
@@ -890,13 +1007,12 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaProverSession<'_, ARITY,
                 return Err(DirectNovaSessionError::FinalState);
             }
             let compressed = NovaCompressedSnark::<C>::prove_owned(
-                &self.suite.public_params,
-                &self.suite.prover_key,
+                &self.prover.public_params,
+                &self.prover.prover_key,
                 recursive,
             )?;
             Ok(self
-                .suite
-                .verifier
+                .prover
                 .proof_shape
                 .as_fixed_serde_shape()
                 .encode(&compressed)?)
@@ -1094,13 +1210,13 @@ mod tests {
     }
 
     #[test]
-    fn qualified_sha_construction_parent_suite_is_frozen() {
+    fn qualified_construction_parent_suite_frame_is_frozen() {
         let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
-            NovaR1csDimensions::new(9_418_599, 9_372_280),
+            NovaR1csDimensions::new(9_418_542, 9_372_224),
             NovaR1csDimensions::new(728_974, 728_211),
             TEST_ARITY,
         )
-        .expect("qualified SHA-256 production proof shape");
+        .expect("qualified SHA-256 proof shape");
         assert_eq!(
             proof_shape.encoded_len(),
             QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH
@@ -1112,8 +1228,8 @@ mod tests {
                 QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
             ),
             public_parameter_digest: QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
-            primary_constraints: 9_418_599,
-            primary_variables: 9_372_280,
+            primary_constraints: 9_418_542,
+            primary_variables: 9_372_224,
             secondary_constraints: 728_974,
             secondary_variables: 728_211,
             proof_length: proof_shape.encoded_len(),
@@ -1121,11 +1237,11 @@ mod tests {
         };
         let suite_id = metadata
             .suite_id::<TEST_ARITY>(&proof_shape, QUALIFIED_CONSTRUCTION_VERSIONS)
-            .expect("qualified SHA-256 production suite ID");
+            .expect("qualified SHA-256 suite ID");
         assert_eq!(suite_id, QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID);
         QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE
             .validate::<TEST_ARITY>(&metadata, &proof_shape)
-            .expect("qualified SHA-256 production suite profile");
+            .expect("qualified SHA-256 suite profile");
     }
 
     const TEST_EXPECTED_SUITE: ExpectedDirectNovaSuite = ExpectedDirectNovaSuite::new(
@@ -1275,10 +1391,7 @@ mod tests {
         expected
             .validate::<TEST_ARITY>(&metadata, &proof_shape)
             .expect("derived tiny suite profile");
-        let selected = SelectedNovaSessionSuite {
-            expected,
-            inner: suite,
-        };
+        let selected = suite.select(expected).expect("select tiny Nova suite");
         assert_eq!(selected.expected(), expected);
 
         let incomplete = selected.start(z0, 2).expect("incomplete session");

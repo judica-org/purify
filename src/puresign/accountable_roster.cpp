@@ -21,7 +21,7 @@ Result<SigningRoster> SigningRoster::aggregate(
         return unexpected_error(ErrorCode::EmptyInput, "accountable:empty_roster");
     }
     std::size_t encoded_size = 0;
-    if (!size_fits_u32(ordered_public_keys.size()) ||
+    if (ordered_public_keys.size() > SigningRoster::kMaxMembers ||
         !checked_mul_size(ordered_public_keys.size(), 33, encoded_size)) {
         return unexpected_error(ErrorCode::RangeViolation, "accountable:roster_size");
     }

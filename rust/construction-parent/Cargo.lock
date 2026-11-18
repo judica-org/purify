@@ -708,6 +708,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "ff",
+ "getrandom 0.2.17",
  "nova-snark",
  "num-bigint 0.4.8",
  "rayon",

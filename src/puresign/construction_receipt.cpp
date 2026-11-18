@@ -19,19 +19,10 @@ namespace purify::accountable {
 namespace {
 
 const TaggedHash kConstructionReceiptStatementHash(
-    "Purify/Accountable/ConstructionReceiptStatement/v3");
+    "Purify/Accountable/ConstructionReceiptStatement/v5");
 
 Status validate_ciphertext(const AnchorEscrowCiphertext& ciphertext) {
-    for (const UInt512& ephemeral : ciphertext.ephemeral_keys) {
-        PURIFY_RETURN_IF_ERROR(
-            validate_public_points(ephemeral),
-            "construction_receipt:ephemeral_key");
-    }
-    if (ciphertext.ephemeral_keys[0] == ciphertext.ephemeral_keys[1]) {
-        return unexpected_error(ErrorCode::BindingMismatch,
-                                "construction_receipt:duplicate_ephemeral");
-    }
-    return {};
+    return validate_public_points(ciphertext.ephemeral_key);
 }
 
 Status validate_circuit_precommitment(
@@ -48,23 +39,55 @@ Status validate_circuit_precommitment(
     return {};
 }
 
-Status validate_entries(
-    std::span<const ConstructionReceiptEntry> entries) {
+Status validate_anchor_entries(
+    std::span<const ConstructionReceiptAnchorEntry> entries) {
     if (entries.empty()) {
         return unexpected_error(ErrorCode::EmptyInput,
-                                "construction_receipt:entries");
+                                "construction_receipt:anchor_entries");
     }
     if (!size_fits_u32(entries.size())) {
         return unexpected_error(ErrorCode::UnexpectedSize,
-                                "construction_receipt:entry_count");
+                                "construction_receipt:anchor_count");
     }
-    for (const ConstructionReceiptEntry& entry : entries) {
+    for (const ConstructionReceiptAnchorEntry& entry : entries) {
         PURIFY_RETURN_IF_ERROR(validate_ciphertext(entry.ciphertext),
                                "construction_receipt:ciphertext");
         PURIFY_RETURN_IF_ERROR(
             validate_circuit_precommitment(
                 entry.circuit_precommitment),
             "construction_receipt:circuit_precommitment");
+    }
+    return {};
+}
+
+Status validate_setup_entries(
+    const UInt512& recovery_root,
+    std::span<const ConstructionReceiptSetupEntry> entries) {
+    if (entries.empty()) {
+        return unexpected_error(ErrorCode::EmptyInput,
+                                "construction_receipt:setup_entries");
+    }
+    if (!size_fits_u32(entries.size())) {
+        return unexpected_error(ErrorCode::UnexpectedSize,
+                                "construction_receipt:setup_count");
+    }
+    std::vector<RecoveryRootShare> shares;
+    shares.reserve(entries.size());
+    for (const ConstructionReceiptSetupEntry& entry : entries) {
+        PURIFY_RETURN_IF_ERROR(
+            validate_circuit_precommitment(
+                entry.circuit_precommitment),
+            "construction_receipt:setup_precommitment");
+        shares.push_back(entry.share);
+    }
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto aggregate,
+        aggregate_recovery_root_shares(shares),
+        "construction_receipt:setup_aggregate");
+    if (aggregate.recovery_root() != recovery_root) {
+        return unexpected_error(
+            ErrorCode::BindingMismatch,
+            "construction_receipt:setup_recovery_root");
     }
     return {};
 }
@@ -90,10 +113,8 @@ void append_array(Bytes& out, const std::array<unsigned char, Size>& value) {
 
 void append_ciphertext(Bytes& out,
                        const AnchorEscrowCiphertext& ciphertext) {
-    for (std::size_t i = 0; i < ciphertext.ephemeral_keys.size(); ++i) {
-        append_array(out, ciphertext.ephemeral_keys[i].to_bytes_be());
-        append_array(out, ciphertext.masked_scalars[i].to_bytes_be());
-    }
+    append_array(out, ciphertext.ephemeral_key.to_bytes_be());
+    append_array(out, ciphertext.masked_scalar.to_bytes_be());
 }
 
 Result<AnchorEscrowCiphertext> parse_ciphertext(
@@ -101,32 +122,46 @@ Result<AnchorEscrowCiphertext> parse_ciphertext(
         encoded) {
     AnchorEscrowCiphertext ciphertext;
     std::size_t offset = 0;
-    for (std::size_t i = 0; i < ciphertext.ephemeral_keys.size(); ++i) {
-        ciphertext.ephemeral_keys[i] =
-            UInt512::from_bytes_be(encoded.data() + offset, 64);
-        offset += 64;
-        std::array<unsigned char, 32> encoded_scalar{};
-        std::copy_n(encoded.data() + offset,
-                    encoded_scalar.size(),
-                    encoded_scalar.begin());
-        PURIFY_ASSIGN_OR_RETURN(
-            ciphertext.masked_scalars[i],
-            FieldElement::try_from_bytes32(encoded_scalar),
-            "construction_receipt:masked_scalar");
-        offset += 32;
-    }
+    ciphertext.ephemeral_key =
+        UInt512::from_bytes_be(encoded.data() + offset, 64);
+    offset += 64;
+    std::array<unsigned char, 32> encoded_scalar{};
+    std::copy_n(encoded.data() + offset,
+                encoded_scalar.size(), encoded_scalar.begin());
+    PURIFY_ASSIGN_OR_RETURN(
+        ciphertext.masked_scalar,
+        FieldElement::try_from_bytes32(encoded_scalar),
+        "construction_receipt:masked_scalar");
+    offset += 32;
     assert(offset == encoded.size());
     PURIFY_RETURN_IF_ERROR(validate_ciphertext(ciphertext),
                            "construction_receipt:ciphertext");
     return ciphertext;
 }
 
-Result<std::size_t> encoded_size_for_count(std::size_t entry_count) {
+Result<std::size_t> encoded_size_for_counts(
+    std::size_t setup_count, std::size_t anchor_count) {
+    std::size_t entry_count = 0;
+    if (!size_fits_u32(setup_count) ||
+        !size_fits_u32(anchor_count) ||
+        !checked_add_size(setup_count, anchor_count, entry_count) ||
+        !size_fits_u32(entry_count)) {
+        return unexpected_error(ErrorCode::UnexpectedSize,
+                                "construction_receipt:entry_count");
+    }
+    std::size_t setup_size = 0;
+    std::size_t anchor_size = 0;
     std::size_t entries_size = 0;
     std::size_t encoded_size = 0;
-    if (!checked_mul_size(entry_count,
-                          ConstructionReceiptPayload::kEntrySize,
-                          entries_size) ||
+    if (!checked_mul_size(
+            setup_count,
+            ConstructionReceiptPayload::kSetupEntrySize,
+            setup_size) ||
+        !checked_mul_size(
+            anchor_count,
+            ConstructionReceiptPayload::kAnchorEntrySize,
+            anchor_size) ||
+        !checked_add_size(setup_size, anchor_size, entries_size) ||
         !checked_add_size(ConstructionReceiptPayload::kFixedHeaderSize,
                           entries_size,
                           encoded_size)) {
@@ -152,14 +187,26 @@ ResolvedConstructionSetupDigest::create(
 
 Result<ConstructionReceiptPayload> ConstructionReceiptPayload::create(
     UInt512 recovery_root,
-    std::vector<ConstructionReceiptEntry> entries) {
+    std::vector<ConstructionReceiptSetupEntry> setup_entries,
+    std::vector<ConstructionReceiptAnchorEntry> anchor_entries) {
     PURIFY_RETURN_IF_ERROR(
         validate_public_points(recovery_root),
         "construction_receipt:recovery_root");
-    PURIFY_RETURN_IF_ERROR(validate_entries(entries),
-                           "construction_receipt:entries");
-    return ConstructionReceiptPayload(recovery_root,
-                                      std::move(entries));
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto encoded_size,
+        encoded_size_for_counts(setup_entries.size(),
+                                anchor_entries.size()),
+        "construction_receipt:encoded_size");
+    (void)encoded_size;
+    PURIFY_RETURN_IF_ERROR(
+        validate_setup_entries(recovery_root, setup_entries),
+        "construction_receipt:setup_entries");
+    PURIFY_RETURN_IF_ERROR(
+        validate_anchor_entries(anchor_entries),
+        "construction_receipt:anchor_entries");
+    return ConstructionReceiptPayload(
+        recovery_root, std::move(setup_entries),
+        std::move(anchor_entries));
 }
 
 Bytes ConstructionReceiptPayload::serialize() const {
@@ -167,9 +214,18 @@ Bytes ConstructionReceiptPayload::serialize() const {
     encoded.reserve(serialized_size());
     encoded.push_back(kSerializationVersion);
     append_array(encoded, recovery_root_.to_bytes_be());
-    assert(size_fits_u32(entries_.size()));
-    append_u32_be(encoded, static_cast<std::uint32_t>(entries_.size()));
-    for (const ConstructionReceiptEntry& entry : entries_) {
+    assert(size_fits_u32(setup_entries_.size()));
+    assert(size_fits_u32(anchor_entries_.size()));
+    append_u32_be(
+        encoded, static_cast<std::uint32_t>(setup_entries_.size()));
+    append_u32_be(
+        encoded, static_cast<std::uint32_t>(anchor_entries_.size()));
+    for (const ConstructionReceiptSetupEntry& entry : setup_entries_) {
+        const auto share = entry.share.serialize();
+        encoded.insert(encoded.end(), share.begin(), share.end());
+        append_array(encoded, entry.circuit_precommitment);
+    }
+    for (const ConstructionReceiptAnchorEntry& entry : anchor_entries_) {
         append_ciphertext(encoded, entry.ciphertext);
         append_array(encoded, entry.circuit_precommitment);
     }
@@ -196,27 +252,55 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::deserialize(
         validate_public_points(recovery_root),
         "construction_receipt:recovery_root");
 
-    const std::span<const unsigned char, 4> encoded_count(
+    const std::span<const unsigned char, 4> encoded_setup_count(
         encoded.data() + offset, 4);
-    const std::uint32_t entry_count = read_u32_be(encoded_count);
+    const std::uint32_t setup_count =
+        read_u32_be(encoded_setup_count);
     offset += 4;
-    if (entry_count == 0) {
+    const std::span<const unsigned char, 4> encoded_anchor_count(
+        encoded.data() + offset, 4);
+    const std::uint32_t anchor_count =
+        read_u32_be(encoded_anchor_count);
+    offset += 4;
+    if (setup_count == 0 || anchor_count == 0) {
         return unexpected_error(ErrorCode::EmptyInput,
                                 "construction_receipt:entry_count");
     }
     PURIFY_ASSIGN_OR_RETURN(
         const std::size_t expected_size,
-        encoded_size_for_count(static_cast<std::size_t>(entry_count)),
+        encoded_size_for_counts(
+            static_cast<std::size_t>(setup_count),
+            static_cast<std::size_t>(anchor_count)),
         "construction_receipt:encoded_size");
     if (encoded.size() != expected_size) {
         return unexpected_error(ErrorCode::InvalidFixedSize,
                                 "construction_receipt:encoded_size");
     }
 
-    std::vector<ConstructionReceiptEntry> entries;
-    entries.reserve(entry_count);
-    for (std::uint32_t i = 0; i < entry_count; ++i) {
-        ConstructionReceiptEntry entry;
+    std::vector<ConstructionReceiptSetupEntry> setup_entries;
+    setup_entries.reserve(setup_count);
+    for (std::uint32_t i = 0; i < setup_count; ++i) {
+        PURIFY_ASSIGN_OR_RETURN(
+            auto share,
+            RecoveryRootShare::deserialize(
+                encoded.subspan(offset,
+                                RecoveryRootShare::kSerializedSize)),
+            "construction_receipt:setup_share");
+        offset += RecoveryRootShare::kSerializedSize;
+        bppp::ScalarBytes precommitment{};
+        std::copy_n(encoded.begin() + offset,
+                    precommitment.size(), precommitment.begin());
+        offset += precommitment.size();
+        PURIFY_RETURN_IF_ERROR(
+            validate_circuit_precommitment(precommitment),
+            "construction_receipt:setup_precommitment");
+        setup_entries.emplace_back(std::move(share), precommitment);
+    }
+
+    std::vector<ConstructionReceiptAnchorEntry> anchor_entries;
+    anchor_entries.reserve(anchor_count);
+    for (std::uint32_t i = 0; i < anchor_count; ++i) {
+        ConstructionReceiptAnchorEntry entry;
         const std::span<const unsigned char,
                         AnchorEscrowCiphertext::kSerializedSize>
             encoded_ciphertext(encoded.data() + offset,
@@ -234,11 +318,18 @@ Result<ConstructionReceiptPayload> ConstructionReceiptPayload::deserialize(
             validate_circuit_precommitment(
                 entry.circuit_precommitment),
             "construction_receipt:circuit_precommitment");
-        entries.push_back(std::move(entry));
+        anchor_entries.push_back(std::move(entry));
     }
     assert(offset == encoded.size());
-    return ConstructionReceiptPayload(recovery_root,
-                                      std::move(entries));
+    PURIFY_RETURN_IF_ERROR(
+        validate_setup_entries(recovery_root, setup_entries),
+        "construction_receipt:setup_entries");
+    PURIFY_RETURN_IF_ERROR(
+        validate_anchor_entries(anchor_entries),
+        "construction_receipt:anchor_entries");
+    return ConstructionReceiptPayload(
+        recovery_root, std::move(setup_entries),
+        std::move(anchor_entries));
 }
 
 Result<ConstructionReceiptStatementDigest>
@@ -246,7 +337,7 @@ construction_receipt_statement_digest(
     const ConstructionReceiptPayload& payload,
     const ResolvedConstructionSetupDigest& resolved_setup,
     std::span<const ResolvedConstructionReceiptEntry> resolved_entries) {
-    if (resolved_entries.size() != payload.entries().size()) {
+    if (resolved_entries.size() != payload.anchor_entries().size()) {
         return unexpected_error(ErrorCode::InvalidFixedSize,
                                 "construction_receipt:resolved_count");
     }
@@ -303,139 +394,34 @@ Result<ConstructionReceiptAccumulator>
 ConstructionReceiptAccumulator::create(
     purify_secp_context* secp_context) {
     PURIFY_ASSIGN_OR_RETURN(
-        auto setup, RecoveryRootSetupAccumulator::create(secp_context),
-        "construction_accumulation:setup_basis");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto anchors, AnchorEscrowAccumulator::create(secp_context),
-        "construction_accumulation:anchor_basis");
-    return ConstructionReceiptAccumulator(std::move(setup),
-                                          std::move(anchors));
+        auto leaves, ConstructionLeafAccumulator::create(secp_context),
+        "construction_accumulation:leaf_basis");
+    return ConstructionReceiptAccumulator(std::move(leaves));
 }
-
-ResolvedConstructionSetup::ResolvedConstructionSetup(
-    RecoveryBoundSigningRoster roster,
-    ResolvedConstructionSetupDigest resolved_digest,
-    std::array<unsigned char, kSeedRootSize> seed_root)
-    : roster_(std::move(roster)),
-      resolved_digest_(std::move(resolved_digest)),
-      seed_root_(std::move(seed_root)) {}
 
 Result<ResolvedConstructionSetup>
-ConstructionReceiptAccumulator::resolve_setup_record(
+ResolvedConstructionSetup::create(
     NonceHostBoundSigningRoster roster,
-    const UInt512& recovery_root,
-    const RecoveryRootSetupProof& setup_proof,
-    ResolvedConstructionSetupDigest resolved_digest,
-    purify_secp_context* secp_context,
-    bppp::ExperimentalCircuitBackend* cache) const {
-    PURIFY_ASSIGN_OR_RETURN(
-        auto verified_roster,
-        verify_recovery_root_setup(
-            std::move(roster), recovery_root, setup_proof,
-            secp_context),
-        "construction_accumulation:verify_setup_record");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto prepared,
-        setup_.prepare(verified_roster, recovery_root, setup_proof,
-                       secp_context, cache),
-        "construction_accumulation:prepare_setup");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto reduction,
-        bppp::accumulation::prove_algebraic_norm_reduction(
-            setup_.basis(), prepared, secp_context),
-        "construction_accumulation:prove_setup_reduction");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto setup_claim,
-        bppp::accumulation::verify_algebraic_norm_reduction(
-            setup_.basis(), prepared, reduction, secp_context),
-        "construction_accumulation:verify_setup_reduction");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto promoted, promote_setup_claim(setup_claim),
-        "construction_accumulation:promote_setup");
-    const std::span<const bppp::accumulation::PendingClaim>
-        promoted_claims(&promoted, 1);
-    PURIFY_ASSIGN_OR_RETURN(
-        auto seed_proof,
-        bppp::accumulation::prove_algebraic_step(
-            anchors_.basis(), promoted_claims, secp_context),
-        "construction_accumulation:prove_setup_seed");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto seed_claim,
-        bppp::accumulation::verify_algebraic_step(
-            anchors_.basis(), promoted_claims, seed_proof,
-            secp_context),
-        "construction_accumulation:verify_setup_seed");
-    PURIFY_ASSIGN_OR_RETURN(
-        auto seed_root,
-        bppp::accumulation::serialize_root_claim(
-            anchors_.basis(), seed_claim, secp_context),
-        "construction_accumulation:serialize_setup_seed");
-    if (seed_root.size() !=
-        ResolvedConstructionSetup::kSeedRootSize) {
+    CoalitionFormation formation,
+    UInt512 recovery_root,
+    ResolvedConstructionSetupDigest resolved_digest) {
+    if (roster.members().empty() ||
+        !size_fits_u32(roster.members().size())) {
         return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "construction_accumulation:setup_seed_size");
+            ErrorCode::RangeViolation,
+            "construction_setup:roster_count");
     }
-    std::array<unsigned char,
-               ResolvedConstructionSetup::kSeedRootSize>
-        canonical_seed_root{};
-    std::copy(seed_root.begin(), seed_root.end(),
-              canonical_seed_root.begin());
     PURIFY_RETURN_IF_ERROR(
-        bppp::accumulation::decide(
-            anchors_.basis(), seed_claim, secp_context),
-        "construction_accumulation:decide_setup_seed");
-    const auto& polynomial = seed_claim.polynomial();
-    (void)polynomial;
-    assert(polynomial.size() == 1);
-    assert(polynomial[0].offset == 0);
-    assert(polynomial[0].factors.size() == kRootClaimRounds);
-    return ResolvedConstructionSetup(
-        std::move(verified_roster), std::move(resolved_digest),
-        std::move(canonical_seed_root));
-}
-
-Result<bppp::accumulation::PendingClaim>
-ConstructionReceiptAccumulator::promote_setup_claim(
-    const bppp::accumulation::PendingClaim& setup_claim) const {
-    const auto& source = setup_.basis();
-    const auto& target = anchors_.basis();
-    if (setup_claim.basis_digest() != source.digest()) {
+        validate_public_points(recovery_root),
+        "construction_setup:recovery_root");
+    if (formation.core_digest() != roster.coalition_core_digest()) {
         return unexpected_error(
             ErrorCode::BindingMismatch,
-            "construction_accumulation:setup_claim_basis");
+            "construction_setup:formation_core");
     }
-    if (source.dimension() >= target.dimension() ||
-        !std::equal(source.points().begin(), source.points().end(),
-                    target.points().begin())) {
-        return unexpected_error(
-            ErrorCode::InternalMismatch,
-            "construction_accumulation:basis_prefix");
-    }
-    const auto& polynomial = setup_claim.polynomial();
-    if (polynomial.empty() || polynomial.size() > 3) {
-        return unexpected_error(
-            ErrorCode::InvalidDimensions,
-            "construction_accumulation:setup_claim_shape");
-    }
-    for (const auto& term : polynomial) {
-        if (term.factors.size() >=
-            std::numeric_limits<std::size_t>::digits) {
-            return unexpected_error(
-                ErrorCode::Overflow,
-                "construction_accumulation:setup_claim_degree");
-        }
-        const std::size_t width =
-            std::size_t{1} << term.factors.size();
-        if (width > source.dimension() ||
-            term.offset > source.dimension() - width) {
-            return unexpected_error(
-                ErrorCode::InvalidDimensions,
-                "construction_accumulation:setup_claim_degree");
-        }
-    }
-    return bppp::accumulation::PendingClaim(
-        target.digest(), setup_claim.point(), polynomial);
+    return ResolvedConstructionSetup(
+        std::move(roster), std::move(formation), recovery_root,
+        std::move(resolved_digest));
 }
 
 Result<ConstructionReceiptEnvelope> ConstructionReceiptEnvelope::create(

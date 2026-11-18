@@ -1,4 +1,6 @@
-# Construction parent qualification vectors
+# Qualification vectors
+
+## Construction parent
 
 The mixed distributed construction-parent qualification pins four vectors:
 
@@ -92,3 +94,111 @@ ctest --test-dir build-parent --output-on-failure \
 The override is test-only, must name an exact 15,076-byte proof for the
 checked accepted Wit4, and does not change the compiled qualified proof used
 by normal tests. A missing override retains the frozen vector path.
+
+## Certificate parent
+
+The certificate-parent tests pin three checked-in cross-language vectors:
+
+| Vector | Encoded bytes | SHA256 |
+| --- | ---: | --- |
+| `certificate_response_authorization_v1.txt` | 1,947 | `8199cfcf64a55db72ec3c7e110e860bef411992f0b5dd83a0b40e60db36a8c78` |
+| `certificate_joined_witness_v2.bin` | 13,782 | `21146d1a2c78206288e741efb57995daba871f787a25ab8548e0119ce58c48d5` |
+| `certificate_joined_witness_v3.bin` | 14,608 | `36a4806d937edd496f28464248256512d45e51e25e36b5b6c184e991b88c9d46` |
+
+The authorization vector is 973 canonical response-authorization bytes
+encoded as lowercase hex plus a newline. C++ produces the record and Rust
+recomputes its common, response, binding, member, and ordered-manifest
+digests. The table hashes the checked-in text file, not its decoded bytes.
+
+CertJWit2 joins the same accepted public records and V4 nonce proofs to a
+detached native receipt. It remains a compatibility vector for the native
+member and recurrence tests; it is not accepted by the production
+certificate-parent prover. CertJWit3 is the production linear witness. It
+adds the fixed native basis and places one reduction and bound transition
+beside each of the four ordered members, with no detached receipt or tree
+suffix.
+
+The qualified CertJWit3 has two responses with two members each. Its external
+96-byte `Purify/CertPub1\0` frame has SHA256
+`9057d923d70e4b600eb9e7f085a32f4a1eb245e6188dde6a0b8147a0ad816196`.
+It fixes certificate context
+`7bcb06b8538ccc9c79fd2f595bbbee9f08c0d829a97ccd92fc3175eb379039f5`,
+two responses, four steps, and final manifest
+`45e8147f293a6edcf50c178d94a4731b5e18784c7b404ba9c357b9db224c1f9c`.
+The frame is independently reconstructed from public C++ records; CertJWit3
+cannot choose it.
+
+The 696,190,360-byte VK2 and 696,022,272-byte PK1 artifacts remain external.
+The accepted 15,268-byte proof has SHA256
+`887eb27a8893078734a57fb497ed9f9aadff03803454e419d497f0650727babb`.
+Their exact identities, historical Char source commits, suite, timings, and
+qualification scope are recorded in
+[`release/certificate-parent-sha256.json`](../../release/certificate-parent-sha256.json).
+That manifest records a historical Char qualification; the extraction into
+this repository did not rerun setup or proving.
+
+### Certificate requalification
+
+Requalification is an explicit high-resource release operation. Do not
+overwrite any checked vector or artifact. Regenerate candidates at new paths,
+review their protocol differences, and update the frozen suite and artifact
+descriptors only as one deliberate release.
+
+First regenerate CertJWit3 from the deterministic external Char integration
+fixture identified by the release manifest. Run
+`char_certificate_nonce_parent_tests` from that exact source tree with a new
+output path:
+
+```sh
+CHAR_CERTIFICATE_WITNESS_V3_OUT=/new/path/certificate.certjwit3 \
+  /path/to/char-test-binary \
+  --run_test=char_certificate_nonce_parent_tests
+```
+
+The test must still derive the public frame independently and must byte-check
+the authorization, response order, member order, native decision, and final
+manifest before exporting. CertJWit2 and the authorization text are
+cross-language regression vectors, not inputs to certificate setup. If their
+formats intentionally change, regenerate them from the same deterministic
+C++ fixture and update both C++ and Rust expectations; do not infer new bytes
+from the Rust relation.
+
+From `rust/construction-parent`, create fresh transparent prover and verifier
+artifacts. Both output paths must not exist:
+
+```sh
+PURIFY_CERTIFICATE_PARENT_PROVER_ARTIFACT_OUT=/new/path/certificate-parent-prover.pk1 \
+PURIFY_CERTIFICATE_PARENT_VERIFIER_ARTIFACT_OUT=/new/path/certificate-parent-verifier.vk2 \
+cargo test --release \
+  setup_only_certificate_parent_qualification_writes_artifacts \
+  -- --ignored --nocapture
+```
+
+Then prove the pinned public frame and the reviewed CertJWit3 with the fresh
+artifacts. The proof output must not exist:
+
+```sh
+PURIFY_CERTIFICATE_PARENT_PROVER_ARTIFACT=/new/path/certificate-parent-prover.pk1 \
+PURIFY_CERTIFICATE_PARENT_VERIFIER_ARTIFACT=/new/path/certificate-parent-verifier.vk2 \
+PURIFY_CERTIFICATE_PARENT_PROOF_OUT=/new/path/certificate-parent-proof.bin \
+cargo test --release \
+  qualified_artifacts_produce_the_pinned_certificate_proof \
+  -- --ignored --nocapture
+```
+
+Finally build Purify with
+`PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=ON` and run the native C++ boundary
+against both fresh resources:
+
+```sh
+PURIFY_TEST_CERTIFICATE_PARENT_VERIFIER_ARTIFACT=/new/path/certificate-parent-verifier.vk2 \
+PURIFY_TEST_CERTIFICATE_PARENT_PROOF=/new/path/certificate-parent-proof.bin \
+ctest --test-dir build-parent --output-on-failure \
+  -R '^purify.tests.certificate_nonce_parent$'
+```
+
+That gate reconstructs the qualified manifest from the hash-pinned CertJWit3
+public records, accepts the matching proof, rejects a changed manifest and
+changed proof, parses the authenticated pending root against the native basis,
+and completes native decision. Record new hashes and measured resources in a
+new release manifest only after all three layers pass.

@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -43,6 +44,60 @@ using purify_test::expect_ok;
 using purify_test::TestContext;
 
 using Point = std::array<unsigned char, 33>;
+using OnePreparedLeaf =
+    std::array<
+        purify::puresign_plusplus::PreparedCertificateNonceLeaf, 1>;
+using OneHost = std::array<PublicKey, 1>;
+using OneProof = std::array<NonceProof, 1>;
+
+static_assert(std::is_constructible_v<
+              CertificateNonceResponseVerificationView,
+              const CertificateNonceParentPublicInputs&,
+              const OnePreparedLeaf&>);
+static_assert(!std::is_constructible_v<
+              CertificateNonceResponseVerificationView,
+              CertificateNonceParentPublicInputs&&,
+              const OnePreparedLeaf&>);
+static_assert(!std::is_constructible_v<
+              CertificateNonceResponseVerificationView,
+              const CertificateNonceParentPublicInputs&,
+              OnePreparedLeaf>);
+static_assert(!std::is_constructible_v<
+              CertificateNonceResponseVerificationView,
+              const CertificateNonceParentPublicInputs&,
+              std::vector<
+                  purify::puresign_plusplus::
+                      PreparedCertificateNonceLeaf>>);
+static_assert(std::is_constructible_v<
+              purify::puresign_plusplus::CertificateNonceResponseProverView,
+              const CertificateNonceParentPublicInputs&,
+              const ConflictContext&, const OneHost&, const OneProof&>);
+static_assert(!std::is_constructible_v<
+              purify::puresign_plusplus::CertificateNonceResponseProverView,
+              CertificateNonceParentPublicInputs&&,
+              const ConflictContext&, const OneHost&, const OneProof&>);
+static_assert(!std::is_constructible_v<
+              purify::puresign_plusplus::CertificateNonceResponseProverView,
+              const CertificateNonceParentPublicInputs&,
+              ConflictContext&&, const OneHost&, const OneProof&>);
+static_assert(!std::is_constructible_v<
+              purify::puresign_plusplus::CertificateNonceResponseProverView,
+              const CertificateNonceParentPublicInputs&,
+              const ConflictContext&, OneHost, const OneProof&>);
+static_assert(!std::is_constructible_v<
+              purify::puresign_plusplus::CertificateNonceResponseProverView,
+              const CertificateNonceParentPublicInputs&,
+              const ConflictContext&, const OneHost&, OneProof>);
+static_assert(!std::is_constructible_v<
+              purify::puresign_plusplus::CertificateNonceResponseProverView,
+              const CertificateNonceParentPublicInputs&,
+              const ConflictContext&, std::vector<PublicKey>,
+              const OneProof&>);
+static_assert(!std::is_constructible_v<
+              purify::puresign_plusplus::CertificateNonceResponseProverView,
+              const CertificateNonceParentPublicInputs&,
+              const ConflictContext&, const OneHost&,
+              std::vector<NonceProof>>);
 
 constexpr std::size_t kQualifiedWitnessSize = 14'608;
 constexpr std::size_t kQualifiedResponseCount = 2;

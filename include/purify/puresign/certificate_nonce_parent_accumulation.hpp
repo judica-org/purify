@@ -646,10 +646,21 @@ private:
 class CertificateNonceResponseVerificationView
 {
 public:
+    template <std::ranges::contiguous_range Leaves>
+        requires std::ranges::sized_range<Leaves> &&
+                 std::same_as<
+                     std::ranges::range_value_t<Leaves>,
+                     PreparedCertificateNonceLeaf> &&
+                 (std::is_lvalue_reference_v<Leaves> ||
+                  std::ranges::borrowed_range<Leaves>)
     CertificateNonceResponseVerificationView(
         const CertificateNonceParentPublicInputs& inputs,
-        std::span<const PreparedCertificateNonceLeaf> ordered_leaves)
+        Leaves&& ordered_leaves)
         : inputs_(&inputs), ordered_leaves_(ordered_leaves) {}
+    template <typename Leaves>
+    CertificateNonceResponseVerificationView(
+        const CertificateNonceParentPublicInputs&&,
+        Leaves&&) = delete;
 
     [[nodiscard]] const CertificateNonceParentPublicInputs& inputs()
         const noexcept

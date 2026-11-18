@@ -10,7 +10,10 @@
 #pragma once
 
 #include <array>
+#include <concepts>
+#include <ranges>
 #include <span>
+#include <type_traits>
 
 #include "purify/puresign/certificate_nonce_parent_accumulation.hpp"
 
@@ -35,20 +38,37 @@ serialize_certificate_parent_public_frame(
 class CertificateNonceResponseProverView
 {
 public:
+    template <
+        std::ranges::contiguous_range Hosts,
+        std::ranges::contiguous_range Proofs>
+        requires std::ranges::sized_range<Hosts> &&
+                 std::ranges::sized_range<Proofs> &&
+                 std::same_as<
+                     std::ranges::range_value_t<Hosts>, PublicKey> &&
+                 std::same_as<
+                     std::ranges::range_value_t<Proofs>, NonceProof> &&
+                 (std::is_lvalue_reference_v<Hosts> ||
+                  std::ranges::borrowed_range<Hosts>) &&
+                 (std::is_lvalue_reference_v<Proofs> ||
+                  std::ranges::borrowed_range<Proofs>)
     CertificateNonceResponseProverView(
         const CertificateNonceParentPublicInputs& inputs,
         const accountable::ConflictContext& context,
-        std::span<const PublicKey> ordered_hosts,
-        std::span<const NonceProof> ordered_proofs)
+        Hosts&& ordered_hosts, Proofs&& ordered_proofs)
         : inputs_(&inputs), context_(&context),
           ordered_hosts_(ordered_hosts), ordered_proofs_(ordered_proofs)
     {
     }
+    template <typename Hosts, typename Proofs>
+    CertificateNonceResponseProverView(
+        const CertificateNonceParentPublicInputs&&,
+        const accountable::ConflictContext&,
+        Hosts&&, Proofs&&) = delete;
+    template <typename Hosts, typename Proofs>
     CertificateNonceResponseProverView(
         const CertificateNonceParentPublicInputs&,
-        accountable::ConflictContext&&,
-        std::span<const PublicKey>,
-        std::span<const NonceProof>) = delete;
+        const accountable::ConflictContext&&,
+        Hosts&&, Proofs&&) = delete;
 
     [[nodiscard]] const CertificateNonceParentPublicInputs& inputs()
         const noexcept

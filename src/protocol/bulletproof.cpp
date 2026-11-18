@@ -12,6 +12,7 @@
 #include "bulletproof_internal.hpp"
 #include "bulletproof_circuit_view.hpp"
 #include "bppp_bridge.h"
+#include "byte_io.hpp"
 #include "checked_size.hpp"
 #include "secure_cleanup.hpp"
 
@@ -110,6 +111,10 @@ purify_bulletproof_backend_resources* ExperimentalBulletproofBackendCache::get_o
 }  // namespace purify
 
 namespace {
+
+using ::purify::detail::append_u32_le;
+using ::purify::detail::append_u64_le;
+using ::purify::detail::read_u32_le;
 
 using purify::Expr;
 using purify::ErrorCode;
@@ -235,18 +240,6 @@ Result<FieldElement> evaluate_known(const Expr& expr, const ResolvedValues& valu
     return out;
 }
 
-void append_u32_le(Bytes& out, std::uint32_t value) {
-    for (int i = 0; i < 4; ++i) {
-        out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-    }
-}
-
-void append_u64_le(Bytes& out, std::uint64_t value) {
-    for (int i = 0; i < 8; ++i) {
-        out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-    }
-}
-
 Status append_symbol_digest(Bytes& out, const purify::Symbol& symbol) {
     using SymbolRank = std::underlying_type_t<purify::SymbolKind>;
     append_u64_le(out, static_cast<std::uint64_t>(static_cast<SymbolRank>(symbol.kind)));
@@ -266,17 +259,6 @@ Status append_expr_digest(Bytes& out, const purify::Expr& expr) {
         out.insert(out.end(), coeff.begin(), coeff.end());
     }
     return {};
-}
-
-std::optional<std::uint32_t> read_u32_le(std::span<const unsigned char> bytes, std::size_t offset) {
-    std::uint32_t value = 0;
-    if (offset > bytes.size() || bytes.size() - offset < 4) {
-        return std::nullopt;
-    }
-    for (int i = 0; i < 4; ++i) {
-        value |= static_cast<std::uint32_t>(bytes[offset + i]) << (8 * i);
-    }
-    return value;
 }
 
 Bytes flatten_scalars32(std::span<const FieldElement> values) {
@@ -760,16 +742,6 @@ Result<Bytes> BulletproofAssignmentData::serialize() const {
 
     Bytes out;
     out.reserve(serialized_size);
-    auto append_u32_le = [&](std::uint32_t value) {
-        for (int i = 0; i < 4; ++i) {
-            out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-        }
-    };
-    auto append_u64_le = [&](std::uint64_t value) {
-        for (int i = 0; i < 8; ++i) {
-            out.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xffU));
-        }
-    };
     auto write_column = [&](std::span<const FieldElement> column) {
         for (const FieldElement& value : column) {
             out.push_back(static_cast<unsigned char>(0x20));
@@ -778,9 +750,9 @@ Result<Bytes> BulletproofAssignmentData::serialize() const {
         }
     };
 
-    append_u32_le(1);
-    append_u32_le(static_cast<std::uint32_t>(commitments.size()));
-    append_u64_le(static_cast<std::uint64_t>(left.size()));
+    append_u32_le(out, 1);
+    append_u32_le(out, static_cast<std::uint32_t>(commitments.size()));
+    append_u64_le(out, static_cast<std::uint64_t>(left.size()));
     write_column(left);
     write_column(right);
     write_column(output);

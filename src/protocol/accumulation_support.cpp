@@ -21,6 +21,7 @@
 
 #include "accumulation_support.hpp"
 #include "bppp_bridge.h"
+#include "byte_io.hpp"
 #include "purify/secp_bridge.h"
 #include "sha256_transcript.hpp"
 
@@ -40,12 +41,11 @@ constexpr std::size_t kMaxAlgebraicRounds = 24;
 
 namespace internal {
 
+using ::purify::detail::append_u64_le;
+
 void append_size(Bytes& out, std::size_t value) {
     static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
-    const auto wide = static_cast<std::uint64_t>(value);
-    for (unsigned int i = 0; i < 8; ++i) {
-        out.push_back(static_cast<unsigned char>((wide >> (8 * i)) & 0xffU));
-    }
+    append_u64_le(out, static_cast<std::uint64_t>(value));
 }
 
 void append(Bytes& out, std::span<const unsigned char> bytes) {

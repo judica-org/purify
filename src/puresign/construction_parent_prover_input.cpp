@@ -13,10 +13,13 @@
 #include <vector>
 
 #include "../bridge/bppp_bridge.h"
+#include "byte_io.hpp"
 #include "checked_size.hpp"
 
 namespace purify::accountable {
 namespace {
+
+using ::purify::detail::append_u32_be;
 
 constexpr std::array<unsigned char, 16> kWit4Magic{
     'P', 'u', 'r', 'i', 'f', 'y', '/', 'N',
@@ -71,13 +74,6 @@ void append_compact_record(Bytes& output,
     assert(transcript_offset <= full_record.size());
     output.push_back(full_record.front());
     append(output, full_record.subspan(transcript_offset));
-}
-
-void append_u32_be(Bytes& output, std::uint32_t value) {
-    output.push_back(static_cast<unsigned char>((value >> 24) & 0xffU));
-    output.push_back(static_cast<unsigned char>((value >> 16) & 0xffU));
-    output.push_back(static_cast<unsigned char>((value >> 8) & 0xffU));
-    output.push_back(static_cast<unsigned char>(value & 0xffU));
 }
 
 bool same_roster(const NonceHostBoundSigningRoster& left,

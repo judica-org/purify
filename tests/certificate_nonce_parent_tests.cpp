@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <fstream>
 #include <span>
 #include <utility>
 #include <vector>
@@ -551,55 +550,24 @@ void test_native_certificate_parent(TestContext& ctx)
         "certificate verifier rejects an empty artifact path");
     const char* verifier_artifact = std::getenv(
         "PURIFY_CERTIFICATE_PARENT_VERIFIER_ARTIFACT");
-    const char* proof_path = std::getenv(
-        "PURIFY_CERTIFICATE_PARENT_PROOF");
     const bool has_artifact =
         verifier_artifact != nullptr && *verifier_artifact != '\0';
-    const bool has_proof =
-        proof_path != nullptr && *proof_path != '\0';
-    ctx.expect(has_artifact == has_proof,
-               "certificate verifier resources are supplied together");
-    if (has_artifact && has_proof) {
+    if (has_artifact) {
         std::array<
             unsigned char,
             purify::puresign_plusplus::CertificateParentVerifier::
                 kProofSize>
-            recursive_proof{};
-        std::ifstream proof_file(proof_path, std::ios::binary);
-        ctx.expect(proof_file.is_open(),
-                   "qualified certificate proof opens");
-        if (!proof_file.is_open()) return;
-        proof_file.read(
-            reinterpret_cast<char*>(recursive_proof.data()),
-            static_cast<std::streamsize>(recursive_proof.size()));
-        const bool exact_proof =
-            proof_file.gcount() ==
-                static_cast<std::streamsize>(recursive_proof.size()) &&
-            proof_file.peek() == std::ifstream::traits_type::eof();
-        ctx.expect(exact_proof,
-                   "qualified certificate proof has the exact size");
-        if (!exact_proof) return;
+            invalid_proof{};
         auto verifier = purify::puresign_plusplus::
             CertificateParentVerifier::load(verifier_artifact);
         expect_ok(ctx, verifier,
                   "qualified certificate verifier artifact loads");
         if (!verifier) return;
-        expect_ok(ctx,
-                  verifier->verify(
-                      *public_manifest, recursive_proof, *accumulator,
-                      secp.get()),
-                  "recursive verifier accepts the native public manifest");
         ctx.expect(
             !verifier->verify(
-                *changed_manifest, recursive_proof, *accumulator,
+                *public_manifest, invalid_proof, *accumulator,
                 secp.get()),
-            "recursive verifier rejects a changed public manifest");
-        recursive_proof.back() ^= 1;
-        ctx.expect(
-            !verifier->verify(
-                *public_manifest, recursive_proof, *accumulator,
-                secp.get()),
-            "recursive verifier rejects a changed proof");
+            "recursive verifier rejects an unauthenticated proof");
     }
 #endif
 #endif

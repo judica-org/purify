@@ -38,7 +38,7 @@ pub(crate) fn append_constant_bytes(
     )
 }
 
-fn scalar_bytes(value: &CanonicalSecpScalar) -> Result<[NovaByte; 32], SynthesisError> {
+pub(crate) fn scalar_bytes(value: &CanonicalSecpScalar) -> Result<[NovaByte; 32], SynthesisError> {
     if value.bits_le().len() != SCALAR_BITS {
         return Err(synthesis_error("Nova scalar bit width"));
     }

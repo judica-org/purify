@@ -6,7 +6,8 @@ use crate::certificate_profile::{CERTIFICATE_MAX_RESPONSES, CERTIFICATE_MEMBER_B
 use crate::RelationError;
 
 const MANIFEST_SEED_TAG: &[u8] = b"Purify/Accountable/CertificateRecursiveManifest/v1/init";
-const MANIFEST_STEP_TAG: &[u8] = b"Purify/Accountable/CertificateRecursiveManifest/v1/member";
+pub(crate) const MANIFEST_STEP_TAG: &[u8] =
+    b"Purify/Accountable/CertificateRecursiveManifest/v1/member";
 
 fn manifest_scalar(tag: &[u8], encoded: &[u8]) -> [u8; 32] {
     let tag_hash = Sha256::digest(tag);

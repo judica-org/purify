@@ -10,23 +10,26 @@ use crate::certificate_authorization::{
     response_common_digest, response_statement_digest, RESPONSE_MEMBER_DESCRIPTOR_BYTES,
 };
 use crate::certificate_native_witness::CertificateNativeReceiptWitness;
+use crate::certificate_nonce_proof::CertificateLeafParentConstantsWitness;
 use crate::certificate_profile::{
     CertificateResponseBoundary, CertificateWitnessFrame, CERTIFICATE_LEAF_ROUNDS,
     CERTIFICATE_MAX_RESPONSES, CERTIFICATE_MEMBER_BATCH_CAPACITY, CERTIFICATE_NONCE_PROOF_BYTES,
+    CERTIFICATE_PARENT_RAW_GENERATOR_DIGEST,
 };
 use crate::circuit_transcript::CircuitPointPairWitnessV4;
 use crate::secp_native::{canonical_scalar_value, SecpEncodedPointWitness, SecpScalarWitness};
 use crate::RelationError;
 
-const MAGIC: &[u8; 16] = b"Purify/CertJWit1";
+const MAGIC: &[u8; 16] = b"Purify/CertJWit2";
 const PUBLIC_INPUT_VERSION: u8 = 1;
 const ACCOUNTABLE_TOPIC_SCOPE: u8 = 1;
 const NONCE_PROOF_VERSION: u8 = 4;
 
 const MEMBER_STATEMENT_BYTES: usize = RESPONSE_MEMBER_DESCRIPTOR_BYTES + 32 + 32 + 32 + 33;
+const MEMBER_PARENT_CONSTANT_BYTES: usize = 32 + 33 + 33;
 const MINIMUM_STATEMENT_BYTES: usize = 575;
 const MINIMUM_JOINED_RESPONSE_BYTES: usize =
-    8 + MINIMUM_STATEMENT_BYTES + 4 + CERTIFICATE_NONCE_PROOF_BYTES;
+    8 + MINIMUM_STATEMENT_BYTES + 4 + MEMBER_PARENT_CONSTANT_BYTES + CERTIFICATE_NONCE_PROOF_BYTES;
 
 /// One response member joined to its exact canonical V4 nonce proof.
 pub(crate) struct CertificateJoinedMemberWitness {
@@ -38,6 +41,7 @@ pub(crate) struct CertificateJoinedMemberWitness {
     circuit_precommitment: SecpScalarWitness,
     nonce_point: SecpEncodedPointWitness,
     authorization_digest: [u8; 32],
+    parent_constants: CertificateLeafParentConstantsWitness,
     nonce_proof: [u8; CERTIFICATE_NONCE_PROOF_BYTES],
 }
 
@@ -72,6 +76,10 @@ impl CertificateJoinedMemberWitness {
 
     pub(crate) const fn authorization_digest(&self) -> [u8; 32] {
         self.authorization_digest
+    }
+
+    pub(crate) const fn parent_constants(&self) -> CertificateLeafParentConstantsWitness {
+        self.parent_constants
     }
 
     pub(crate) const fn nonce_proof(&self) -> &[u8; CERTIFICATE_NONCE_PROOF_BYTES] {
@@ -184,6 +192,11 @@ impl CertificateJoinedWitness {
         if cursor.array::<16>()? != *MAGIC {
             return Err(RelationError::Malformed("certificate joined witness magic"));
         }
+        if cursor.array::<32>()? != CERTIFICATE_PARENT_RAW_GENERATOR_DIGEST {
+            return Err(RelationError::Malformed(
+                "certificate joined raw generator digest",
+            ));
+        }
         let response_count = cursor.u64()?;
         if response_count == 0 || response_count > CERTIFICATE_MAX_RESPONSES {
             return Err(RelationError::Malformed(
@@ -215,8 +228,11 @@ impl CertificateJoinedWitness {
             }
             let proof_count_usize = usize::try_from(proof_count)
                 .map_err(|_| RelationError::Malformed("certificate joined proof count"))?;
+            let member_bytes = MEMBER_PARENT_CONSTANT_BYTES
+                .checked_add(CERTIFICATE_NONCE_PROOF_BYTES)
+                .ok_or(RelationError::Malformed("certificate joined member bytes"))?;
             let proof_bytes = proof_count_usize
-                .checked_mul(CERTIFICATE_NONCE_PROOF_BYTES)
+                .checked_mul(member_bytes)
                 .ok_or(RelationError::Malformed("certificate joined proof bytes"))?;
             if cursor.remaining() < proof_bytes {
                 return Err(RelationError::Malformed(
@@ -226,6 +242,11 @@ impl CertificateJoinedWitness {
 
             let mut members = Vec::with_capacity(proof_count_usize);
             for parsed_member in parsed.members {
+                let parent_constants = CertificateLeafParentConstantsWitness {
+                    circuit_binding_digest: cursor.array::<32>()?,
+                    coefficient_commitment: SecpEncodedPointWitness::parse(cursor.array::<33>()?)?,
+                    anchored_offset: SecpEncodedPointWitness::parse(cursor.array::<33>()?)?,
+                };
                 let nonce_proof = cursor.array::<CERTIFICATE_NONCE_PROOF_BYTES>()?;
                 let proof_nonce = parse_nonce_proof(&nonce_proof)?;
                 if proof_nonce != parsed_member.nonce_point
@@ -244,6 +265,7 @@ impl CertificateJoinedWitness {
                     circuit_precommitment: parsed_member.circuit_precommitment,
                     nonce_point: parsed_member.nonce_point,
                     authorization_digest: parsed_member.authorization_digest,
+                    parent_constants,
                     nonce_proof,
                 });
             }
@@ -737,6 +759,24 @@ mod tests {
         encoded
     }
 
+    fn parent_constants() -> CertificateLeafParentConstantsWitness {
+        CertificateLeafParentConstantsWitness {
+            circuit_binding_digest: [0x99; 32],
+            coefficient_commitment: SecpEncodedPointWitness::parse(generator())
+                .expect("coefficient commitment"),
+            anchored_offset: SecpEncodedPointWitness::identity(),
+        }
+    }
+
+    fn append_parent_constants(
+        encoded: &mut Vec<u8>,
+        constants: CertificateLeafParentConstantsWitness,
+    ) {
+        encoded.extend_from_slice(&constants.circuit_binding_digest);
+        encoded.extend_from_slice(&constants.coefficient_commitment.encoded);
+        encoded.extend_from_slice(&constants.anchored_offset.encoded);
+    }
+
     fn response_statement(proof: &[u8; CERTIFICATE_NONCE_PROOF_BYTES]) -> (Vec<u8>, usize) {
         let mut encoded = Vec::new();
         encoded.push(PUBLIC_INPUT_VERSION);
@@ -797,6 +837,7 @@ mod tests {
         statement_start: usize,
         descriptor_start: usize,
         proof_count_offset: usize,
+        parent_constants_start: usize,
         proof_start: usize,
         receipt_start: usize,
     }
@@ -807,12 +848,15 @@ mod tests {
         let receipt = native_receipt(response_statement_digest(&statement), 1);
         let mut encoded = Vec::new();
         encoded.extend_from_slice(MAGIC);
+        encoded.extend_from_slice(&CERTIFICATE_PARENT_RAW_GENERATOR_DIGEST);
         push_u64(&mut encoded, 1);
         push_u64(&mut encoded, statement.len() as u64);
         let statement_start = encoded.len();
         encoded.extend_from_slice(&statement);
         let proof_count_offset = encoded.len();
         push_u32(&mut encoded, 1);
+        let parent_constants_start = encoded.len();
+        append_parent_constants(&mut encoded, parent_constants());
         let proof_start = encoded.len();
         encoded.extend_from_slice(&proof);
         push_u64(&mut encoded, receipt.len() as u64);
@@ -823,6 +867,7 @@ mod tests {
             statement_start,
             descriptor_start: statement_start + descriptor_offset,
             proof_count_offset,
+            parent_constants_start,
             proof_start,
             receipt_start,
         }
@@ -874,6 +919,7 @@ mod tests {
         assert_eq!(member.circuit_precommitment().bytes, scalar(1));
         assert_eq!(member.nonce_point().encoded, generator());
         assert_ne!(member.authorization_digest(), [0; 32]);
+        assert_eq!(member.parent_constants(), parent_constants());
     }
 
     #[test]
@@ -885,8 +931,12 @@ mod tests {
         assert!(CertificateJoinedWitness::parse(&wrong_magic).is_err());
 
         let mut impossible_count = fixture.encoded.clone();
-        impossible_count[16..24].copy_from_slice(&CERTIFICATE_MAX_RESPONSES.to_be_bytes());
+        impossible_count[48..56].copy_from_slice(&CERTIFICATE_MAX_RESPONSES.to_be_bytes());
         assert!(CertificateJoinedWitness::parse(&impossible_count).is_err());
+
+        let mut wrong_raw_generator = fixture.encoded.clone();
+        wrong_raw_generator[16] ^= 1;
+        assert!(CertificateJoinedWitness::parse(&wrong_raw_generator).is_err());
 
         let mut wrong_proof_count = fixture.encoded.clone();
         wrong_proof_count[fixture.proof_count_offset..fixture.proof_count_offset + 4]
@@ -915,6 +965,14 @@ mod tests {
         let mut wrong_proof_version = fixture.encoded.clone();
         wrong_proof_version[fixture.proof_start] ^= 1;
         assert!(CertificateJoinedWitness::parse(&wrong_proof_version).is_err());
+
+        let mut wrong_coefficient_encoding = fixture.encoded.clone();
+        wrong_coefficient_encoding[fixture.parent_constants_start + 32] = 4;
+        assert!(CertificateJoinedWitness::parse(&wrong_coefficient_encoding).is_err());
+
+        let mut wrong_offset_encoding = fixture.encoded.clone();
+        wrong_offset_encoding[fixture.parent_constants_start + 65] = 1;
+        assert!(CertificateJoinedWitness::parse(&wrong_offset_encoding).is_err());
 
         let mut wrong_proof_digest = fixture.encoded.clone();
         wrong_proof_digest[fixture.proof_start + 163] ^= 1;

@@ -191,7 +191,7 @@ impl ConstructionParentProverFixture {
     }
 }
 
-struct CheckingWitnessCs {
+pub(crate) struct CheckingWitnessCs {
     inputs: Vec<Scalar>,
     auxiliary: Vec<Scalar>,
     constraints: usize,
@@ -199,7 +199,7 @@ struct CheckingWitnessCs {
 }
 
 impl CheckingWitnessCs {
-    fn with_auxiliary_capacity(capacity: usize) -> Self {
+    pub(crate) fn with_auxiliary_capacity(capacity: usize) -> Self {
         Self {
             inputs: vec![Scalar::ONE],
             auxiliary: Vec::with_capacity(capacity),
@@ -221,6 +221,18 @@ impl CheckingWitnessCs {
             .fold(Scalar::ZERO, |value, (variable, coefficient)| {
                 value + self.value(variable) * coefficient
             })
+    }
+
+    pub(crate) const fn auxiliary_len(&self) -> usize {
+        self.auxiliary.len()
+    }
+
+    pub(crate) const fn constraint_count(&self) -> usize {
+        self.constraints
+    }
+
+    pub(crate) const fn first_unsatisfied(&self) -> Option<usize> {
+        self.first_unsatisfied
     }
 }
 

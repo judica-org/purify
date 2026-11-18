@@ -103,12 +103,35 @@ impl CertificateRecurrenceStateWitness {
         Ok(state)
     }
 
-    pub(crate) fn is_complete(&self) -> bool {
+    fn is_complete(&self) -> bool {
         self.response_ordinal == self.total_responses
             && self.member_count == 0
             && self.member_ordinal == 0
             && self.partial_nonce.encoded == [0; 33]
             && self.response_binding == [0; 32]
+    }
+
+    /// Validate the complete public frame before releasing its pending root.
+    ///
+    /// The returned claim remains unaccepted until the native candidate
+    /// decider checks it under the certificate basis.
+    pub(crate) fn pending_root_for_decision(
+        &self,
+        expected_context_digest: [u8; 32],
+        expected_total_responses: u64,
+        expected_record_manifest: [u8; 32],
+    ) -> Result<&CandidateRootClaim, RelationError> {
+        self.validate()?;
+        if self.certificate_context_digest != expected_context_digest
+            || self.total_responses != expected_total_responses
+            || self.record_manifest != expected_record_manifest
+            || !self.is_complete()
+        {
+            return Err(RelationError::Malformed(
+                "certificate recurrence final frame",
+            ));
+        }
+        Ok(&self.root)
     }
 
     fn validate(&self) -> Result<(), RelationError> {
@@ -243,5 +266,17 @@ mod tests {
         finished.response_ordinal = finished.total_responses;
         assert!(finished.state_fields().is_ok());
         assert!(finished.is_complete());
+        assert!(finished
+            .pending_root_for_decision([0x11; 32], 2, finished.record_manifest)
+            .is_ok());
+        assert!(finished
+            .pending_root_for_decision([0x12; 32], 2, finished.record_manifest)
+            .is_err());
+        assert!(finished
+            .pending_root_for_decision([0x11; 32], 1, finished.record_manifest)
+            .is_err());
+        assert!(finished
+            .pending_root_for_decision([0x11; 32], 2, low_digest(0x77))
+            .is_err());
     }
 }

@@ -2,9 +2,9 @@
 
 use std::array;
 
-use ff::{Field, PrimeField};
+use ff::Field;
 use nova_snark::{
-    frontend::{gadgets::num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError},
+    frontend::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError},
     traits::circuit::StepCircuit,
 };
 
@@ -18,22 +18,24 @@ use crate::circuit_transcript::CircuitProofTranscriptWitnessV4;
 use crate::construction_manifest::CONSTRUCTION_STEP_MANIFEST_DOMAIN;
 use crate::construction_profile::{
     CONSTRUCTION_PARENT_BASIS_DIGEST, CONSTRUCTION_PARENT_RAW_GENERATOR_DIGEST,
-    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_ROUNDS,
+    CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_ROUNDS, CONSTRUCTION_ROOT_STATE_ARITY,
 };
 use crate::construction_recurrence::{
     validate_production_shape, ConstructionRecurrenceStateWitness, MANIFEST_INDEX,
-    ROOT_FACTORS_START, ROOT_PREFIX_INDEX, ROOT_SCALE_INDEX, ROOT_X_INDEX, STEP_INDEX,
+    ROOT_PREFIX_INDEX, ROOT_X_INDEX, STEP_INDEX,
 };
 use crate::nova_candidate::{
     install_constrained_candidate_step, DirectCandidateRoot, DirectPendingClaim,
-    DirectPolynomialTerm,
+};
+use crate::nova_candidate_state::{
+    bind_candidate_root_state, candidate_root_output_fields, materialize_scalar,
 };
 use crate::nova_circuit_norm_leaf::constrain_manifest_bound_construction_leaf;
 use crate::nova_protocol_transcript::{
     append_bytes, append_constant_bytes, append_point, append_scalar, challenge,
 };
-use crate::nova_secp::{allocate_encoded_point, DirectEncodedSecpPoint};
-use crate::nova_secp_scalar::{allocate_canonical_scalar, CanonicalSecpScalar};
+use crate::nova_secp::DirectEncodedSecpPoint;
+use crate::nova_secp_scalar::CanonicalSecpScalar;
 use crate::nova_session::NovaSessionStep;
 use crate::nova_sha256_transcript::{NovaByte, NovaTranscript};
 use crate::nova_types::DirectRelationId;
@@ -274,19 +276,6 @@ fn synthesis_error(label: &'static str) -> SynthesisError {
     SynthesisError::Unsatisfiable(label.to_owned())
 }
 
-fn enforce_equal<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    value: &AllocatedNum<Scalar>,
-    expected: LinearCombination<Scalar>,
-) {
-    cs.enforce(
-        || "state field binding",
-        |linear| linear + value.get_variable(),
-        |linear| linear + CS::one(),
-        |_| expected,
-    );
-}
-
 fn field_bytes_be<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     value: &AllocatedNum<Scalar>,
@@ -301,16 +290,6 @@ fn field_bytes_be<CS: ConstraintSystem<Scalar>>(
     }))
 }
 
-fn bind_scalar<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    state: &AllocatedNum<Scalar>,
-    witness: crate::secp_native::SecpScalarWitness,
-) -> Result<CanonicalSecpScalar, SynthesisError> {
-    let scalar = allocate_canonical_scalar(cs.namespace(|| "canonical scalar"), witness)?;
-    enforce_equal(cs.namespace(|| "embedded scalar"), state, scalar.embedded());
-    Ok(scalar)
-}
-
 pub(crate) fn bind_prior_state<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     state: &[AllocatedNum<Scalar>],
@@ -322,48 +301,16 @@ pub(crate) fn bind_prior_state<CS: ConstraintSystem<Scalar>>(
         return Err(synthesis_error("construction recurrence state shape"));
     }
 
-    let point = allocate_encoded_point(cs.namespace(|| "root point"), witness.root.point)?;
-    enforce_equal(
-        cs.namespace(|| "root prefix"),
-        &state[ROOT_PREFIX_INDEX],
-        LinearCombination::zero() + point.prefix().get_variable(),
-    );
-    enforce_equal(
-        cs.namespace(|| "root x"),
-        &state[ROOT_X_INDEX],
-        LinearCombination::zero() + point.point().x().get_variable(),
-    );
-    let scale = bind_scalar(
-        cs.namespace(|| "root scale"),
-        &state[ROOT_SCALE_INDEX],
-        witness.root.scale,
+    let root_claim = bind_candidate_root_state::<_, CONSTRUCTION_ROOT_ROUNDS>(
+        &mut cs,
+        &state[..CONSTRUCTION_ROOT_STATE_ARITY],
+        &witness.root,
     )?;
-    let factors = witness
-        .root
-        .factors
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, factor)| {
-            bind_scalar(
-                cs.namespace(|| format!("root factor {index}")),
-                &state[ROOT_FACTORS_START + index],
-                factor,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
 
     let manifest = field_bytes_be(cs.namespace(|| "prior manifest"), &state[MANIFEST_INDEX])?;
     let index_bytes = field_bytes_be(cs.namespace(|| "step index"), &state[STEP_INDEX])?;
     Ok(DirectPriorState {
-        root_claim: DirectPendingClaim {
-            point,
-            polynomial: vec![DirectPolynomialTerm {
-                scale,
-                offset: 0,
-                factors,
-            }],
-        },
+        root_claim,
         manifest,
         index: state[STEP_INDEX].clone(),
         index_bytes,
@@ -384,31 +331,6 @@ pub(crate) fn install_manifest_transition<CS: ConstraintSystem<Scalar>>(
     append_point(&mut transcript, leaf.coefficient_commitment);
     append_point(&mut transcript, leaf.anchored_offset);
     challenge(cs.namespace(|| "next manifest"), &mut transcript, 0)
-}
-
-fn scalar_assignment(value: &CanonicalSecpScalar) -> Result<Option<Scalar>, SynthesisError> {
-    value
-        .integer()
-        .map(|value| {
-            Scalar::from_str_vartime(&value.to_string())
-                .ok_or_else(|| synthesis_error("construction scalar embedding"))
-        })
-        .transpose()
-}
-
-fn materialize_scalar<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    value: &CanonicalSecpScalar,
-) -> Result<AllocatedNum<Scalar>, SynthesisError> {
-    let output = AllocatedNum::alloc(cs.namespace(|| "state output"), || {
-        scalar_assignment(value)?.ok_or(SynthesisError::AssignmentMissing)
-    })?;
-    enforce_equal(
-        cs.namespace(|| "state output binding"),
-        &output,
-        value.embedded(),
-    );
-    Ok(output)
 }
 
 fn increment_index<CS: ConstraintSystem<Scalar>>(
@@ -436,22 +358,10 @@ pub(crate) fn expose_output_state<CS: ConstraintSystem<Scalar>>(
     root: &DirectCandidateRoot,
     manifest: &CanonicalSecpScalar,
 ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
-    if root.factors.len() != CONSTRUCTION_ROOT_ROUNDS {
-        return Err(synthesis_error("construction output root shape"));
-    }
     let mut output = Vec::with_capacity(CONSTRUCTION_RECURRENCE_STATE_ARITY);
-    output.push(root.point.prefix().clone());
-    output.push(root.point.point().x().clone());
-    output.push(materialize_scalar(
-        cs.namespace(|| "root scale"),
-        &root.scale,
+    output.extend(candidate_root_output_fields::<_, CONSTRUCTION_ROOT_ROUNDS>(
+        &mut cs, root,
     )?);
-    for (index, factor) in root.factors.iter().enumerate() {
-        output.push(materialize_scalar(
-            cs.namespace(|| format!("root factor {index}")),
-            factor,
-        )?);
-    }
     output.push(materialize_scalar(cs.namespace(|| "manifest"), manifest)?);
     output.push(increment_index(
         cs.namespace(|| "step index"),

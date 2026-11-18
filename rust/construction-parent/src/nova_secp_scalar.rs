@@ -354,7 +354,7 @@ fn bignat_from_bits<CS: ConstraintSystem<Scalar>>(
 /// Adding one constant zero top bit proves the value is below `2^255 < n`,
 /// so no second decomposition or less-than comparator is needed.
 pub(crate) fn nonzero_scalar_from_sha255<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     bits_le: &[Boolean],
 ) -> Result<CanonicalSecpScalar, SynthesisError> {
     if bits_le.len() != SHA_CHALLENGE_BITS {
@@ -367,8 +367,133 @@ pub(crate) fn nonzero_scalar_from_sha255<CS: ConstraintSystem<Scalar>>(
     let mut scalar_bits = bits_le.to_vec();
     scalar_bits.push(Boolean::constant(false));
     let value = bignat_from_bits::<CS::Root>(&scalar_bits)?;
-    let packed = value.group_limbs(LIMB_COUNT).limbs[0].clone();
-    let embedded = value
+    enforce_nonzero_sha_scalar(
+        cs,
+        CanonicalSecpScalar {
+            value,
+            bits_le: scalar_bits,
+        },
+    )
+}
+
+/// Reduce a complete SHA-256 image modulo the secp256k1 scalar order.
+///
+/// A 256-bit digest is below twice the group order. The circuit derives the
+/// `digest >= n` bit from all 256 digest bits, conditionally subtracts `n`
+/// exactly once, and rejects a zero remainder. No prover-selected overflow
+/// flag or generic modular quotient enters this specialized relation.
+pub(crate) fn nonzero_scalar_from_sha256<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    bits_le: &[Boolean],
+) -> Result<CanonicalSecpScalar, SynthesisError> {
+    if bits_le.len() != SCALAR_BITS {
+        return Err(synthesis_error("SHA-256 scalar bit length"));
+    }
+    assert!(
+        (BigInt::from(1u8) << SCALAR_BITS) < BigInt::from(2u8) * scalar_order(),
+        "one subtraction reduces every 256-bit digest"
+    );
+    let less_than_order =
+        less_than_scalar_order(cs.namespace(|| "compare SHA-256 with order"), bits_le)?;
+    let subtract_order = less_than_order.not();
+    let mut borrow = Boolean::constant(false);
+    let mut remainder_bits = Vec::with_capacity(SCALAR_BITS);
+    let order = scalar_order();
+    for (index, digest_bit) in bits_le.iter().enumerate() {
+        let subtrahend_bit = if order_bit(&order, index) {
+            subtract_order.clone()
+        } else {
+            Boolean::constant(false)
+        };
+        let difference_without_borrow = Boolean::xor(
+            cs.namespace(|| format!("difference without borrow {index}")),
+            digest_bit,
+            &subtrahend_bit,
+        )?;
+        let difference = Boolean::xor(
+            cs.namespace(|| format!("difference bit {index}")),
+            &difference_without_borrow,
+            &borrow,
+        )?;
+        remainder_bits.push(difference);
+
+        let subtrahend_or_borrow = Boolean::or(
+            cs.namespace(|| format!("subtrahend or borrow {index}")),
+            &subtrahend_bit,
+            &borrow,
+        )?;
+        let missing_minuend = Boolean::and(
+            cs.namespace(|| format!("missing minuend {index}")),
+            &digest_bit.not(),
+            &subtrahend_or_borrow,
+        )?;
+        let double_subtrahend = Boolean::and(
+            cs.namespace(|| format!("double subtrahend {index}")),
+            &subtrahend_bit,
+            &borrow,
+        )?;
+        borrow = Boolean::or(
+            cs.namespace(|| format!("next borrow {index}")),
+            &missing_minuend,
+            &double_subtrahend,
+        )?;
+    }
+    Boolean::enforce_equal(
+        cs.namespace(|| "final subtraction borrow"),
+        &borrow,
+        &Boolean::constant(false),
+    )?;
+    let scalar = CanonicalSecpScalar {
+        value: bignat_from_bits::<CS::Root>(&remainder_bits)?,
+        bits_le: remainder_bits,
+    };
+    enforce_nonzero_sha_scalar(cs.namespace(|| "nonzero scalar"), scalar)
+}
+
+fn less_than_scalar_order<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    bits_le: &[Boolean],
+) -> Result<Boolean, SynthesisError> {
+    if bits_le.len() != SCALAR_BITS {
+        return Err(synthesis_error("scalar comparison bit length"));
+    }
+    let order = scalar_order();
+    let mut equal = Boolean::constant(true);
+    let mut less = Boolean::constant(false);
+    for index in (0..SCALAR_BITS).rev() {
+        if order_bit(&order, index) {
+            let less_here = Boolean::and(
+                cs.namespace(|| format!("less at bit {index}")),
+                &equal,
+                &bits_le[index].not(),
+            )?;
+            less = Boolean::or(
+                cs.namespace(|| format!("less through bit {index}")),
+                &less,
+                &less_here,
+            )?;
+            equal = Boolean::and(
+                cs.namespace(|| format!("equal through bit {index}")),
+                &equal,
+                &bits_le[index],
+            )?;
+        } else {
+            equal = Boolean::and(
+                cs.namespace(|| format!("equal through bit {index}")),
+                &equal,
+                &bits_le[index].not(),
+            )?;
+        }
+    }
+    Ok(less)
+}
+
+fn enforce_nonzero_sha_scalar<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    scalar: CanonicalSecpScalar,
+) -> Result<CanonicalSecpScalar, SynthesisError> {
+    let embedded = scalar
+        .value
         .value
         .as_ref()
         .map(|integer| {
@@ -384,14 +509,11 @@ pub(crate) fn nonzero_scalar_from_sha255<CS: ConstraintSystem<Scalar>>(
     )?;
     cs.enforce(
         || "nonzero SHA challenge",
-        |_| packed,
+        |_| scalar.embedded(),
         |lc| lc + inverse,
         |lc| lc + CS::one(),
     );
-    Ok(CanonicalSecpScalar {
-        value,
-        bits_le: scalar_bits,
-    })
+    Ok(scalar)
 }
 
 fn synthesis_error(label: &'static str) -> SynthesisError {
@@ -520,6 +642,22 @@ mod tests {
         assert!(!value.embedded().is_empty());
     }
 
+    fn allocate_sha256_bits<CS: ConstraintSystem<Scalar>>(
+        mut cs: CS,
+        value: &BigInt,
+    ) -> Vec<Boolean> {
+        (0..SCALAR_BITS)
+            .map(|index| {
+                AllocatedBit::alloc(
+                    cs.namespace(|| format!("digest bit {index}")),
+                    Some(order_bit(value, index)),
+                )
+                .map(Boolean::from)
+                .expect("digest bit")
+            })
+            .collect()
+    }
+
     #[test]
     fn scalar_operations_wrap_at_the_group_order() {
         let order = scalar_order();
@@ -603,6 +741,56 @@ mod tests {
         assert_eq!(allocated.len(), SCALAR_BITS);
         assert_eq!(allocated[0].get_value(), Some(true));
         assert!(cs.is_satisfied());
+    }
+
+    #[test]
+    fn full_sha256_reduction_matches_secp_scalar_boundaries() {
+        let order = scalar_order();
+        let maximum_digest: BigInt = (BigInt::from(1u8) << SCALAR_BITS) - 1;
+        for (digest, expected) in [
+            (&order - 1, &order - 1),
+            (&order + 1, BigInt::from(1u8)),
+            (maximum_digest.clone(), maximum_digest.clone() - &order),
+        ] {
+            let mut cs = TestConstraintSystem::<Scalar>::new();
+            let bits = allocate_sha256_bits(cs.namespace(|| "digest"), &digest);
+            let scalar = nonzero_scalar_from_sha256(cs.namespace(|| "reduced challenge"), &bits)
+                .expect("full SHA-256 reduction");
+            assert_integer(&scalar, &expected);
+            assert!(cs.is_satisfied());
+        }
+
+        for digest in [BigInt::from(0u8), order] {
+            let mut zero = TestConstraintSystem::<Scalar>::new();
+            let bits = allocate_sha256_bits(zero.namespace(|| "digest"), &digest);
+            let reduced = nonzero_scalar_from_sha256(zero.namespace(|| "reduced challenge"), &bits)
+                .expect("zero remainder relation");
+            assert_integer(&reduced, &BigInt::from(0u8));
+            assert!(!zero.is_satisfied());
+        }
+
+        let mut malformed = TestConstraintSystem::<Scalar>::new();
+        assert!(nonzero_scalar_from_sha256(
+            malformed.namespace(|| "short digest"),
+            &vec![Boolean::constant(false); SCALAR_BITS - 1],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn full_sha256_reduction_shape_needs_no_witness() {
+        let mut shape = ShapeCS::<Secq256k1Sha256Engine>::new();
+        let bits = (0..SCALAR_BITS)
+            .map(|index| {
+                AllocatedBit::alloc(shape.namespace(|| format!("digest bit {index}")), None)
+                    .map(Boolean::from)
+                    .expect("digest bit shape")
+            })
+            .collect::<Vec<_>>();
+        nonzero_scalar_from_sha256(shape.namespace(|| "reduced challenge"), &bits)
+            .expect("full SHA-256 reduction shape");
+        assert_eq!(shape.num_aux(), 2_170);
+        assert_eq!(shape.num_constraints(), 2_171);
     }
 
     #[test]

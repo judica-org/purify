@@ -8,7 +8,7 @@ use crate::candidate::{
 };
 use crate::nova_opening_base::constrain_transcript_opening_base;
 use crate::nova_protocol_transcript::{
-    append_constant_bytes, append_point, append_scalar, challenge,
+    append_bytes, append_constant_bytes, append_point, append_scalar, challenge,
 };
 use crate::nova_secp::{
     add_points, allocate_encoded_point, encode_computed_point, scale_point, DirectEncodedSecpPoint,
@@ -18,12 +18,13 @@ use crate::nova_secp_scalar::{
     add_scalars, allocate_canonical_scalar, constant_scalar, invert_scalar, multiply_scalars,
     subtract_scalars, CanonicalSecpScalar,
 };
-use crate::nova_sha256_transcript::NovaTranscript;
+use crate::nova_sha256_transcript::{NovaByte, NovaTranscript};
 use crate::opening_generators::ACCUMULATION_OPENING_BASE_ROLE;
 use crate::secp_native::SecpScalarWitness;
 use crate::Scalar;
 
 const CANDIDATE_STEP_DOMAIN: &[u8] = b"Purify/BPPP/CandidateAccumStep/v1";
+const CANDIDATE_BOUND_STEP_DOMAIN: &[u8] = b"Purify/BPPP/CandidateBoundAccumStep/v1";
 
 #[derive(Clone)]
 pub(crate) struct DirectPolynomialTerm {
@@ -271,14 +272,67 @@ pub(crate) fn install_candidate_step<CS: ConstraintSystem<Scalar>>(
 }
 
 pub(crate) fn install_constrained_candidate_step<CS: ConstraintSystem<Scalar>>(
+    cs: CS,
+    basis_digest: [u8; 32],
+    claims: &[DirectPendingClaim],
+    proof: &CandidateStepProofWitness,
+) -> Result<DirectCandidateRoot, SynthesisError> {
+    install_constrained_candidate_step_inner(cs, basis_digest, None, claims, proof)
+}
+
+/// Verify one native statement-bound accumulation step in-circuit.
+///
+/// `basis_digest` is a trusted constant selected by the circuit profile.
+/// `basis_rounds` is the matching `log2(basis.dimension())`; pinning both
+/// mirrors the native `Basis` object rather than accepting a proof-selected
+/// dimension. Native parsing checks each claim's basis tag before the direct
+/// circuit type intentionally erases that redundant metadata.
+///
+/// `statement_digest` must be derived from, or constrained against, the
+/// certificate statement by the caller. Accepting constrained bytes here
+/// prevents a prover from substituting an unrelated native statement.
+/// The returned root is a pending obligation, not proof acceptance; its
+/// authenticated transition chain must ultimately reach the native decider.
+pub(crate) fn install_constrained_bound_candidate_step<CS: ConstraintSystem<Scalar>>(
+    cs: CS,
+    basis_digest: [u8; 32],
+    basis_rounds: usize,
+    statement_digest: &[NovaByte; 32],
+    claims: &[DirectPendingClaim],
+    proof: &CandidateStepProofWitness,
+) -> Result<DirectCandidateRoot, SynthesisError> {
+    if proof.left.len() != basis_rounds {
+        return Err(synthesis_error("bound candidate basis rounds"));
+    }
+    install_constrained_candidate_step_inner(
+        cs,
+        basis_digest,
+        Some(statement_digest),
+        claims,
+        proof,
+    )
+}
+
+fn install_constrained_candidate_step_inner<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     basis_digest: [u8; 32],
+    statement_digest: Option<&[NovaByte; 32]>,
     claims: &[DirectPendingClaim],
     proof: &CandidateStepProofWitness,
 ) -> Result<DirectCandidateRoot, SynthesisError> {
     let rounds = validate_constrained_shape(claims, proof)?;
     let mut transcript = NovaTranscript::new();
-    append_constant_bytes(&mut transcript, CANDIDATE_STEP_DOMAIN)?;
+    append_constant_bytes(
+        &mut transcript,
+        if statement_digest.is_some() {
+            CANDIDATE_BOUND_STEP_DOMAIN
+        } else {
+            CANDIDATE_STEP_DOMAIN
+        },
+    )?;
+    if let Some(statement_digest) = statement_digest {
+        append_bytes(&mut transcript, statement_digest)?;
+    }
     append_constant_bytes(&mut transcript, &basis_digest)?;
     transcript.append_u64(rounds as u64);
     append_claims(&mut transcript, claims)?;
@@ -497,6 +551,137 @@ mod tests {
         encoded_point_value, standard_generator, SecpEncodedPointWitness, SecpScalarWitness,
     };
 
+    const BOUND_VECTOR_SIZE: usize = 390;
+    const BOUND_CLAIM_OFFSET: usize = 64;
+    const BOUND_PROOF_OFFSET: usize = 161;
+    const BOUND_ROOT_OFFSET: usize = 293;
+
+    struct BoundFixture {
+        basis: [u8; 32],
+        statement: [u8; 32],
+        claims: Vec<CandidatePendingClaimWitness>,
+        proof: CandidateStepProofWitness,
+        root: CandidateRootClaim,
+    }
+
+    fn allocate_statement<CS: ConstraintSystem<Scalar>>(
+        mut cs: CS,
+        statement: [u8; 32],
+    ) -> Result<[NovaByte; 32], SynthesisError> {
+        statement
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                NovaByte::allocate(cs.namespace(|| format!("byte {index}")), value)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| synthesis_error("statement digest length"))
+    }
+
+    fn install_bound_fixture<CS: ConstraintSystem<Scalar>>(
+        mut cs: CS,
+        basis: [u8; 32],
+        basis_rounds: usize,
+        statement: [u8; 32],
+        claims: &[CandidatePendingClaimWitness],
+        proof: &CandidateStepProofWitness,
+    ) -> Result<DirectCandidateRoot, SynthesisError> {
+        let claims = allocate_candidate_claims(cs.namespace(|| "claims"), claims)?;
+        let statement = allocate_statement(cs.namespace(|| "statement digest"), statement)?;
+        install_constrained_bound_candidate_step(
+            cs.namespace(|| "bound candidate step"),
+            basis,
+            basis_rounds,
+            &statement,
+            &claims,
+            proof,
+        )
+    }
+
+    fn bound_fixture_is_satisfied(
+        basis: [u8; 32],
+        statement: [u8; 32],
+        claims: &[CandidatePendingClaimWitness],
+        proof: &CandidateStepProofWitness,
+    ) -> bool {
+        let mut cs = TestConstraintSystem::<Scalar>::new();
+        install_bound_fixture(
+            cs.namespace(|| "fixture"),
+            basis,
+            1,
+            statement,
+            claims,
+            proof,
+        )
+        .expect("well-shaped bound fixture");
+        cs.is_satisfied()
+    }
+
+    fn decode_bound_vector() -> Vec<u8> {
+        let encoded = include_str!("../../../../test/data/bound_candidate_step_v1.hex")
+            .chars()
+            .filter(|value| !value.is_ascii_whitespace())
+            .collect::<String>();
+        assert_eq!(encoded.len(), 2 * BOUND_VECTOR_SIZE);
+        (0..encoded.len())
+            .step_by(2)
+            .map(|index| {
+                u8::from_str_radix(&encoded[index..index + 2], 16)
+                    .expect("bound candidate vector hex")
+            })
+            .collect()
+    }
+
+    fn vector_array<const SIZE: usize>(vector: &[u8], offset: usize) -> [u8; SIZE] {
+        vector[offset..offset + SIZE]
+            .try_into()
+            .expect("bound candidate vector field")
+    }
+
+    fn vector_point(vector: &[u8], offset: usize) -> SecpEncodedPointWitness {
+        SecpEncodedPointWitness::parse(vector_array(vector, offset))
+            .expect("bound candidate vector point")
+    }
+
+    fn vector_scalar(vector: &[u8], offset: usize) -> SecpScalarWitness {
+        SecpScalarWitness::from_bytes_be(vector_array(vector, offset))
+    }
+
+    /// Vector generated by C++ `prove_bound_algebraic_step` over the exact
+    /// dimension-two `Purify/Test/CandidateBoundParity/v1` basis.
+    fn bound_fixture() -> BoundFixture {
+        let vector = decode_bound_vector();
+        assert_eq!(vector[BOUND_PROOF_OFFSET], 2);
+        let claim = CandidatePendingClaimWitness {
+            point: vector_point(&vector, BOUND_CLAIM_OFFSET),
+            polynomial: vec![CandidatePolynomialTermWitness {
+                scale: vector_scalar(&vector, BOUND_CLAIM_OFFSET + 33),
+                offset: 0,
+                factors: vec![vector_scalar(&vector, BOUND_CLAIM_OFFSET + 65)],
+            }],
+        };
+        let proof = CandidateStepProofWitness {
+            left: vec![vector_point(&vector, BOUND_PROOF_OFFSET + 1)],
+            right: vec![vector_point(&vector, BOUND_PROOF_OFFSET + 34)],
+            terminal_scalar: vector_scalar(&vector, BOUND_PROOF_OFFSET + 67),
+            folded_generator: vector_point(&vector, BOUND_PROOF_OFFSET + 99),
+        };
+        let root = CandidateRootClaim {
+            point: vector_point(&vector, BOUND_ROOT_OFFSET),
+            scale: vector_scalar(&vector, BOUND_ROOT_OFFSET + 33),
+            factors: vec![vector_scalar(&vector, BOUND_ROOT_OFFSET + 65)],
+        };
+        assert_eq!(proof.folded_generator, root.point);
+        BoundFixture {
+            basis: vector_array(&vector, 0),
+            statement: vector_array(&vector, 32),
+            claims: vec![claim],
+            proof,
+            root,
+        }
+    }
+
     fn fixture(
         scale: SecpScalarWitness,
     ) -> (
@@ -634,6 +819,130 @@ mod tests {
         )
         .expect("well-shaped wrong step");
         assert!(!wrong_cs.is_satisfied());
+    }
+
+    #[test]
+    fn direct_bound_candidate_step_matches_cpp_vector_and_binds_statement() {
+        let fixture = bound_fixture();
+        {
+            let mut cs = TestConstraintSystem::<Scalar>::new();
+            let actual = install_bound_fixture(
+                cs.namespace(|| "fixture"),
+                fixture.basis,
+                1,
+                fixture.statement,
+                &fixture.claims,
+                &fixture.proof,
+            )
+            .expect("direct bound candidate step");
+            let expected_point = encoded_point_value(fixture.root.point).expect("expected point");
+            assert_eq!(
+                actual.point.prefix().get_value(),
+                Some(Scalar::from(u64::from(fixture.root.point.encoded[0])))
+            );
+            assert_eq!(actual.point.point().x().get_value(), Some(expected_point.x));
+            assert_eq!(actual.point.point().y().get_value(), Some(expected_point.y));
+            assert_eq!(
+                actual.scale.integer(),
+                Some(&scalar_integer(fixture.root.scale))
+            );
+            assert_eq!(actual.factors.len(), 1);
+            assert_eq!(
+                actual.factors[0].integer(),
+                Some(&scalar_integer(fixture.root.factors[0]))
+            );
+            assert!(cs.is_satisfied());
+        }
+
+        let mut wrong_statement = fixture.statement;
+        wrong_statement[0] ^= 1;
+        assert!(!bound_fixture_is_satisfied(
+            fixture.basis,
+            wrong_statement,
+            &fixture.claims,
+            &fixture.proof,
+        ));
+
+        let mut wrong_rounds_cs = TestConstraintSystem::<Scalar>::new();
+        assert!(install_bound_fixture(
+            wrong_rounds_cs.namespace(|| "wrong basis rounds"),
+            fixture.basis,
+            2,
+            fixture.statement,
+            &fixture.claims,
+            &fixture.proof,
+        )
+        .is_err());
+
+        let mut wrong_basis = fixture.basis;
+        wrong_basis[0] ^= 1;
+        assert!(!bound_fixture_is_satisfied(
+            wrong_basis,
+            fixture.statement,
+            &fixture.claims,
+            &fixture.proof,
+        ));
+
+        let mut wrong_claims = fixture.claims.clone();
+        wrong_claims[0].polynomial[0].scale = SecpScalarWitness::from_u64(8);
+        assert!(!bound_fixture_is_satisfied(
+            fixture.basis,
+            fixture.statement,
+            &wrong_claims,
+            &fixture.proof,
+        ));
+
+        let mut wrong_proof = fixture.proof.clone();
+        wrong_proof.folded_generator =
+            SecpEncodedPointWitness::from_point_value(standard_generator());
+        assert!(!bound_fixture_is_satisfied(
+            fixture.basis,
+            fixture.statement,
+            &fixture.claims,
+            &wrong_proof,
+        ));
+
+        let mut unbound_cs = TestConstraintSystem::<Scalar>::new();
+        install_candidate_step(
+            unbound_cs.namespace(|| "unbound domain"),
+            fixture.basis,
+            &fixture.claims,
+            &fixture.proof,
+        )
+        .expect("well-shaped unbound step");
+        assert!(!unbound_cs.is_satisfied());
+    }
+
+    #[test]
+    fn direct_bound_candidate_step_has_fixed_shape() {
+        let fixture = bound_fixture();
+        let mut first_shape = ShapeCS::<Secq256k1Sha256Engine>::new();
+        install_bound_fixture(
+            &mut first_shape,
+            fixture.basis,
+            1,
+            fixture.statement,
+            &fixture.claims,
+            &fixture.proof,
+        )
+        .expect("first bound candidate shape");
+        let mut second_shape = ShapeCS::<Secq256k1Sha256Engine>::new();
+        install_bound_fixture(
+            &mut second_shape,
+            fixture.basis,
+            1,
+            [0x81; 32],
+            &fixture.claims,
+            &fixture.proof,
+        )
+        .expect("second bound candidate shape");
+
+        assert_eq!(first_shape.constraints, second_shape.constraints);
+        assert_eq!(first_shape.num_aux(), second_shape.num_aux());
+        assert_eq!(
+            (first_shape.num_aux(), first_shape.num_constraints()),
+            (377_452, 378_991)
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -15,8 +16,13 @@ namespace {
 
 constexpr std::array<unsigned char, 16> kJoinedWitnessMagic{
     'P', 'u', 'r', 'i', 'f', 'y', '/', 'C',
-    'e', 'r', 't', 'J', 'W', 'i', 't', '1'};
-constexpr std::size_t kHeaderSize = kJoinedWitnessMagic.size() + 8;
+    'e', 'r', 't', 'J', 'W', 'i', 't', '2'};
+constexpr std::size_t kDigestSize = 32;
+constexpr std::size_t kPointSize = 33;
+constexpr std::size_t kParentConstantsSize =
+    kDigestSize + 2 * kPointSize;
+constexpr std::size_t kHeaderSize =
+    kJoinedWitnessMagic.size() + kDigestSize + 8;
 constexpr std::size_t kResponseHeaderSize = 8 + 4;
 constexpr std::size_t kReceiptHeaderSize = 8;
 
@@ -84,6 +90,7 @@ Result<Bytes> serialize_accepted_certificate_nonce_parent_witness(
 
     std::vector<AcceptedResponse> accepted;
     accepted.reserve(ordered_responses.size());
+    std::optional<std::array<unsigned char, 32>> raw_generator_digest;
     for (std::size_t response_index = 0;
          response_index < ordered_responses.size(); ++response_index) {
         const auto& view = ordered_responses[response_index];
@@ -140,10 +147,23 @@ Result<Bytes> serialize_accepted_certificate_nonce_parent_witness(
                     ErrorCode::InternalMismatch,
                     "certificate_nonce_parent_witness:proof_size");
             }
+            const auto& constants = leaf.parent_constants();
+            if (raw_generator_digest.has_value() &&
+                *raw_generator_digest != constants.raw_generator_digest) {
+                return unexpected_error(
+                    ErrorCode::InternalMismatch,
+                    "certificate_nonce_parent_witness:raw_generator_digest");
+            }
+            raw_generator_digest = constants.raw_generator_digest;
             response.leaves.push_back(std::move(leaf));
             response.proofs.push_back(std::move(proof));
         }
         accepted.push_back(std::move(response));
+    }
+    if (!raw_generator_digest.has_value()) {
+        return unexpected_error(
+            ErrorCode::EmptyInput,
+            "certificate_nonce_parent_witness:empty_leaves");
     }
 
     std::vector<CertificateNonceResponseVerificationView>
@@ -176,7 +196,8 @@ Result<Bytes> serialize_accepted_certificate_nonce_parent_witness(
         std::size_t proof_bytes = 0;
         if (!checked_mul_size(
                 accepted[index].proofs.size(),
-                NonceProof::kSerializedSize, proof_bytes)) {
+                kParentConstantsSize + NonceProof::kSerializedSize,
+                proof_bytes)) {
             return unexpected_error(
                 ErrorCode::Overflow,
                 "certificate_nonce_parent_witness:proof_bytes");
@@ -202,6 +223,7 @@ Result<Bytes> serialize_accepted_certificate_nonce_parent_witness(
     Bytes encoded;
     encoded.reserve(expected_size);
     append(encoded, kJoinedWitnessMagic);
+    append(encoded, *raw_generator_digest);
     append_u64(
         encoded, static_cast<std::uint64_t>(ordered_responses.size()));
     for (std::size_t index = 0; index < ordered_responses.size(); ++index) {
@@ -220,8 +242,15 @@ Result<Bytes> serialize_accepted_certificate_nonce_parent_witness(
         append_u32(
             encoded,
             static_cast<std::uint32_t>(accepted[index].proofs.size()));
-        for (const auto& proof : accepted[index].proofs) {
-            append(encoded, proof);
+        for (std::size_t member_index = 0;
+             member_index < accepted[index].proofs.size();
+             ++member_index) {
+            const auto& constants =
+                accepted[index].leaves[member_index].parent_constants();
+            append(encoded, constants.circuit_binding_digest);
+            append(encoded, constants.coefficient_commitment);
+            append(encoded, constants.anchored_offset);
+            append(encoded, accepted[index].proofs[member_index]);
         }
     }
     append_u64(

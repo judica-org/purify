@@ -19,7 +19,13 @@ mod certificate_joined_witness;
 #[cfg(any(test, feature = "prover"))]
 mod certificate_native_witness;
 #[cfg(any(test, feature = "prover"))]
+mod certificate_nonce_proof;
+#[cfg(any(test, feature = "prover"))]
 mod certificate_profile;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_recurrence;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_recursive_manifest;
 #[cfg(any(test, feature = "prover"))]
 mod circuit_norm;
 #[cfg(any(test, feature = "prover"))]
@@ -49,6 +55,9 @@ mod nova_types;
 // Production candidate accumulation constraints for qualification.
 #[cfg(any(test, feature = "prover"))]
 mod nova_candidate;
+// Exact accountable-signature hashes for certificate recurrence steps.
+#[cfg(any(test, feature = "prover"))]
+mod nova_accountable_hash;
 // Production V4 transcript constraints for qualification.
 #[cfg(any(test, feature = "prover"))]
 mod nova_circuit_transcript;

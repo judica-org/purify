@@ -56,6 +56,10 @@ impl NovaByte {
         Self { bits_le }
     }
 
+    pub(crate) fn bits_le(&self) -> &[Boolean; 8] {
+        &self.bits_le
+    }
+
     pub(crate) fn value(&self) -> u8 {
         self.bits_le
             .iter()
@@ -103,7 +107,7 @@ fn constrained_byte_header(item_type: u32, auxiliary: &NovaByte) -> [NovaByte; H
     encoded
 }
 
-fn hash<CS: ConstraintSystem<Scalar>>(
+pub(crate) fn constrain_sha256<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     message: &[NovaByte],
 ) -> Result<[NovaByte; 32], SynthesisError> {
@@ -128,6 +132,24 @@ fn hash<CS: ConstraintSystem<Scalar>>(
         .collect::<Vec<_>>()
         .try_into()
         .expect("SHA-256 output digest"))
+}
+
+/// Constrain a BIP340-style tagged SHA-256 image.
+///
+/// The tag and message length select the relation shape. The native tag hash
+/// is embedded only as relation constants; every message byte remains a
+/// constrained input.
+pub(crate) fn constrain_tagged_sha256<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    tag: &[u8],
+    message: &[NovaByte],
+) -> Result<[NovaByte; 32], SynthesisError> {
+    let tag_hash = Sha256::digest(tag);
+    let mut encoded = Vec::with_capacity(2 * tag_hash.len() + message.len());
+    encoded.extend(tag_hash.iter().copied().map(NovaByte::constant));
+    encoded.extend(tag_hash.iter().copied().map(NovaByte::constant));
+    encoded.extend_from_slice(message);
+    constrain_sha256(cs.namespace(|| "tagged SHA-256"), &encoded)
 }
 
 fn scalar_255<CS: ConstraintSystem<Scalar>>(
@@ -219,7 +241,7 @@ impl NovaTranscript {
         message.extend_from_slice(&self.state);
         message.extend_from_slice(&self.pending);
         message.extend(constrained_header(CHALLENGE_ITEM, round));
-        let digest = hash(cs.namespace(|| format!("challenge {round}")), &message)
+        let digest = constrain_sha256(cs.namespace(|| format!("challenge {round}")), &message)
             .map_err(|_| RelationError::Malformed("Nova SHA-256 synthesis"))?;
         let (scalar_bits_le, scalar) = scalar_255::<CS::Root>(&digest);
         self.state = digest.clone();
@@ -250,7 +272,7 @@ impl NovaTranscript {
         );
         message.extend_from_slice(&fork.state);
         message.extend_from_slice(&fork.pending);
-        let digest = hash(cs.namespace(|| format!("opening base {role}")), &message)
+        let digest = constrain_sha256(cs.namespace(|| format!("opening base {role}")), &message)
             .map_err(|_| RelationError::Malformed("Nova SHA-256 synthesis"))?;
         let (scalar_bits_le, scalar) = scalar_255::<CS::Root>(&digest);
         Ok(NovaChallenge {
@@ -270,6 +292,15 @@ mod tests {
 
     use super::*;
     use crate::sha256_transcript::NativeTranscript;
+
+    fn tagged_sha256(tag: &[u8], message: &[u8]) -> [u8; 32] {
+        let tag_hash = Sha256::digest(tag);
+        let mut digest = Sha256::new();
+        digest.update(tag_hash);
+        digest.update(tag_hash);
+        digest.update(message);
+        digest.finalize().into()
+    }
 
     fn bytes32_from_u64(value: u64) -> [u8; 32] {
         let mut encoded = [0; 32];
@@ -383,7 +414,7 @@ mod tests {
     fn nova_sha_one_block_shape_is_pinned() {
         let mut cs = TestConstraintSystem::<Scalar>::new();
         let message = allocate_bytes(cs.namespace(|| "input"), b"input bit");
-        let digest = hash(cs.namespace(|| "hash"), &message).expect("SHA-256");
+        let digest = constrain_sha256(cs.namespace(|| "hash"), &message).expect("SHA-256");
         assert_eq!(
             digest.each_ref().map(NovaByte::value),
             Sha256::digest(b"input bit")[..]
@@ -393,8 +424,44 @@ mod tests {
 
         let mut shape = ShapeCS::<Secq256k1Sha256Engine>::new();
         let message = allocate_bytes(shape.namespace(|| "input"), b"input bit");
-        hash(shape.namespace(|| "hash"), &message).expect("SHA-256 shape");
+        constrain_sha256(shape.namespace(|| "hash"), &message).expect("SHA-256 shape");
         assert_eq!(shape.num_aux(), 24_928);
         assert_eq!(shape.num_constraints(), 24_954);
+    }
+
+    #[test]
+    fn nova_tagged_sha_matches_native_and_fixes_shape() {
+        const TAG: &[u8] = b"Purify/Test/TaggedHash/v1";
+        let first_message = b"fixed relation payload";
+        let second_message = b"muted relation payload";
+
+        let mut first = TestConstraintSystem::<Scalar>::new();
+        let first_bytes = allocate_bytes(first.namespace(|| "message"), first_message);
+        let first_digest =
+            constrain_tagged_sha256(first.namespace(|| "tagged hash"), TAG, &first_bytes)
+                .expect("tagged hash");
+        assert_eq!(
+            first_digest.each_ref().map(NovaByte::value),
+            tagged_sha256(TAG, first_message),
+        );
+        assert!(first.is_satisfied());
+
+        let mut second = TestConstraintSystem::<Scalar>::new();
+        let second_bytes = allocate_bytes(second.namespace(|| "message"), second_message);
+        let second_digest =
+            constrain_tagged_sha256(second.namespace(|| "tagged hash"), TAG, &second_bytes)
+                .expect("tagged hash");
+        assert_eq!(
+            second_digest.each_ref().map(NovaByte::value),
+            tagged_sha256(TAG, second_message),
+        );
+        assert!(second.is_satisfied());
+        assert_eq!(first.num_constraints(), second.num_constraints());
+
+        let mut shape = ShapeCS::<Secq256k1Sha256Engine>::new();
+        let shape_bytes = allocate_bytes(shape.namespace(|| "message"), first_message);
+        constrain_tagged_sha256(shape.namespace(|| "tagged hash"), TAG, &shape_bytes)
+            .expect("tagged hash shape");
+        assert_eq!(shape.num_constraints(), first.num_constraints());
     }
 }

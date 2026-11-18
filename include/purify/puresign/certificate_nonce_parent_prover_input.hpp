@@ -65,9 +65,10 @@ private:
  * and accumulation step through the final native decision. Bytes are returned
  * only after that decision succeeds.
  *
- * The joined witness carries each response's canonical statement bytes and
- * raw nonce proofs, followed by the exact canonical native receipt. It is
- * prover input, not a compact proof or certificate admission result.
+ * The joined witness carries each response's canonical statement bytes,
+ * verifier-derived V4 parent constants, and raw nonce proofs, followed by the
+ * exact canonical native receipt. It is prover input, not a compact proof or
+ * certificate admission result.
  */
 [[nodiscard]] Result<Bytes>
 serialize_accepted_certificate_nonce_parent_witness(

@@ -13,8 +13,6 @@
 #include <span>
 #include <vector>
 
-#include "bppp_points.hpp"
-#include "bppp_support.hpp"
 #include "purify/bppp.hpp"
 
 namespace purify::bppp {
@@ -35,11 +33,6 @@ Result<BatchedPublicCommitment> batch_public_commitments(
     std::span<const PointBytes> public_commitments,
     std::span<const unsigned char> challenge_digest,
     purify_secp_context *secp_context);
-
-Result<FieldElement> dlog_challenge(
-    std::span<const unsigned char> challenge_digest,
-    const PointBytes &batched_commitment,
-    const std::array<unsigned char, 32> &nonce_xonly);
 
 struct PublicCommitmentDlogProof {
   std::array<unsigned char, 32> nonce_xonly{};

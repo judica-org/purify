@@ -80,9 +80,6 @@ std::span<unsigned char> writable_byte_span(std::vector<ByteArray> &values) {
   return {reinterpret_cast<unsigned char *>(bytes.data()), bytes.size()};
 }
 
-/** @brief Returns true when a bridge call signals success. */
-bool require_ok(int ok);
-
 struct ResolvedBpppGeneratorBackend {
   std::span<const unsigned char> serialized_bytes{};
   std::size_t generator_count = 0;

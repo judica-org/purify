@@ -80,7 +80,7 @@ prove_norm_arg_impl(Inputs &&inputs,
                 l_vec.data(), inputs.l_vec.size(), c_vec.data(),
                 inputs.c_vec.size(), commitment.data(), proof.data(),
                 &proof_len);
-  if (!require_ok(ok)) {
+  if (ok == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   proof.resize(proof_len);
@@ -116,7 +116,7 @@ prove_norm_arg_impl(Inputs &&inputs,
 GeneratorBytes base_generator(purify_secp_context *secp_context) {
   GeneratorBytes out{};
   bool ok = secp_context != nullptr
-            && require_ok(purify_bppp_base_generator(secp_context, out.data()));
+            && purify_bppp_base_generator(secp_context, out.data()) != 0;
   assert(ok && "base_generator() requires a functioning backend");
   (void)ok;
   return out;
@@ -125,8 +125,7 @@ GeneratorBytes base_generator(purify_secp_context *secp_context) {
 GeneratorBytes value_generator_h(purify_secp_context *secp_context) {
   GeneratorBytes out{};
   bool ok = secp_context != nullptr
-            && require_ok(
-                purify_bppp_value_generator_h(secp_context, out.data()));
+            && purify_bppp_value_generator_h(secp_context, out.data()) != 0;
   assert(ok && "value_generator_h() requires a functioning backend");
   (void)ok;
   return out;
@@ -141,9 +140,8 @@ Result<std::vector<PointBytes>> create_generators(std::size_t count,
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
   std::span<unsigned char> serialized = writable_byte_span(out);
   std::size_t serialized_len = serialized.size();
-  if (!require_ok(purify_bppp_create_generators(secp_context, count,
-                                                serialized.data(),
-                                                &serialized_len))) {
+  if (purify_bppp_create_generators(secp_context, count, serialized.data(),
+                                   &serialized_len) == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   if (serialized_len != serialized.size()) {
@@ -192,7 +190,7 @@ commit_norm_arg_with_cache(const NormArgInputs &inputs,
                 resolved.generator_count, n_vec.data(), inputs.n_vec.size(),
                 l_vec.data(), inputs.l_vec.size(), c_vec.data(),
                 inputs.c_vec.size(), commitment.data());
-  if (!require_ok(ok)) {
+  if (ok == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return commitment;
@@ -213,9 +211,9 @@ Result<PointBytes> pedersen_commit_char(const ScalarBytes &blind,
                                         const GeneratorBytes &blind_gen) {
   PointBytes commitment{};
   PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context));
-  if (!require_ok(purify_pedersen_commit_char(
+  if (purify_pedersen_commit_char(
           secp_context, blind.data(), value.data(), value_gen.data(), blind_gen.data(),
-          commitment.data()))) {
+          commitment.data()) == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   return commitment;
@@ -279,7 +277,7 @@ Result<NormArgProof> prove_norm_arg_to_commitment_with_cache(
                 l_vec.data(), inputs.l_vec.size(), c_vec.data(),
                 inputs.c_vec.size(), commitment.data(), proof.data(),
                 &proof_len);
-  if (!require_ok(ok)) {
+  if (ok == 0) {
     return unexpected_error(ErrorCode::BackendRejectedInput);
   }
   proof.resize(proof_len);

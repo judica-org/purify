@@ -14,30 +14,12 @@
 #include <cstdint>
 #include <limits>
 #include <span>
-#include <type_traits>
 #include <vector>
 
 #include "bppp_support.hpp"
 #include "secure_cleanup.hpp"
 
-namespace purify::bppp {
-
-// Helpers shared between the translation units of this module live in detail.
-using namespace detail;
-
-namespace {
-
-void secure_clear_field_element(FieldElement &value) noexcept {
-  static_assert(std::is_trivially_destructible_v<FieldElement>);
-  ::purify::detail::secure_clear_bytes(&value, sizeof(value));
-}
-
-} // namespace
-
-namespace detail {
-
-/** @brief Returns true when a bridge call signals success. */
-bool require_ok(int ok) { return ok != 0; }
+namespace purify::bppp::detail {
 
 ResolvedBpppGeneratorBackend resolve_bppp_generator_backend(
     ExperimentalCircuitBackend *cache,
@@ -114,7 +96,7 @@ Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
         FieldElement::try_from_bytes32(candidate_bytes.value);
     if (candidate.has_value()) {
       out = *candidate;
-      secure_clear_field_element(*candidate);
+      ::purify::detail::secure_erase(*candidate);
       return {};
     }
   }
@@ -145,10 +127,10 @@ Status derive_secret_nonzero_scalar(FieldElement &out,
     if (candidate.has_value()) {
       if (!candidate->is_zero()) {
         out = *candidate;
-        secure_clear_field_element(*candidate);
+        ::purify::detail::secure_erase(*candidate);
         return {};
       }
-      secure_clear_field_element(*candidate);
+      ::purify::detail::secure_erase(*candidate);
     }
   }
   return unexpected_error(ErrorCode::InternalMismatch);
@@ -169,6 +151,4 @@ FieldElement weighted_bppp_inner_product(std::span<const FieldElement> lhs,
   return total;
 }
 
-} // namespace detail
-
-} // namespace purify::bppp
+} // namespace purify::bppp::detail

@@ -20,10 +20,7 @@
 #include "bppp_support.hpp"
 #include "purify/secp_bridge.h"
 
-namespace purify::bppp {
-
-// Helpers shared between the translation units of this module live in detail.
-using namespace detail;
+namespace purify::bppp::detail {
 
 namespace {
 
@@ -41,9 +38,17 @@ const TaggedHash kCircuitDlogBatchTaggedHash(kCircuitDlogBatchTag);
 const TaggedHash kCircuitDlogNonceTaggedHash(kCircuitDlogNonceTag);
 const TaggedHash kCircuitDlogChallengeTaggedHash(kCircuitDlogChallengeTag);
 
-} // namespace
+Result<FieldElement> dlog_challenge(
+    std::span<const unsigned char> challenge_digest,
+    const PointBytes &batched_commitment,
+    const std::array<unsigned char, 32> &nonce_xonly) {
+  Bytes seed(challenge_digest.begin(), challenge_digest.end());
+  seed.insert(seed.end(), batched_commitment.begin(), batched_commitment.end());
+  seed.insert(seed.end(), nonce_xonly.begin(), nonce_xonly.end());
+  return derive_nonzero_scalar(seed, kCircuitDlogChallengeTaggedHash, 0);
+}
 
-namespace detail {
+} // namespace
 
 Result<BatchedPublicCommitment> batch_public_commitments_with_eta(
     std::span<const PointBytes> public_commitments,
@@ -79,16 +84,6 @@ Result<BatchedPublicCommitment> batch_public_commitments(
       derive_nonzero_scalar(challenge_digest, kCircuitDlogBatchTaggedHash, 0));
   return batch_public_commitments_with_eta(public_commitments, eta,
                                            secp_context);
-}
-
-Result<FieldElement> dlog_challenge(
-    std::span<const unsigned char> challenge_digest,
-    const PointBytes &batched_commitment,
-    const std::array<unsigned char, 32> &nonce_xonly) {
-  Bytes seed(challenge_digest.begin(), challenge_digest.end());
-  seed.insert(seed.end(), batched_commitment.begin(), batched_commitment.end());
-  seed.insert(seed.end(), nonce_xonly.begin(), nonce_xonly.end());
-  return derive_nonzero_scalar(seed, kCircuitDlogChallengeTaggedHash, 0);
 }
 
 Result<PublicCommitmentDlogProof> prove_public_commitment_dlog(
@@ -232,6 +227,4 @@ validate_public_commitments(std::span<const PointBytes> public_commitments,
   return {};
 }
 
-} // namespace detail
-
-} // namespace purify::bppp
+} // namespace purify::bppp::detail

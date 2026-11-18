@@ -369,7 +369,7 @@ function(purify_enable_release_optimizations target)
     target_compile_definitions(${target} PRIVATE NDEBUG)
 endfunction()
 
-add_library(purify
+set(PURIFY_LIBRARY_SOURCES
     src/core/core.c
     src/core/curve.c
     src/core/field.c
@@ -415,6 +415,8 @@ add_library(purify
     src/protocol/sha256_circuit_transcript.cpp
     src/bridge/bppp_bridge.c
 )
+
+add_library(purify ${PURIFY_LIBRARY_SOURCES})
 
 add_library(purify::purify ALIAS purify)
 
@@ -804,52 +806,7 @@ endif()
 if(PURIFY_BUILD_BENCH)
     add_subdirectory(third_party/nanobench EXCLUDE_FROM_ALL)
 
-    add_library(purify_bench_support STATIC
-        src/core/core.c
-        src/core/curve.c
-        src/core/field.c
-        src/core/uint.c
-        src/api/c_api.cpp
-        src/api/api.cpp
-        src/protocol/bulletproof.cpp
-        src/protocol/bulletproof_circuit.cpp
-        src/protocol/bulletproof_gadgets.cpp
-        src/protocol/nonce_batch.cpp
-        src/support/curve.cpp
-        src/protocol/expr.cpp
-        src/legacy_bulletproof/scratch_frames.c
-        src/support/numeric.cpp
-        src/puresign/core.cpp
-        src/puresign/legacy.cpp
-        src/puresign/bppp.cpp
-        src/puresign/accountable.cpp
-        src/puresign/coalition_formation.cpp
-        src/puresign/accountable_roster.cpp
-        src/puresign/accountable_responses.cpp
-        src/puresign/recovery_root.cpp
-        src/puresign/anchor_escrow.cpp
-        src/puresign/construction_receipt.cpp
-        src/puresign/construction_parent_input.cpp
-        src/puresign/construction_parent_prover_input.cpp
-        src/protocol/bppp.cpp
-        src/protocol/bppp_backend_cache.cpp
-        src/protocol/bppp_support.cpp
-        src/protocol/bppp_masking.cpp
-        src/protocol/bppp_points.cpp
-        src/protocol/bppp_circuit_reduction.cpp
-        src/protocol/bppp_public_commitments.cpp
-        src/protocol/bppp_circuit_proof.cpp
-        src/protocol/bppp_circuit_v4.cpp
-        src/protocol/bppp_circuit_v4_prove.cpp
-        src/protocol/accumulation.cpp
-        src/protocol/accumulation_support.cpp
-        src/protocol/accumulation_ipa.cpp
-        src/protocol/accumulation_norm.cpp
-        src/protocol/accumulation_codec.cpp
-        src/protocol/sha256_transcript.cpp
-        src/protocol/sha256_circuit_transcript.cpp
-        src/bridge/bppp_bridge.c
-    )
+    add_library(purify_bench_support STATIC ${PURIFY_LIBRARY_SOURCES})
 
     purify_configure_library_target(purify_bench_support)
     purify_enable_release_optimizations(purify_bench_support)

@@ -4,6 +4,9 @@
 
 #include <array>
 #include <cstdint>
+#include <iostream>
+#include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -32,6 +35,195 @@ void overwrite_u32_le(Bytes& bytes, std::size_t offset, std::uint32_t value) {
     for (std::size_t i = 0; i < 4; ++i) {
         bytes[offset + i] = static_cast<unsigned char>((value >> (8 * i)) & 0xffU);
     }
+}
+
+std::string hex_of(std::span<const unsigned char> bytes) {
+    static constexpr char kDigits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(bytes.size() * 2);
+    for (unsigned char byte : bytes) {
+        out.push_back(kDigits[byte >> 4]);
+        out.push_back(kDigits[byte & 0x0fU]);
+    }
+    return out;
+}
+
+std::string sha256_hex_of(std::span<const unsigned char> bytes) {
+    std::array<unsigned char, 32> digest{};
+    purify_sha256(digest.data(), bytes.data(), bytes.size());
+    return hex_of(digest);
+}
+
+void expect_pinned(TestContext& ctx, std::string_view actual, std::string_view expected, std::string_view message) {
+    if (actual != expected) {
+        std::cerr << "      actual: " << actual << "\n";
+    }
+    ctx.expect(actual == expected, message);
+}
+
+/** The byte-level outputs of one backend for the sample secret, message and topic. */
+struct PinnedSigningVectors {
+    std::string_view message_nonce;
+    std::string_view message_signature;
+    std::string_view message_nonce_proof_sha256;
+    std::string_view message_proven_signature_sha256;
+    std::string_view topic_nonce;
+    std::string_view topic_signature;
+    std::string_view topic_nonce_proof_sha256;
+    std::string_view topic_proven_signature_sha256;
+};
+
+/**
+ * Pins every derived value of one proof(R) backend: nonces, signatures, and the complete
+ * serialized proof artifacts, with and without a reusable proof cache.
+ */
+template <typename KeyPair, typename MessageProofCache, typename TopicProofCache>
+void expect_pinned_signing_vectors(TestContext& ctx, std::string_view backend,
+                                   const PinnedSigningVectors& expected) {
+    const std::string label(backend);
+    Result<SecretKey> secret = sample_secret();
+    expect_ok(ctx, secret, label + " pinned vectors parse the sample secret");
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (!secret.has_value() || context == nullptr) {
+        return;
+    }
+    const Bytes message = sample_message();
+    const Bytes topic = purify::bytes_from_ascii("session-1");
+
+    auto key_pair = KeyPair::from_secret(*secret, context.get());
+    auto message_cache = MessageProofCache::build(message);
+    auto topic_cache = TopicProofCache::build(topic);
+    expect_ok(ctx, key_pair, label + " pinned vectors derive the key pair");
+    expect_ok(ctx, message_cache, label + " pinned vectors build the message cache");
+    expect_ok(ctx, topic_cache, label + " pinned vectors build the topic cache");
+    if (!key_pair.has_value() || !message_cache.has_value() || !topic_cache.has_value()) {
+        return;
+    }
+
+    auto message_proven = key_pair->sign_message_with_proof(message, context.get());
+    auto message_proven_cached = key_pair->sign_message_with_proof(*message_cache, context.get());
+    auto topic_proven = key_pair->sign_with_topic_proof(message, topic, context.get());
+    auto topic_proven_cached = key_pair->sign_with_topic_proof(message, *topic_cache, context.get());
+    expect_ok(ctx, message_proven, label + " pinned vectors sign the message with proof");
+    expect_ok(ctx, message_proven_cached, label + " pinned vectors sign the cached message with proof");
+    expect_ok(ctx, topic_proven, label + " pinned vectors sign under the topic with proof");
+    expect_ok(ctx, topic_proven_cached, label + " pinned vectors sign under the cached topic with proof");
+    if (!message_proven.has_value() || !message_proven_cached.has_value() || !topic_proven.has_value() ||
+        !topic_proven_cached.has_value()) {
+        return;
+    }
+
+    const auto expect_bundle = [&](const auto& proven, std::string_view nonce, std::string_view signature,
+                                   std::string_view nonce_proof_sha256, std::string_view proven_sha256,
+                                   const std::string& what) {
+        auto nonce_proof_bytes = proven.nonce_proof.serialize(context.get());
+        auto proven_bytes = proven.serialize(context.get());
+        expect_ok(ctx, nonce_proof_bytes, label + " " + what + " nonce proof serializes");
+        expect_ok(ctx, proven_bytes, label + " " + what + " proven signature serializes");
+        if (!nonce_proof_bytes.has_value() || !proven_bytes.has_value()) {
+            return;
+        }
+        expect_pinned(ctx, hex_of(proven.nonce_proof.nonce.xonly), nonce, label + " " + what + " nonce is pinned");
+        expect_pinned(ctx, hex_of(proven.signature.bytes), signature, label + " " + what + " signature is pinned");
+        expect_pinned(ctx, sha256_hex_of(*nonce_proof_bytes), nonce_proof_sha256,
+                      label + " " + what + " nonce proof bytes are pinned");
+        expect_pinned(ctx, sha256_hex_of(*proven_bytes), proven_sha256,
+                      label + " " + what + " proven signature bytes are pinned");
+    };
+    expect_bundle(*message_proven, expected.message_nonce, expected.message_signature,
+                  expected.message_nonce_proof_sha256, expected.message_proven_signature_sha256, "message");
+    expect_bundle(*message_proven_cached, expected.message_nonce, expected.message_signature,
+                  expected.message_nonce_proof_sha256, expected.message_proven_signature_sha256,
+                  "cached message");
+    expect_bundle(*topic_proven, expected.topic_nonce, expected.topic_signature,
+                  expected.topic_nonce_proof_sha256, expected.topic_proven_signature_sha256, "topic");
+    expect_bundle(*topic_proven_cached, expected.topic_nonce, expected.topic_signature,
+                  expected.topic_nonce_proof_sha256, expected.topic_proven_signature_sha256, "cached topic");
+
+    // The proof-free paths must derive the same nonces and signatures.
+    auto message_nonce = key_pair->prepare_message_nonce(message, context.get());
+    auto topic_nonce = key_pair->prepare_topic_nonce(topic, context.get());
+    auto message_signature = key_pair->sign_message(message, context.get());
+    auto topic_signature = key_pair->sign_with_topic(message, topic, context.get());
+    expect_ok(ctx, message_nonce, label + " pinned vectors prepare the message nonce");
+    expect_ok(ctx, topic_nonce, label + " pinned vectors prepare the topic nonce");
+    expect_ok(ctx, message_signature, label + " pinned vectors sign the message");
+    expect_ok(ctx, topic_signature, label + " pinned vectors sign under the topic");
+    if (!message_nonce.has_value() || !topic_nonce.has_value() || !message_signature.has_value() ||
+        !topic_signature.has_value()) {
+        return;
+    }
+    expect_pinned(ctx, hex_of(message_nonce->public_nonce().xonly), expected.message_nonce,
+                  label + " prepared message nonce is pinned");
+    expect_pinned(ctx, hex_of(topic_nonce->public_nonce().xonly), expected.topic_nonce,
+                  label + " prepared topic nonce is pinned");
+    expect_pinned(ctx, hex_of(message_signature->bytes), expected.message_signature,
+                  label + " plain message signature is pinned");
+    expect_pinned(ctx, hex_of(topic_signature->bytes), expected.topic_signature,
+                  label + " plain topic signature is pinned");
+}
+
+// Key derivation, and so every value below, depends on the configured field hashes.
+#if PURIFY_USE_LEGACY_FIELD_HASHES
+constexpr PinnedSigningVectors kBulletproofVectors{
+    .message_nonce = "af107e7489139e49674ccb97a2ff0fd63aa4f758d058ec6778d99bc1fc7c13a3",
+    .message_signature = "af107e7489139e49674ccb97a2ff0fd63aa4f758d058ec6778d99bc1fc7c13a3"
+                         "d099373b87ed7b4a616925e54eb0262f5c1e15dfc2c551323d966c73b1f90b1d",
+    .message_nonce_proof_sha256 = "63c060b86985df5e6d443de4baa30d7e8dac8b272c92e1366397e05e4aea9cf3",
+    .message_proven_signature_sha256 = "251eeba7de234814338cc1efc8b14a4c7c507581f5f2e058321b347f1199a3d7",
+    .topic_nonce = "0da0cb5c9169b21dfbe0d46da89133a82ce4d7c66c52966e24b9114c80cb4bc5",
+    .topic_signature = "0da0cb5c9169b21dfbe0d46da89133a82ce4d7c66c52966e24b9114c80cb4bc5"
+                         "c624f97a32661399cb823e8c9430aafceab58791aa883f3e4892121406a9aebe",
+    .topic_nonce_proof_sha256 = "7cee668e645725b0e682c15eec2cd6abe67e16c815c21df306059dc1f8a1a285",
+    .topic_proven_signature_sha256 = "3a102f5bbf3820c0059321f4caba907e7c5c97488e428c7e53bc7d9740047988",
+};
+
+constexpr PinnedSigningVectors kBpppVectors{
+    .message_nonce = "af107e7489139e49674ccb97a2ff0fd63aa4f758d058ec6778d99bc1fc7c13a3",
+    .message_signature = "af107e7489139e49674ccb97a2ff0fd63aa4f758d058ec6778d99bc1fc7c13a3"
+                         "d099373b87ed7b4a616925e54eb0262f5c1e15dfc2c551323d966c73b1f90b1d",
+    .message_nonce_proof_sha256 = "30bd4fef790f775b880166e40a33f62e5fc9923dab10bac20821ef8056f42a23",
+    .message_proven_signature_sha256 = "94fbe277468cbd3c91906198a66baffbcd8c4a134a4f7ee242a96799529f05dc",
+    .topic_nonce = "0da0cb5c9169b21dfbe0d46da89133a82ce4d7c66c52966e24b9114c80cb4bc5",
+    .topic_signature = "0da0cb5c9169b21dfbe0d46da89133a82ce4d7c66c52966e24b9114c80cb4bc5"
+                         "c624f97a32661399cb823e8c9430aafceab58791aa883f3e4892121406a9aebe",
+    .topic_nonce_proof_sha256 = "6b42a730796b18c2f784397f1d10c6b1180f052bc5094cbcfe44fc409aa388d9",
+    .topic_proven_signature_sha256 = "d9598c91e56fd6267822e207aaeecfdbd6a636f79eb5b29fbd5e0c3cd37da92d",
+};
+#else
+constexpr PinnedSigningVectors kBulletproofVectors{
+    .message_nonce = "489376c6dab8a30fde84c19c7448b29dc401826a8e0c14510d5804a7a051bd4f",
+    .message_signature = "489376c6dab8a30fde84c19c7448b29dc401826a8e0c14510d5804a7a051bd4f"
+                         "fc98d4f408047c0354a8b0634b43a6bceb63d90c0fe6e1333c69761b5314c553",
+    .message_nonce_proof_sha256 = "6f5637891d10399004a430fbb7574731fcffc3d129e5be63d1e314186e74ea30",
+    .message_proven_signature_sha256 = "73b6dcd3239acc94be3a0fbdef62ceaaed2177b2dfefd4dc3d274887d3b725bd",
+    .topic_nonce = "4492ce5bc4ddddb3e89c9630248047411c2807645a3ad9d36b723d09e9811334",
+    .topic_signature = "4492ce5bc4ddddb3e89c9630248047411c2807645a3ad9d36b723d09e9811334"
+                         "8907b863f889792099fae4f7c266ca0138df01fb2a07384627a4a51487c5307d",
+    .topic_nonce_proof_sha256 = "4a975d130ee4a4485de065efe8f5c3be4dfb2d149f11bd4c1b8fe8371d18792a",
+    .topic_proven_signature_sha256 = "786f7c1d884afa8506de8183ee910bfda54db7621772cebde9ff11ae1d395ba0",
+};
+
+constexpr PinnedSigningVectors kBpppVectors{
+    .message_nonce = "489376c6dab8a30fde84c19c7448b29dc401826a8e0c14510d5804a7a051bd4f",
+    .message_signature = "489376c6dab8a30fde84c19c7448b29dc401826a8e0c14510d5804a7a051bd4f"
+                         "fc98d4f408047c0354a8b0634b43a6bceb63d90c0fe6e1333c69761b5314c553",
+    .message_nonce_proof_sha256 = "36329a879d79fd8ebafc5b14c2dfabcd0c4016d78ef0eb1dca4a3897a2d048c4",
+    .message_proven_signature_sha256 = "1e27a745bd54e517bc14877b8fbc3163ac6dbce1ee7fc8ad923cb9457711b647",
+    .topic_nonce = "4492ce5bc4ddddb3e89c9630248047411c2807645a3ad9d36b723d09e9811334",
+    .topic_signature = "4492ce5bc4ddddb3e89c9630248047411c2807645a3ad9d36b723d09e9811334"
+                         "8907b863f889792099fae4f7c266ca0138df01fb2a07384627a4a51487c5307d",
+    .topic_nonce_proof_sha256 = "f392f6ca73e9a4edfc79cfeefc448970e1c15cb376ba3ef6e7df7bec6dc9600c",
+    .topic_proven_signature_sha256 = "27c6a2172605982a5c0871ab26b14183dbcbbc35a5b29afc6a9389d4fb00011f",
+};
+#endif
+
+void test_puresign_pinned_signing_vectors(TestContext& ctx) {
+    expect_pinned_signing_vectors<purify::puresign::KeyPair, purify::puresign::MessageProofCache,
+                                  purify::puresign::TopicProofCache>(ctx, "PureSign", kBulletproofVectors);
+    expect_pinned_signing_vectors<purify::puresign_plusplus::KeyPair,
+                                  purify::puresign_plusplus::MessageProofCache,
+                                  purify::puresign_plusplus::TopicProofCache>(ctx, "PureSign++", kBpppVectors);
 }
 
 void test_puresign_message_signing(TestContext& ctx) {
@@ -989,6 +1181,7 @@ void test_puresign_plusplus_topic_proof_cache_clone_for_thread(TestContext& ctx)
 }  // namespace
 
 void run_puresign_tests(purify_test::TestContext& ctx) {
+    test_puresign_pinned_signing_vectors(ctx);
     test_puresign_message_signing(ctx);
     test_puresign_topic_signing(ctx);
     test_puresign_topic_proof_cache_clone_for_thread(ctx);

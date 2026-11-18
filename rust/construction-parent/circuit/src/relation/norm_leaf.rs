@@ -4,15 +4,11 @@
 //! This module checks the outer proof equations and prepares the exact short
 //! norm obligation consumed by the reduction.
 
-use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
+use nova_snark::frontend::{ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::{
-    add_points, allocate_constant_point, encode_computed_point, scale_point, EncodedPoint, Point,
-};
-use crate::gadgets::scalar::{
-    constant_scalar, constant_u64, invert_scalar, multiply_scalars, subtract_scalars,
-    CanonicalScalar,
-};
+use crate::gadgets::ops::Ops;
+use crate::gadgets::point::{allocate_constant_point, EncodedPoint, Point};
+use crate::gadgets::scalar::CanonicalScalar;
 use crate::gadgets::sha256::Byte;
 use crate::gadgets::synthesis_error;
 use crate::native::circuit_norm::{
@@ -51,130 +47,62 @@ pub(crate) struct ManifestBoundConstructionLeaf {
     pub(crate) anchored_offset: EncodedPoint,
 }
 
-fn require_finite<CS: ConstraintSystem<Scalar>>(
-    cs: CS,
-    point: &Point,
-) -> Result<(), SynthesisError> {
-    Boolean::enforce_equal(cs, &point.is_identity(), &Boolean::constant(false))
-}
-
-fn scale<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    point: &Point,
-    scalar: &CanonicalScalar,
-) -> Result<Point, SynthesisError> {
-    let bits = scalar.allocated_bits_le(cs.namespace(|| "scalar bits"))?;
-    scale_point(cs.namespace(|| "scalar multiplication"), point, &bits)
-}
-
-fn square_repeatedly<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    value: &CanonicalScalar,
-    count: usize,
-) -> Result<CanonicalScalar, SynthesisError> {
-    let mut result = value.clone();
-    for round in 0..count {
-        result = multiply_scalars(cs.namespace(|| format!("square {round}")), &result, &result)?;
-    }
-    Ok(result)
-}
-
+/// `anchored = raw + offset` and `combined = anchored + alpha mask + alpha^2 t2 G`.
 fn constrain_anchor_and_mask<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     transcript: &CircuitTranscriptResultV4,
     generator: &Point,
 ) -> Result<(), SynthesisError> {
-    require_finite(
-        cs.namespace(|| "raw commitment is finite"),
-        transcript.raw_commitment.point(),
-    )?;
-    require_finite(
-        cs.namespace(|| "mask commitment is finite"),
-        transcript.mask_commitment.point(),
-    )?;
-    let anchored = add_points(
-        cs.namespace(|| "anchored commitment"),
+    let mut ops = Ops::new(cs);
+    ops.require_finite(transcript.raw_commitment.point())?;
+    ops.require_finite(transcript.mask_commitment.point())?;
+    let anchored = ops.add_points(
         transcript.raw_commitment.point(),
         transcript.anchored_offset.point(),
     )?;
-    require_finite(cs.namespace(|| "anchor is finite"), &anchored)?;
-    anchored.enforce_equal(
-        cs.namespace(|| "anchor equality"),
-        transcript.anchored_commitment.point(),
-    )?;
+    ops.require_finite(&anchored)?;
+    ops.require_equal_points(&anchored, transcript.anchored_commitment.point())?;
 
-    let alpha_squared = multiply_scalars(
-        cs.namespace(|| "alpha squared"),
-        &transcript.alpha,
-        &transcript.alpha,
-    )?;
-    let t2_scale = multiply_scalars(cs.namespace(|| "t2 scale"), &alpha_squared, &transcript.t2)?;
-    let scaled_mask = scale(
-        cs.namespace(|| "scaled mask"),
+    let alpha_squared = ops.square(&transcript.alpha)?;
+    let t2_scale = ops.mul(&alpha_squared, &transcript.t2)?;
+    let masked = ops.add_scaled(
+        transcript.anchored_commitment.point(),
         transcript.mask_commitment.point(),
         &transcript.alpha,
     )?;
-    let masked = add_points(
-        cs.namespace(|| "masked commitment"),
-        transcript.anchored_commitment.point(),
-        &scaled_mask,
-    )?;
-    let t2_point = scale(cs.namespace(|| "t2 point"), generator, &t2_scale)?;
-    let combined = add_points(cs.namespace(|| "combined commitment"), &masked, &t2_point)?;
-    require_finite(cs.namespace(|| "combined is finite"), &combined)?;
-    combined.enforce_equal(
-        cs.namespace(|| "combined equality"),
-        transcript.combined_commitment.point(),
-    )
+    let combined = ops.add_scaled(&masked, generator, &t2_scale)?;
+    ops.require_finite(&combined)?;
+    ops.require_equal_points(&combined, transcript.combined_commitment.point())
 }
 
+/// `batched = sum_i eta^i public_i`, with every term and the sum finite.
 fn constrain_public_commitment_batch<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     transcript: &CircuitTranscriptResultV4,
 ) -> Result<(), SynthesisError> {
+    let mut ops = Ops::new(cs);
     let (first, rest) = transcript
         .public_commitments
         .split_first()
         .ok_or_else(|| synthesis_error("public V4 circuit norm commitments"))?;
-    require_finite(
-        cs.namespace(|| "public commitment 0 is finite"),
-        first.point(),
-    )?;
+    ops.require_finite(first.point())?;
     let mut batched = first.point().clone();
     let mut weight = transcript.eta.clone();
     for (index, point) in rest.iter().enumerate() {
-        require_finite(
-            cs.namespace(|| format!("public commitment {} is finite", index + 1)),
-            point.point(),
-        )?;
-        let term = scale(
-            cs.namespace(|| format!("public commitment {} scale", index + 1)),
-            point.point(),
-            &weight,
-        )?;
-        batched = add_points(
-            cs.namespace(|| format!("public commitment {} sum", index + 1)),
-            &batched,
-            &term,
-        )?;
+        ops.require_finite(point.point())?;
+        batched = ops.add_scaled(&batched, point.point(), &weight)?;
         if index + 1 != rest.len() {
-            weight = multiply_scalars(
-                cs.namespace(|| format!("public commitment {} weight", index + 1)),
-                &weight,
-                &transcript.eta,
-            )?;
+            weight = ops.mul(&weight, &transcript.eta)?;
         }
     }
-    require_finite(cs.namespace(|| "batched commitment is finite"), &batched)?;
-    batched.enforce_equal(
-        cs.namespace(|| "batched commitment equality"),
-        transcript.batched_public_commitment.point(),
-    )
+    ops.require_finite(&batched)?;
+    ops.require_equal_points(&batched, transcript.batched_public_commitment.point())
 }
 
-/// Check the public commitment batch and its Schnorr response.
+/// Check the public commitment batch and its Schnorr response:
+/// `response G = nonce + challenge batched`, with a nonzero response.
 pub(crate) fn constrain_manifest_bound_public_dlog<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     transcript: &CircuitTranscriptResultV4,
     generator: &Point,
 ) -> Result<(), SynthesisError> {
@@ -183,32 +111,21 @@ pub(crate) fn constrain_manifest_bound_public_dlog<CS: ConstraintSystem<Scalar>>
             "manifest-bound V4 construction leaf commitment count",
         ));
     }
-    constrain_public_commitment_batch(cs.namespace(|| "public commitment batch"), transcript)?;
-    let scaled = scale(
-        cs.namespace(|| "scaled public commitment"),
+    let mut ops = Ops::new(cs);
+    constrain_public_commitment_batch(ops.scope("public commitment batch"), transcript)?;
+    let scaled = ops.scale(
         transcript.batched_public_commitment.point(),
         &transcript.dlog_challenge,
     )?;
-    let _response_inverse = invert_scalar(
-        cs.namespace(|| "nonzero dlog response"),
-        &transcript.dlog_response,
-    )?;
-    let lhs = scale(
-        cs.namespace(|| "dlog response point"),
-        generator,
-        &transcript.dlog_response,
-    )?;
-    let rhs = add_points(
-        cs.namespace(|| "dlog response equation"),
-        transcript.dlog_nonce.point(),
-        &scaled,
-    )?;
-    lhs.enforce_equal(cs.namespace(|| "dlog response equality"), &rhs)
+    ops.require_nonzero(&transcript.dlog_response)?;
+    let lhs = ops.scale(generator, &transcript.dlog_response)?;
+    let rhs = ops.add_points(transcript.dlog_nonce.point(), &scaled)?;
+    ops.require_equal_points(&lhs, &rhs)
 }
 
 /// Check the outer norm equations and prepare the short reduction claim.
 pub(crate) fn prepare_norm<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     shape: CircuitTranscriptShapeV4,
     transcript: &CircuitTranscriptResultV4,
     generator: &Point,
@@ -219,96 +136,46 @@ pub(crate) fn prepare_norm<CS: ConstraintSystem<Scalar>>(
     {
         return Err(synthesis_error("V4 prepared norm shape"));
     }
-    constrain_anchor_and_mask(cs.namespace(|| "anchor and mask"), transcript, generator)?;
+    let mut ops = Ops::new(cs);
+    constrain_anchor_and_mask(ops.scope("anchor and mask"), transcript, generator)?;
+    let zero = ops.constant(0)?;
+    let one = ops.constant(1)?;
 
+    // norm_scale = terminal_n^2 rho^(2n), with rho^n by repeated squaring.
     let rounds = shape.round_count();
-    let rho_to_n = square_repeatedly(cs.namespace(|| "rho power"), &transcript.rho, rounds)?;
-    let rho_to_two_n = multiply_scalars(cs.namespace(|| "rho to two n"), &rho_to_n, &rho_to_n)?;
-    let terminal_n_squared = multiply_scalars(
-        cs.namespace(|| "terminal n squared"),
-        &transcript.terminal_n,
-        &transcript.terminal_n,
-    )?;
-    let norm_scale = multiply_scalars(
-        cs.namespace(|| "norm scale"),
-        &terminal_n_squared,
-        &rho_to_two_n,
-    )?;
-    let negative_norm_scale = subtract_scalars(
-        cs.namespace(|| "negative norm scale"),
-        &constant_u64::<CS::Root>(0)?,
-        &norm_scale,
-    )?;
-
-    let mut short = transcript.combined_commitment.point().clone();
-    for (round, (pair, gamma)) in transcript.rounds.iter().zip(&transcript.gammas).enumerate() {
-        let gamma_squared = multiply_scalars(
-            cs.namespace(|| format!("gamma {round} squared")),
-            gamma,
-            gamma,
-        )?;
-        let gamma_squared_minus_one = subtract_scalars(
-            cs.namespace(|| format!("gamma {round} squared minus one")),
-            &gamma_squared,
-            &constant_u64::<CS::Root>(1)?,
-        )?;
-        let first = scale(
-            cs.namespace(|| format!("round {round} first")),
-            pair.first.point(),
-            gamma,
-        )?;
-        short = add_points(
-            cs.namespace(|| format!("round {round} first sum")),
-            &short,
-            &first,
-        )?;
-        let second = scale(
-            cs.namespace(|| format!("round {round} second")),
-            pair.second.point(),
-            &gamma_squared_minus_one,
-        )?;
-        short = add_points(
-            cs.namespace(|| format!("round {round} second sum")),
-            &short,
-            &second,
-        )?;
+    let mut rho_to_n = transcript.rho.clone();
+    for _ in 0..rounds {
+        rho_to_n = ops.square(&rho_to_n)?;
     }
-    let norm_base = scale(
-        cs.namespace(|| "negative norm point"),
-        generator,
-        &negative_norm_scale,
-    )?;
-    let residual_point = add_points(cs.namespace(|| "norm residual"), &short, &norm_base)?;
-    let residual = encode_computed_point(cs.namespace(|| "encoded norm residual"), residual_point)?;
+    let rho_to_two_n = ops.square(&rho_to_n)?;
+    let terminal_n_squared = ops.square(&transcript.terminal_n)?;
+    let norm_scale = ops.mul(&terminal_n_squared, &rho_to_two_n)?;
+    let negative_norm_scale = ops.sub(&zero, &norm_scale)?;
 
-    let mul_scale_inverse =
-        invert_scalar(cs.namespace(|| "mul scale inverse"), &transcript.mul_scale)?;
-    let n_rho = multiply_scalars(
-        cs.namespace(|| "terminal n rho"),
-        &transcript.terminal_n,
-        &rho_to_n,
-    )?;
-    let g_scale = multiply_scalars(cs.namespace(|| "g scale"), &n_rho, &mul_scale_inverse)?;
-    let sqrt_minus_one_inverse = constant_scalar::<CS::Root>(SQRT_MINUS_ONE_INVERSE)?;
+    // residual = combined + sum_r (gamma_r first_r + (gamma_r^2 - 1) second_r)
+    //            - norm_scale G
+    let mut short = transcript.combined_commitment.point().clone();
+    for (pair, gamma) in transcript.rounds.iter().zip(&transcript.gammas) {
+        let gamma_squared = ops.square(gamma)?;
+        let gamma_squared_minus_one = ops.sub(&gamma_squared, &one)?;
+        short = ops.add_scaled(&short, pair.first.point(), gamma)?;
+        short = ops.add_scaled(&short, pair.second.point(), &gamma_squared_minus_one)?;
+    }
+    let residual_point = ops.add_scaled(&short, generator, &negative_norm_scale)?;
+    let residual = ops.encode(residual_point)?;
+
+    // g(X) = (terminal_n rho^n / mul_scale) prod_r (1 + g_factor_r X^(2^r)),
+    // g_factor_0 = gamma_0 / sqrt(-1), g_factor_r = gamma_r / mul_ratio^(2^(r-1)).
+    let mul_scale_inverse = ops.invert(&transcript.mul_scale)?;
+    let n_rho = ops.mul(&transcript.terminal_n, &rho_to_n)?;
+    let g_scale = ops.mul(&n_rho, &mul_scale_inverse)?;
+    let sqrt_minus_one_inverse = ops.constant_scalar(SQRT_MINUS_ONE_INVERSE)?;
     let mut g_factors = Vec::with_capacity(rounds);
-    g_factors.push(multiply_scalars(
-        cs.namespace(|| "first g factor"),
-        &transcript.gammas[0],
-        &sqrt_minus_one_inverse,
-    )?);
-    let mut ratio_inverse_power =
-        invert_scalar(cs.namespace(|| "ratio inverse"), &transcript.mul_ratio)?;
-    for (round, gamma) in transcript.gammas.iter().enumerate().skip(1) {
-        g_factors.push(multiply_scalars(
-            cs.namespace(|| format!("g factor {round}")),
-            gamma,
-            &ratio_inverse_power,
-        )?);
-        ratio_inverse_power = multiply_scalars(
-            cs.namespace(|| format!("ratio inverse power {round}")),
-            &ratio_inverse_power,
-            &ratio_inverse_power,
-        )?;
+    g_factors.push(ops.mul(&transcript.gammas[0], &sqrt_minus_one_inverse)?);
+    let mut ratio_inverse_power = ops.invert(&transcript.mul_ratio)?;
+    for gamma in transcript.gammas.iter().skip(1) {
+        g_factors.push(ops.mul(gamma, &ratio_inverse_power)?);
+        ratio_inverse_power = ops.square(&ratio_inverse_power)?;
     }
 
     Ok(PreparedNorm {
@@ -338,7 +205,7 @@ pub(crate) fn allocate_standard_generator<CS: ConstraintSystem<Scalar>>(
 
 /// Constrain one public construction leaf and reduce it to a pending claim.
 pub(crate) fn constrain_manifest_bound_construction_leaf<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     statement: ManifestBoundConstructionLeafStatementV4,
     transcript_witness: &CircuitProofTranscriptWitnessV4,
     reduction_proof: &CandidateNormReductionProofWitness,
@@ -348,36 +215,25 @@ pub(crate) fn constrain_manifest_bound_construction_leaf<CS: ConstraintSystem<Sc
     {
         return Err(synthesis_error("manifest-bound V4 construction leaf mode"));
     }
-    let circuit_binding_digest = statement
-        .circuit_binding_digest
-        .into_iter()
-        .enumerate()
-        .map(|(index, byte)| {
-            Byte::allocate(
-                cs.namespace(|| format!("circuit binding byte {index}")),
-                byte,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .try_into()
-        .expect("a circuit binding digest has 32 bytes");
+    let mut ops = Ops::new(cs);
+    let circuit_binding_digest = ops.bytes(statement.circuit_binding_digest)?;
     let transcript = install_transcript_with_constrained_binding(
-        cs.namespace(|| "V4 transcript"),
+        ops.scope("V4 transcript"),
         statement.shape,
         &circuit_binding_digest,
         statement.raw_generator_digest,
         transcript_witness,
     )?;
-    let generator = allocate_standard_generator(cs.namespace(|| "standard generator"))?;
-    constrain_manifest_bound_public_dlog(cs.namespace(|| "public DLog"), &transcript, &generator)?;
+    let generator = allocate_standard_generator(ops.scope("standard generator"))?;
+    constrain_manifest_bound_public_dlog(ops.scope("public DLog"), &transcript, &generator)?;
     let prepared = prepare_norm(
-        cs.namespace(|| "prepared norm"),
+        ops.scope("prepared norm"),
         statement.shape,
         &transcript,
         &generator,
     )?;
     let claim = constrain_candidate_norm_reduction(
-        cs.namespace(|| "coefficient reduction"),
+        ops.scope("coefficient reduction"),
         statement.basis_digest,
         statement.shape.n_vec_len,
         &prepared,

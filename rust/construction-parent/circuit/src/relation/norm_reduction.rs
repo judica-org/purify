@@ -3,18 +3,13 @@
 //! This layer owns the reduction transcript and opening equation. It consumes
 //! an already constrained norm and returns one pending candidate claim.
 
-use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
+use nova_snark::frontend::{ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::{
-    add_points, allocate_encoded_point, encode_computed_point, scale_point, Point,
-};
-use crate::gadgets::scalar::{
-    add_scalars, allocate_canonical_scalar, constant_u64, invert_scalar, multiply_scalars,
-    subtract_scalars, CanonicalScalar,
-};
+use crate::gadgets::ops::Ops;
+use crate::gadgets::point::Point;
 use crate::gadgets::sha256::Transcript;
 use crate::gadgets::synthesis_error;
-use crate::gadgets::transcript::{append_constant_bytes, append_point, append_scalar, challenge};
+use crate::gadgets::transcript::{append_constant_bytes, append_point, append_scalar};
 use crate::native::circuit_norm::CandidateNormReductionProofWitness;
 use crate::native::opening_generators::REDUCTION_OPENING_BASE_ROLE;
 use crate::relation::candidate::{append_polynomial, PendingClaim, PolynomialTerm};
@@ -24,25 +19,6 @@ use statement::Scalar;
 
 const NORM_REDUCTION_DOMAIN: &[u8] = b"Purify/BPPP/CandidateNormReduction/v2";
 const MAX_REDUCTION_ROUNDS: usize = 24;
-
-fn scale<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    point: &Point,
-    scalar: &CanonicalScalar,
-) -> Result<Point, SynthesisError> {
-    let bits = scalar.allocated_bits_le(cs.namespace(|| "scalar bits"))?;
-    scale_point(cs.namespace(|| "scalar multiplication"), point, &bits)
-}
-
-fn add_scaled<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    sum: &Point,
-    point: &Point,
-    scalar: &CanonicalScalar,
-) -> Result<Point, SynthesisError> {
-    let term = scale(cs.namespace(|| "scaled term"), point, scalar)?;
-    add_points(cs.namespace(|| "term sum"), sum, &term)
-}
 
 fn validate_shape(
     n_vec_len: usize,
@@ -77,7 +53,7 @@ fn validate_shape(
 
 /// Reduce one already constrained norm to a pending candidate claim.
 pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     basis_digest: [u8; 32],
     n_vec_len: usize,
     prepared: &PreparedNorm,
@@ -85,16 +61,14 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
     generator: &Point,
 ) -> Result<PendingClaim, SynthesisError> {
     let rounds = validate_shape(n_vec_len, prepared, proof)?;
-    let zero = constant_u64::<CS::Root>(0)?;
-    let one = constant_u64::<CS::Root>(1)?;
+    let mut ops = Ops::new(cs);
+    let zero = ops.constant(0)?;
+    let one = ops.constant(1)?;
     let mut transcript = Transcript::new();
     append_constant_bytes(&mut transcript, NORM_REDUCTION_DOMAIN)?;
     append_constant_bytes(&mut transcript, &basis_digest)?;
     transcript.append_u64(rounds as u64);
-    let _binding_inverse = invert_scalar(
-        cs.namespace(|| "nonzero prepared binding"),
-        &prepared.prepared_binding,
-    )?;
+    ops.require_nonzero(&prepared.prepared_binding)?;
     append_scalar(&mut transcript, &prepared.prepared_binding)?;
     append_point(&mut transcript, &prepared.coefficient_commitment);
 
@@ -104,145 +78,68 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
         factors: prepared.polynomial[1].factors.clone(),
     };
     append_polynomial(&mut transcript, std::slice::from_ref(&weights))?;
-    let evaluation = allocate_canonical_scalar(
-        cs.namespace(|| "coefficient evaluation"),
-        proof.coefficient_evaluation,
-    )?;
+    let evaluation = ops.scalar(proof.coefficient_evaluation)?;
     append_scalar(&mut transcript, &evaluation)?;
 
     let opening_base = constrain_transcript_opening_base(
-        cs.namespace(|| "opening base"),
+        ops.scope("opening base"),
         &transcript,
         basis_digest,
         REDUCTION_OPENING_BASE_ROLE,
     )?;
-    let encoded_opening_base =
-        encode_computed_point(cs.namespace(|| "encoded opening base"), opening_base)?;
-    append_point(&mut transcript, &encoded_opening_base);
+    let opening_base = ops.encode(opening_base)?;
+    append_point(&mut transcript, &opening_base);
 
+    // Opening equation, folded one round at a time:
+    //   commitment + sum_r (c_r^2 left_r + c_r^-2 right_r)
+    //     + (evaluation - terminal b) opening_base - terminal folded_generator = 0
     let mut opening_residual = prepared.coefficient_commitment.point().clone();
     let mut folded_scale = one.clone();
     let mut folded_factors = vec![zero.clone(); rounds];
     for round in 0..rounds {
-        let left = allocate_encoded_point(
-            cs.namespace(|| format!("round {round} left")),
-            proof.left[round],
-        )?;
-        let right = allocate_encoded_point(
-            cs.namespace(|| format!("round {round} right")),
-            proof.right[round],
-        )?;
+        let left = ops.point(proof.left[round])?;
+        let right = ops.point(proof.right[round])?;
         append_point(&mut transcript, &left);
         append_point(&mut transcript, &right);
-        let round_challenge = challenge(
-            cs.namespace(|| format!("round {round} challenge")),
-            &mut transcript,
-            round as u64,
-        )?;
-        let inverse = invert_scalar(
-            cs.namespace(|| format!("round {round} inverse")),
-            &round_challenge,
-        )?;
-        let squared = multiply_scalars(
-            cs.namespace(|| format!("round {round} squared")),
-            &round_challenge,
-            &round_challenge,
-        )?;
-        let inverse_squared = multiply_scalars(
-            cs.namespace(|| format!("round {round} inverse squared")),
-            &inverse,
-            &inverse,
-        )?;
-        folded_scale = multiply_scalars(
-            cs.namespace(|| format!("round {round} folded scale")),
-            &folded_scale,
-            &inverse,
-        )?;
+        let round_challenge = ops.challenge(&mut transcript, round as u64)?;
+        let inverse = ops.invert(&round_challenge)?;
+        let squared = ops.square(&round_challenge)?;
+        let inverse_squared = ops.square(&inverse)?;
+        folded_scale = ops.mul(&folded_scale, &inverse)?;
         folded_factors[rounds - 1 - round] = squared.clone();
-        opening_residual = add_scaled(
-            cs.namespace(|| format!("round {round} left term")),
-            &opening_residual,
-            left.point(),
-            &squared,
-        )?;
-        opening_residual = add_scaled(
-            cs.namespace(|| format!("round {round} right term")),
-            &opening_residual,
-            right.point(),
-            &inverse_squared,
-        )?;
+        opening_residual = ops.add_scaled(&opening_residual, left.point(), &squared)?;
+        opening_residual = ops.add_scaled(&opening_residual, right.point(), &inverse_squared)?;
     }
 
-    let terminal =
-        allocate_canonical_scalar(cs.namespace(|| "terminal scalar"), proof.terminal_scalar)?;
+    // b = folded_scale prod_r (1 + weight_r folded_factor_r)
+    let terminal = ops.scalar(proof.terminal_scalar)?;
     let mut b_final = folded_scale.clone();
-    for (round, (weight, factor)) in weights.factors.iter().zip(&folded_factors).enumerate() {
-        let product = multiply_scalars(
-            cs.namespace(|| format!("weight product {round}")),
-            weight,
-            factor,
-        )?;
-        let one_plus_product = add_scalars(
-            cs.namespace(|| format!("one plus product {round}")),
-            &one,
-            &product,
-        )?;
-        b_final = multiply_scalars(
-            cs.namespace(|| format!("b final {round}")),
-            &b_final,
-            &one_plus_product,
-        )?;
+    for (weight, factor) in weights.factors.iter().zip(&folded_factors) {
+        let product = ops.mul(weight, factor)?;
+        let one_plus_product = ops.add(&one, &product)?;
+        b_final = ops.mul(&b_final, &one_plus_product)?;
     }
-    let terminal_evaluation =
-        multiply_scalars(cs.namespace(|| "terminal evaluation"), &terminal, &b_final)?;
-    let opening_scalar = subtract_scalars(
-        cs.namespace(|| "opening scalar"),
-        &evaluation,
-        &terminal_evaluation,
-    )?;
-    opening_residual = add_scaled(
-        cs.namespace(|| "opening-base term"),
-        &opening_residual,
-        encoded_opening_base.point(),
-        &opening_scalar,
-    )?;
+    let terminal_evaluation = ops.mul(&terminal, &b_final)?;
+    let opening_scalar = ops.sub(&evaluation, &terminal_evaluation)?;
+    opening_residual = ops.add_scaled(&opening_residual, opening_base.point(), &opening_scalar)?;
 
-    let folded_generator =
-        allocate_encoded_point(cs.namespace(|| "folded generator"), proof.folded_generator)?;
-    let negative_terminal =
-        subtract_scalars(cs.namespace(|| "negative terminal"), &zero, &terminal)?;
-    opening_residual = add_scaled(
-        cs.namespace(|| "folded-generator term"),
+    let folded_generator = ops.point(proof.folded_generator)?;
+    let negative_terminal = ops.sub(&zero, &terminal)?;
+    opening_residual = ops.add_scaled(
         &opening_residual,
         folded_generator.point(),
         &negative_terminal,
     )?;
-    Boolean::enforce_equal(
-        cs.namespace(|| "opening equation identity"),
-        &opening_residual.is_identity(),
-        &Boolean::constant(true),
-    )?;
+    ops.require_identity(&opening_residual)?;
 
-    let norm_shift = multiply_scalars(
-        cs.namespace(|| "norm shift"),
-        &prepared.polynomial[1].scale,
-        &evaluation,
-    )?;
-    let negative_shift =
-        subtract_scalars(cs.namespace(|| "negative norm shift"), &zero, &norm_shift)?;
-    let shifted_generator = scale(
-        cs.namespace(|| "shifted generator"),
-        generator,
-        &negative_shift,
-    )?;
-    let norm_point = add_points(
-        cs.namespace(|| "norm point"),
-        prepared.residual.point(),
-        &shifted_generator,
-    )?;
-    let encoded_norm_point =
-        encode_computed_point(cs.namespace(|| "encoded norm point"), norm_point)?;
+    // norm_point = residual - (terminal_l evaluation) G
+    let norm_shift = ops.mul(&prepared.polynomial[1].scale, &evaluation)?;
+    let negative_shift = ops.sub(&zero, &norm_shift)?;
+    let shifted_generator = ops.scale(generator, &negative_shift)?;
+    let norm_point = ops.add_points(prepared.residual.point(), &shifted_generator)?;
+    let norm_point = ops.encode(norm_point)?;
 
+    // The pending claim fuses the norm point with the folded opening.
     let folded = PolynomialTerm {
         scale: folded_scale,
         offset: n_vec_len,
@@ -250,32 +147,16 @@ pub(crate) fn constrain_candidate_norm_reduction<CS: ConstraintSystem<Scalar>>(
     };
     append_scalar(&mut transcript, &terminal)?;
     append_point(&mut transcript, &folded_generator);
-    append_point(&mut transcript, &encoded_norm_point);
+    append_point(&mut transcript, &norm_point);
     append_polynomial(&mut transcript, &prepared.polynomial)?;
     append_polynomial(&mut transcript, std::slice::from_ref(&folded))?;
-    let fusion = challenge(
-        cs.namespace(|| "fusion challenge"),
-        &mut transcript,
-        rounds as u64,
-    )?;
-    let scaled_folded = scale(
-        cs.namespace(|| "fused folded generator"),
-        folded_generator.point(),
-        &fusion,
-    )?;
-    let combined = add_points(
-        cs.namespace(|| "combined norm claim"),
-        encoded_norm_point.point(),
-        &scaled_folded,
-    )?;
-    let point = encode_computed_point(cs.namespace(|| "encoded norm claim"), combined)?;
+    let fusion = ops.challenge(&mut transcript, rounds as u64)?;
+    let scaled_folded = ops.scale(folded_generator.point(), &fusion)?;
+    let combined = ops.add_points(norm_point.point(), &scaled_folded)?;
+    let point = ops.encode(combined)?;
     let mut polynomial = prepared.polynomial.clone();
     polynomial.push(PolynomialTerm {
-        scale: multiply_scalars(
-            cs.namespace(|| "fused folded scale"),
-            &folded.scale,
-            &fusion,
-        )?,
+        scale: ops.mul(&folded.scale, &fusion)?,
         offset: folded.offset,
         factors: folded.factors,
     });
@@ -291,7 +172,9 @@ mod tests {
 
     use super::*;
     use crate::gadgets::point::{allocate_encoded_point as allocate_direct_point, EncodedPoint};
-    use crate::gadgets::scalar::allocate_canonical_scalar as allocate_test_scalar;
+    use crate::gadgets::scalar::{
+        allocate_canonical_scalar as allocate_test_scalar, CanonicalScalar,
+    };
     use crate::native::secp::SecpScalarWitness;
     use crate::native::secp::{encoded_point_value, standard_generator, SecpEncodedPointWitness};
     use crate::relation::norm_leaf::allocate_standard_generator;

@@ -2,6 +2,7 @@
 
 use nova_snark::frontend::SynthesisError;
 
+pub mod ops;
 pub mod point;
 pub mod scalar;
 pub mod sha256;

@@ -8,12 +8,13 @@ use nova_snark::{
     traits::circuit::StepCircuit,
 };
 
-use crate::gadgets::point::{allocate_encoded_point, EncodedPoint};
-use crate::gadgets::scalar::{allocate_canonical_scalar, CanonicalScalar};
+use crate::gadgets::ops::Ops;
+use crate::gadgets::point::EncodedPoint;
+use crate::gadgets::scalar::CanonicalScalar;
 use crate::gadgets::sha256::{Byte, Transcript};
 use crate::gadgets::synthesis_error;
 use crate::gadgets::transcript::{
-    append_bytes, append_constant_bytes, append_point, append_scalar, challenge,
+    append_bytes, append_constant_bytes, append_point, append_scalar,
 };
 use crate::native::candidate::CandidateStepProofWitness;
 use crate::native::circuit_norm::{
@@ -234,58 +235,55 @@ fn field_bytes_be<CS: ConstraintSystem<Scalar>>(
     }))
 }
 
+/// Allocates a canonical scalar equal to one public state field.
 fn bind_scalar<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     state: &AllocatedNum<Scalar>,
     witness: crate::native::secp::SecpScalarWitness,
 ) -> Result<CanonicalScalar, SynthesisError> {
-    let scalar = allocate_canonical_scalar(cs.namespace(|| "canonical scalar"), witness)?;
-    enforce_equal(cs.namespace(|| "embedded scalar"), state, scalar.embedded());
+    let mut ops = Ops::new(cs);
+    let scalar = ops.scalar(witness)?;
+    enforce_equal(ops.scope("embedded scalar"), state, scalar.embedded());
     Ok(scalar)
 }
 
 pub(crate) fn bind_prior_state<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     state: &[AllocatedNum<Scalar>],
     witness: &ConstructionRecurrenceStateWitness,
 ) -> Result<PriorState, SynthesisError> {
     if state.len() != STATE_ARITY || witness.root.factors.len() != ROOT_ROUNDS {
         return Err(synthesis_error("construction recurrence state shape"));
     }
+    let mut ops = Ops::new(cs);
 
-    let point = allocate_encoded_point(cs.namespace(|| "root point"), witness.root.point)?;
+    let point = ops.point(witness.root.point)?;
     enforce_equal(
-        cs.namespace(|| "root prefix"),
+        ops.scope("root prefix"),
         &state[ROOT_PREFIX_INDEX],
         LinearCombination::zero() + point.prefix().get_variable(),
     );
     enforce_equal(
-        cs.namespace(|| "root x"),
+        ops.scope("root x"),
         &state[ROOT_X_INDEX],
         LinearCombination::zero() + point.point().x().get_variable(),
     );
     let scale = bind_scalar(
-        cs.namespace(|| "root scale"),
+        ops.scope("root scale"),
         &state[ROOT_SCALE_INDEX],
         witness.root.scale,
     )?;
-    let factors = witness
-        .root
-        .factors
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, factor)| {
-            bind_scalar(
-                cs.namespace(|| format!("root factor {index}")),
-                &state[ROOT_FACTORS_START + index],
-                factor,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut factors = Vec::with_capacity(ROOT_ROUNDS);
+    for (index, factor) in witness.root.factors.iter().copied().enumerate() {
+        factors.push(bind_scalar(
+            ops.scope("root factor"),
+            &state[ROOT_FACTORS_START + index],
+            factor,
+        )?);
+    }
 
-    let manifest = field_bytes_be(cs.namespace(|| "prior manifest"), &state[MANIFEST_INDEX])?;
-    let index_bytes = field_bytes_be(cs.namespace(|| "step index"), &state[STEP_INDEX])?;
+    let manifest = field_bytes_be(ops.scope("prior manifest"), &state[MANIFEST_INDEX])?;
+    let index_bytes = field_bytes_be(ops.scope("step index"), &state[STEP_INDEX])?;
     Ok(PriorState {
         root_claim: PendingClaim {
             point,
@@ -302,7 +300,7 @@ pub(crate) fn bind_prior_state<CS: ConstraintSystem<Scalar>>(
 }
 
 pub(crate) fn install_manifest_transition<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     state: &PriorState,
     leaf: ConstrainedManifestLeaf<'_>,
 ) -> Result<CanonicalScalar, SynthesisError> {
@@ -314,7 +312,7 @@ pub(crate) fn install_manifest_transition<CS: ConstraintSystem<Scalar>>(
     append_scalar(&mut transcript, leaf.precommitment)?;
     append_point(&mut transcript, leaf.coefficient_commitment);
     append_point(&mut transcript, leaf.anchored_offset);
-    challenge(cs.namespace(|| "next manifest"), &mut transcript, 0)
+    Ops::new(cs).challenge(&mut transcript, 0)
 }
 
 fn scalar_assignment(value: &CanonicalScalar) -> Result<Option<Scalar>, SynthesisError> {
@@ -362,7 +360,7 @@ fn increment_index<CS: ConstraintSystem<Scalar>>(
 }
 
 pub(crate) fn expose_output_state<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     prior: &PriorState,
     root: &CandidateRoot,
     manifest: &CanonicalScalar,
@@ -370,24 +368,16 @@ pub(crate) fn expose_output_state<CS: ConstraintSystem<Scalar>>(
     if root.factors.len() != ROOT_ROUNDS {
         return Err(synthesis_error("construction output root shape"));
     }
+    let mut ops = Ops::new(cs);
     let mut output = Vec::with_capacity(STATE_ARITY);
     output.push(root.point.prefix().clone());
     output.push(root.point.point().x().clone());
-    output.push(materialize_scalar(
-        cs.namespace(|| "root scale"),
-        &root.scale,
-    )?);
-    for (index, factor) in root.factors.iter().enumerate() {
-        output.push(materialize_scalar(
-            cs.namespace(|| format!("root factor {index}")),
-            factor,
-        )?);
+    output.push(materialize_scalar(ops.scope("root scale"), &root.scale)?);
+    for factor in &root.factors {
+        output.push(materialize_scalar(ops.scope("root factor"), factor)?);
     }
-    output.push(materialize_scalar(cs.namespace(|| "manifest"), manifest)?);
-    output.push(increment_index(
-        cs.namespace(|| "step index"),
-        prior.index(),
-    )?);
+    output.push(materialize_scalar(ops.scope("manifest"), manifest)?);
+    output.push(increment_index(ops.scope("step index"), prior.index())?);
     debug_assert_eq!(output.len(), STATE_ARITY);
     Ok(output)
 }

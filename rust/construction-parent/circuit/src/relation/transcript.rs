@@ -6,12 +6,13 @@
 
 use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::{allocate_encoded_point, EncodedPoint};
-use crate::gadgets::scalar::{allocate_canonical_scalar, CanonicalScalar};
+use crate::gadgets::ops::Ops;
+use crate::gadgets::point::EncodedPoint;
+use crate::gadgets::scalar::CanonicalScalar;
 use crate::gadgets::sha256::{Byte, Transcript};
 use crate::gadgets::synthesis_error;
 use crate::gadgets::transcript::{
-    append_bytes, append_constant_bytes, append_point, append_scalar, challenge,
+    append_bytes, append_constant_bytes, append_point, append_scalar,
 };
 use crate::native::circuit_transcript::{
     CircuitCommitmentModeV4, CircuitPointPairWitnessV4, CircuitProofTranscriptWitnessV4,
@@ -105,12 +106,13 @@ fn pair_point(
 }
 
 fn append_pair<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     transcript: &mut Transcript,
     witness: &CircuitPointPairWitnessV4,
 ) -> Result<CircuitPointPairV4, SynthesisError> {
-    let first = allocate_encoded_point(cs.namespace(|| "first point"), pair_point(witness, 0)?)?;
-    let second = allocate_encoded_point(cs.namespace(|| "second point"), pair_point(witness, 1)?)?;
+    let mut ops = Ops::new(cs);
+    let first = ops.point(pair_point(witness, 0)?)?;
+    let second = ops.point(pair_point(witness, 1)?)?;
     let parity = Byte::from_constrained_bits_le([
         second.odd().clone(),
         first.odd().clone(),
@@ -125,36 +127,8 @@ fn append_pair<CS: ConstraintSystem<Scalar>>(
     Ok(CircuitPointPairV4 { first, second })
 }
 
-fn require_identity<CS: ConstraintSystem<Scalar>>(
-    cs: CS,
-    point: &EncodedPoint,
-) -> Result<(), SynthesisError> {
-    Boolean::enforce_equal(cs, &point.point().is_identity(), &Boolean::constant(true))
-}
-
-fn require_finite_even<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    point: &EncodedPoint,
-) -> Result<(), SynthesisError> {
-    Boolean::enforce_equal(
-        cs.namespace(|| "finite"),
-        &point.point().is_identity(),
-        &Boolean::constant(false),
-    )?;
-    Boolean::enforce_equal(
-        cs.namespace(|| "even"),
-        point.odd(),
-        &Boolean::constant(false),
-    )
-}
-
-fn require_zero_scalar<CS: ConstraintSystem<Scalar>>(mut cs: CS, value: &CanonicalScalar) {
-    let embedded = value.embedded();
-    cs.enforce(|| "zero scalar", |_| embedded, |lc| lc + CS::one(), |lc| lc);
-}
-
 fn install_transcript_with_binding<CS, F>(
-    mut cs: CS,
+    cs: CS,
     shape: CircuitTranscriptShapeV4,
     raw_generator_digest: [u8; 32],
     witness: &CircuitProofTranscriptWitnessV4,
@@ -172,112 +146,82 @@ where
     {
         return Err(synthesis_error("V4 transcript witness shape"));
     }
+    let mut ops = Ops::new(cs);
 
     let mut precommit = Transcript::new();
     append_constant_bytes(&mut precommit, CIRCUIT_NORM_PRECOMMIT_DOMAIN_V4)?;
     append_binding(&mut precommit)?;
     append_shape(&mut precommit, shape)?;
     let mut public_commitments = Vec::with_capacity(witness.public_commitments.len());
-    for (index, point) in witness.public_commitments.iter().copied().enumerate() {
-        let point =
-            allocate_encoded_point(cs.namespace(|| format!("public commitment {index}")), point)?;
+    for point in witness.public_commitments.iter().copied() {
+        let point = ops.point(point)?;
         append_point(&mut precommit, &point);
         public_commitments.push(point);
     }
-    let raw_commitment =
-        allocate_encoded_point(cs.namespace(|| "raw commitment"), witness.raw_commitment)?;
+    let raw_commitment = ops.point(witness.raw_commitment)?;
     append_point(&mut precommit, &raw_commitment);
-    let precommitment = challenge(cs.namespace(|| "precommitment"), &mut precommit, 0)?;
+    let precommitment = ops.challenge(&mut precommit, 0)?;
 
     let mut proof = Transcript::new();
     append_constant_bytes(&mut proof, CIRCUIT_NORM_PROOF_DOMAIN_V4)?;
     append_scalar(&mut proof, &precommitment)?;
     append_constant_bytes(&mut proof, &raw_generator_digest)?;
     append_shape(&mut proof, shape)?;
-    let rho = challenge(cs.namespace(|| "rho"), &mut proof, 0)?;
-    let mul_scale = challenge(cs.namespace(|| "mul scale"), &mut proof, 1)?;
-    let mul_ratio = challenge(cs.namespace(|| "mul ratio"), &mut proof, 2)?;
-    let row_ratio = challenge(cs.namespace(|| "row ratio"), &mut proof, 3)?;
+    let rho = ops.challenge(&mut proof, 0)?;
+    let mul_scale = ops.challenge(&mut proof, 1)?;
+    let mul_ratio = ops.challenge(&mut proof, 2)?;
+    let row_ratio = ops.challenge(&mut proof, 3)?;
 
-    let coefficient_commitment = allocate_encoded_point(
-        cs.namespace(|| "coefficient commitment"),
-        witness.coefficient_commitment,
-    )?;
+    let coefficient_commitment = ops.point(witness.coefficient_commitment)?;
     append_point(&mut proof, &coefficient_commitment);
-    let anchored_offset =
-        allocate_encoded_point(cs.namespace(|| "anchored offset"), witness.anchored_offset)?;
+    let anchored_offset = ops.point(witness.anchored_offset)?;
     append_point(&mut proof, &anchored_offset);
-    let anchored_commitment = allocate_encoded_point(
-        cs.namespace(|| "anchored commitment"),
-        witness.anchored_commitment,
-    )?;
+    let anchored_commitment = ops.point(witness.anchored_commitment)?;
     append_point(&mut proof, &anchored_commitment);
-    let eta = challenge(cs.namespace(|| "eta"), &mut proof, 4)?;
-    let batched_public_commitment = allocate_encoded_point(
-        cs.namespace(|| "batched public commitment"),
-        witness.batched_public_commitment,
-    )?;
+    let eta = ops.challenge(&mut proof, 4)?;
+    let batched_public_commitment = ops.point(witness.batched_public_commitment)?;
     append_point(&mut proof, &batched_public_commitment);
-    let dlog_nonce = allocate_encoded_point(cs.namespace(|| "dlog nonce"), witness.dlog_nonce)?;
+    let dlog_nonce = ops.point(witness.dlog_nonce)?;
     match shape.mode {
         CircuitCommitmentModeV4::Hidden => {
-            require_identity(
-                cs.namespace(|| "hidden batched commitment"),
-                &batched_public_commitment,
-            )?;
-            require_identity(cs.namespace(|| "hidden dlog nonce"), &dlog_nonce)?;
+            ops.require_identity(batched_public_commitment.point())?;
+            ops.require_identity(dlog_nonce.point())?;
         }
         CircuitCommitmentModeV4::Public => {
-            require_finite_even(cs.namespace(|| "public dlog nonce"), &dlog_nonce)?;
+            ops.require_finite(dlog_nonce.point())?;
+            ops.require_even(&dlog_nonce)?;
         }
     }
     append_bytes(&mut proof, dlog_nonce.x_bytes())?;
-    let dlog_challenge = challenge(cs.namespace(|| "dlog challenge"), &mut proof, 5)?;
-    let dlog_response =
-        allocate_canonical_scalar(cs.namespace(|| "dlog response"), witness.dlog_response)?;
+    let dlog_challenge = ops.challenge(&mut proof, 5)?;
+    let dlog_response = ops.scalar(witness.dlog_response)?;
     if shape.mode == CircuitCommitmentModeV4::Hidden {
-        require_zero_scalar(cs.namespace(|| "hidden dlog response"), &dlog_response);
+        ops.require_zero(&dlog_response);
     }
     append_scalar(&mut proof, &dlog_response)?;
 
-    let mask_commitment =
-        allocate_encoded_point(cs.namespace(|| "mask commitment"), witness.mask_commitment)?;
+    let mask_commitment = ops.point(witness.mask_commitment)?;
     append_point(&mut proof, &mask_commitment);
-    let t2 = allocate_canonical_scalar(cs.namespace(|| "t2"), witness.t2)?;
+    let t2 = ops.scalar(witness.t2)?;
     append_scalar(&mut proof, &t2)?;
-    let alpha = challenge(cs.namespace(|| "alpha"), &mut proof, 6)?;
-    let combined_commitment = allocate_encoded_point(
-        cs.namespace(|| "combined commitment"),
-        witness.combined_commitment,
-    )?;
+    let alpha = ops.challenge(&mut proof, 6)?;
+    let combined_commitment = ops.point(witness.combined_commitment)?;
     append_point(&mut proof, &combined_commitment);
 
     let mut rounds = Vec::with_capacity(witness.rounds.len());
     let mut gammas = Vec::with_capacity(witness.rounds.len());
     for (round, pair) in witness.rounds.iter().enumerate() {
-        rounds.push(append_pair(
-            cs.namespace(|| format!("round pair {round}")),
-            &mut proof,
-            pair,
-        )?);
+        rounds.push(append_pair(ops.scope("round pair"), &mut proof, pair)?);
         let round = u64::try_from(round).map_err(|_| synthesis_error("V4 round"))?;
-        gammas.push(challenge(
-            cs.namespace(|| format!("gamma {round}")),
-            &mut proof,
-            7 + round,
-        )?);
+        gammas.push(ops.challenge(&mut proof, 7 + round)?);
     }
-    let terminal_n = allocate_canonical_scalar(cs.namespace(|| "terminal n"), witness.terminal_n)?;
-    let terminal_l = allocate_canonical_scalar(cs.namespace(|| "terminal l"), witness.terminal_l)?;
+    let terminal_n = ops.scalar(witness.terminal_n)?;
+    let terminal_l = ops.scalar(witness.terminal_l)?;
     append_scalar(&mut proof, &terminal_n)?;
     append_scalar(&mut proof, &terminal_l)?;
     let prepared_round = 7 + u64::try_from(witness.rounds.len())
         .map_err(|_| synthesis_error("V4 transcript rounds"))?;
-    let prepared_binding = challenge(
-        cs.namespace(|| "prepared binding"),
-        &mut proof,
-        prepared_round,
-    )?;
+    let prepared_binding = ops.challenge(&mut proof, prepared_round)?;
 
     Ok(CircuitTranscriptResultV4 {
         public_commitments,

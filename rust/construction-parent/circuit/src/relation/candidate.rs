@@ -1,22 +1,17 @@
 //! Candidate accumulation arithmetic on Nova's constraint frontend.
 
-use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
+use nova_snark::frontend::{ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::{
-    add_points, allocate_encoded_point, encode_computed_point, scale_point, EncodedPoint, Point,
-};
-use crate::gadgets::scalar::{
-    add_scalars, allocate_canonical_scalar, constant_scalar, constant_u64, invert_scalar,
-    multiply_scalars, subtract_scalars, CanonicalScalar,
-};
+use crate::gadgets::ops::Ops;
+use crate::gadgets::point::EncodedPoint;
+use crate::gadgets::scalar::CanonicalScalar;
 use crate::gadgets::sha256::Transcript;
 use crate::gadgets::synthesis_error;
-use crate::gadgets::transcript::{append_constant_bytes, append_point, append_scalar, challenge};
+use crate::gadgets::transcript::{append_constant_bytes, append_point, append_scalar};
 use crate::native::candidate::{
     CandidateStepProofWitness, MAX_CANDIDATE_CLAIMS, MAX_CANDIDATE_ROUNDS,
 };
 use crate::native::opening_generators::ACCUMULATION_OPENING_BASE_ROLE;
-use crate::native::secp::SecpScalarWitness;
 use crate::relation::opening_base::constrain_transcript_opening_base;
 use statement::Scalar;
 
@@ -41,29 +36,28 @@ pub(crate) struct CandidateRoot {
     pub(crate) factors: Vec<CanonicalScalar>,
 }
 
+/// `value^(2^r)` for `r` in `0..rounds`.
 pub(crate) fn candidate_power_ladder<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     value: &CanonicalScalar,
     rounds: usize,
 ) -> Result<Vec<CanonicalScalar>, SynthesisError> {
     if rounds == 0 {
         return Err(synthesis_error("candidate power ladder"));
     }
+    let mut ops = Ops::new(cs);
     let mut powers = Vec::with_capacity(rounds);
     powers.push(value.clone());
-    for round in 1..rounds {
-        let previous = powers.last().expect("nonempty power ladder");
-        powers.push(multiply_scalars(
-            cs.namespace(|| format!("power {round}")),
-            previous,
-            previous,
-        )?);
+    for _ in 1..rounds {
+        let next = ops.square(powers.last().expect("nonempty power ladder"))?;
+        powers.push(next);
     }
     Ok(powers)
 }
 
+/// `x^offset` from the ladder's binary powers, or `None` for a zero offset.
 fn candidate_offset_power<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     powers: &[CanonicalScalar],
     offset: usize,
 ) -> Result<Option<CanonicalScalar>, SynthesisError> {
@@ -73,51 +67,38 @@ fn candidate_offset_power<CS: ConstraintSystem<Scalar>>(
     if offset >> powers.len() != 0 {
         return Err(synthesis_error("candidate term offset"));
     }
+    let mut ops = Ops::new(cs);
     let mut selected = None;
     for (index, power) in powers.iter().enumerate() {
         if offset & (1usize << index) != 0 {
             selected = Some(match selected {
                 None => power.clone(),
-                Some(value) => multiply_scalars(
-                    cs.namespace(|| format!("offset bit {index}")),
-                    &value,
-                    power,
-                )?,
+                Some(value) => ops.mul(&value, power)?,
             });
         }
     }
     Ok(selected)
 }
 
+/// `scale x^offset prod_j (1 + factor_j x^(2^j))`.
 pub(crate) fn evaluate_candidate_term<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     term: &PolynomialTerm,
     powers: &[CanonicalScalar],
 ) -> Result<CanonicalScalar, SynthesisError> {
     if term.factors.len() > powers.len() {
         return Err(synthesis_error("candidate term factors"));
     }
-    let mut value = match candidate_offset_power(cs.namespace(|| "offset"), powers, term.offset)? {
-        Some(offset) => multiply_scalars(cs.namespace(|| "scale offset"), &term.scale, &offset)?,
+    let mut ops = Ops::new(cs);
+    let mut value = match candidate_offset_power(ops.scope("offset"), powers, term.offset)? {
+        Some(offset) => ops.mul(&term.scale, &offset)?,
         None => term.scale.clone(),
     };
-    let one = constant_scalar::<CS::Root>(SecpScalarWitness::from_u64(1))?;
-    for (index, (factor, power)) in term.factors.iter().zip(powers).enumerate() {
-        let product = multiply_scalars(
-            cs.namespace(|| format!("factor product {index}")),
-            factor,
-            power,
-        )?;
-        let one_plus = add_scalars(
-            cs.namespace(|| format!("one plus factor {index}")),
-            &one,
-            &product,
-        )?;
-        value = multiply_scalars(
-            cs.namespace(|| format!("term product {index}")),
-            &value,
-            &one_plus,
-        )?;
+    let one = ops.constant(1)?;
+    for (factor, power) in term.factors.iter().zip(powers) {
+        let product = ops.mul(factor, power)?;
+        let one_plus = ops.add(&one, &product)?;
+        value = ops.mul(&value, &one_plus)?;
     }
     Ok(value)
 }
@@ -148,27 +129,6 @@ fn append_claims(
         append_polynomial(transcript, &claim.polynomial)?;
     }
     Ok(())
-}
-
-fn append_computed_point<CS: ConstraintSystem<Scalar>>(
-    cs: CS,
-    transcript: &mut Transcript,
-    point: Point,
-) -> Result<EncodedPoint, SynthesisError> {
-    let encoded = encode_computed_point(cs, point)?;
-    append_point(transcript, &encoded);
-    Ok(encoded)
-}
-
-fn add_scaled<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    accumulator: &Point,
-    point: &Point,
-    scalar: &CanonicalScalar,
-) -> Result<Point, SynthesisError> {
-    let bits = scalar.allocated_bits_le(cs.namespace(|| "scalar bits"))?;
-    let term = scale_point(cs.namespace(|| "scaled point"), point, &bits)?;
-    add_points(cs.namespace(|| "point sum"), accumulator, &term)
 }
 
 fn validate_constrained_shape(
@@ -207,206 +167,108 @@ fn validate_constrained_shape(
 }
 
 pub(crate) fn install_constrained_candidate_step<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     basis_digest: [u8; 32],
     claims: &[PendingClaim],
     proof: &CandidateStepProofWitness,
 ) -> Result<CandidateRoot, SynthesisError> {
     let rounds = validate_constrained_shape(claims, proof)?;
+    let mut ops = Ops::new(cs);
+    let zero = ops.constant(0)?;
+    let one = ops.constant(1)?;
     let mut transcript = Transcript::new();
     append_constant_bytes(&mut transcript, CANDIDATE_STEP_DOMAIN)?;
     append_constant_bytes(&mut transcript, &basis_digest)?;
     transcript.append_u64(rounds as u64);
     append_claims(&mut transcript, claims)?;
 
-    let beta = challenge(cs.namespace(|| "beta"), &mut transcript, 0)?;
-    let mut claim_weights = Vec::with_capacity(claims.len());
-    claim_weights.push(constant_u64::<CS::Root>(1)?);
+    // commitment = sum_i beta^i claim_i
+    let beta = ops.challenge(&mut transcript, 0)?;
+    let mut claim_weights = vec![one.clone()];
     for index in 1..claims.len() {
-        let next = multiply_scalars(
-            cs.namespace(|| format!("claim weight {index}")),
-            claim_weights.last().expect("nonempty claim weights"),
-            &beta,
-        )?;
+        let next = ops.mul(&claim_weights[index - 1], &beta)?;
         claim_weights.push(next);
     }
     let mut commitment = claims[0].point.point().clone();
-    for index in 1..claims.len() {
-        commitment = add_scaled(
-            cs.namespace(|| format!("commitment term {index}")),
-            &commitment,
-            claims[index].point.point(),
-            &claim_weights[index],
-        )?;
+    for (claim, weight) in claims.iter().zip(&claim_weights).skip(1) {
+        commitment = ops.add_scaled(&commitment, claim.point.point(), weight)?;
     }
-    append_computed_point(
-        cs.namespace(|| "commitment encoding"),
-        &mut transcript,
-        commitment.clone(),
-    )?;
+    let encoded_commitment = ops.encode(commitment.clone())?;
+    append_point(&mut transcript, &encoded_commitment);
 
-    let x = challenge(cs.namespace(|| "evaluation point"), &mut transcript, 1)?;
-    let powers = candidate_power_ladder(cs.namespace(|| "evaluation powers"), &x, rounds)?;
+    // y = sum_i beta^i claim_i(x)
+    let x = ops.challenge(&mut transcript, 1)?;
+    let powers = candidate_power_ladder(ops.scope("evaluation powers"), &x, rounds)?;
     let mut y = None;
     for (claim_index, (claim, weight)) in claims.iter().zip(&claim_weights).enumerate() {
-        let mut terms = claim.polynomial.iter().enumerate();
-        let (term_index, first) = terms.next().expect("nonempty candidate polynomial");
-        let mut evaluation = evaluate_candidate_term(
-            cs.namespace(|| format!("claim {claim_index} term {term_index}")),
-            first,
-            &powers,
-        )?;
-        for (term_index, term) in terms {
-            let term = evaluate_candidate_term(
-                cs.namespace(|| format!("claim {claim_index} term {term_index}")),
-                term,
-                &powers,
-            )?;
-            evaluation = add_scalars(
-                cs.namespace(|| format!("claim {claim_index} term sum {term_index}")),
-                &evaluation,
-                &term,
-            )?;
+        let mut evaluation = None;
+        for term in &claim.polynomial {
+            let term = evaluate_candidate_term(ops.scope("claim term"), term, &powers)?;
+            evaluation = Some(match evaluation {
+                None => term,
+                Some(sum) => ops.add(&sum, &term)?,
+            });
         }
+        let evaluation = evaluation.expect("nonempty candidate polynomial");
         let weighted = if claim_index == 0 {
             evaluation
         } else {
-            multiply_scalars(
-                cs.namespace(|| format!("weighted claim {claim_index}")),
-                weight,
-                &evaluation,
-            )?
+            ops.mul(weight, &evaluation)?
         };
         y = Some(match y {
             None => weighted,
-            Some(value) => add_scalars(
-                cs.namespace(|| format!("claim sum {claim_index}")),
-                &value,
-                &weighted,
-            )?,
+            Some(sum) => ops.add(&sum, &weighted)?,
         });
     }
     let y = y.expect("nonempty candidate claims");
     append_scalar(&mut transcript, &y)?;
 
     let opening = constrain_transcript_opening_base(
-        cs.namespace(|| "opening base"),
+        ops.scope("opening base"),
         &transcript,
         basis_digest,
         ACCUMULATION_OPENING_BASE_ROLE,
     )?;
-    append_computed_point(
-        cs.namespace(|| "opening encoding"),
-        &mut transcript,
-        opening.clone(),
-    )?;
+    let encoded_opening = ops.encode(opening.clone())?;
+    append_point(&mut transcript, &encoded_opening);
 
+    // Opening equation, folded one round at a time:
+    //   commitment + sum_r (c_r^2 left_r + c_r^-2 right_r)
+    //     + (y - terminal f(x)) opening - terminal folded_generator = 0
     let mut residual = commitment;
-    let mut folded_scale = constant_u64::<CS::Root>(1)?;
-    let mut folded_factors = (0..rounds)
-        .map(|_| constant_u64::<CS::Root>(0))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut folded_scale = one.clone();
+    let mut folded_factors = vec![zero.clone(); rounds];
     for round in 0..rounds {
-        let left = allocate_encoded_point(
-            cs.namespace(|| format!("round {round} left")),
-            proof.left[round],
-        )?;
-        let right = allocate_encoded_point(
-            cs.namespace(|| format!("round {round} right")),
-            proof.right[round],
-        )?;
+        let left = ops.point(proof.left[round])?;
+        let right = ops.point(proof.right[round])?;
         append_point(&mut transcript, &left);
         append_point(&mut transcript, &right);
-        let round_challenge = challenge(
-            cs.namespace(|| format!("round {round} challenge")),
-            &mut transcript,
-            2 + round as u64,
-        )?;
-        let inverse = invert_scalar(
-            cs.namespace(|| format!("round {round} inverse")),
-            &round_challenge,
-        )?;
-        let squared = multiply_scalars(
-            cs.namespace(|| format!("round {round} square")),
-            &round_challenge,
-            &round_challenge,
-        )?;
-        let inverse_squared = multiply_scalars(
-            cs.namespace(|| format!("round {round} inverse square")),
-            &inverse,
-            &inverse,
-        )?;
-        folded_scale = multiply_scalars(
-            cs.namespace(|| format!("round {round} folded scale")),
-            &folded_scale,
-            &inverse,
-        )?;
+        let round_challenge = ops.challenge(&mut transcript, 2 + round as u64)?;
+        let inverse = ops.invert(&round_challenge)?;
+        let squared = ops.square(&round_challenge)?;
+        let inverse_squared = ops.square(&inverse)?;
+        folded_scale = ops.mul(&folded_scale, &inverse)?;
         folded_factors[rounds - 1 - round] = squared.clone();
-        residual = add_scaled(
-            cs.namespace(|| format!("round {round} left residual")),
-            &residual,
-            left.point(),
-            &squared,
-        )?;
-        residual = add_scaled(
-            cs.namespace(|| format!("round {round} right residual")),
-            &residual,
-            right.point(),
-            &inverse_squared,
-        )?;
+        residual = ops.add_scaled(&residual, left.point(), &squared)?;
+        residual = ops.add_scaled(&residual, right.point(), &inverse_squared)?;
     }
 
-    let terminal =
-        allocate_canonical_scalar(cs.namespace(|| "terminal scalar"), proof.terminal_scalar)?;
+    // f(x) = folded_scale prod_j (1 + folded_factor_j x^(2^j))
+    let terminal = ops.scalar(proof.terminal_scalar)?;
     let mut final_evaluation = folded_scale.clone();
-    for (index, (factor, power)) in folded_factors.iter().zip(&powers).enumerate() {
-        let product = multiply_scalars(
-            cs.namespace(|| format!("terminal factor {index}")),
-            factor,
-            power,
-        )?;
-        let one = constant_u64::<CS::Root>(1)?;
-        let one_plus = add_scalars(
-            cs.namespace(|| format!("terminal one plus {index}")),
-            &one,
-            &product,
-        )?;
-        final_evaluation = multiply_scalars(
-            cs.namespace(|| format!("terminal evaluation {index}")),
-            &final_evaluation,
-            &one_plus,
-        )?;
+    for (factor, power) in folded_factors.iter().zip(&powers) {
+        let product = ops.mul(factor, power)?;
+        let one_plus = ops.add(&one, &product)?;
+        final_evaluation = ops.mul(&final_evaluation, &one_plus)?;
     }
-    let terminal_evaluation = multiply_scalars(
-        cs.namespace(|| "terminal product"),
-        &terminal,
-        &final_evaluation,
-    )?;
-    let opening_scalar =
-        subtract_scalars(cs.namespace(|| "opening scalar"), &y, &terminal_evaluation)?;
-    let zero = constant_u64::<CS::Root>(0)?;
-    let negative_terminal =
-        subtract_scalars(cs.namespace(|| "negative terminal"), &zero, &terminal)?;
-    residual = add_scaled(
-        cs.namespace(|| "opening residual"),
-        &residual,
-        &opening,
-        &opening_scalar,
-    )?;
+    let terminal_evaluation = ops.mul(&terminal, &final_evaluation)?;
+    let opening_scalar = ops.sub(&y, &terminal_evaluation)?;
+    let negative_terminal = ops.sub(&zero, &terminal)?;
+    residual = ops.add_scaled(&residual, &opening, &opening_scalar)?;
 
-    let folded_generator =
-        allocate_encoded_point(cs.namespace(|| "folded generator"), proof.folded_generator)?;
-    residual = add_scaled(
-        cs.namespace(|| "folded residual"),
-        &residual,
-        folded_generator.point(),
-        &negative_terminal,
-    )?;
-    Boolean::enforce_equal(
-        cs.namespace(|| "candidate equation"),
-        &residual.is_identity(),
-        &Boolean::constant(true),
-    )?;
+    let folded_generator = ops.point(proof.folded_generator)?;
+    residual = ops.add_scaled(&residual, folded_generator.point(), &negative_terminal)?;
+    ops.require_identity(&residual)?;
 
     Ok(CandidateRoot {
         point: folded_generator,
@@ -424,6 +286,8 @@ mod tests {
     use num_bigint::{BigInt, Sign};
 
     use super::*;
+    use crate::gadgets::point::allocate_encoded_point;
+    use crate::gadgets::scalar::allocate_canonical_scalar;
     use crate::native::candidate::{CandidateRootClaim, CandidateStepProofWitness};
     use crate::native::secp::SECP256K1_SCALAR_ORDER_BE;
     use crate::native::secp::{

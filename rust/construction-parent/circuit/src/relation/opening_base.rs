@@ -1,8 +1,9 @@
 //! Direct Nova opening-base derivation from trusted native constants.
 
-use nova_snark::frontend::{gadgets::boolean::Boolean, ConstraintSystem, SynthesisError};
+use nova_snark::frontend::{ConstraintSystem, SynthesisError};
 
-use crate::gadgets::point::{add_points, allocate_constant_point, scale_point, Point};
+use crate::gadgets::ops::Ops;
+use crate::gadgets::point::Point;
 use crate::gadgets::scalar::nonzero_scalar_from_sha255;
 use crate::gadgets::sha256::Transcript;
 use crate::gadgets::synthesis_error;
@@ -15,34 +16,23 @@ use statement::Scalar;
 /// the resulting trusted constants and proves only the transcript-selected
 /// linear combination.
 pub(crate) fn constrain_transcript_opening_base<CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
+    cs: CS,
     transcript: &Transcript,
     basis_digest: [u8; 32],
     role: u64,
 ) -> Result<Point, SynthesisError> {
+    let mut ops = Ops::new(cs);
     let challenge = transcript
-        .opening_base_scalar(
-            cs.namespace(|| "opening-base challenge"),
-            basis_digest,
-            role,
-        )
+        .opening_base_scalar(ops.scope("opening-base challenge"), basis_digest, role)
         .map_err(|_| synthesis_error("opening-base transcript"))?;
-    let scalar = nonzero_scalar_from_sha255(
-        cs.namespace(|| "opening-base scalar"),
-        challenge.scalar_bits_le(),
-    )?;
+    let scalar =
+        nonzero_scalar_from_sha255(ops.scope("opening-base scalar"), challenge.scalar_bits_le())?;
     let [first, second] = opening_generator_pair(basis_digest, role)
         .map_err(|_| synthesis_error("opening-base generators"))?;
-    let first = allocate_constant_point(cs.namespace(|| "first generator"), first)?;
-    let second = allocate_constant_point(cs.namespace(|| "second generator"), second)?;
-    let bits = scalar.allocated_bits_le(cs.namespace(|| "opening-base bits"))?;
-    let scaled = scale_point(cs.namespace(|| "scaled generator"), &second, &bits)?;
-    let output = add_points(cs.namespace(|| "opening-base sum"), &first, &scaled)?;
-    Boolean::enforce_equal(
-        cs.namespace(|| "opening base is finite"),
-        &output.is_identity(),
-        &Boolean::constant(false),
-    )?;
+    let first = ops.constant_point(first)?;
+    let second = ops.constant_point(second)?;
+    let output = ops.add_scaled(&first, &second, &scalar)?;
+    ops.require_finite(&output)?;
     Ok(output)
 }
 

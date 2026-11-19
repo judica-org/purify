@@ -173,7 +173,7 @@ artifacts. Both output paths must not exist:
 ```sh
 PURIFY_CERTIFICATE_PARENT_PROVER_ARTIFACT_OUT=/new/path/certificate-parent-prover.pk1 \
 PURIFY_CERTIFICATE_PARENT_VERIFIER_ARTIFACT_OUT=/new/path/certificate-parent-verifier.vk2 \
-cargo test --release \
+cargo test --locked --release \
   setup_only_certificate_parent_qualification_writes_artifacts \
   -- --ignored --nocapture
 ```
@@ -194,9 +194,10 @@ target/release/purify-certificate-parent-prover \
 
 Finally build Purify with
 `PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=ON` and run the native C++ boundary
-against both fresh resources:
+against both fresh resources from the repository root:
 
 ```sh
+cd ../..
 PURIFY_TEST_CERTIFICATE_PARENT_VERIFIER_ARTIFACT=/new/path/certificate-parent-verifier.vk2 \
 PURIFY_TEST_CERTIFICATE_PARENT_CANDIDATE_PROOF=/new/path/certificate-parent-proof.bin \
 ctest --test-dir build-parent --output-on-failure \

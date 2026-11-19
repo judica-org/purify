@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -111,34 +112,23 @@ constexpr std::size_t kQualifiedMemberProofSize =
     purify::puresign_plusplus::CertificateNonceLinearReceipt::
         kStepSerializedSize;
 
+bool write_all(
+    std::FILE* output, std::span<const unsigned char> bytes)
+{
+    while (!bytes.empty()) {
+        const auto written = std::fwrite(
+            bytes.data(), 1, bytes.size(), output);
+        if (written == 0) return false;
+        bytes = bytes.subspan(written);
+    }
+    return std::fflush(output) == 0;
+}
+
 void write_certificate_parent_fixture_if_requested(
     TestContext& ctx,
     std::span<const unsigned char> witness,
     std::span<const unsigned char> public_frame)
 {
-    const char* witness_path = std::getenv(
-        "PURIFY_CERTIFICATE_PARENT_WITNESS_V3_OUT");
-    const char* public_frame_path = std::getenv(
-        "PURIFY_CERTIFICATE_PARENT_PUBLIC_FRAME_OUT");
-    const bool has_witness_path = witness_path != nullptr;
-    const bool has_public_frame_path = public_frame_path != nullptr;
-    ctx.expect(
-        has_witness_path == has_public_frame_path,
-        "certificate parent fixture paths are configured together");
-    if (!has_witness_path || !has_public_frame_path) return;
-    ctx.expect(
-        *witness_path != '\0' && *public_frame_path != '\0',
-        "certificate parent fixture paths are nonempty");
-    if (*witness_path == '\0' || *public_frame_path == '\0') return;
-    ctx.expect(
-        std::filesystem::path{witness_path} !=
-            std::filesystem::path{public_frame_path},
-        "certificate parent fixture paths are distinct");
-    if (std::filesystem::path{witness_path} ==
-        std::filesystem::path{public_frame_path}) {
-        return;
-    }
-
     std::array<unsigned char, 32> witness_digest{};
     std::array<unsigned char, 32> public_frame_digest{};
     purify_sha256(
@@ -162,40 +152,55 @@ void write_certificate_parent_fixture_if_requested(
         "certificate parent fixture bytes match their pinned digests");
     if (!fixture_matches) return;
 
-    std::error_code filesystem_error;
-    const bool witness_exists =
-        std::filesystem::exists(witness_path, filesystem_error);
+    const char* witness_path = std::getenv(
+        "PURIFY_CERTIFICATE_PARENT_WITNESS_V3_OUT");
+    const char* public_frame_path = std::getenv(
+        "PURIFY_CERTIFICATE_PARENT_PUBLIC_FRAME_OUT");
+    const bool has_witness_path = witness_path != nullptr;
+    const bool has_public_frame_path = public_frame_path != nullptr;
     ctx.expect(
-        !filesystem_error && !witness_exists,
-        "certificate parent witness output path is new");
-    if (filesystem_error || witness_exists) return;
-    const bool public_frame_exists =
-        std::filesystem::exists(public_frame_path, filesystem_error);
+        has_witness_path == has_public_frame_path,
+        "certificate parent fixture paths are configured together");
+    if (!has_witness_path || !has_public_frame_path) return;
     ctx.expect(
-        !filesystem_error && !public_frame_exists,
-        "certificate parent public frame output path is new");
-    if (filesystem_error || public_frame_exists) return;
+        *witness_path != '\0' && *public_frame_path != '\0',
+        "certificate parent fixture paths are nonempty");
+    if (*witness_path == '\0' || *public_frame_path == '\0') return;
 
-    std::ofstream witness_output{
-        witness_path, std::ios::binary | std::ios::out};
-    std::ofstream public_frame_output{
-        public_frame_path, std::ios::binary | std::ios::out};
+    std::FILE* witness_output = std::fopen(witness_path, "wbx");
     ctx.expect(
-        witness_output.is_open() && public_frame_output.is_open(),
-        "certificate parent fixture outputs open");
-    if (!witness_output.is_open() || !public_frame_output.is_open()) {
+        witness_output != nullptr,
+        "certificate parent witness output creates exclusively");
+    if (witness_output == nullptr) return;
+    std::FILE* public_frame_output =
+        std::fopen(public_frame_path, "wbx");
+    if (public_frame_output == nullptr) {
+        std::fclose(witness_output);
+        std::error_code cleanup_error;
+        std::filesystem::remove(witness_path, cleanup_error);
+        ctx.expect(
+            false,
+            "certificate parent public frame output creates exclusively");
         return;
     }
-    witness_output.write(
-        reinterpret_cast<const char*>(witness.data()),
-        static_cast<std::streamsize>(witness.size()));
-    public_frame_output.write(
-        reinterpret_cast<const char*>(public_frame.data()),
-        static_cast<std::streamsize>(public_frame.size()));
-    witness_output.flush();
-    public_frame_output.flush();
+
+    const bool witness_written = write_all(witness_output, witness);
+    const bool public_frame_written =
+        write_all(public_frame_output, public_frame);
+    const bool witness_closed = std::fclose(witness_output) == 0;
+    const bool public_frame_closed =
+        std::fclose(public_frame_output) == 0;
+    const bool complete =
+        witness_written && public_frame_written && witness_closed &&
+        public_frame_closed;
+    if (!complete) {
+        std::error_code cleanup_error;
+        std::filesystem::remove(witness_path, cleanup_error);
+        cleanup_error.clear();
+        std::filesystem::remove(public_frame_path, cleanup_error);
+    }
     ctx.expect(
-        witness_output.good() && public_frame_output.good(),
+        complete,
         "certificate parent fixture outputs write completely");
 }
 

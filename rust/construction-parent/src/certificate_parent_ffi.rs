@@ -1,0 +1,422 @@
+//! Private C ABI for the selected certificate-parent verifier.
+//!
+//! This boundary can return only a proof-authenticated pending root. It is
+//! deliberately not installed as a public C API: the C++ certificate
+//! verifier must parse the returned root against the fixed native basis and
+//! complete `decide()` before exposing success.
+
+use core::ptr;
+use std::slice;
+
+use crate::artifact_snapshot::PrivateArtifactSnapshot;
+use crate::certificate_parent_input::CertificateParentInputs;
+use crate::certificate_parent_verifier::{
+    load_qualified_certificate_parent_verifier, verify_certificate_parent,
+    CertificateParentVerifierError,
+};
+use crate::certificate_profile::{CERTIFICATE_RECURRENCE_STATE_ARITY, CERTIFICATE_ROOT_BYTES};
+use crate::nova_session::verifier_artifact::QUALIFIED_CERTIFICATE_PARENT_VERIFIER_ARTIFACT;
+use crate::nova_session::{SelectedDirectNovaVerifier, QUALIFIED_CERTIFICATE_PARENT_PROOF_LENGTH};
+
+/// Stable values mirrored by the private certificate-parent bridge header.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PurifyCertificateParentStatus {
+    Ok = 0,
+    Malformed = 1,
+    ProofRejected = 2,
+    BufferTooSmall = 3,
+    ArtifactOpenFailed = 4,
+    ArtifactRejected = 5,
+    InternalError = 6,
+    ArtifactSnapshotFailed = 7,
+}
+
+/// Opaque owner of the locally configured certificate verifier.
+#[repr(C)]
+pub(crate) struct PurifyCertificateParentVerifier {
+    verifier: SelectedDirectNovaVerifier<CERTIFICATE_RECURRENCE_STATE_ARITY>,
+}
+
+struct RootOutput {
+    data: *mut u8,
+}
+
+impl RootOutput {
+    unsafe fn initialize(
+        data: *mut u8,
+        capacity: usize,
+    ) -> Result<Self, PurifyCertificateParentStatus> {
+        if data.is_null() {
+            return Err(PurifyCertificateParentStatus::Malformed);
+        }
+        if capacity < CERTIFICATE_ROOT_BYTES {
+            // SAFETY: the ABI requires `data` to identify `capacity` writable
+            // bytes. Clearing only that declared allocation cannot overflow it.
+            unsafe { ptr::write_bytes(data, 0, capacity) };
+            return Err(PurifyCertificateParentStatus::BufferTooSmall);
+        }
+        // SAFETY: the ABI requires a writable allocation of at least the
+        // canonical root size. Output must not alias an input allocation.
+        unsafe { ptr::write_bytes(data, 0, CERTIFICATE_ROOT_BYTES) };
+        Ok(Self { data })
+    }
+
+    unsafe fn write(self, root: &[u8; CERTIFICATE_ROOT_BYTES]) {
+        // SAFETY: initialization established the fixed writable capacity and
+        // the source is a distinct Rust-owned canonical root.
+        unsafe { ptr::copy_nonoverlapping(root.as_ptr(), self.data, root.len()) };
+    }
+}
+
+unsafe fn borrow_input<'a>(
+    data: *const u8,
+    length: usize,
+) -> Result<&'a [u8], PurifyCertificateParentStatus> {
+    if length == 0 {
+        return Ok(&[]);
+    }
+    if data.is_null() {
+        return Err(PurifyCertificateParentStatus::Malformed);
+    }
+    // SAFETY: the private ABI requires every nonempty input to identify a
+    // readable allocation of exactly `length` bytes for the complete call.
+    Ok(unsafe { slice::from_raw_parts(data, length) })
+}
+
+unsafe fn read_array<const N: usize>(
+    data: *const u8,
+) -> Result<[u8; N], PurifyCertificateParentStatus> {
+    if data.is_null() {
+        return Err(PurifyCertificateParentStatus::Malformed);
+    }
+    let mut output = [0u8; N];
+    // SAFETY: the private ABI requires `data` to identify N readable bytes.
+    // The stack output is a distinct allocation of exactly N bytes.
+    unsafe { ptr::copy_nonoverlapping(data, output.as_mut_ptr(), N) };
+    Ok(output)
+}
+
+fn verifier_status(error: CertificateParentVerifierError) -> PurifyCertificateParentStatus {
+    match error {
+        CertificateParentVerifierError::Suite
+        | CertificateParentVerifierError::ProofLength { .. } => {
+            PurifyCertificateParentStatus::InternalError
+        }
+        CertificateParentVerifierError::State(_) | CertificateParentVerifierError::Nova(_) => {
+            PurifyCertificateParentStatus::ProofRejected
+        }
+    }
+}
+
+fn artifact_snapshot_status(error: &std::io::Error) -> PurifyCertificateParentStatus {
+    match error.kind() {
+        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData => {
+            PurifyCertificateParentStatus::ArtifactRejected
+        }
+        _ => PurifyCertificateParentStatus::ArtifactSnapshotFailed,
+    }
+}
+
+/// Snapshots, opens, and authenticates the configured verifier artifact.
+///
+/// `artifact_path` is an explicit UTF-8 path. The output is set to null before
+/// any validation or I/O. The path selects only a storage location; artifact
+/// identity is compiled into the Rust verifier.
+#[no_mangle]
+pub(crate) unsafe extern "C" fn purify_certificate_parent_verifier_load(
+    artifact_path: *const u8,
+    artifact_path_length: usize,
+    verifier_output: *mut *mut PurifyCertificateParentVerifier,
+) -> PurifyCertificateParentStatus {
+    if verifier_output.is_null() {
+        return PurifyCertificateParentStatus::Malformed;
+    }
+    // SAFETY: the ABI requires one writable verifier pointer.
+    unsafe { verifier_output.write(ptr::null_mut()) };
+    let artifact_path = match unsafe { borrow_input(artifact_path, artifact_path_length) } {
+        Ok([]) => return PurifyCertificateParentStatus::Malformed,
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    if artifact_path.contains(&0) {
+        return PurifyCertificateParentStatus::Malformed;
+    }
+    let artifact_path = match std::str::from_utf8(artifact_path) {
+        Ok(value) => value,
+        Err(_) => return PurifyCertificateParentStatus::Malformed,
+    };
+    let mut artifact_source = match std::fs::File::open(artifact_path) {
+        Ok(value) => value,
+        Err(_) => return PurifyCertificateParentStatus::ArtifactOpenFailed,
+    };
+    let mut artifact = match PrivateArtifactSnapshot::copy_from(
+        &mut artifact_source,
+        QUALIFIED_CERTIFICATE_PARENT_VERIFIER_ARTIFACT.encoded_length(),
+    ) {
+        Ok(value) => value,
+        Err(error) => return artifact_snapshot_status(&error),
+    };
+    drop(artifact_source);
+    let verifier = match load_qualified_certificate_parent_verifier(artifact.reader()) {
+        Ok(value) => value,
+        Err(_) => return PurifyCertificateParentStatus::ArtifactRejected,
+    };
+    let verifier = Box::into_raw(Box::new(PurifyCertificateParentVerifier { verifier }));
+    // SAFETY: output validation established one writable pointer, and the Box
+    // is transferred exactly once to the caller.
+    unsafe { verifier_output.write(verifier) };
+    PurifyCertificateParentStatus::Ok
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn verify_inner(
+    verifier: &PurifyCertificateParentVerifier,
+    certificate_context_digest: *const u8,
+    total_responses: u64,
+    total_steps: u64,
+    final_manifest: *const u8,
+    proof: *const u8,
+    proof_length: usize,
+    output: RootOutput,
+) -> PurifyCertificateParentStatus {
+    if proof_length != QUALIFIED_CERTIFICATE_PARENT_PROOF_LENGTH {
+        return PurifyCertificateParentStatus::Malformed;
+    }
+    let certificate_context_digest = match unsafe { read_array::<32>(certificate_context_digest) } {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let final_manifest = match unsafe { read_array::<32>(final_manifest) } {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let proof = match unsafe { borrow_input(proof, proof_length) } {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let inputs = match CertificateParentInputs::new(
+        certificate_context_digest,
+        total_responses,
+        u128::from(total_steps),
+        final_manifest,
+    ) {
+        Ok(value) => value,
+        Err(_) => return PurifyCertificateParentStatus::Malformed,
+    };
+    let authenticated = match verify_certificate_parent(&verifier.verifier, &inputs, proof) {
+        Ok(value) => value,
+        Err(error) => return verifier_status(error),
+    };
+    unsafe { output.write(authenticated.canonical_root_bytes()) };
+    PurifyCertificateParentStatus::Ok
+}
+
+/// Verifies one exact certificate parent and returns its pending root.
+///
+/// The output is cleared before any input or proof check. It must not alias
+/// any input. Success is still not certificate acceptance: the private C++
+/// caller must immediately parse this root against the certificate basis and
+/// call the native final decision.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe extern "C" fn purify_certificate_parent_verify(
+    verifier: *const PurifyCertificateParentVerifier,
+    certificate_context_digest: *const u8,
+    total_responses: u64,
+    total_steps: u64,
+    final_manifest: *const u8,
+    proof: *const u8,
+    proof_length: usize,
+    pending_root_output: *mut u8,
+    pending_root_capacity: usize,
+) -> PurifyCertificateParentStatus {
+    let output = match unsafe { RootOutput::initialize(pending_root_output, pending_root_capacity) }
+    {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let verifier = match unsafe { verifier.as_ref() } {
+        Some(value) => value,
+        None => return PurifyCertificateParentStatus::Malformed,
+    };
+    unsafe {
+        verify_inner(
+            verifier,
+            certificate_context_digest,
+            total_responses,
+            total_steps,
+            final_manifest,
+            proof,
+            proof_length,
+            output,
+        )
+    }
+}
+
+/// Releases a verifier returned by the configured-artifact loader.
+#[no_mangle]
+pub(crate) unsafe extern "C" fn purify_certificate_parent_verifier_destroy(
+    verifier: *mut PurifyCertificateParentVerifier,
+) {
+    if verifier.is_null() {
+        return;
+    }
+    // SAFETY: the loader transfers exactly one Box allocation to its caller,
+    // which must invoke this destructor at most once.
+    drop(unsafe { Box::from_raw(verifier) });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    #[test]
+    fn loader_rejects_malformed_paths_and_clears_output() {
+        let sentinel = ptr::dangling_mut::<PurifyCertificateParentVerifier>();
+        let mut verifier = sentinel;
+        // SAFETY: the output is live and the empty path is intentionally null.
+        let empty =
+            unsafe { purify_certificate_parent_verifier_load(ptr::null(), 0, &mut verifier) };
+        assert_eq!(empty, PurifyCertificateParentStatus::Malformed);
+        assert!(verifier.is_null());
+
+        let invalid_utf8 = [0xff];
+        verifier = sentinel;
+        // SAFETY: the path and output identify live allocations.
+        let invalid = unsafe {
+            purify_certificate_parent_verifier_load(
+                invalid_utf8.as_ptr(),
+                invalid_utf8.len(),
+                &mut verifier,
+            )
+        };
+        assert_eq!(invalid, PurifyCertificateParentStatus::Malformed);
+        assert!(verifier.is_null());
+    }
+
+    #[test]
+    fn loader_reports_a_missing_artifact() {
+        let path = std::env::temp_dir().join(format!(
+            "purify-missing-certificate-parent-{}",
+            std::process::id()
+        ));
+        let path = path.to_string_lossy();
+        let mut verifier = ptr::dangling_mut::<PurifyCertificateParentVerifier>();
+        // SAFETY: the path and output identify live allocations.
+        let status = unsafe {
+            purify_certificate_parent_verifier_load(
+                path.as_bytes().as_ptr(),
+                path.len(),
+                &mut verifier,
+            )
+        };
+        assert_eq!(status, PurifyCertificateParentStatus::ArtifactOpenFailed);
+        assert!(verifier.is_null());
+    }
+
+    #[test]
+    fn snapshot_failures_distinguish_identity_from_local_storage() {
+        for kind in [
+            std::io::ErrorKind::UnexpectedEof,
+            std::io::ErrorKind::InvalidData,
+        ] {
+            let error = std::io::Error::from(kind);
+            assert_eq!(
+                artifact_snapshot_status(&error),
+                PurifyCertificateParentStatus::ArtifactRejected
+            );
+        }
+
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::StorageFull,
+            std::io::ErrorKind::Other,
+        ] {
+            let error = std::io::Error::from(kind);
+            assert_eq!(
+                artifact_snapshot_status(&error),
+                PurifyCertificateParentStatus::ArtifactSnapshotFailed
+            );
+        }
+    }
+
+    #[test]
+    fn loader_rejects_an_unauthenticated_artifact() {
+        let path = std::env::temp_dir().join(format!(
+            "purify-rejected-certificate-parent-{}",
+            std::process::id()
+        ));
+        let mut artifact = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create malformed verifier artifact");
+        artifact
+            .write_all(&[0u8; 64])
+            .expect("write malformed verifier artifact");
+        drop(artifact);
+
+        let path_bytes = path.to_string_lossy();
+        let mut verifier = ptr::dangling_mut::<PurifyCertificateParentVerifier>();
+        // SAFETY: the path and output identify live allocations.
+        let status = unsafe {
+            purify_certificate_parent_verifier_load(
+                path_bytes.as_bytes().as_ptr(),
+                path_bytes.len(),
+                &mut verifier,
+            )
+        };
+        assert_eq!(status, PurifyCertificateParentStatus::ArtifactRejected);
+        assert!(verifier.is_null());
+        std::fs::remove_file(path).expect("remove malformed verifier artifact");
+    }
+
+    #[test]
+    fn null_verifier_clears_complete_output() {
+        let mut output = [0xa5; CERTIFICATE_ROOT_BYTES];
+        // SAFETY: every pointer is either intentionally null or identifies a
+        // live output allocation of the declared size.
+        let status = unsafe {
+            purify_certificate_parent_verify(
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                ptr::null(),
+                0,
+                output.as_mut_ptr(),
+                output.len(),
+            )
+        };
+        assert_eq!(status, PurifyCertificateParentStatus::Malformed);
+        assert_eq!(output, [0; CERTIFICATE_ROOT_BYTES]);
+    }
+
+    #[test]
+    fn short_output_clears_only_declared_capacity() {
+        let mut output = [0xa5; CERTIFICATE_ROOT_BYTES];
+        let declared = CERTIFICATE_ROOT_BYTES - 1;
+        // SAFETY: the output allocation is larger than the deliberately short
+        // declared capacity and no input pointer is dereferenced.
+        let status = unsafe {
+            purify_certificate_parent_verify(
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                ptr::null(),
+                0,
+                output.as_mut_ptr(),
+                declared,
+            )
+        };
+        assert_eq!(status, PurifyCertificateParentStatus::BufferTooSmall);
+        assert_eq!(&output[..declared], vec![0; declared]);
+        assert_eq!(output[declared], 0xa5);
+    }
+}

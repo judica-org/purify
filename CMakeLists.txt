@@ -104,6 +104,15 @@ option(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER
     "Build the purpose-specific construction-parent prover executable."
     OFF
 )
+option(PURIFY_BUILD_CERTIFICATE_PARENT_PROVER
+    "Build the purpose-specific certificate-parent prover executable."
+    OFF
+)
+set(PURIFY_BUILD_PARENT_PROVER OFF)
+if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER OR
+   PURIFY_BUILD_CERTIFICATE_PARENT_PROVER)
+    set(PURIFY_BUILD_PARENT_PROVER ON)
+endif()
 set(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET "" CACHE STRING
     "Optional Rust target triple for construction-parent Rust targets."
 )
@@ -163,10 +172,9 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER AND
     )
 endif()
 
-if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER AND
-   PURIFY_USE_LEGACY_FIELD_HASHES)
+if(PURIFY_BUILD_PARENT_PROVER AND PURIFY_USE_LEGACY_FIELD_HASHES)
     message(FATAL_ERROR
-        "PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER requires the modern "
+        "Purpose-specific parent prover executables require the modern "
         "tagged field-hash suite."
     )
 endif()
@@ -385,6 +393,8 @@ add_library(purify
     src/puresign/legacy.cpp
     src/puresign/codecs/legacy.cpp
     src/puresign/bppp.cpp
+    src/puresign/certificate_nonce_parent_accumulation.cpp
+    src/puresign/certificate_nonce_parent_prover_input.cpp
     src/puresign/codecs/bppp.cpp
     src/puresign/accountable.cpp
     src/puresign/coalition_formation.cpp
@@ -433,49 +443,49 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
     endif()
 endif()
 
-if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
+if(PURIFY_BUILD_PARENT_PROVER)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND
        NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
         message(FATAL_ERROR
-            "PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER supports only Darwin "
-            "and Linux targets."
+            "Purpose-specific parent prover executables support only "
+            "Darwin and Linux targets."
         )
     endif()
     if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR
-            "The construction-parent prover requires a 64-bit target."
+            "Purpose-specific parent provers require a 64-bit target."
         )
     endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         list(LENGTH CMAKE_OSX_ARCHITECTURES
-            PURIFY_CONSTRUCTION_PARENT_OSX_ARCH_COUNT)
-        if(PURIFY_CONSTRUCTION_PARENT_OSX_ARCH_COUNT GREATER 1)
+            PURIFY_PARENT_PROVER_OSX_ARCH_COUNT)
+        if(PURIFY_PARENT_PROVER_OSX_ARCH_COUNT GREATER 1)
             message(FATAL_ERROR
-                "The construction-parent prover does not support a "
+                "Purpose-specific parent provers do not support a "
                 "multi-architecture CMAKE_OSX_ARCHITECTURES."
             )
         endif()
-        unset(PURIFY_CONSTRUCTION_PARENT_OSX_ARCH_COUNT)
+        unset(PURIFY_PARENT_PROVER_OSX_ARCH_COUNT)
         if(CMAKE_OSX_ARCHITECTURES AND
            NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
             message(FATAL_ERROR
                 "An explicit CMAKE_OSX_ARCHITECTURES requires "
                 "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET for the "
-                "construction-parent prover."
+                "purpose-specific parent provers."
             )
         endif()
     endif()
     if(CMAKE_CROSSCOMPILING AND
        NOT PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
         message(FATAL_ERROR
-            "Cross-compiling the construction-parent prover requires "
+            "Cross-compiling purpose-specific parent provers requires "
             "PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET."
         )
     endif()
 endif()
 
 if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER OR
-   PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
+   PURIFY_BUILD_PARENT_PROVER)
     find_program(PURIFY_CARGO_EXECUTABLE cargo REQUIRED)
     set(PURIFY_CONSTRUCTION_PARENT_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/rust/construction-parent"
@@ -627,9 +637,11 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
         purify_construction_parent_backend
     )
     target_sources(purify PRIVATE
+        src/puresign/certificate_parent_verifier.cpp
         src/puresign/construction_parent_verifier.cpp
     )
     target_compile_definitions(purify PUBLIC
+        PURIFY_HAS_CERTIFICATE_PARENT_VERIFIER=1
         PURIFY_HAS_CONSTRUCTION_PARENT_VERIFIER=1
     )
     install(FILES "${PURIFY_CONSTRUCTION_PARENT_LIBRARY}"
@@ -710,6 +722,81 @@ if(PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER)
     unset(PURIFY_CONSTRUCTION_PARENT_PROVER_CARGO_ENV)
 endif()
 
+if(PURIFY_BUILD_CERTIFICATE_PARENT_PROVER)
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_SOURCE
+        "${PURIFY_CONSTRUCTION_PARENT_DIR}/src/bin/purify-certificate-parent-prover.rs"
+    )
+    if(NOT EXISTS "${PURIFY_CERTIFICATE_PARENT_PROVER_SOURCE}")
+        message(FATAL_ERROR
+            "PURIFY_BUILD_CERTIFICATE_PARENT_PROVER requires "
+            "${PURIFY_CERTIFICATE_PARENT_PROVER_SOURCE}."
+        )
+    endif()
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_TARGET_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/certificate-parent-prover-target"
+    )
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ARGS
+        build
+        --locked
+        --release
+        --no-default-features
+        --features prover
+        --bin purify-certificate-parent-prover
+    )
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_DIR
+        "${PURIFY_CERTIFICATE_PARENT_PROVER_TARGET_DIR}/release"
+    )
+    if(PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET)
+        list(APPEND PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ARGS
+            --target "${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}"
+        )
+        set(PURIFY_CERTIFICATE_PARENT_PROVER_DIR
+            "${PURIFY_CERTIFICATE_PARENT_PROVER_TARGET_DIR}/${PURIFY_CONSTRUCTION_PARENT_CARGO_TARGET}/release"
+        )
+    endif()
+    set(PURIFY_CERTIFICATE_PARENT_PROVER
+        "${PURIFY_CERTIFICATE_PARENT_PROVER_DIR}/purify-certificate-parent-prover${CMAKE_EXECUTABLE_SUFFIX}"
+    )
+    set(PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ENV
+        --unset=MAKEFLAGS
+        --unset=MFLAGS
+        --unset=CARGO_MAKEFLAGS
+        "CARGO_INCREMENTAL=0"
+        "CARGO_TARGET_DIR=${PURIFY_CERTIFICATE_PARENT_PROVER_TARGET_DIR}"
+    )
+    if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
+        list(APPEND PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ENV
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        )
+    endif()
+    add_custom_command(
+        OUTPUT "${PURIFY_CERTIFICATE_PARENT_PROVER}"
+        COMMAND "${CMAKE_COMMAND}" -E env
+            ${PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ENV}
+            "${PURIFY_CARGO_EXECUTABLE}"
+            ${PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ARGS}
+        DEPENDS
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.lock"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/Cargo.toml"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/build.rs"
+            "${PURIFY_CONSTRUCTION_PARENT_DIR}/rust-toolchain.toml"
+            ${PURIFY_CONSTRUCTION_PARENT_RUST_SOURCES}
+        WORKING_DIRECTORY "${PURIFY_CONSTRUCTION_PARENT_DIR}"
+        COMMENT "Building purpose-specific certificate-parent prover"
+        VERBATIM
+    )
+    add_custom_target(purify_certificate_parent_prover ALL
+        DEPENDS "${PURIFY_CERTIFICATE_PARENT_PROVER}"
+    )
+    install(PROGRAMS "${PURIFY_CERTIFICATE_PARENT_PROVER}"
+        DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        COMPONENT certificate_parent_prover
+    )
+    unset(PURIFY_CERTIFICATE_PARENT_PROVER_CARGO_ENV)
+endif()
+
+unset(PURIFY_BUILD_PARENT_PROVER)
+
 if(WIN32)
     target_link_libraries(purify PUBLIC bcrypt)
 endif()
@@ -789,6 +876,8 @@ if(PURIFY_BUILD_BENCH)
         src/puresign/legacy.cpp
         src/puresign/codecs/legacy.cpp
         src/puresign/bppp.cpp
+        src/puresign/certificate_nonce_parent_accumulation.cpp
+        src/puresign/certificate_nonce_parent_prover_input.cpp
         src/puresign/codecs/bppp.cpp
         src/puresign/accountable.cpp
         src/puresign/coalition_formation.cpp
@@ -893,27 +982,34 @@ if(PURIFY_BUILD_TESTS)
     if((APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND
        CMAKE_SIZEOF_VOID_P EQUAL 8 AND
        NOT CMAKE_CROSSCOMPILING)
-        add_test(NAME purify.tests.construction_parent_prover_package
-            COMMAND "${CMAKE_COMMAND}"
-                "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-                "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-                "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
-                "-DTEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
-                "-DTEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
-                "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
-                "-DTEST_CONFIG=$<CONFIG>"
-                "-DTEST_C_COMPILER=${CMAKE_C_COMPILER}"
-                "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-                "-DTEST_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}"
-                "-DTEST_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}"
-                "-DTEST_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}"
-                "-DTEST_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/construction_parent_prover_package/run.cmake"
-        )
-        set_tests_properties(
-            purify.tests.construction_parent_prover_package
-            PROPERTIES RUN_SERIAL TRUE TIMEOUT 120
-        )
+        function(purify_add_parent_prover_package_test kind)
+            set(test_name
+                "purify.tests.${kind}_parent_prover_package")
+            add_test(NAME "${test_name}"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DTEST_PARENT_PROVER_KIND=${kind}"
+                    "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+                    "-DTEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+                    "-DTEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+                    "-DTEST_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                    "-DTEST_CONFIG=$<CONFIG>"
+                    "-DTEST_C_COMPILER=${CMAKE_C_COMPILER}"
+                    "-DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                    "-DTEST_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}"
+                    "-DTEST_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}"
+                    "-DTEST_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}"
+                    "-DTEST_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/parent_prover_package/run.cmake"
+            )
+            set_tests_properties("${test_name}"
+                PROPERTIES RUN_SERIAL TRUE TIMEOUT 120
+            )
+        endfunction()
+
+        purify_add_parent_prover_package_test(construction)
+        purify_add_parent_prover_package_test(certificate)
     endif()
 
     add_executable(purify_opening_base_vector_tests
@@ -959,6 +1055,7 @@ if(PURIFY_BUILD_TESTS)
         tests/aggregate_nonce_tests.cpp
         tests/nonce_batch_tests.cpp
         tests/nonce_certificate_tests.cpp
+        tests/certificate_nonce_parent_tests.cpp
         tests/circuit_soundness_tests.cpp
         tests/sha256_transcript_tests.cpp
         tests/sha256_circuit_transcript_tests.cpp
@@ -980,6 +1077,7 @@ if(PURIFY_BUILD_TESTS)
     target_compile_definitions(purify_tests PRIVATE
         "PURIFY_TEST_CONSTRUCTION_PARENT_WIT4_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_accepted.wit4\""
         "PURIFY_TEST_CONSTRUCTION_PARENT_NONDECIDING_WIT4_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/construction_parent_sha256_nondeciding.wit4\""
+        "PURIFY_TEST_CERTIFICATE_PARENT_WITNESS_V3_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/rust/construction-parent/tests/vectors/certificate_joined_witness_v3.bin\""
     )
 
     if(PURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER)
@@ -1118,6 +1216,11 @@ if(PURIFY_BUILD_TESTS)
     purify_add_cpp_suite_test(aggregate_nonce_100)
     purify_add_cpp_suite_test(nonce_batch)
     purify_add_cpp_suite_test(nonce_certificate)
+    purify_add_cpp_suite_test(certificate_nonce_parent)
+    set_tests_properties(
+        purify.tests.certificate_nonce_parent
+        PROPERTIES RUN_SERIAL TRUE TIMEOUT 1800
+    )
 
     add_executable(purify_property_tests
         tests/purify_property_tests.cpp

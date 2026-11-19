@@ -567,7 +567,7 @@ int main(int argc, char** argv) {
             bench_case->key_pair_plusplus->prepare_message_nonce_with_proof(
                 bench_case->message, bench_case->secp_context.get(), &bench_case->puresign_plusplus_cache);
         assert(prepared.has_value() && "benchmark PureSign++ nonce proof preparation should succeed");
-        ankerl::nanobench::doNotOptimizeAway(prepared->proof().proof.proof.data());
+        ankerl::nanobench::doNotOptimizeAway(prepared->proof().norm_proof.data());
     });
 
     auto prepare_nonce_with_cached_proof_plusplus_bench = make_bench(*config, "nonce");
@@ -578,7 +578,7 @@ int main(int argc, char** argv) {
                 bench_case->key_pair_plusplus->prepare_message_nonce_with_proof(
                     bench_case->message_proof_cache_plusplus, bench_case->secp_context.get());
             assert(prepared.has_value() && "benchmark cached PureSign++ nonce proof preparation should succeed");
-            ankerl::nanobench::doNotOptimizeAway(prepared->proof().proof.proof.data());
+            ankerl::nanobench::doNotOptimizeAway(prepared->proof().norm_proof.data());
         });
 
     auto verify_nonce_with_proof_bench = make_bench(*config, "nonce");

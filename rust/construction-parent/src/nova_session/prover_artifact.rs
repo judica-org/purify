@@ -109,6 +109,21 @@ pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT: ExpectedDirectNo
         ],
     );
 
+/// Exact certificate prover state emitted by setup-only qualification.
+///
+/// The ordinary artifact SHA-256 is
+/// `b8d52debdd9075ca81dc20b374619d1970d202c7739735e130b2fd5aed058cd1`.
+pub(crate) const QUALIFIED_CERTIFICATE_PARENT_PROVER_ARTIFACT: ExpectedDirectNovaProverArtifact =
+    ExpectedDirectNovaProverArtifact::new(
+        696_022_272,
+        3_074_225_014,
+        [
+            0xfa, 0x22, 0x15, 0x90, 0x73, 0x6d, 0x58, 0xa3, 0xef, 0x65, 0x4b, 0xc2, 0xda, 0xbc,
+            0x4d, 0x5e, 0x13, 0xa8, 0x9b, 0x8e, 0x48, 0xd2, 0x37, 0x71, 0x27, 0x4b, 0xc7, 0x92,
+            0x39, 0x58, 0xb3, 0xdf,
+        ],
+    );
+
 /// Failure while writing or loading a selected prover artifact.
 #[derive(Debug, Error)]
 pub(crate) enum DirectNovaProverArtifactError {
@@ -268,8 +283,9 @@ mod tests {
 
     use super::*;
     use crate::nova_session::{
-        ConstructionManifestVersion, ConstructionNativeDecisionVersion, ConstructionPayloadVersion,
-        ConstructionStatementVersion, DirectNovaConstructionVersions, NovaSessionSuite,
+        ApplicationManifestVersion, ApplicationNativeDecisionVersion, ApplicationPayloadVersion,
+        ApplicationStatementVersion, DirectNovaApplicationProfile, DirectNovaApplicationVersions,
+        NovaSessionSuite,
     };
     use crate::Scalar;
 
@@ -299,6 +315,36 @@ mod tests {
         );
         assert!(
             QUALIFIED_CONSTRUCTION_PARENT_PROVER_ARTIFACT.decoded_payload_length()
+                <= MAX_DECODED_PAYLOAD_LENGTH as u64
+        );
+    }
+
+    #[test]
+    fn qualified_certificate_pk1_identity_is_frozen() {
+        assert_eq!(MAX_COMPRESSED_PAYLOAD_LENGTH, 1_000_000_000);
+        assert_eq!(MAX_DECODED_PAYLOAD_LENGTH, 4_000_000_000);
+        assert_eq!(
+            QUALIFIED_CERTIFICATE_PARENT_PROVER_ARTIFACT.encoded_length(),
+            696_022_272
+        );
+        assert_eq!(
+            QUALIFIED_CERTIFICATE_PARENT_PROVER_ARTIFACT.decoded_payload_length(),
+            3_074_225_014
+        );
+        assert_eq!(
+            QUALIFIED_CERTIFICATE_PARENT_PROVER_ARTIFACT.digest(),
+            [
+                0xfa, 0x22, 0x15, 0x90, 0x73, 0x6d, 0x58, 0xa3, 0xef, 0x65, 0x4b, 0xc2, 0xda, 0xbc,
+                0x4d, 0x5e, 0x13, 0xa8, 0x9b, 0x8e, 0x48, 0xd2, 0x37, 0x71, 0x27, 0x4b, 0xc7, 0x92,
+                0x39, 0x58, 0xb3, 0xdf,
+            ]
+        );
+        assert!(
+            QUALIFIED_CERTIFICATE_PARENT_PROVER_ARTIFACT.encoded_length()
+                <= MAX_COMPRESSED_PAYLOAD_LENGTH as u64
+        );
+        assert!(
+            QUALIFIED_CERTIFICATE_PARENT_PROVER_ARTIFACT.decoded_payload_length()
                 <= MAX_DECODED_PAYLOAD_LENGTH as u64
         );
     }
@@ -460,11 +506,14 @@ mod tests {
     }
 
     const TINY_ARITY: usize = 1;
-    const TINY_VERSIONS: DirectNovaConstructionVersions = DirectNovaConstructionVersions::new(
-        ConstructionPayloadVersion::new(1),
-        ConstructionStatementVersion::new(1),
-        ConstructionManifestVersion::new(1),
-        ConstructionNativeDecisionVersion::new(1),
+    const TINY_APPLICATION: DirectNovaApplicationProfile = DirectNovaApplicationProfile::new(
+        b"Purify/Test/ProverArtifactNovaSuite/v1",
+        DirectNovaApplicationVersions::new(
+            ApplicationPayloadVersion::new(1),
+            ApplicationStatementVersion::new(1),
+            ApplicationManifestVersion::new(1),
+            ApplicationNativeDecisionVersion::new(1),
+        ),
     );
     const TINY_RELATION: DirectRelationId = DirectRelationId::from_frozen_bytes([0x42; 32]);
 
@@ -524,7 +573,7 @@ mod tests {
             input: initial_state,
         })
         .expect("setup tiny prover")
-        .select_generated_for_qualification(TINY_VERSIONS)
+        .select_generated_for_qualification(TINY_APPLICATION)
         .expect("select tiny prover");
         let expected = suite.expected();
         let verifier = suite.verifier;

@@ -24,6 +24,9 @@ if(NOT _nm_result EQUAL 0)
 endif()
 
 set(_expected
+    purify_certificate_parent_verifier_destroy
+    purify_certificate_parent_verifier_load
+    purify_certificate_parent_verify
     purify_construction_parent_verifier_destroy
     purify_construction_parent_verifier_load
     purify_construction_parent_verify

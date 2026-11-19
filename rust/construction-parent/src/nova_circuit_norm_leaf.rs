@@ -48,6 +48,7 @@ pub(crate) struct DirectManifestBoundConstructionLeaf {
     pub(crate) precommitment: CanonicalSecpScalar,
     pub(crate) coefficient_commitment: DirectEncodedSecpPoint,
     pub(crate) anchored_offset: DirectEncodedSecpPoint,
+    pub(crate) transcript: DirectCircuitTranscriptResultV4,
 }
 
 fn synthesis_error(label: &'static str) -> SynthesisError {
@@ -396,9 +397,10 @@ pub(crate) fn constrain_manifest_bound_construction_leaf<CS: ConstraintSystem<Sc
     Ok(DirectManifestBoundConstructionLeaf {
         claim,
         circuit_binding_digest,
-        precommitment: transcript.precommitment,
-        coefficient_commitment: transcript.coefficient_commitment,
-        anchored_offset: transcript.anchored_offset,
+        precommitment: transcript.precommitment.clone(),
+        coefficient_commitment: transcript.coefficient_commitment.clone(),
+        anchored_offset: transcript.anchored_offset.clone(),
+        transcript,
     })
 }
 

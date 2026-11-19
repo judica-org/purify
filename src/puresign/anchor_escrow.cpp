@@ -503,6 +503,58 @@ Result<AnchorEscrowRecord> create_anchor_escrow(
         auxiliary_randomness.value, secp_context, cache);
 }
 
+AnchorEscrowAuxiliaryScalar::AnchorEscrowAuxiliaryScalar(
+    AnchorEscrowAuxiliaryScalar&& other) noexcept
+    : bytes_(other.bytes_) {
+    other.clear();
+}
+
+AnchorEscrowAuxiliaryScalar& AnchorEscrowAuxiliaryScalar::operator=(
+    AnchorEscrowAuxiliaryScalar&& other) noexcept {
+    if (this != &other) {
+        clear();
+        bytes_ = other.bytes_;
+        other.clear();
+    }
+    return *this;
+}
+
+AnchorEscrowAuxiliaryScalar::~AnchorEscrowAuxiliaryScalar() {
+    clear();
+}
+
+void AnchorEscrowAuxiliaryScalar::clear() noexcept {
+    detail::secure_clear_bytes(bytes_.data(), bytes_.size());
+}
+
+Result<AnchorEscrowAuxiliaryScalar>
+AnchorEscrowAuxiliaryScalar::from_bytes(const Bytes& encoded) {
+    auto scalar = FieldElement::try_from_bytes32(encoded);
+    if (!scalar.has_value()) {
+        return unexpected_error(ErrorCode::RangeViolation,
+                                "anchor_escrow:auxiliary_scalar_encoding");
+    }
+    WipeOnDestruction scalar_guard(*scalar);
+    if (scalar->is_zero()) {
+        return unexpected_error(ErrorCode::RangeViolation,
+                                "anchor_escrow:auxiliary_scalar_zero");
+    }
+    return AnchorEscrowAuxiliaryScalar{encoded};
+}
+
+Result<AnchorEscrowRecord> create_anchor_escrow_deterministic(
+    const RecoveryBoundSigningRoster& roster,
+    const UInt512& advertised_anchor_root,
+    const AnchorPunishmentKey& punishment_key,
+    const AnchorEscrowContextDigest& context_digest,
+    const AnchorEscrowAuxiliaryScalar& auxiliary_scalar,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache) {
+    return create_anchor_escrow_with_aux_randomness(
+        roster, advertised_anchor_root, punishment_key, context_digest,
+        auxiliary_scalar.bytes_, secp_context, cache);
+}
+
 Result<AnchorEscrowRecord> create_anchor_escrow_with_aux_randomness(
     const RecoveryBoundSigningRoster& roster,
     const UInt512& advertised_anchor_root,

@@ -93,24 +93,24 @@ jobs:
           cargo clippy --locked --release --all-targets
           -- -D warnings
 
-      - name: Test Rust prover
+      - name: Test Rust provers
         working-directory: rust/construction-parent
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/build-construction-parent/construction-parent-prover-ci-target
         run: >
           cargo test --locked --release --no-default-features
-          --features prover --bin purify-construction-parent-prover
+          --features prover --bins
           -- --test-threads=1
 
       # The prover feature also compiles qualification/setup internals that
       # the production binary does not call. Deny every other warning.
-      - name: Lint Rust prover
+      - name: Lint Rust provers
         working-directory: rust/construction-parent
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/build-construction-parent/construction-parent-prover-ci-target
         run: >
           cargo clippy --locked --release --no-default-features
-          --features prover --bin purify-construction-parent-prover
+          --features prover --bins
           -- -D warnings -A dead-code
 
       - name: Initialize required submodule

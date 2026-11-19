@@ -79,9 +79,11 @@ When a macOS minimum deployment target is supplied, Purify forwards it to
 Cargo so the C++ library and the backend use the same platform boundary.
 
 The installed verifier backend is approximately 2.4 MB on arm64 macOS. Its
-exact size is platform-dependent. It exports only the three private load,
-verify, and destroy ABI entry points. The private ABI header is not installed;
-applications use `ConstructionParentVerifier` from the C++ library.
+exact size is platform-dependent. It exports only six private load, verify,
+and destroy ABI entry points: one purpose-specific set each for construction
+and certificate parents. The private ABI headers are not installed;
+applications use `ConstructionParentVerifier` and `CertificateParentVerifier`
+from the C++ library.
 
 The release manifest pins separate verifier (`VK2`) and prover (`PK1`)
 artifacts by exact length and tagged SHA-256 digest. The verifier backend
@@ -92,7 +94,7 @@ external deployment resources rather than files embedded in the library,
 prover executable, or repository. Do not deploy a manifest whose release
 status is not `accepted`. Each load first copies the complete artifact to an
 unlinked private file, so the configured temporary directory must have at
-least 694 MB of writable space. The standalone prover loads PK1 and VK2
+least 1 GiB of writable space. The standalone prover loads PK1 and VK2
 sequentially rather than retaining both snapshots.
 
 The ordinary CI job builds and tests the Rust, package, codec, and private
@@ -100,7 +102,8 @@ symbol boundaries without downloading these artifacts. It does not claim
 recursive proof acceptance. Artifact-backed acceptance remains the explicit
 release gate.
 
-Run that release gate with the authenticated artifact:
+Run that release gate with both authenticated verifier artifacts and the
+qualified certificate proof:
 
 ```sh
 cmake -S . -B build-parent \
@@ -113,8 +116,10 @@ cmake -S . -B build-parent \
   -DPURIFY_BUILD_FUZZ=OFF \
   -DPURIFY_CONSTRUCTION_PARENT_VERIFIER_ARTIFACT=/path/to/sha256-parent-verifier.nvk.zst
 CARGO_BUILD_JOBS=1 cmake --build build-parent --parallel
+PURIFY_TEST_CERTIFICATE_PARENT_VERIFIER_ARTIFACT=/path/to/certificate-parent-verifier.vk2 \
+PURIFY_TEST_CERTIFICATE_PARENT_PROOF=/path/to/certificate-parent-proof.bin \
 ctest --test-dir build-parent --output-on-failure \
-  -R '^(purify.tests.slashability_e2e|purify.tests.installed_package|purify.tests.private_construction_parent_symbols)$'
+  -R '^(purify.tests.slashability_e2e|purify.tests.certificate_nonce_parent|purify.tests.installed_package|purify.tests.private_construction_parent_symbols)$'
 ```
 
 Build the standalone purpose-specific prover separately:
@@ -159,6 +164,55 @@ state with VK2, and writes one synced 15,076-byte proof. Producing that proof
 is not receipt acceptance: the proof must still pass
 `ConstructionParentVerifier`, including the native final accumulation
 decision, before an application acts on the receipt.
+
+Build the certificate-parent producer as a separate opt-in executable:
+
+```sh
+cmake -S . -B build-certificate-prover \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPURIFY_BUILD_CERTIFICATE_PARENT_PROVER=ON \
+  -DPURIFY_BUILD_CONSTRUCTION_PARENT_VERIFIER=OFF \
+  -DPURIFY_BUILD_TESTS=OFF \
+  -DPURIFY_BUILD_CLI=OFF \
+  -DPURIFY_BUILD_BENCH=OFF \
+  -DPURIFY_BUILD_DOCS=OFF \
+  -DPURIFY_BUILD_FUZZ=OFF
+CARGO_BUILD_JOBS=1 cmake --build build-certificate-prover \
+  --target purify_certificate_parent_prover
+cmake --install build-certificate-prover --prefix /opt/purify \
+  --component certificate_parent_prover
+```
+
+The application derives the 96-byte public frame from the complete ordered
+public response sequence with
+`serialize_certificate_parent_public_frame()`. The private-constructor
+manifest resolution fixes its certificate context, response count, step
+count, and final manifest. CertJWit3 is a separate, accepted linear witness;
+it cannot select those public facts.
+
+```sh
+/opt/purify/bin/purify-certificate-parent-prover \
+  /path/to/certificate-parent-prover.pk1 \
+  /path/to/certificate-parent-verifier.vk2 \
+  /path/to/certificate.cpi1 \
+  /path/to/certificate.certjwit3 \
+  /new/path/certificate.proof
+```
+
+The output path must not exist. The producer validates and binds both input
+files before opening either artifact, snapshots and authenticates PK1, proves,
+drops PK1, snapshots and authenticates VK2, and independently reverifies the
+exact final state. It publishes only the fixed 15,268-byte proof, using a
+synced same-directory hard link as the no-replace linearization point. The
+256 MiB witness-input limit is a local allocation bound, not a consensus or
+proof-validity bound. Automated callers must impose a separate admitted-step
+scheduling limit because proving work grows with the member count.
+
+Process success is not certificate acceptance. The application must rebuild
+the canonical public manifest from admitted registry state and call
+`CertificateParentVerifier`; that wrapper authenticates the recursive proof,
+parses its pending root against the fixed certificate basis, and completes the
+native accumulation decision.
 
 `ConstructionParentVerifier` verifies the recursive proof and completes the
 native accumulation decision before returning a verified receipt. This

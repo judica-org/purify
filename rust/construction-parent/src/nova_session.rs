@@ -1,8 +1,8 @@
 //! Serialized one-thread Nova lifecycle for one exact direct relation.
 //!
-//! This module owns the generic fixed-template mechanics and the one frozen
-//! construction-parent profile. Setup and proving compile only for
-//! qualification; production loads the profile's authenticated verifier key.
+//! This module owns generic fixed-template mechanics and locally selected
+//! application profiles. Setup compiles only for qualification; production
+//! loads an authenticated verifier key for one frozen profile.
 
 use std::sync::Mutex;
 
@@ -36,7 +36,7 @@ use crate::{
 
 mod artifact_codec;
 #[cfg(all(feature = "prover", not(target_pointer_width = "64")))]
-compile_error!("the construction-parent prover supports only 64-bit targets");
+compile_error!("the direct Nova prover supports only 64-bit targets");
 #[cfg(all(any(test, feature = "prover"), target_pointer_width = "64"))]
 pub(crate) mod prover_artifact;
 pub(crate) mod verifier_artifact;
@@ -89,7 +89,10 @@ pub(crate) trait NovaSessionStep<const ARITY: usize>: StepCircuit<DirectNovaScal
     fn input_state(&self) -> &[DirectNovaScalar; ARITY];
 }
 
-const DIRECT_NOVA_SUITE_ID_TAG: &[u8] = b"Purify/Accountable/ConstructionParentNovaSuite/v2";
+const CONSTRUCTION_PARENT_NOVA_SUITE_ID_TAG: &[u8] =
+    b"Purify/Accountable/ConstructionParentNovaSuite/v2";
+const CERTIFICATE_PARENT_NOVA_SUITE_ID_TAG: &[u8] =
+    b"Purify/Accountable/CertificateParentNovaSuite/v1";
 const DIRECT_NOVA_SUITE_ENCODING_VERSION: u8 = 2;
 const NOVA_VERSION: [u8; 3] = [0, 76, 0];
 const PRIMARY_ENGINE_SECQ256K1_SHA256: u8 = 1;
@@ -98,7 +101,7 @@ const FOLDING_SCHEME_NOVA: u8 = 1;
 const COMPRESSION_SCHEME_SPARTAN: u8 = 1;
 const EVALUATION_ENGINE_IPA_PC: u8 = 1;
 
-macro_rules! construction_version {
+macro_rules! application_version {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub(crate) struct $name(u32);
@@ -115,10 +118,10 @@ macro_rules! construction_version {
     };
 }
 
-construction_version!(ConstructionPayloadVersion);
-construction_version!(ConstructionStatementVersion);
-construction_version!(ConstructionManifestVersion);
-construction_version!(ConstructionNativeDecisionVersion);
+application_version!(ApplicationPayloadVersion);
+application_version!(ApplicationStatementVersion);
+application_version!(ApplicationManifestVersion);
+application_version!(ApplicationNativeDecisionVersion);
 
 /// Receipt-layer versions whose meanings are external to the Nova matrix.
 ///
@@ -126,19 +129,19 @@ construction_version!(ConstructionNativeDecisionVersion);
 /// remain separate from the Nova matrix so a changed receipt meaning selects a
 /// different suite ID.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DirectNovaConstructionVersions {
-    payload: ConstructionPayloadVersion,
-    statement: ConstructionStatementVersion,
-    manifest: ConstructionManifestVersion,
-    native_decision: ConstructionNativeDecisionVersion,
+pub(crate) struct DirectNovaApplicationVersions {
+    payload: ApplicationPayloadVersion,
+    statement: ApplicationStatementVersion,
+    manifest: ApplicationManifestVersion,
+    native_decision: ApplicationNativeDecisionVersion,
 }
 
-impl DirectNovaConstructionVersions {
+impl DirectNovaApplicationVersions {
     const fn new(
-        payload: ConstructionPayloadVersion,
-        statement: ConstructionStatementVersion,
-        manifest: ConstructionManifestVersion,
-        native_decision: ConstructionNativeDecisionVersion,
+        payload: ApplicationPayloadVersion,
+        statement: ApplicationStatementVersion,
+        manifest: ApplicationManifestVersion,
+        native_decision: ApplicationNativeDecisionVersion,
     ) -> Self {
         Self {
             payload,
@@ -156,6 +159,31 @@ impl DirectNovaConstructionVersions {
             self.manifest.value(),
             self.native_decision.value(),
         )
+    }
+}
+
+/// Receipt semantics and suite-ID domain selected by one local application.
+///
+/// Nova parameters with identical matrices remain distinct suites when their
+/// public payload or native decision has different meaning. Peers never
+/// supply this profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DirectNovaApplicationProfile {
+    suite_id_tag: &'static [u8],
+    versions: DirectNovaApplicationVersions,
+}
+
+impl DirectNovaApplicationProfile {
+    const fn new(suite_id_tag: &'static [u8], versions: DirectNovaApplicationVersions) -> Self {
+        Self {
+            suite_id_tag,
+            versions,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn version_values(self) -> (u32, u32, u32, u32) {
+        self.versions.values()
     }
 }
 
@@ -215,7 +243,7 @@ impl DirectNovaSuiteMetadata {
     fn suite_id<const ARITY: usize>(
         &self,
         proof_shape: &NovaCompressedProofShape,
-        construction: DirectNovaConstructionVersions,
+        application: DirectNovaApplicationProfile,
     ) -> Result<DirectNovaSuiteId, DirectNovaSessionError> {
         if self.proof_length != proof_shape.encoded_len()
             || self.codec_sequence_count != proof_shape.sequence_count()
@@ -225,7 +253,7 @@ impl DirectNovaSuiteMetadata {
             ));
         }
 
-        let tag_hash = Sha256::digest(DIRECT_NOVA_SUITE_ID_TAG);
+        let tag_hash = Sha256::digest(application.suite_id_tag);
         let mut digest = Sha256::new();
         digest.update(tag_hash);
         digest.update(tag_hash);
@@ -239,10 +267,10 @@ impl DirectNovaSuiteMetadata {
             DIRECT_NOVA_SUITE_ENCODING_VERSION,
             DIRECT_STEP_RELATION_ENCODING_VERSION,
         ]);
-        digest.update(construction.payload.value().to_be_bytes());
-        digest.update(construction.statement.value().to_be_bytes());
-        digest.update(construction.manifest.value().to_be_bytes());
-        digest.update(construction.native_decision.value().to_be_bytes());
+        digest.update(application.versions.payload.value().to_be_bytes());
+        digest.update(application.versions.statement.value().to_be_bytes());
+        digest.update(application.versions.manifest.value().to_be_bytes());
+        digest.update(application.versions.native_decision.value().to_be_bytes());
         digest.update(NOVA_VERSION);
         digest.update([
             PRIMARY_ENGINE_SECQ256K1_SHA256,
@@ -362,7 +390,7 @@ impl FrozenNovaProofMetrics {
 /// One locally selected suite. Receipts and peers never construct this value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ExpectedDirectNovaSuite {
-    construction_versions: DirectNovaConstructionVersions,
+    application: DirectNovaApplicationProfile,
     relation_id: [u8; 32],
     public_parameter_digest: [u8; 32],
     primary: FrozenNovaDimensions,
@@ -373,7 +401,7 @@ pub(crate) struct ExpectedDirectNovaSuite {
 
 impl ExpectedDirectNovaSuite {
     const fn new(
-        construction_versions: DirectNovaConstructionVersions,
+        application: DirectNovaApplicationProfile,
         relation_id: [u8; 32],
         public_parameter_digest: [u8; 32],
         primary: FrozenNovaDimensions,
@@ -382,7 +410,7 @@ impl ExpectedDirectNovaSuite {
         suite_id: DirectNovaSuiteId,
     ) -> Self {
         Self {
-            construction_versions,
+            application,
             relation_id,
             public_parameter_digest,
             primary,
@@ -456,7 +484,7 @@ impl ExpectedDirectNovaSuite {
                 "codec sequence count",
             ));
         }
-        let suite_id = metadata.suite_id::<ARITY>(proof_shape, self.construction_versions)?;
+        let suite_id = metadata.suite_id::<ARITY>(proof_shape, self.application)?;
         if suite_id != self.suite_id {
             return Err(DirectNovaSessionError::SuiteMismatch("suite ID"));
         }
@@ -492,24 +520,44 @@ impl ExpectedDirectNovaSuite {
     }
 }
 
-const QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION: ConstructionPayloadVersion =
-    ConstructionPayloadVersion::new(4);
-const QUALIFIED_CONSTRUCTION_STATEMENT_VERSION: ConstructionStatementVersion =
-    ConstructionStatementVersion::new(5);
-const QUALIFIED_CONSTRUCTION_MANIFEST_VERSION: ConstructionManifestVersion =
-    ConstructionManifestVersion::new(3);
+const QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION: ApplicationPayloadVersion =
+    ApplicationPayloadVersion::new(4);
+const QUALIFIED_CONSTRUCTION_STATEMENT_VERSION: ApplicationStatementVersion =
+    ApplicationStatementVersion::new(5);
+const QUALIFIED_CONSTRUCTION_MANIFEST_VERSION: ApplicationManifestVersion =
+    ApplicationManifestVersion::new(3);
 
 /// Candidate-decision v1 binds `CandidateAccumStep/v1` and the native linear
 /// decision over `point:33 || scale:32 || factors:15*32`, the current 545-byte
 /// construction-root semantics.
-const QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION: ConstructionNativeDecisionVersion =
-    ConstructionNativeDecisionVersion::new(1);
-pub(crate) const QUALIFIED_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
-    DirectNovaConstructionVersions::new(
+const QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION: ApplicationNativeDecisionVersion =
+    ApplicationNativeDecisionVersion::new(1);
+pub(crate) const QUALIFIED_CONSTRUCTION_VERSIONS: DirectNovaApplicationVersions =
+    DirectNovaApplicationVersions::new(
         QUALIFIED_CONSTRUCTION_PAYLOAD_VERSION,
         QUALIFIED_CONSTRUCTION_STATEMENT_VERSION,
         QUALIFIED_CONSTRUCTION_MANIFEST_VERSION,
         QUALIFIED_NATIVE_CANDIDATE_DECISION_VERSION,
+    );
+pub(crate) const QUALIFIED_CONSTRUCTION_APPLICATION: DirectNovaApplicationProfile =
+    DirectNovaApplicationProfile::new(
+        CONSTRUCTION_PARENT_NOVA_SUITE_ID_TAG,
+        QUALIFIED_CONSTRUCTION_VERSIONS,
+    );
+
+const CERTIFICATE_PARENT_VERSIONS: DirectNovaApplicationVersions =
+    DirectNovaApplicationVersions::new(
+        // Compact certificate proof payload, public statement frame,
+        // recursive manifest semantics, and native certificate-root decision.
+        ApplicationPayloadVersion::new(1),
+        ApplicationStatementVersion::new(1),
+        ApplicationManifestVersion::new(1),
+        ApplicationNativeDecisionVersion::new(1),
+    );
+pub(crate) const CERTIFICATE_PARENT_NOVA_APPLICATION: DirectNovaApplicationProfile =
+    DirectNovaApplicationProfile::new(
+        CERTIFICATE_PARENT_NOVA_SUITE_ID_TAG,
+        CERTIFICATE_PARENT_VERSIONS,
     );
 
 const QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID: [u8; 32] = [
@@ -529,13 +577,39 @@ pub(crate) const QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH: usize = 15_076;
 /// Exact mixed construction-parent profile selected by qualification.
 pub(crate) static QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE: ExpectedDirectNovaSuite =
     ExpectedDirectNovaSuite::new(
-        QUALIFIED_CONSTRUCTION_VERSIONS,
+        QUALIFIED_CONSTRUCTION_APPLICATION,
         QUALIFIED_CONSTRUCTION_PARENT_RELATION_ID,
         QUALIFIED_CONSTRUCTION_PARENT_PP_DIGEST,
         FrozenNovaDimensions::new(9_418_542, 9_372_224),
         FrozenNovaDimensions::new(728_974, 728_211),
         FrozenNovaProofMetrics::new(QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH as u64, 152),
         QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID,
+    );
+
+const QUALIFIED_CERTIFICATE_PARENT_RELATION_ID: [u8; 32] = [
+    0xf5, 0xa3, 0x14, 0x75, 0x8f, 0x53, 0x15, 0xd9, 0x19, 0x89, 0x49, 0x3b, 0x31, 0xa7, 0x97, 0x7a,
+    0xde, 0x72, 0x0f, 0x29, 0x67, 0xb4, 0x6e, 0x75, 0x6b, 0xce, 0x63, 0x8e, 0x18, 0x76, 0x08, 0x1b,
+];
+const QUALIFIED_CERTIFICATE_PARENT_PP_DIGEST: [u8; 32] = [
+    0x06, 0x97, 0xca, 0x2f, 0xa2, 0x15, 0xb5, 0xef, 0xf3, 0x17, 0x8c, 0x2c, 0x10, 0xe6, 0x2b, 0x9e,
+    0x80, 0xd5, 0x6e, 0xed, 0x12, 0x16, 0x61, 0xaf, 0x1a, 0xd8, 0x53, 0x26, 0x73, 0x6b, 0xb3, 0x03,
+];
+const QUALIFIED_CERTIFICATE_PARENT_SUITE_ID: DirectNovaSuiteId = DirectNovaSuiteId::new([
+    0x21, 0xd8, 0xc4, 0x1e, 0x26, 0xe9, 0x16, 0xe3, 0xee, 0x15, 0xd4, 0x5e, 0x35, 0x6e, 0x91, 0x3e,
+    0x69, 0x58, 0xf7, 0xe7, 0x06, 0x68, 0x12, 0x31, 0x79, 0xe4, 0x30, 0x00, 0xfd, 0x5e, 0x2c, 0x8b,
+]);
+pub(crate) const QUALIFIED_CERTIFICATE_PARENT_PROOF_LENGTH: usize = 15_268;
+
+/// Exact certificate-parent profile selected by production qualification.
+pub(crate) static QUALIFIED_CERTIFICATE_PARENT_NOVA_SUITE: ExpectedDirectNovaSuite =
+    ExpectedDirectNovaSuite::new(
+        CERTIFICATE_PARENT_NOVA_APPLICATION,
+        QUALIFIED_CERTIFICATE_PARENT_RELATION_ID,
+        QUALIFIED_CERTIFICATE_PARENT_PP_DIGEST,
+        FrozenNovaDimensions::new(9_617_365, 9_575_269),
+        FrozenNovaDimensions::new(728_974, 728_211),
+        FrozenNovaProofMetrics::new(QUALIFIED_CERTIFICATE_PARENT_PROOF_LENGTH as u64, 152),
+        QUALIFIED_CERTIFICATE_PARENT_SUITE_ID,
     );
 
 /// A generic suite promoted through one exact local selection profile.
@@ -570,20 +644,19 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> NovaSessionSuite<ARITY, C> {
     }
 
     /// Promotes one freshly generated qualification suite under its exact
-    /// metadata and receipt-layer versions.
+    /// metadata and complete application profile.
     ///
     /// The leaked profile is scoped to the resource-gated test process. It is
     /// deliberately not reachable by the production artifact loader, which
     /// remains pinned and fail-closed until these outputs are reviewed.
     pub(crate) fn select_generated_for_qualification(
         self,
-        construction_versions: DirectNovaConstructionVersions,
+        application: DirectNovaApplicationProfile,
     ) -> Result<SelectedNovaSessionSuite<ARITY, C>, DirectNovaSessionError> {
         let metadata = self.verifier.metadata;
-        let suite_id =
-            metadata.suite_id::<ARITY>(&self.verifier.proof_shape, construction_versions)?;
+        let suite_id = metadata.suite_id::<ARITY>(&self.verifier.proof_shape, application)?;
         let expected = Box::leak(Box::new(ExpectedDirectNovaSuite::new(
-            construction_versions,
+            application,
             *metadata.relation_id.bytes(),
             metadata.public_parameter_digest,
             FrozenNovaDimensions::new(
@@ -813,6 +886,16 @@ impl<const ARITY: usize, C: NovaSessionStep<ARITY>> SelectedNovaSessionSuite<ARI
     pub(crate) fn into_verifier(self) -> SelectedNovaVerifier<ARITY, C> {
         self.verifier
     }
+
+    /// Split one setup-only qualification into its two artifact payloads.
+    ///
+    /// Production code cannot call this test-only API or perform setup. Each
+    /// returned component remains selected by the exact supplied suite.
+    pub(crate) fn into_artifact_parts(
+        self,
+    ) -> (SelectedNovaProver<ARITY, C>, SelectedNovaVerifier<ARITY, C>) {
+        (self.prover, self.verifier)
+    }
 }
 
 #[cfg(any(test, feature = "prover"))]
@@ -883,9 +966,9 @@ impl<const ARITY: usize, C: StepCircuit<DirectNovaScalar>> SelectedNovaVerifier<
 
     /// Authenticates the recurrence output under this selected suite.
     ///
-    /// The returned state is not construction-receipt acceptance: the
-    /// construction wrapper must still bind its verifier-derived suffix and
-    /// complete the native final accumulation decision.
+    /// The returned state is not application acceptance: its native wrapper
+    /// must still bind the verifier-derived public frame and complete the
+    /// final accumulation decision.
     pub(crate) fn verify_final(
         &self,
         initial_state: &[DirectNovaScalar; ARITY],
@@ -1033,13 +1116,17 @@ mod tests {
 
     const TEST_ARITY: usize = 20;
 
-    const TEST_CONSTRUCTION_VERSIONS: DirectNovaConstructionVersions =
-        DirectNovaConstructionVersions::new(
-            ConstructionPayloadVersion::new(0x0102_0304),
-            ConstructionStatementVersion::new(0x1112_1314),
-            ConstructionManifestVersion::new(0x2122_2324),
-            ConstructionNativeDecisionVersion::new(0x3132_3334),
+    const TEST_CONSTRUCTION_VERSIONS: DirectNovaApplicationVersions =
+        DirectNovaApplicationVersions::new(
+            ApplicationPayloadVersion::new(0x0102_0304),
+            ApplicationStatementVersion::new(0x1112_1314),
+            ApplicationManifestVersion::new(0x2122_2324),
+            ApplicationNativeDecisionVersion::new(0x3132_3334),
         );
+    const TEST_APPLICATION: DirectNovaApplicationProfile = DirectNovaApplicationProfile::new(
+        CONSTRUCTION_PARENT_NOVA_SUITE_ID_TAG,
+        TEST_CONSTRUCTION_VERSIONS,
+    );
     const TEST_SUITE_ID: DirectNovaSuiteId = DirectNovaSuiteId::new([
         0x75, 0xaf, 0xf8, 0x3f, 0x39, 0x05, 0x05, 0x67, 0x86, 0x99, 0x2a, 0xb4, 0x24, 0x9f, 0x29,
         0x4b, 0x6b, 0x62, 0xab, 0x02, 0x64, 0x69, 0xfa, 0xad, 0x60, 0xfa, 0xb4, 0xfb, 0x3c, 0x47,
@@ -1159,7 +1246,7 @@ mod tests {
     fn suite_id_has_a_fixed_codec_complete_encoding() {
         let (metadata, proof_shape) = fixed_suite_fixture();
         let suite_id = metadata
-            .suite_id::<TEST_ARITY>(&proof_shape, TEST_CONSTRUCTION_VERSIONS)
+            .suite_id::<TEST_ARITY>(&proof_shape, TEST_APPLICATION)
             .expect("tiny suite ID");
         eprintln!(
             "tiny_sha256_suite_id={:02x?}\nmetadata={metadata:#?}",
@@ -1167,11 +1254,22 @@ mod tests {
         );
         assert_eq!(suite_id, TEST_SUITE_ID);
 
+        let alternate_domain = DirectNovaApplicationProfile::new(
+            CERTIFICATE_PARENT_NOVA_SUITE_ID_TAG,
+            TEST_CONSTRUCTION_VERSIONS,
+        );
+        assert_ne!(
+            metadata
+                .suite_id::<TEST_ARITY>(&proof_shape, alternate_domain)
+                .expect("alternate application suite ID"),
+            suite_id
+        );
+
         let mut changed_schedule = proof_shape.clone();
         changed_schedule.increment_suite_sequence_length_for_test(7);
         assert_ne!(
             metadata
-                .suite_id::<TEST_ARITY>(&changed_schedule, TEST_CONSTRUCTION_VERSIONS)
+                .suite_id::<TEST_ARITY>(&changed_schedule, TEST_APPLICATION)
                 .expect("changed codec schedule suite ID"),
             suite_id
         );
@@ -1180,7 +1278,7 @@ mod tests {
         changed_metadata.public_parameter_digest[0] ^= 1;
         assert_ne!(
             changed_metadata
-                .suite_id::<TEST_ARITY>(&proof_shape, TEST_CONSTRUCTION_VERSIONS)
+                .suite_id::<TEST_ARITY>(&proof_shape, TEST_APPLICATION)
                 .expect("changed suite ID"),
             suite_id
         );
@@ -1188,11 +1286,14 @@ mod tests {
             metadata
                 .suite_id::<TEST_ARITY>(
                     &proof_shape,
-                    DirectNovaConstructionVersions::new(
-                        ConstructionPayloadVersion::new(0x0102_0305),
-                        ConstructionStatementVersion::new(0x1112_1314),
-                        ConstructionManifestVersion::new(0x2122_2324),
-                        ConstructionNativeDecisionVersion::new(0x3132_3334),
+                    DirectNovaApplicationProfile::new(
+                        CONSTRUCTION_PARENT_NOVA_SUITE_ID_TAG,
+                        DirectNovaApplicationVersions::new(
+                            ApplicationPayloadVersion::new(0x0102_0305),
+                            ApplicationStatementVersion::new(0x1112_1314),
+                            ApplicationManifestVersion::new(0x2122_2324),
+                            ApplicationNativeDecisionVersion::new(0x3132_3334),
+                        ),
                     ),
                 )
                 .expect("changed construction version suite ID"),
@@ -1202,7 +1303,7 @@ mod tests {
         let mut inconsistent = metadata;
         inconsistent.proof_length += 1;
         assert!(matches!(
-            inconsistent.suite_id::<TEST_ARITY>(&proof_shape, TEST_CONSTRUCTION_VERSIONS),
+            inconsistent.suite_id::<TEST_ARITY>(&proof_shape, TEST_APPLICATION),
             Err(DirectNovaSessionError::SuiteIdentity(
                 "proof codec metadata"
             ))
@@ -1236,7 +1337,7 @@ mod tests {
             codec_sequence_count: proof_shape.sequence_count(),
         };
         let suite_id = metadata
-            .suite_id::<TEST_ARITY>(&proof_shape, QUALIFIED_CONSTRUCTION_VERSIONS)
+            .suite_id::<TEST_ARITY>(&proof_shape, QUALIFIED_CONSTRUCTION_APPLICATION)
             .expect("qualified SHA-256 suite ID");
         assert_eq!(suite_id, QUALIFIED_CONSTRUCTION_PARENT_SUITE_ID);
         QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE
@@ -1244,8 +1345,64 @@ mod tests {
             .expect("qualified SHA-256 suite profile");
     }
 
+    #[test]
+    fn certificate_parent_application_frame_is_distinct() {
+        assert_eq!(
+            CERTIFICATE_PARENT_NOVA_APPLICATION.version_values(),
+            (1, 1, 1, 1)
+        );
+        assert_ne!(
+            CERTIFICATE_PARENT_NOVA_APPLICATION.suite_id_tag,
+            QUALIFIED_CONSTRUCTION_APPLICATION.suite_id_tag
+        );
+    }
+
+    #[test]
+    fn qualified_certificate_parent_suite_frame_is_frozen() {
+        use crate::certificate_profile::CERTIFICATE_RECURRENCE_STATE_ARITY;
+
+        assert_eq!(
+            *crate::nova_certificate_recurrence::QUALIFIED_CERTIFICATE_PARENT_RELATION_ID.bytes(),
+            QUALIFIED_CERTIFICATE_PARENT_RELATION_ID
+        );
+        let proof_shape = NovaCompressedProofShape::from_suite_dimensions(
+            NovaR1csDimensions::new(9_617_365, 9_575_269),
+            NovaR1csDimensions::new(728_974, 728_211),
+            CERTIFICATE_RECURRENCE_STATE_ARITY,
+        )
+        .expect("qualified certificate proof shape");
+        assert_eq!(
+            proof_shape.encoded_len(),
+            QUALIFIED_CERTIFICATE_PARENT_PROOF_LENGTH
+        );
+        assert_eq!(proof_shape.sequence_count(), 152);
+
+        let metadata = DirectNovaSuiteMetadata {
+            relation_id: DirectRelationId::from_frozen_bytes(
+                QUALIFIED_CERTIFICATE_PARENT_RELATION_ID,
+            ),
+            public_parameter_digest: QUALIFIED_CERTIFICATE_PARENT_PP_DIGEST,
+            primary_constraints: 9_617_365,
+            primary_variables: 9_575_269,
+            secondary_constraints: 728_974,
+            secondary_variables: 728_211,
+            proof_length: proof_shape.encoded_len(),
+            codec_sequence_count: proof_shape.sequence_count(),
+        };
+        let suite_id = metadata
+            .suite_id::<CERTIFICATE_RECURRENCE_STATE_ARITY>(
+                &proof_shape,
+                CERTIFICATE_PARENT_NOVA_APPLICATION,
+            )
+            .expect("qualified certificate suite ID");
+        assert_eq!(suite_id, QUALIFIED_CERTIFICATE_PARENT_SUITE_ID);
+        QUALIFIED_CERTIFICATE_PARENT_NOVA_SUITE
+            .validate::<CERTIFICATE_RECURRENCE_STATE_ARITY>(&metadata, &proof_shape)
+            .expect("qualified certificate suite profile");
+    }
+
     const TEST_EXPECTED_SUITE: ExpectedDirectNovaSuite = ExpectedDirectNovaSuite::new(
-        TEST_CONSTRUCTION_VERSIONS,
+        TEST_APPLICATION,
         [0x11; 32],
         [0x22; 32],
         FrozenNovaDimensions::new(101, 103),
@@ -1254,7 +1411,7 @@ mod tests {
         TEST_SUITE_ID,
     );
     const TEST_WRONG_RELATION_SUITE: ExpectedDirectNovaSuite = ExpectedDirectNovaSuite::new(
-        TEST_CONSTRUCTION_VERSIONS,
+        TEST_APPLICATION,
         [0; 32],
         [0x22; 32],
         FrozenNovaDimensions::new(101, 103),
@@ -1318,11 +1475,14 @@ mod tests {
         ));
 
         let mut changed = expected;
-        changed.construction_versions = DirectNovaConstructionVersions::new(
-            ConstructionPayloadVersion::new(0x0102_0305),
-            ConstructionStatementVersion::new(0x1112_1314),
-            ConstructionManifestVersion::new(0x2122_2324),
-            ConstructionNativeDecisionVersion::new(0x3132_3334),
+        changed.application = DirectNovaApplicationProfile::new(
+            CONSTRUCTION_PARENT_NOVA_SUITE_ID_TAG,
+            DirectNovaApplicationVersions::new(
+                ApplicationPayloadVersion::new(0x0102_0305),
+                ApplicationStatementVersion::new(0x1112_1314),
+                ApplicationManifestVersion::new(0x2122_2324),
+                ApplicationNativeDecisionVersion::new(0x3132_3334),
+            ),
         );
         assert!(matches!(
             changed.validate::<TEST_ARITY>(&metadata, &proof_shape),
@@ -1367,10 +1527,10 @@ mod tests {
         let metadata = suite.metadata();
         let proof_shape = suite.verifier.proof_shape.clone();
         let suite_id = metadata
-            .suite_id::<TEST_ARITY>(&proof_shape, TEST_CONSTRUCTION_VERSIONS)
+            .suite_id::<TEST_ARITY>(&proof_shape, TEST_APPLICATION)
             .expect("tiny suite ID");
         let expected = Box::leak(Box::new(ExpectedDirectNovaSuite::new(
-            TEST_CONSTRUCTION_VERSIONS,
+            TEST_APPLICATION,
             *metadata.relation_id.bytes(),
             metadata.public_parameter_digest,
             FrozenNovaDimensions::new(

@@ -16,6 +16,8 @@
 namespace purify::accountable {
 
 class ConstructionLeafAccumulator;
+class AnchorEscrowRecord;
+class AnchorPunishmentKey;
 class VerifiedDistributedRecoverySetup;
 
 /**
@@ -26,6 +28,48 @@ class VerifiedDistributedRecoverySetup;
  * digest must not include the escrow record itself.
  */
 using AnchorEscrowContextDigest = std::array<unsigned char, 32>;
+
+/**
+ * Canonical nonzero scalar used to make one anchor escrow reproducible.
+ *
+ * Applications must derive this scalar with a secret, domain-separated PRF
+ * over every field that identifies the escrow. The type validates only the
+ * scalar encoding; it cannot establish the input's entropy or provenance.
+ */
+class AnchorEscrowAuxiliaryScalar {
+public:
+    using Bytes = bppp::ScalarBytes;
+
+    AnchorEscrowAuxiliaryScalar() = delete;
+    AnchorEscrowAuxiliaryScalar(
+        const AnchorEscrowAuxiliaryScalar&) = delete;
+    AnchorEscrowAuxiliaryScalar& operator=(
+        const AnchorEscrowAuxiliaryScalar&) = delete;
+    AnchorEscrowAuxiliaryScalar(
+        AnchorEscrowAuxiliaryScalar&& other) noexcept;
+    AnchorEscrowAuxiliaryScalar& operator=(
+        AnchorEscrowAuxiliaryScalar&& other) noexcept;
+    ~AnchorEscrowAuxiliaryScalar();
+
+    /** Parse one canonical, nonzero secp256k1 scalar. */
+    [[nodiscard]] static Result<AnchorEscrowAuxiliaryScalar> from_bytes(
+        const Bytes& encoded);
+
+private:
+    explicit AnchorEscrowAuxiliaryScalar(const Bytes& encoded)
+        : bytes_(encoded) {}
+
+    void clear() noexcept;
+
+    Bytes bytes_{};
+
+    friend Result<AnchorEscrowRecord>
+    create_anchor_escrow_deterministic(
+        const RecoveryBoundSigningRoster&, const UInt512&,
+        const AnchorPunishmentKey&, const AnchorEscrowContextDigest&,
+        const AnchorEscrowAuxiliaryScalar&, purify_secp_context*,
+        bppp::ExperimentalCircuitBackend*);
+};
 
 /** Canonical x-only BIP340 key authorized to punish one anchor. */
 class AnchorPunishmentPublicKey {
@@ -181,6 +225,26 @@ static_assert(AnchorEscrowRecord::kSerializedSize == 1233);
     const UInt512& advertised_anchor_root,
     const AnchorPunishmentKey& punishment_key,
     const AnchorEscrowContextDigest& context_digest,
+    purify_secp_context* secp_context,
+    bppp::ExperimentalCircuitBackend* cache = nullptr);
+
+/**
+ * Reproduce one exact anchor escrow from application-derived auxiliary input.
+ *
+ * This is the idempotent counterpart to create_anchor_escrow(). The same
+ * statement, secret, and auxiliary scalar produce byte-identical ciphertext
+ * and proof records. The scalar must be derived from a secret PRF over the
+ * complete application context, not accepted as an untrusted protocol field.
+ * Purify additionally hedges it with the anchor secret and exact public
+ * statement before deriving encryption and proof randomness.
+ */
+[[nodiscard]] Result<AnchorEscrowRecord>
+create_anchor_escrow_deterministic(
+    const RecoveryBoundSigningRoster& roster,
+    const UInt512& advertised_anchor_root,
+    const AnchorPunishmentKey& punishment_key,
+    const AnchorEscrowContextDigest& context_digest,
+    const AnchorEscrowAuxiliaryScalar& auxiliary_scalar,
     purify_secp_context* secp_context,
     bppp::ExperimentalCircuitBackend* cache = nullptr);
 

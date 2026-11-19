@@ -21,6 +21,7 @@ using purify_test::expect_error;
 using purify_test::expect_ok;
 using purify::FieldElement;
 using purify::Result;
+using purify::accountable::AnchorEscrowAuxiliaryScalar;
 using purify::accountable::AnchorEscrowContextDigest;
 using purify::accountable::CoalitionCoreDigest;
 using purify::accountable::RecoveryBoundSigningRoster;
@@ -258,7 +259,11 @@ void test_anchor_escrow(TestContext& ctx) {
         "anchor root and punishment key use distinct secret material");
 #if PURIFY_USE_LEGACY_FIELD_HASHES
     const AnchorEscrowContextDigest legacy_context{};
-    const purify::bppp::ScalarBytes legacy_auxiliary_randomness{};
+    auto legacy_auxiliary = AnchorEscrowAuxiliaryScalar::from_bytes(
+        FieldElement::one().to_bytes_be());
+    expect_ok(ctx, legacy_auxiliary,
+              "legacy build accepts a canonical auxiliary scalar");
+    if (!legacy_auxiliary) return;
     expect_error(
         ctx,
         purify::accountable::create_anchor_escrow(
@@ -268,9 +273,9 @@ void test_anchor_escrow(TestContext& ctx) {
         "anchor v4 creation rejects the legacy field-hash suite");
     expect_error(
         ctx,
-        purify::accountable::create_anchor_escrow_with_aux_randomness(
+        purify::accountable::create_anchor_escrow_deterministic(
             fixture->roster, anchor->public_key, *punishment,
-            legacy_context, legacy_auxiliary_randomness, secp.get()),
+            legacy_context, *legacy_auxiliary, secp.get()),
         purify::ErrorCode::UnsupportedSymbol,
         "deterministic anchor v4 creation rejects legacy field hashes");
     auto legacy_construction_accumulator = purify::accountable::
@@ -285,22 +290,41 @@ void test_anchor_escrow(TestContext& ctx) {
             .digest(purify::bytes_from_ascii(
                 "anchor=alice/bond=7/purpose=slash/domain=3"));
 
-    purify::bppp::ScalarBytes auxiliary_randomness{};
+    purify::bppp::ScalarBytes zero_auxiliary{};
+    expect_error(
+        ctx, AnchorEscrowAuxiliaryScalar::from_bytes(zero_auxiliary),
+        purify::ErrorCode::RangeViolation,
+        "zero deterministic escrow auxiliary scalar rejects");
+    purify::bppp::ScalarBytes noncanonical_auxiliary{};
+    noncanonical_auxiliary.fill(0xff);
     expect_error(
         ctx,
-        purify::accountable::create_anchor_escrow_with_aux_randomness(
+        AnchorEscrowAuxiliaryScalar::from_bytes(noncanonical_auxiliary),
+        purify::ErrorCode::RangeViolation,
+        "noncanonical deterministic escrow auxiliary scalar rejects");
+
+    const auto auxiliary_bytes =
+        FieldElement::from_u64(41).to_bytes_be();
+    auto auxiliary =
+        AnchorEscrowAuxiliaryScalar::from_bytes(auxiliary_bytes);
+    expect_ok(ctx, auxiliary,
+              "deterministic escrow auxiliary scalar parses");
+    if (!auxiliary) return;
+    expect_error(
+        ctx,
+        purify::accountable::create_anchor_escrow_deterministic(
             fixture->roster, fixture->roster.recovery_root(),
-            *punishment, context, auxiliary_randomness, secp.get()),
+            *punishment, context, *auxiliary, secp.get()),
         purify::ErrorCode::BindingMismatch,
         "anchor escrow rejects the coalition recovery root as an anchor");
     const auto started = std::chrono::steady_clock::now();
     auto record =
-        purify::accountable::create_anchor_escrow_with_aux_randomness(
+        purify::accountable::create_anchor_escrow_deterministic(
             fixture->roster, anchor->public_key, *punishment, context,
-            auxiliary_randomness, secp.get());
+            *auxiliary, secp.get());
     const auto proved = std::chrono::steady_clock::now();
     expect_ok(ctx, record,
-              "deterministic test seam proves exact anchor encryption");
+              "public deterministic API proves exact anchor encryption");
     if (!record) return;
     auto circuit_shape =
         purify::accountable::anchor_escrow_circuit_shape_for_testing(
@@ -710,9 +734,9 @@ void test_anchor_escrow(TestContext& ctx) {
         "escrow proof binds the setup-registered nonce host commitment");
 
     auto repeated_record =
-        purify::accountable::create_anchor_escrow_with_aux_randomness(
+        purify::accountable::create_anchor_escrow_deterministic(
             fixture->roster, anchor->public_key, *punishment, context,
-            auxiliary_randomness, secp.get());
+            *auxiliary, secp.get());
     expect_ok(ctx, repeated_record,
               "identical auxiliary input recreates the escrow");
     if (!repeated_record) return;
@@ -722,12 +746,15 @@ void test_anchor_escrow(TestContext& ctx) {
     ctx.expect(*repeated_encoded == *encoded,
                "hedged derivation is deterministic for one exact statement");
 
-    auto changed_auxiliary = auxiliary_randomness;
-    changed_auxiliary.back() = 1;
+    auto changed_auxiliary = AnchorEscrowAuxiliaryScalar::from_bytes(
+        FieldElement::from_u64(42).to_bytes_be());
+    expect_ok(ctx, changed_auxiliary,
+              "changed deterministic auxiliary scalar parses");
+    if (!changed_auxiliary) return;
     auto changed_aux_record =
-        purify::accountable::create_anchor_escrow_with_aux_randomness(
+        purify::accountable::create_anchor_escrow_deterministic(
             fixture->roster, anchor->public_key, *punishment, context,
-            changed_auxiliary, secp.get());
+            *changed_auxiliary, secp.get());
     expect_ok(ctx, changed_aux_record,
               "changed auxiliary input creates another valid escrow");
     if (!changed_aux_record) return;
@@ -744,10 +771,9 @@ void test_anchor_escrow(TestContext& ctx) {
                "changed-auxiliary escrow still verifies");
 
     auto changed_context_record =
-        purify::accountable::create_anchor_escrow_with_aux_randomness(
+        purify::accountable::create_anchor_escrow_deterministic(
             fixture->roster, anchor->public_key, *punishment,
-            changed_context,
-            auxiliary_randomness, secp.get());
+            changed_context, *auxiliary, secp.get());
     expect_ok(ctx, changed_context_record,
               "changed context creates a separately hedged escrow");
     if (!changed_context_record) return;
@@ -798,7 +824,7 @@ void test_anchor_escrow(TestContext& ctx) {
         purify::accountable::create_anchor_escrow_with_aux_randomness(
             fixture->roster, maximum_anchor->public_key,
             *maximum_punishment, maximum_context,
-            auxiliary_randomness, secp.get());
+            auxiliary_bytes, secp.get());
     expect_ok(ctx, maximum_record,
               "high punishment scalar encrypts");
     if (!maximum_record) return;

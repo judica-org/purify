@@ -181,9 +181,13 @@ private:
     friend Result<PendingClaim> verify_algebraic_step(
         const Basis&, std::span<const PendingClaim>,
         const AlgebraicStepProof&, purify_secp_context*);
+    friend Result<PendingClaim> verify_bound_algebraic_step(
+        const Basis&, std::span<const PendingClaim>, const Digest&,
+        const AlgebraicStepProof&, purify_secp_context*);
     friend Result<PendingClaim> parse_root_claim(
         const Basis&, std::span<const unsigned char>,
         purify_secp_context*);
+    friend Result<PendingClaim> canonical_zero_claim(const Basis&);
     friend class purify::accountable::ConstructionReceiptAccumulator;
 };
 
@@ -255,6 +259,15 @@ Result<Bytes> serialize_root_claim(const Basis& basis,
 Result<PendingClaim> parse_root_claim(
     const Basis& basis, std::span<const unsigned char> encoded,
     purify_secp_context* context);
+
+/**
+ * Return the basis-bound algebraic identity used before a first linear step.
+ *
+ * The claim has the same one-term, full-round root shape returned by an
+ * accumulation step. It is still only a pending claim; callers must retain
+ * every authenticated transition and pass the final root to decide().
+ */
+Result<PendingClaim> canonical_zero_claim(const Basis& basis);
 
 /** Parses the norm transcript and computes C_c from its exact required public coefficients. */
 Result<PreparedNorm> prepare_norm(const Basis& basis, const NormArgProof& proof,
@@ -337,6 +350,29 @@ Result<AlgebraicStepProof> prove_algebraic_step(
 Result<PendingClaim> verify_algebraic_step(
     const Basis& basis, std::span<const PendingClaim> claims,
     const AlgebraicStepProof& proof, purify_secp_context* context);
+
+/**
+ * Proves an accumulation step bound to one exact public statement digest.
+ *
+ * This uses a separate transcript domain from the unbound algebraic step.
+ * The digest is public metadata only; callers must derive it from their
+ * complete typed application inputs before invoking this API.
+ */
+Result<AlgebraicStepProof> prove_bound_algebraic_step(
+    const Basis& basis, std::span<const PendingClaim> claims,
+    const Digest& statement_digest, purify_secp_context* context);
+
+/**
+ * Checks a statement-bound accumulation step and returns a pending claim.
+ *
+ * Reusing the proof under another statement digest fails. The returned claim
+ * remains unaccepted until it is included in later verified steps and passed
+ * to decide().
+ */
+Result<PendingClaim> verify_bound_algebraic_step(
+    const Basis& basis, std::span<const PendingClaim> claims,
+    const Digest& statement_digest, const AlgebraicStepProof& proof,
+    purify_secp_context* context);
 
 /** Final required linear-size MSM. Only success here discharges the supplied obligation. */
 Status decide(const Basis& basis, const PendingClaim& claim, purify_secp_context* context);

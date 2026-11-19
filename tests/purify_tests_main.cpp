@@ -34,6 +34,7 @@ void run_aggregate_nonce_tests(TestContext& ctx);
 void run_aggregate_nonce_100_tests(TestContext& ctx);
 void run_nonce_batch_tests(TestContext& ctx);
 void run_nonce_certificate_tests(TestContext& ctx);
+void run_certificate_nonce_parent_tests(TestContext& ctx);
 void run_circuit_soundness_tests(TestContext& ctx);
 void run_sha256_transcript_tests(TestContext& ctx);
 void run_sha256_circuit_transcript_tests(TestContext& ctx);
@@ -74,6 +75,7 @@ constexpr SuiteSpec kSuites[]{
     {"aggregate_nonce_100", &run_aggregate_nonce_100_tests},
     {"nonce_batch", &run_nonce_batch_tests},
     {"nonce_certificate", &run_nonce_certificate_tests},
+    {"certificate_nonce_parent", &run_certificate_nonce_parent_tests},
     {"circuit_soundness", &run_circuit_soundness_tests},
     {"sha256_transcript", &run_sha256_transcript_tests},
     {"sha256_circuit_transcript",

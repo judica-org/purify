@@ -3,7 +3,8 @@
 //! By default the crate exports only the purpose-specific construction-parent
 //! verifier through its private C ABI. C++ reconstructs and decides the
 //! authenticated pending root before receipt acceptance. The opt-in `prover`
-//! feature additionally exposes checked prover inputs through [`prover`].
+//! feature additionally exposes purpose-specific checked inputs through
+//! [`prover`] and [`certificate_parent_prover`].
 
 use ff::PrimeField;
 use nova_snark::{provider::Secq256k1Sha256Engine, traits::Engine};
@@ -12,6 +13,36 @@ use thiserror::Error;
 mod artifact_snapshot;
 #[cfg(any(test, feature = "prover"))]
 mod candidate;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_authorization;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_joined_witness;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_member_leaf;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_native_witness;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_nonce_proof;
+mod certificate_parent_input;
+// This private ABI returns only a proof-authenticated pending root. The C++
+// acceptance boundary must parse and decide that root before exposing success.
+mod certificate_parent_ffi;
+#[cfg(any(test, feature = "prover"))]
+pub mod certificate_parent_prover;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_parent_prover_binding;
+#[cfg(test)]
+mod certificate_parent_qualification;
+// This authenticates a pending certificate root. Native decide remains
+// mandatory before certificate acceptance.
+mod certificate_parent_verifier;
+mod certificate_profile;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_recurrence;
+mod certificate_recursive_manifest;
+#[cfg(any(test, feature = "prover"))]
+mod certificate_response_relation;
+mod certificate_root;
 #[cfg(any(test, feature = "prover"))]
 mod circuit_norm;
 #[cfg(any(test, feature = "prover"))]
@@ -41,6 +72,13 @@ mod nova_types;
 // Production candidate accumulation constraints for qualification.
 #[cfg(any(test, feature = "prover"))]
 mod nova_candidate;
+#[cfg(any(test, feature = "prover"))]
+mod nova_candidate_state;
+#[cfg(any(test, feature = "prover"))]
+mod nova_certificate_recurrence;
+// Exact accountable-signature hashes for certificate recurrence steps.
+#[cfg(any(test, feature = "prover"))]
+mod nova_accountable_hash;
 // Production V4 transcript constraints for qualification.
 #[cfg(any(test, feature = "prover"))]
 mod nova_circuit_transcript;

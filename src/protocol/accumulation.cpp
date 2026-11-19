@@ -38,6 +38,8 @@ constexpr std::size_t kMaxAlgebraicClaims = 1024;
 constexpr std::size_t kMaxAlgebraicRounds = 24;
 constexpr std::string_view kAlgebraicStepDomain =
     "Purify/BPPP/CandidateAccumStep/v1";
+constexpr std::string_view kAlgebraicBoundStepDomain =
+    "Purify/BPPP/CandidateBoundAccumStep/v1";
 constexpr std::string_view kAlgebraicNormDomain =
     "Purify/BPPP/CandidateNormReduction/v2";
 
@@ -496,7 +498,7 @@ struct AlgebraicStepContext {
 
 Result<AlgebraicStepContext> make_algebraic_step_context(
     const Basis& basis, std::span<const PendingClaim> claims,
-    purify_secp_context* context) {
+    const Digest* statement_digest, purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(
         require_secp_context(context, "accumulation:context"),
         "accumulation:context");
@@ -516,13 +518,21 @@ Result<AlgebraicStepContext> make_algebraic_step_context(
         validate_algebraic_dimension(basis.dimension()),
         "accumulation:algebraic_step_shape");
     AlgebraicStepContext out;
+    const auto domain_name = statement_digest == nullptr
+        ? kAlgebraicStepDomain
+        : kAlgebraicBoundStepDomain;
     const auto domain = std::span(
         reinterpret_cast<const unsigned char*>(
-            kAlgebraicStepDomain.data()),
-        kAlgebraicStepDomain.size());
+            domain_name.data()),
+        domain_name.size());
     PURIFY_RETURN_IF_ERROR(
         out.transcript.append_bytes(domain),
         "accumulation:algebraic_step_domain");
+    if (statement_digest != nullptr) {
+        PURIFY_RETURN_IF_ERROR(
+            out.transcript.append_bytes(*statement_digest),
+            "accumulation:algebraic_step_statement");
+    }
     PURIFY_RETURN_IF_ERROR(
         out.transcript.append_bytes(basis.digest()),
         "accumulation:algebraic_step_basis");
@@ -1230,6 +1240,20 @@ Result<PendingClaim> parse_root_claim(
         validate_root_claim(basis, out, context),
         "accumulation:parse_root_claim");
     return out;
+}
+
+Result<PendingClaim> canonical_zero_claim(const Basis& basis) {
+    PURIFY_RETURN_IF_ERROR(validate_basis(basis), "accumulation:basis");
+    PURIFY_RETURN_IF_ERROR(
+        validate_algebraic_dimension(basis.dimension()),
+        "accumulation:zero_claim_dimension");
+    return PendingClaim(
+        basis.digest(), PointBytes{},
+        {PolynomialTerm{
+            FieldElement::zero(), 0,
+            std::vector<FieldElement>(
+                log2_dimension(basis.dimension()),
+                FieldElement::zero())}});
 }
 
 Result<Bytes> serialize_norm_reduction(const Basis& basis, const NormReductionProof& proof,
@@ -2011,12 +2035,15 @@ Result<PendingClaim> verify_step(const Basis& basis, std::span<const PendingClai
     return PendingClaim(basis.digest(), proof.folded_generator, {std::move(folded)});
 }
 
-Result<AlgebraicStepProof> prove_algebraic_step(
+namespace {
+
+Result<AlgebraicStepProof> prove_algebraic_step_impl(
     const Basis& basis, std::span<const PendingClaim> claims,
-    purify_secp_context* context) {
+    const Digest* statement_digest, purify_secp_context* context) {
     PURIFY_ASSIGN_OR_RETURN(
         auto state,
-        make_algebraic_step_context(basis, claims, context),
+        make_algebraic_step_context(
+            basis, claims, statement_digest, context),
         "accumulation:prove_algebraic_context");
     std::vector<FieldElement> coefficients(
         basis.dimension(), FieldElement::zero());
@@ -2036,15 +2063,24 @@ Result<AlgebraicStepProof> prove_algebraic_step(
         "accumulation:prove_algebraic_ipa");
     PURIFY_ASSIGN_OR_RETURN(
         auto pending,
-        verify_algebraic_step(basis, claims, proof, context),
+        statement_digest == nullptr
+            ? verify_algebraic_step(
+                  basis, claims, proof, context)
+            : verify_bound_algebraic_step(
+                  basis, claims, *statement_digest, proof, context),
         "accumulation:prove_algebraic_check");
     (void)pending;
     return proof;
 }
 
-Result<PendingClaim> verify_algebraic_step(
+struct AlgebraicStepPendingData {
+    PointBytes point;
+    PolynomialTerm polynomial;
+};
+
+Result<AlgebraicStepPendingData> verify_algebraic_step_impl(
     const Basis& basis, std::span<const PendingClaim> claims,
-    const AlgebraicStepProof& proof,
+    const Digest* statement_digest, const AlgebraicStepProof& proof,
     purify_secp_context* context) {
     PURIFY_RETURN_IF_ERROR(
         validate_basis(basis), "accumulation:basis");
@@ -2062,7 +2098,8 @@ Result<PendingClaim> verify_algebraic_step(
     (void)terminal;
     PURIFY_ASSIGN_OR_RETURN(
         auto state,
-        make_algebraic_step_context(basis, claims, context),
+        make_algebraic_step_context(
+            basis, claims, statement_digest, context),
         "accumulation:verify_algebraic_context");
     const auto weights =
         geometric_tensor(state.x, basis.dimension());
@@ -2073,9 +2110,52 @@ Result<PendingClaim> verify_algebraic_step(
             state.commitment, state.y, state.opening_base,
             state.transcript, 2, context),
         "accumulation:verify_algebraic_ipa");
+    return AlgebraicStepPendingData{
+        proof.folded_generator, std::move(folded)};
+}
+
+} // namespace
+
+Result<AlgebraicStepProof> prove_algebraic_step(
+    const Basis& basis, std::span<const PendingClaim> claims,
+    purify_secp_context* context) {
+    return prove_algebraic_step_impl(
+        basis, claims, nullptr, context);
+}
+
+Result<PendingClaim> verify_algebraic_step(
+    const Basis& basis, std::span<const PendingClaim> claims,
+    const AlgebraicStepProof& proof,
+    purify_secp_context* context) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto pending,
+        verify_algebraic_step_impl(
+            basis, claims, nullptr, proof, context),
+        "accumulation:verify_algebraic_step");
     return PendingClaim(
-        basis.digest(), proof.folded_generator,
-        {std::move(folded)});
+        basis.digest(), pending.point,
+        {std::move(pending.polynomial)});
+}
+
+Result<AlgebraicStepProof> prove_bound_algebraic_step(
+    const Basis& basis, std::span<const PendingClaim> claims,
+    const Digest& statement_digest, purify_secp_context* context) {
+    return prove_algebraic_step_impl(
+        basis, claims, &statement_digest, context);
+}
+
+Result<PendingClaim> verify_bound_algebraic_step(
+    const Basis& basis, std::span<const PendingClaim> claims,
+    const Digest& statement_digest, const AlgebraicStepProof& proof,
+    purify_secp_context* context) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto pending,
+        verify_algebraic_step_impl(
+            basis, claims, &statement_digest, proof, context),
+        "accumulation:verify_bound_algebraic_step");
+    return PendingClaim(
+        basis.digest(), pending.point,
+        {std::move(pending.polynomial)});
 }
 
 #if defined(PURIFY_INTERNAL_TEST_SUPPORT)
@@ -2096,7 +2176,7 @@ Result<PointBytes> algebraic_step_equation_residual(
     }
     PURIFY_ASSIGN_OR_RETURN(
         auto state,
-        make_algebraic_step_context(basis, claims, context),
+        make_algebraic_step_context(basis, claims, nullptr, context),
         "accumulation:test_step_context");
     const auto weights =
         geometric_tensor(state.x, basis.dimension());

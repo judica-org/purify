@@ -95,6 +95,10 @@ public:
   [[nodiscard]] const CircuitTranscriptShapeV4 &shape() const noexcept {
     return shape_;
   }
+  [[nodiscard]] const TranscriptDigest &circuit_binding_digest()
+      const noexcept {
+    return circuit_binding_digest_;
+  }
   [[nodiscard]] const std::vector<PointBytes> &
   raw_generators() const noexcept {
     return raw_generators_;
@@ -118,17 +122,20 @@ public:
 private:
   PreparedCircuitZkNormArgV4(
       CircuitTranscriptShapeV4 shape,
+      TranscriptDigest circuit_binding_digest,
       std::vector<PointBytes> raw_generators,
       CircuitProofTranscriptInputV4 transcript_input,
       CircuitProofTranscriptResultV4 transcript, NormArgProof norm,
       PointBytes pending_norm_residual)
       : shape_(std::move(shape)),
+        circuit_binding_digest_(std::move(circuit_binding_digest)),
         raw_generators_(std::move(raw_generators)),
         transcript_input_(std::move(transcript_input)),
         transcript_(std::move(transcript)), norm_(std::move(norm)),
         pending_norm_residual_(pending_norm_residual) {}
 
   CircuitTranscriptShapeV4 shape_;
+  TranscriptDigest circuit_binding_digest_{};
   std::vector<PointBytes> raw_generators_;
   CircuitProofTranscriptInputV4 transcript_input_;
   CircuitProofTranscriptResultV4 transcript_;

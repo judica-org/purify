@@ -14,6 +14,11 @@ name = "purify-construction-parent-prover"
 path = "src/bin/purify-construction-parent-prover.rs"
 required-features = ["prover"]
 
+[[bin]]
+name = "purify-certificate-parent-prover"
+path = "src/bin/purify-certificate-parent-prover.rs"
+required-features = ["prover"]
+
 [features]
 default = []
 prover = ["dep:num-bigint"]

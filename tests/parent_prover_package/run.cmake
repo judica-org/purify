@@ -1,4 +1,5 @@
 foreach(required IN ITEMS
+        TEST_PARENT_PROVER_KIND
         TEST_SOURCE_DIR
         TEST_BINARY_DIR
         TEST_GENERATOR
@@ -17,7 +18,25 @@ foreach(required IN ITEMS
     endif()
 endforeach()
 
-set(test_root "${TEST_BINARY_DIR}/construction-parent-prover-package")
+if(TEST_PARENT_PROVER_KIND STREQUAL "construction")
+    set(prover_slug "construction-parent")
+    set(prover_option "PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER")
+    set(prover_target "purify_construction_parent_prover")
+    set(prover_component "construction_parent_prover")
+    set(prover_executable "purify-construction-parent-prover")
+elseif(TEST_PARENT_PROVER_KIND STREQUAL "certificate")
+    set(prover_slug "certificate-parent")
+    set(prover_option "PURIFY_BUILD_CERTIFICATE_PARENT_PROVER")
+    set(prover_target "purify_certificate_parent_prover")
+    set(prover_component "certificate_parent_prover")
+    set(prover_executable "purify-certificate-parent-prover")
+else()
+    message(FATAL_ERROR
+        "unsupported parent prover kind: ${TEST_PARENT_PROVER_KIND}"
+    )
+endif()
+
+set(test_root "${TEST_BINARY_DIR}/${prover_slug}-prover-package")
 set(off_binary "${test_root}/off")
 set(on_binary "${test_root}/on")
 set(verifier_binary "${test_root}/verifier")
@@ -39,9 +58,9 @@ file(WRITE "${fake_cargo}"
     "mkdir -p \"$CARGO_TARGET_DIR/release\"\n"
     "printf '#!/bin/sh\\nexit 0\\n' > "
         "\"$CARGO_TARGET_DIR/release/"
-        "purify-construction-parent-prover${TEST_EXECUTABLE_SUFFIX}\"\n"
+        "${prover_executable}${TEST_EXECUTABLE_SUFFIX}\"\n"
     "chmod +x \"$CARGO_TARGET_DIR/release/"
-        "purify-construction-parent-prover${TEST_EXECUTABLE_SUFFIX}\"\n"
+        "${prover_executable}${TEST_EXECUTABLE_SUFFIX}\"\n"
 )
 file(CHMOD "${fake_cargo}"
     PERMISSIONS
@@ -71,7 +90,7 @@ function(run_configure binary_dir build_prover build_verifier
     )
     if(NOT "${build_prover}" STREQUAL "DEFAULT")
         list(APPEND configure_command
-            "-DPURIFY_BUILD_CONSTRUCTION_PARENT_PROVER=${build_prover}"
+            "-D${prover_option}=${build_prover}"
         )
     endif()
     list(APPEND configure_command ${ARGN})
@@ -99,7 +118,7 @@ function(configure_case binary_dir build_prover build_verifier)
         configure_result configure_output ${ARGN})
     if(NOT configure_result EQUAL 0)
         message(FATAL_ERROR
-            "construction-parent prover ${build_prover}, verifier "
+            "${prover_slug} prover ${build_prover}, verifier "
             "${build_verifier} configure failed:\n${configure_output}"
         )
     endif()
@@ -126,7 +145,7 @@ endfunction()
 function(require_missing_prover binary_dir description)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" --build "${binary_dir}"
-            --target purify_construction_parent_prover
+            --target "${prover_target}"
         RESULT_VARIABLE build_result
         OUTPUT_QUIET
         ERROR_QUIET
@@ -134,12 +153,12 @@ function(require_missing_prover binary_dir description)
     if(build_result EQUAL 0)
         message(FATAL_ERROR "${description} exposes the prover target")
     endif()
-    if(EXISTS "${binary_dir}/construction-parent-prover-target")
+    if(EXISTS "${binary_dir}/${prover_slug}-prover-target")
         message(FATAL_ERROR "${description} created a prover target dir")
     endif()
     file(READ "${binary_dir}/cmake_install.cmake" install_script)
     string(FIND "${install_script}"
-        "CMAKE_INSTALL_COMPONENT STREQUAL \"construction_parent_prover\""
+        "CMAKE_INSTALL_COMPONENT STREQUAL \"${prover_component}\""
         component_position)
     if(NOT component_position EQUAL -1)
         message(FATAL_ERROR "${description} installs the prover")
@@ -148,10 +167,10 @@ endfunction()
 
 configure_case("${off_binary}" DEFAULT OFF)
 file(STRINGS "${off_binary}/CMakeCache.txt" prover_cache
-    REGEX "^PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER:BOOL=")
+    REGEX "^${prover_option}:BOOL=")
 if(NOT "${prover_cache}" STREQUAL
-   "PURIFY_BUILD_CONSTRUCTION_PARENT_PROVER:BOOL=OFF")
-    message(FATAL_ERROR "construction-parent prover is not default OFF")
+   "${prover_option}:BOOL=OFF")
+    message(FATAL_ERROR "${prover_slug} prover is not default OFF")
 endif()
 require_missing_prover("${off_binary}" "default configuration")
 
@@ -160,13 +179,13 @@ require_missing_prover("${verifier_binary}" "verifier-only configuration")
 
 require_configure_failure(
     "${unsupported_binary}" ON OFF
-    "supports only Darwin"
+    "support only Darwin"
     "-DCMAKE_SYSTEM_NAME=Generic"
     -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
 )
 require_configure_failure(
     "${cross_binary}" ON OFF
-    "Cross-compiling the construction-parent prover"
+    "Cross-compiling purpose-specific parent provers"
     "-DCMAKE_SYSTEM_NAME=${TEST_SYSTEM_NAME}"
     -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
 )
@@ -192,7 +211,7 @@ if(TEST_SYSTEM_NAME STREQUAL "Darwin")
     )
     require_configure_failure(
         "${multi_arch_binary}" ON OFF
-        "does not support a multi-architecture"
+        "do not support a multi-architecture"
         -C "${multi_arch_cache}"
         -DPURIFY_CONSTRUCTION_PARENT_CARGO_TARGET=aarch64-apple-darwin
     )
@@ -202,7 +221,7 @@ configure_case("${both_binary}" ON ON)
 file(READ "${both_binary}/cmake_install.cmake" both_install)
 foreach(target_dir IN ITEMS
         construction-parent-target
-        construction-parent-prover-target)
+        ${prover_slug}-prover-target)
     string(FIND "${both_install}" "/${target_dir}/" target_dir_position)
     if(target_dir_position EQUAL -1)
         message(FATAL_ERROR
@@ -214,11 +233,11 @@ endforeach()
 configure_case("${on_binary}" ON OFF)
 execute_process(
     COMMAND "${CMAKE_COMMAND}" --build "${on_binary}"
-        --target purify_construction_parent_prover
+        --target "${prover_target}"
     RESULT_VARIABLE prover_build_result
 )
 if(NOT prover_build_result EQUAL 0)
-    message(FATAL_ERROR "fake construction-parent prover build failed")
+    message(FATAL_ERROR "fake ${prover_slug} prover build failed")
 endif()
 file(STRINGS "${cargo_args_log}" cargo_args)
 set(expected_cargo_args
@@ -229,7 +248,7 @@ set(expected_cargo_args
     --features
     prover
     --bin
-    purify-construction-parent-prover
+    ${prover_executable}
 )
 if(NOT "${cargo_args}" STREQUAL "${expected_cargo_args}")
     message(FATAL_ERROR
@@ -240,7 +259,7 @@ endif()
 file(READ "${cargo_target_log}" cargo_target_dir)
 string(STRIP "${cargo_target_dir}" cargo_target_dir)
 set(expected_target_dir
-    "${on_binary}/construction-parent-prover-target")
+    "${on_binary}/${prover_slug}-prover-target")
 if(NOT "${cargo_target_dir}" STREQUAL "${expected_target_dir}")
     message(FATAL_ERROR
         "prover Cargo target is '${cargo_target_dir}', expected "
@@ -252,12 +271,12 @@ if(EXISTS "${on_binary}/construction-parent-target")
 endif()
 
 set(prover_name
-    "purify-construction-parent-prover${TEST_EXECUTABLE_SUFFIX}")
+    "${prover_executable}${TEST_EXECUTABLE_SUFFIX}")
 
 set(install_command
     "${CMAKE_COMMAND}" --install "${on_binary}"
     --prefix "${prefix}"
-    --component construction_parent_prover
+    --component "${prover_component}"
 )
 if(DEFINED TEST_CONFIG AND NOT "${TEST_CONFIG}" STREQUAL "")
     list(APPEND install_command --config "${TEST_CONFIG}")

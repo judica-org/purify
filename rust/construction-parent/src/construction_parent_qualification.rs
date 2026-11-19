@@ -31,8 +31,8 @@ use crate::nova_construction_recurrence::{
 use crate::nova_relation_identity::direct_step_relation_shape;
 use crate::nova_session::{
     NovaSessionStep, NovaSessionSuite, SelectedNovaProver, SelectedNovaSessionSuite,
-    QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE, QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
-    QUALIFIED_CONSTRUCTION_VERSIONS,
+    QUALIFIED_CONSTRUCTION_APPLICATION, QUALIFIED_CONSTRUCTION_PARENT_NOVA_SUITE,
+    QUALIFIED_CONSTRUCTION_PARENT_PROOF_LENGTH,
 };
 use crate::nova_types::{DirectNovaPrimaryEngine, DirectNovaScalar, DirectNovaSecondaryEngine};
 use crate::prover::ConstructionParentWitness;
@@ -599,10 +599,10 @@ fn native_profile_sha_parent_qualification_is_exact() {
         )
         .expect("unselected mixed qualification suite");
     let selected = unselected
-        .select_generated_for_qualification(QUALIFIED_CONSTRUCTION_VERSIONS)
+        .select_generated_for_qualification(QUALIFIED_CONSTRUCTION_APPLICATION)
         .expect("select generated mixed qualification suite");
     let metadata = selected.metadata();
-    let versions = QUALIFIED_CONSTRUCTION_VERSIONS.values();
+    let versions = QUALIFIED_CONSTRUCTION_APPLICATION.version_values();
     eprintln!(
         "sha_parent_qualification: setup_seconds={:.3}\n\
          payload_version={} statement_version={} manifest_version={} \

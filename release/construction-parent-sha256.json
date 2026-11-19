@@ -1,0 +1,179 @@
+{
+  "schema": "purify-construction-parent-release-v2",
+  "protocol": "purify-construction-parent-v1",
+  "status": "accepted",
+  "transcript_hash": "sha256",
+  "artifacts": {
+    "verifier": {
+      "filename": "sha256-parent-verifier.nvk.zst",
+      "format_magic": "Purify/Nova/VK2\u0000",
+      "format_version": 2,
+      "encoded_bytes": 693708278,
+      "decoded_bytes": 3206736424,
+      "sha256": "ba8c69e6fb2fc34105898486df7917fdc35889baa092e48baffb885c8071ee21",
+      "tagged_sha256": {
+        "tag": "Purify/Accountable/DirectNovaVerifierArtifact/v2",
+        "digest": "184c3340de8f005a6e3a83997e90ff993d245026d6aec04804dcb736f29ca0aa"
+      }
+    },
+    "prover": {
+      "filename": "sha256-parent-prover.pk1.zst",
+      "format_magic": "Purify/Nova/PK1\u0000",
+      "format_version": 1,
+      "encoded_bytes": 693582375,
+      "decoded_bytes": 3022457782,
+      "sha256": "cd4bece27897e8634e837a4acb85ed091f2175df62d8c38e65497ef07066f816",
+      "tagged_sha256": {
+        "tag": "Purify/Accountable/DirectNovaProverArtifact/v1",
+        "digest": "37b31a1cea0012cad3b5342deb2c2df85d6b0e43ce913eb80e4dff6af359223b"
+      }
+    }
+  },
+  "suite": {
+    "construction_versions": {
+      "payload": 4,
+      "statement": 5,
+      "manifest": 3,
+      "native_decision": 1
+    },
+    "relation_id": "a66c58a86afce64b2b69d53e83d3d5430d080faf0b68064cadb3a6d8b439eea9",
+    "public_parameter_digest": "124d0756203ebf5b416b6f1230356ef9921fb30538a8f7fcebb1061819497100",
+    "suite_id": "ccba9ed4b0eec037c8dc34bf33fd292cc476375ec4700a36c070e3710dd1a902",
+    "state_arity": 20,
+    "primary_constraints": 9418542,
+    "primary_variables": 9372224,
+    "secondary_constraints": 728974,
+    "secondary_variables": 728211,
+    "proof_bytes": 15076,
+    "proof_sequences": 152
+  },
+  "source": {
+    "qualification_tag": "construction-parent-sha256-pk1-v1-provenance",
+    "qualification_commit": "f85123925ae32f3d2ee0ec13b5a8d553037b2c99",
+    "qualification_source_tree": "814b38bfbcc09f1c45e769135af81253d7e3280b",
+    "gated_source_tree": "a93b66c2cb82898420b51a5834ba298746289167",
+    "nova_repository": "https://github.com/JeremyRubin/Nova",
+    "nova_commit": "aa42229024dc141e4edff89fcaa79f345e156d46"
+  },
+  "prover_release_gate": {
+    "status": "accepted",
+    "environment": {
+      "operating_system": "macOS 15.7.3 (24G419)",
+      "architecture": "arm64",
+      "processor": "Apple M4",
+      "memory_bytes": 17179869184,
+      "logical_cpus": 10
+    },
+    "qualified_fixture": {
+      "setup_leaves": 3,
+      "anchor_leaves": 2,
+      "recursive_steps": 5,
+      "production_witness_bytes": 17587
+    },
+    "deployment_bound": {
+      "total_leaves": 200,
+      "witness_bytes": 676297,
+      "performance_qualified": false
+    },
+    "witness_format_bridge": {
+      "setup_qualification_input": {
+        "format": "Purify/Nova/Wit3",
+        "bytes": 17977,
+        "sha256": "b39168a9e4fb6a5a893a9a4a9479ff55abe4fa3b50708a8c874a08bcd0bbe9f5"
+      },
+      "production_input": {
+        "format": "Purify/Nova/Wit4",
+        "bytes": 17587,
+        "sha256": "77b7331e92a538ebd1bfe90480166b298196ff4dd9a3d8f7557c202a3bab3418"
+      },
+      "removed_redundant_prefix_bytes": {
+        "setup_record": 66,
+        "anchor_record": 96
+      },
+      "semantic_projection_verified": true,
+      "projection_compared": [
+        "descriptors",
+        "public_points",
+        "transcript_inputs",
+        "proof_reductions",
+        "ordered_steps",
+        "final_roots"
+      ],
+      "relation_unchanged": true,
+      "prover_artifact_unchanged": true,
+      "verifier_artifact_unchanged": true,
+      "proof_format_unchanged": true
+    },
+    "setup_qualification": {
+      "proof": {
+        "bytes": 15076,
+        "sha256": "79e9f30b835a017a4490e79695efd7c014b0490ca0a172f997caa2eb4db0f062"
+      },
+      "timings_seconds": {
+        "setup": 715.093,
+        "prover_artifact_write": 44.670,
+        "prover_artifact_reload": 220.771,
+        "proving": 5944.215,
+        "recursive_verification": 289.951,
+        "total": 7230.213,
+        "outer_wall_clock": 7292.47
+      },
+      "peak_resident_bytes": null,
+      "peak_memory_footprint_bytes": null,
+      "resource_metrics_unavailable_reason": "The successful sandboxed /usr/bin/time -l run denied extended metrics after the qualification test passed: sysctl kern.clockrate: Operation not permitted.",
+      "exact_final_state_verified": true,
+      "cpp_native_decision": {
+        "proof_sha256": "79e9f30b835a017a4490e79695efd7c014b0490ca0a172f997caa2eb4db0f062",
+        "elapsed_seconds": 1042.62,
+        "passed": true
+      }
+    },
+    "packaged_cli": {
+      "executable": {
+        "filename": "purify-construction-parent-prover",
+        "bytes": 5857264,
+        "sha256": "7f8b68b46b6692b060d093475249cb5bf7e2a6740ef02f19bf3ee0e1b05c8e07",
+        "platform": "Mach-O 64-bit arm64",
+        "linked_only_to_system_libraries": true,
+        "rebuilt_from_gated_source_byte_identical": true
+      },
+      "proof": {
+        "bytes": 15076,
+        "sha256": "0f950839497bfc13c0c10ff0bf6882a74dbe90a8b36fdab8b4416fdd9d29f2df"
+      },
+      "elapsed_seconds": 6749.73,
+      "peak_resident_bytes": 4722769920,
+      "peak_memory_footprint_bytes": 8447794208,
+      "exact_final_state_verified": true,
+      "matches_setup_qualification_proof": false,
+      "cpp_native_decision": {
+        "proof_sha256": "0f950839497bfc13c0c10ff0bf6882a74dbe90a8b36fdab8b4416fdd9d29f2df",
+        "elapsed_seconds": 1043.46,
+        "passed": true
+      }
+    }
+  },
+  "qualification_vectors": {
+    "status": "qualified",
+    "accepted_wit4": {
+      "path": "tests/vectors/construction_parent_sha256_accepted.wit4",
+      "bytes": 17587,
+      "sha256": "77b7331e92a538ebd1bfe90480166b298196ff4dd9a3d8f7557c202a3bab3418"
+    },
+    "nondeciding_wit4": {
+      "path": "tests/vectors/construction_parent_sha256_nondeciding.wit4",
+      "bytes": 17587,
+      "sha256": "9620a21298d175d3c68a5b7b98da82e11065beae2b6048c76625a2b7303a8115"
+    },
+    "accepted_proof": {
+      "path": "tests/vectors/construction_parent_sha256_accepted.proof",
+      "bytes": 15076,
+      "sha256": "74b66a779134a39560185472708d94e9a1532240f7fcf9c66a88d91728e8d779"
+    },
+    "nondeciding_proof": {
+      "path": "tests/vectors/construction_parent_sha256_nondeciding.proof",
+      "bytes": 15076,
+      "sha256": "a869016dea8d439f579b8c7be6c3613bc3e5f5e9f18f6177ee27c6050038b072"
+    }
+  }
+}

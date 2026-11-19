@@ -150,24 +150,22 @@ overwrite any checked vector or artifact. Regenerate candidates at new paths,
 review their protocol differences, and update the frozen suite and artifact
 descriptors only as one deliberate release.
 
-First regenerate CertJWit3 from the deterministic external Char integration
-fixture identified by the release manifest. Run
-`char_certificate_nonce_parent_tests` from that exact source tree with a new
-output path:
+First regenerate a paired CertJWit3 and public frame from Purify's
+deterministic native certificate fixture. Both output paths must not exist:
 
 ```sh
-CHAR_CERTIFICATE_WITNESS_V3_OUT=/new/path/certificate.certjwit3 \
-  /path/to/char-test-binary \
-  --run_test=char_certificate_nonce_parent_tests
+PURIFY_CERTIFICATE_PARENT_WITNESS_V3_OUT=/new/path/certificate.certjwit3 \
+PURIFY_CERTIFICATE_PARENT_PUBLIC_FRAME_OUT=/new/path/certificate.cpi1 \
+  build/purify_tests --suite certificate_nonce_parent
 ```
 
-The test must still derive the public frame independently and must byte-check
-the authorization, response order, member order, native decision, and final
-manifest before exporting. CertJWit2 and the authorization text are
-cross-language regression vectors, not inputs to certificate setup. If their
-formats intentionally change, regenerate them from the same deterministic
-C++ fixture and update both C++ and Rust expectations; do not infer new bytes
-from the Rust relation.
+The test derives the public frame independently from public records, verifies
+the linear receipt and native decision, pins both output digests, and refuses
+partial, empty, identical, or existing output paths. CertJWit2 and the
+authorization text are cross-language regression vectors, not inputs to
+certificate setup. If their formats intentionally change, regenerate them
+from the same deterministic C++ fixture and update both C++ and Rust
+expectations; do not infer new bytes from the Rust relation.
 
 From `rust/construction-parent`, create fresh transparent prover and verifier
 artifacts. Both output paths must not exist:
@@ -180,16 +178,18 @@ cargo test --release \
   -- --ignored --nocapture
 ```
 
-Then prove the pinned public frame and the reviewed CertJWit3 with the fresh
+Then build the production prover and prove the reviewed pair with the fresh
 artifacts. The proof output must not exist:
 
 ```sh
-PURIFY_CERTIFICATE_PARENT_PROVER_ARTIFACT=/new/path/certificate-parent-prover.pk1 \
-PURIFY_CERTIFICATE_PARENT_VERIFIER_ARTIFACT=/new/path/certificate-parent-verifier.vk2 \
-PURIFY_CERTIFICATE_PARENT_PROOF_OUT=/new/path/certificate-parent-proof.bin \
-cargo test --release \
-  qualified_artifacts_produce_the_pinned_certificate_proof \
-  -- --ignored --nocapture
+cargo build --locked --release --features prover \
+  --bin purify-certificate-parent-prover
+target/release/purify-certificate-parent-prover \
+  /new/path/certificate-parent-prover.pk1 \
+  /new/path/certificate-parent-verifier.vk2 \
+  /new/path/certificate.cpi1 \
+  /new/path/certificate.certjwit3 \
+  /new/path/certificate-parent-proof.bin
 ```
 
 Finally build Purify with
@@ -198,13 +198,14 @@ against both fresh resources:
 
 ```sh
 PURIFY_TEST_CERTIFICATE_PARENT_VERIFIER_ARTIFACT=/new/path/certificate-parent-verifier.vk2 \
-PURIFY_TEST_CERTIFICATE_PARENT_PROOF=/new/path/certificate-parent-proof.bin \
+PURIFY_TEST_CERTIFICATE_PARENT_CANDIDATE_PROOF=/new/path/certificate-parent-proof.bin \
 ctest --test-dir build-parent --output-on-failure \
   -R '^purify.tests.certificate_nonce_parent$'
 ```
 
-That gate reconstructs the qualified manifest from the hash-pinned CertJWit3
+That gate reconstructs the candidate manifest from the same hash-pinned
 public records, accepts the matching proof, rejects a changed manifest and
-changed proof, parses the authenticated pending root against the native basis,
-and completes native decision. Record new hashes and measured resources in a
-new release manifest only after all three layers pass.
+changed proof, parses the authenticated pending root against the native
+basis, and completes native decision. Record new hashes, the Purify source
+commit, and measured resources in a new release manifest only after all three
+layers pass. Do not rewrite the historical Char qualification record.

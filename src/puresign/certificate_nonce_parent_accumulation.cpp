@@ -10,6 +10,7 @@
 #include <array>
 #include <limits>
 #include <set>
+#include <type_traits>
 #include <utility>
 
 namespace purify::puresign_plusplus {
@@ -105,6 +106,18 @@ std::uint64_t read_u64(std::span<const unsigned char> encoded)
 bool is_zero(const bppp::accumulation::Digest& digest) {
     return std::ranges::all_of(
         digest, [](unsigned char byte) { return byte == 0; });
+}
+
+template <typename Count>
+constexpr bool exceeds_response_limit(Count count) noexcept
+{
+    static_assert(std::is_unsigned_v<Count>);
+    if constexpr (
+        std::numeric_limits<Count>::max() <=
+        CertificateNonceParentAccumulator::kMaxResponses) {
+        return false;
+    }
+    return count > CertificateNonceParentAccumulator::kMaxResponses;
 }
 
 Status validate_recursive_member_frame(
@@ -444,8 +457,7 @@ Result<std::size_t> native_tree_proof_count(
     std::size_t response_count)
 {
     if (response_count == 0 ||
-        response_count >
-            CertificateNonceParentAccumulator::kMaxResponses) {
+        exceeds_response_limit(response_count)) {
         return unexpected_error(
             ErrorCode::RangeViolation,
             "certificate_nonce_native:response_count");
@@ -505,8 +517,7 @@ Status validate_linear_receipt_shape(
     std::span<const CertificateNonceLinearResponseProof> responses)
 {
     if (is_zero(context_digest) || responses.empty() ||
-        responses.size() >
-            CertificateNonceParentAccumulator::kMaxResponses) {
+        exceeds_response_limit(responses.size())) {
         return unexpected_error(
             ErrorCode::RangeViolation,
             "certificate_nonce_linear:response_count");
@@ -529,8 +540,7 @@ Result<bppp::accumulation::Digest> validate_linear_public_inputs(
         ordered_responses)
 {
     if (ordered_responses.empty() ||
-        ordered_responses.size() >
-            CertificateNonceParentAccumulator::kMaxResponses) {
+        exceeds_response_limit(ordered_responses.size())) {
         return unexpected_error(
             ErrorCode::RangeViolation,
             "certificate_nonce_linear:public_responses");
@@ -870,10 +880,8 @@ certificate_nonce_recursive_manifest(
         ordered_responses,
     purify_secp_context* secp_context)
 {
-    if (!size_fits_u64(ordered_responses.size()) ||
-        ordered_responses.empty() ||
-        ordered_responses.size() >
-            CertificateNonceParentAccumulator::kMaxResponses) {
+    if (ordered_responses.empty() ||
+        exceeds_response_limit(ordered_responses.size())) {
         return unexpected_error(
             ErrorCode::RangeViolation,
             "certificate_nonce_recursive:public_manifest_responses");

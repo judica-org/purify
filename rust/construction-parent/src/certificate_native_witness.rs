@@ -5,10 +5,12 @@
 //! accumulation transition, decide the pending root, or accept a certificate.
 
 use crate::candidate::CandidateStepProofWitness;
+#[cfg(test)]
+use crate::certificate_profile::CERTIFICATE_MEMBER_BATCH_CAPACITY;
 use crate::certificate_profile::{
     certificate_tree_step_count, CertificateResponseBoundary, CertificateWitnessFrame,
-    CERTIFICATE_LEAF_ROUNDS, CERTIFICATE_MEMBER_BATCH_CAPACITY, CERTIFICATE_PARENT_BASIS_DIGEST,
-    CERTIFICATE_REDUCTION_PROOF_BYTES, CERTIFICATE_ROOT_ROUNDS, CERTIFICATE_STEP_PROOF_BYTES,
+    CERTIFICATE_LEAF_ROUNDS, CERTIFICATE_PARENT_BASIS_DIGEST, CERTIFICATE_REDUCTION_PROOF_BYTES,
+    CERTIFICATE_ROOT_ROUNDS, CERTIFICATE_STEP_PROOF_BYTES,
 };
 use crate::circuit_norm::CandidateNormReductionProofWitness;
 use crate::secp_native::{canonical_scalar_value, SecpEncodedPointWitness, SecpScalarWitness};

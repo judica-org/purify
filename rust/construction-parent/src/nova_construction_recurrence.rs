@@ -21,9 +21,10 @@ use crate::construction_profile::{
     CONSTRUCTION_RECURRENCE_STATE_ARITY, CONSTRUCTION_ROOT_ROUNDS, CONSTRUCTION_ROOT_STATE_ARITY,
 };
 use crate::construction_recurrence::{
-    validate_production_shape, ConstructionRecurrenceStateWitness, MANIFEST_INDEX,
-    ROOT_PREFIX_INDEX, ROOT_X_INDEX, STEP_INDEX,
+    validate_production_shape, ConstructionRecurrenceStateWitness, MANIFEST_INDEX, STEP_INDEX,
 };
+#[cfg(test)]
+use crate::construction_recurrence::{ROOT_PREFIX_INDEX, ROOT_X_INDEX};
 use crate::nova_candidate::{
     install_constrained_candidate_step, DirectCandidateRoot, DirectPendingClaim,
 };

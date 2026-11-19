@@ -4,19 +4,27 @@
 //! qualified recurrence relation. Dimensions alone do not select or
 //! authenticate a Nova suite, witness, or proof.
 
+#[cfg(any(test, feature = "prover"))]
 use crate::RelationError;
 
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_LEAF_GATE_COUNT: usize = 2_048;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_LEAF_NORM_LENGTH: usize = 4_096;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_LEAF_ROUNDS: usize = 12;
 
 pub(crate) const CERTIFICATE_ROOT_ROUNDS: usize = 13;
 pub(crate) const CERTIFICATE_ROOT_STATE_ARITY: usize = 3 + CERTIFICATE_ROOT_ROUNDS;
 pub(crate) const CERTIFICATE_ROOT_BYTES: usize = 33 + 32 + 32 * CERTIFICATE_ROOT_ROUNDS;
 pub(crate) const CERTIFICATE_RECURRENCE_STATE_ARITY: usize = CERTIFICATE_ROOT_STATE_ARITY + 10;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const ROOT_PREFIX_INDEX: usize = 0;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const ROOT_X_INDEX: usize = 1;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const ROOT_SCALE_INDEX: usize = 2;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const ROOT_FACTORS_START: usize = 3;
 pub(crate) const CONTEXT_HIGH_INDEX: usize = CERTIFICATE_ROOT_STATE_ARITY;
 pub(crate) const CONTEXT_LOW_INDEX: usize = CONTEXT_HIGH_INDEX + 1;
@@ -28,19 +36,26 @@ pub(crate) const RESPONSE_ORDINAL_INDEX: usize = RECORD_MANIFEST_INDEX + 1;
 pub(crate) const MEMBER_ORDINAL_INDEX: usize = RESPONSE_ORDINAL_INDEX + 1;
 pub(crate) const MEMBER_COUNT_INDEX: usize = MEMBER_ORDINAL_INDEX + 1;
 pub(crate) const RESPONSE_BINDING_INDEX: usize = MEMBER_COUNT_INDEX + 1;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_RECURRENCE_RELATION_AUXILIARY: usize = 7_485_953;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_RECURRENCE_RELATION_CONSTRAINTS: usize = 7_525_946;
 
 pub(crate) const CERTIFICATE_MEMBER_BATCH_CAPACITY: u32 = 128;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_TREE_FANOUT: u64 = 16;
 pub(crate) const CERTIFICATE_MAX_RESPONSES: u64 = 1 << 60;
 
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_NONCE_PROOF_BYTES: usize = 1_072;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_REDUCTION_PROOF_BYTES: usize = 890;
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_STEP_PROOF_BYTES: usize = 924;
 
 /// Native `NormAccumBasisV2` digest for the certificate nonce-leaf domain and
 /// its fixed 4,096-by-4,096 dimensions.
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_PARENT_BASIS_DIGEST: [u8; 32] = [
     0x9b, 0x48, 0xdf, 0x1e, 0xd8, 0xf8, 0x2f, 0x09, 0xc0, 0xce, 0x3d, 0xf8, 0x93, 0x84, 0x50, 0xef,
     0x3b, 0x58, 0xa7, 0xc3, 0x53, 0xba, 0xee, 0xc7, 0xec, 0xdb, 0x02, 0xe3, 0x27, 0xed, 0x14, 0xfe,
@@ -48,6 +63,7 @@ pub(crate) const CERTIFICATE_PARENT_BASIS_DIGEST: [u8; 32] = [
 
 /// SHA256 of the exact 8,192 raw V4 generator encodings used by certificate
 /// nonce leaves.
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const CERTIFICATE_PARENT_RAW_GENERATOR_DIGEST: [u8; 32] = [
     0x44, 0xab, 0x48, 0xd4, 0xab, 0x2f, 0xdb, 0xb9, 0x5e, 0xee, 0xd5, 0x72, 0xe9, 0xe0, 0xa6, 0xc4,
     0x69, 0xdb, 0xc1, 0xa3, 0x21, 0x16, 0xeb, 0xd9, 0x18, 0xb4, 0x87, 0xca, 0x5e, 0xa6, 0x05, 0x82,
@@ -55,11 +71,13 @@ pub(crate) const CERTIFICATE_PARENT_RAW_GENERATOR_DIGEST: [u8; 32] = [
 
 /// Immutable trace frame shared by every response in one certificate witness.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) struct CertificateWitnessFrame {
     certificate_context_digest: [u8; 32],
     total_responses: u64,
 }
 
+#[cfg(any(test, feature = "prover"))]
 impl CertificateWitnessFrame {
     pub(crate) fn new(
         certificate_context_digest: [u8; 32],
@@ -100,12 +118,14 @@ impl CertificateWitnessFrame {
 
 /// Exact response/member boundary consumed by a certificate witness decoder.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "prover"))]
 pub(crate) struct CertificateResponseBoundary {
     frame: CertificateWitnessFrame,
     ordinal: u64,
     member_count: u32,
 }
 
+#[cfg(any(test, feature = "prover"))]
 impl CertificateResponseBoundary {
     fn new(
         frame: CertificateWitnessFrame,
@@ -140,6 +160,7 @@ impl CertificateResponseBoundary {
     }
 }
 
+#[cfg(any(test, feature = "prover"))]
 pub(crate) fn certificate_tree_step_count(response_count: u64) -> Result<u64, RelationError> {
     if response_count == 0 || response_count > CERTIFICATE_MAX_RESPONSES {
         return Err(RelationError::Malformed(

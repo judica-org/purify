@@ -2,10 +2,13 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::certificate_profile::{CERTIFICATE_MAX_RESPONSES, CERTIFICATE_MEMBER_BATCH_CAPACITY};
+use crate::certificate_profile::CERTIFICATE_MAX_RESPONSES;
+#[cfg(any(test, feature = "prover"))]
+use crate::certificate_profile::CERTIFICATE_MEMBER_BATCH_CAPACITY;
 use crate::RelationError;
 
 const MANIFEST_SEED_TAG: &[u8] = b"Purify/Accountable/CertificateRecursiveManifest/v1/init";
+#[cfg(any(test, feature = "prover"))]
 pub(crate) const MANIFEST_STEP_TAG: &[u8] =
     b"Purify/Accountable/CertificateRecursiveManifest/v1/member";
 
@@ -38,6 +41,7 @@ pub(crate) fn recursive_manifest_seed(
     Ok(manifest_scalar(MANIFEST_SEED_TAG, &encoded))
 }
 
+#[cfg(any(test, feature = "prover"))]
 pub(crate) fn recursive_manifest_step(
     prior: [u8; 32],
     response_ordinal: u64,

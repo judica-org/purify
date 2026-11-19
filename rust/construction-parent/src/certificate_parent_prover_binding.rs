@@ -87,10 +87,6 @@ pub(crate) struct BoundCertificateParentWitness {
 }
 
 impl BoundCertificateParentWitness {
-    pub(crate) const fn initial_state(&self) -> &[Scalar; CERTIFICATE_RECURRENCE_STATE_ARITY] {
-        &self.initial_state
-    }
-
     pub(crate) const fn final_state(&self) -> &[Scalar; CERTIFICATE_RECURRENCE_STATE_ARITY] {
         &self.final_state
     }

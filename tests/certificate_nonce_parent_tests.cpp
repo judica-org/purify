@@ -667,7 +667,7 @@ qualified_manifest_fixture(const CertificateNonceParentAccumulator& accumulator,
 #if defined(PURIFY_HAS_CERTIFICATE_PARENT_VERIFIER)
 Result<std::array<unsigned char, purify::puresign_plusplus::
                                      CertificateParentVerifier::kProofSize>>
-read_qualified_proof(const char* path)
+read_certificate_parent_proof(const char* path)
 {
     using Proof = std::array<
         unsigned char,
@@ -676,12 +676,12 @@ read_qualified_proof(const char* path)
     if (!input.is_open()) {
         return purify::unexpected_error(
             purify::ErrorCode::IoOpenFailed,
-            "certificate_parent_test:qualified_proof_open");
+            "certificate_parent_test:proof_open");
     }
     if (input.tellg() != static_cast<std::streamoff>(Proof{}.size())) {
         return purify::unexpected_error(
             purify::ErrorCode::InvalidFixedSize,
-            "certificate_parent_test:qualified_proof_size");
+            "certificate_parent_test:proof_size");
     }
     Proof proof{};
     input.seekg(0);
@@ -691,16 +691,7 @@ read_qualified_proof(const char* path)
         input.peek() != std::ifstream::traits_type::eof()) {
         return purify::unexpected_error(
             purify::ErrorCode::UnexpectedSize,
-            "certificate_parent_test:qualified_proof_read");
-    }
-    std::array<unsigned char, 32> digest{};
-    purify_sha256(digest.data(), proof.data(), proof.size());
-    if (digest != purify::UInt256::from_hex("887eb27a8893078734a57fb497ed9f9aa"
-                                            "dff03803454e419d497f0650727babb")
-                      .to_bytes_be()) {
-        return purify::unexpected_error(
-            purify::ErrorCode::BindingMismatch,
-            "certificate_parent_test:qualified_proof_digest");
+            "certificate_parent_test:proof_read");
     }
     return proof;
 }
@@ -1297,42 +1288,88 @@ void test_native_certificate_parent(TestContext& ctx)
         "certificate verifier rejects an empty artifact path");
     const char* verifier_artifact = std::getenv(
         "PURIFY_TEST_CERTIFICATE_PARENT_VERIFIER_ARTIFACT");
-    const char* proof_path = std::getenv(
+    const char* qualified_proof_path = std::getenv(
         "PURIFY_TEST_CERTIFICATE_PARENT_PROOF");
+    const char* candidate_proof_path = std::getenv(
+        "PURIFY_TEST_CERTIFICATE_PARENT_CANDIDATE_PROOF");
     const bool has_artifact =
         verifier_artifact != nullptr && *verifier_artifact != '\0';
+    const bool has_qualified_proof =
+        qualified_proof_path != nullptr && *qualified_proof_path != '\0';
+    const bool has_candidate_proof =
+        candidate_proof_path != nullptr && *candidate_proof_path != '\0';
     const bool has_proof =
-        proof_path != nullptr && *proof_path != '\0';
+        has_qualified_proof || has_candidate_proof;
     ctx.expect(
         has_artifact == has_proof,
-        "qualified verifier resources are configured together");
+        "certificate verifier artifact and proof are configured together");
     if (has_artifact && has_proof) {
-        auto proof = read_qualified_proof(proof_path);
-        expect_ok(ctx, proof,
-                  "qualified certificate proof loads and authenticates");
-        if (!proof) return;
         auto verifier = purify::puresign_plusplus::
             CertificateParentVerifier::load(verifier_artifact);
         expect_ok(ctx, verifier,
-                  "qualified certificate verifier artifact loads");
+                  "certificate verifier artifact loads");
         if (!verifier) return;
-        expect_ok(ctx,
-                  verifier->verify(
-                      qualified->manifest, *proof, *accumulator,
-                      secp.get()),
-                  "qualified recursive certificate proof verifies");
-        ctx.expect(
-            !verifier->verify(
-                qualified->changed_manifest, *proof, *accumulator,
-                secp.get()),
-            "recursive verifier rejects a changed public manifest");
-        auto changed_proof = *proof;
-        changed_proof.back() ^= 1;
-        ctx.expect(
-            !verifier->verify(
-                qualified->manifest, changed_proof, *accumulator,
-                secp.get()),
-            "recursive verifier rejects a changed proof");
+        if (has_qualified_proof) {
+            auto proof = read_certificate_parent_proof(
+                qualified_proof_path);
+            expect_ok(ctx, proof,
+                      "qualified certificate proof loads");
+            if (!proof) return;
+            std::array<unsigned char, 32> proof_digest{};
+            purify_sha256(
+                proof_digest.data(), proof->data(), proof->size());
+            const bool proof_matches =
+                proof_digest ==
+                    purify::UInt256::from_hex(
+                        "887eb27a8893078734a57fb497ed9f9aa"
+                        "dff03803454e419d497f0650727babb")
+                        .to_bytes_be();
+            ctx.expect(
+                proof_matches,
+                "qualified certificate proof matches qualification");
+            if (!proof_matches) return;
+            expect_ok(ctx,
+                      verifier->verify(
+                          qualified->manifest, *proof, *accumulator,
+                          secp.get()),
+                      "qualified recursive certificate proof verifies");
+            ctx.expect(
+                !verifier->verify(
+                    qualified->changed_manifest, *proof, *accumulator,
+                    secp.get()),
+                "qualified proof rejects a changed public manifest");
+            auto changed_proof = *proof;
+            changed_proof.back() ^= 1;
+            ctx.expect(
+                !verifier->verify(
+                    qualified->manifest, changed_proof, *accumulator,
+                    secp.get()),
+                "qualified verifier rejects a changed proof");
+        }
+        if (has_candidate_proof) {
+            auto proof = read_certificate_parent_proof(
+                candidate_proof_path);
+            expect_ok(ctx, proof,
+                      "candidate certificate proof loads");
+            if (!proof) return;
+            expect_ok(ctx,
+                      verifier->verify(
+                          *public_manifest, *proof, *accumulator,
+                          secp.get()),
+                      "candidate recursive certificate proof verifies");
+            ctx.expect(
+                !verifier->verify(
+                    *changed_manifest, *proof, *accumulator,
+                    secp.get()),
+                "candidate proof rejects a changed public manifest");
+            auto changed_proof = *proof;
+            changed_proof.back() ^= 1;
+            ctx.expect(
+                !verifier->verify(
+                    *public_manifest, changed_proof, *accumulator,
+                    secp.get()),
+                "candidate verifier rejects a changed proof");
+        }
     }
 #endif
 #endif

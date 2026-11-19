@@ -857,12 +857,12 @@ void test_native_certificate_parent(TestContext& ctx)
         tampered_proof_bytes, secp.get());
     bool tamper_rejected = !tampered_proof;
     if (tampered_proof) {
-        tamper_rejected = !accumulator->leaves().prepare(
-            hosts.front(), *cache, *tampered_proof, secp.get(),
-            &circuit_cache);
+        auto tampered_ok = host.verify_topic_nonce_proof(
+            *cache, *tampered_proof, secp.get(), &circuit_cache);
+        tamper_rejected = !tampered_ok || !*tampered_ok;
     }
     ctx.expect(tamper_rejected,
-               "changed V4 nonce proof rejects before leaf admission");
+               "changed V4 nonce proof rejects under full verification");
 
     auto changed_slot = slot;
     changed_slot.back() ^= 1;

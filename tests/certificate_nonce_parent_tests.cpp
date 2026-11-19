@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -109,6 +110,94 @@ constexpr std::size_t kQualifiedMemberProofSize =
         kReductionSerializedSize +
     purify::puresign_plusplus::CertificateNonceLinearReceipt::
         kStepSerializedSize;
+
+void write_certificate_parent_fixture_if_requested(
+    TestContext& ctx,
+    std::span<const unsigned char> witness,
+    std::span<const unsigned char> public_frame)
+{
+    const char* witness_path = std::getenv(
+        "PURIFY_CERTIFICATE_PARENT_WITNESS_V3_OUT");
+    const char* public_frame_path = std::getenv(
+        "PURIFY_CERTIFICATE_PARENT_PUBLIC_FRAME_OUT");
+    const bool has_witness_path = witness_path != nullptr;
+    const bool has_public_frame_path = public_frame_path != nullptr;
+    ctx.expect(
+        has_witness_path == has_public_frame_path,
+        "certificate parent fixture paths are configured together");
+    if (!has_witness_path || !has_public_frame_path) return;
+    ctx.expect(
+        *witness_path != '\0' && *public_frame_path != '\0',
+        "certificate parent fixture paths are nonempty");
+    if (*witness_path == '\0' || *public_frame_path == '\0') return;
+    ctx.expect(
+        std::filesystem::path{witness_path} !=
+            std::filesystem::path{public_frame_path},
+        "certificate parent fixture paths are distinct");
+    if (std::filesystem::path{witness_path} ==
+        std::filesystem::path{public_frame_path}) {
+        return;
+    }
+
+    std::array<unsigned char, 32> witness_digest{};
+    std::array<unsigned char, 32> public_frame_digest{};
+    purify_sha256(
+        witness_digest.data(), witness.data(), witness.size());
+    purify_sha256(
+        public_frame_digest.data(), public_frame.data(),
+        public_frame.size());
+    const bool fixture_matches =
+        witness_digest ==
+            purify::UInt256::from_hex(
+                "3190c4d200759afbe6ab6dc74689a9c3b"
+                "c8287ee33be78650682e3a0995b7212")
+                .to_bytes_be() &&
+        public_frame_digest ==
+            purify::UInt256::from_hex(
+                "5159f74d4b73e042286daddd2f9b37ab"
+                "650d2fa2656e0b9938c77288d76e794e")
+                .to_bytes_be();
+    ctx.expect(
+        fixture_matches,
+        "certificate parent fixture bytes match their pinned digests");
+    if (!fixture_matches) return;
+
+    std::error_code filesystem_error;
+    const bool witness_exists =
+        std::filesystem::exists(witness_path, filesystem_error);
+    ctx.expect(
+        !filesystem_error && !witness_exists,
+        "certificate parent witness output path is new");
+    if (filesystem_error || witness_exists) return;
+    const bool public_frame_exists =
+        std::filesystem::exists(public_frame_path, filesystem_error);
+    ctx.expect(
+        !filesystem_error && !public_frame_exists,
+        "certificate parent public frame output path is new");
+    if (filesystem_error || public_frame_exists) return;
+
+    std::ofstream witness_output{
+        witness_path, std::ios::binary | std::ios::out};
+    std::ofstream public_frame_output{
+        public_frame_path, std::ios::binary | std::ios::out};
+    ctx.expect(
+        witness_output.is_open() && public_frame_output.is_open(),
+        "certificate parent fixture outputs open");
+    if (!witness_output.is_open() || !public_frame_output.is_open()) {
+        return;
+    }
+    witness_output.write(
+        reinterpret_cast<const char*>(witness.data()),
+        static_cast<std::streamsize>(witness.size()));
+    public_frame_output.write(
+        reinterpret_cast<const char*>(public_frame.data()),
+        static_cast<std::streamsize>(public_frame.size()));
+    witness_output.flush();
+    public_frame_output.flush();
+    ctx.expect(
+        witness_output.good() && public_frame_output.good(),
+        "certificate parent fixture outputs write completely");
+}
 
 class FixtureCursor {
 public:
@@ -1154,6 +1243,8 @@ void test_native_certificate_parent(TestContext& ctx)
                 public_frame_magic.begin(), public_frame_magic.end(),
                 public_frame->begin()),
         "certificate prover frame has the fixed public boundary");
+    write_certificate_parent_fixture_if_requested(
+        ctx, *linear_witness, *public_frame);
 
     auto changed_descriptors = descriptors;
     changed_descriptors.front().leaf_binding.back() ^= 1;

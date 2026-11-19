@@ -1,0 +1,163 @@
+{
+  "schema": "purify-certificate-parent-release-v2",
+  "protocol": "purify-certificate-parent-v1",
+  "status": "accepted",
+  "transcript_hash": "sha256",
+  "artifacts": {
+    "verifier": {
+      "filename": "certificate-parent-verifier.vk2",
+      "format_magic": "Purify/Nova/VK2\u0000",
+      "format_version": 2,
+      "encoded_bytes": 696190360,
+      "decoded_bytes": 3253731904,
+      "sha256": "34ddb2b620d786fa6fa3fa19d146986cac6bc765f94ff5ce83003d717ca3aa22",
+      "tagged_sha256": {
+        "tag": "Purify/Accountable/DirectNovaVerifierArtifact/v2",
+        "digest": "9f6b982b5e52a31f57f31bb03db54b087dfc3f945c200a5d66557ee7f90dae9e"
+      }
+    },
+    "prover": {
+      "filename": "certificate-parent-prover.pk1",
+      "format_magic": "Purify/Nova/PK1\u0000",
+      "format_version": 1,
+      "encoded_bytes": 696022272,
+      "decoded_bytes": 3074225014,
+      "sha256": "b8d52debdd9075ca81dc20b374619d1970d202c7739735e130b2fd5aed058cd1",
+      "tagged_sha256": {
+        "tag": "Purify/Accountable/DirectNovaProverArtifact/v1",
+        "digest": "fa221590736d58a3ef654bc2dabc4d5e13a89b8e48d23771274bc7923958b3df"
+      }
+    }
+  },
+  "suite": {
+    "application_versions": {
+      "payload": 1,
+      "statement": 1,
+      "manifest": 1,
+      "native_decision": 1
+    },
+    "relation_id": "f5a314758f5315d91989493b31a7977ade720f2967b46e756bce638e1876081b",
+    "public_parameter_digest": "0697ca2fa215b5eff3178c2c10e62b9e80d56eed121661af1ad85326736bb303",
+    "suite_id": "21d8c41e26e916e3ee15d45e356e913e6958f7e70668123179e43000fd5e2c8b",
+    "state_arity": 26,
+    "primary_constraints": 9617365,
+    "primary_variables": 9575269,
+    "secondary_constraints": 728974,
+    "secondary_variables": 728211,
+    "proof_bytes": 15268,
+    "proof_sequences": 152
+  },
+  "source": {
+    "provenance": "The artifacts were qualified in the Char integration repository before the corresponding src/purify vendor closure was extracted upstream. These records identify that historical run; they do not claim that this Purify branch reran setup, proving, or verification.",
+    "artifact_qualification": {
+      "repository": "https://github.com/judica-org/char-bitcoin.git",
+      "ref": "refs/heads/work/char-certificate-nova-profile",
+      "ref_scope": "historical-local-development-ref",
+      "ref_availability": "remote fetchability not asserted",
+      "commit": "b6dc3ec2e4a0faed334022d283517ef1dd84be01",
+      "tree": "4e6b4de35cbe78b4b0c1442ce6ea7994d51109e5",
+      "subtree_path": "src/purify",
+      "subtree_tree": "3f4d1b63a56860f690414d5fddc28ba25e98b6c7"
+    },
+    "proof_gate": {
+      "repository": "https://github.com/judica-org/char-bitcoin.git",
+      "ref": "refs/heads/work/char-certificate-nova-profile",
+      "ref_scope": "historical-local-development-ref",
+      "ref_availability": "remote fetchability not asserted",
+      "commit": "a24ee802b91ef850730c17254e11b97e257e57d5",
+      "tree": "9e122ae387707f49f52024a30019d90b32e0d699",
+      "subtree_path": "src/purify",
+      "subtree_tree": "e2c0331d687624ce16e10d550f1d85da7345ead7"
+    },
+    "nova": {
+      "repository": "https://github.com/JeremyRubin/Nova.git",
+      "commit": "aa42229024dc141e4edff89fcaa79f345e156d46"
+    }
+  },
+  "release_gate": {
+    "status": "accepted",
+    "environment": {
+      "operating_system": "macOS 15.7.3 (24G419)",
+      "architecture": "arm64",
+      "processor": "Apple M4",
+      "memory_bytes": 17179869184,
+      "logical_cpus": 10
+    },
+    "qualified_fixture": {
+      "witness": {
+        "path": "rust/construction-parent/tests/vectors/certificate_joined_witness_v3.bin",
+        "format_magic": "Purify/CertJWit3",
+        "bytes": 14608,
+        "sha256": "36a4806d937edd496f28464248256512d45e51e25e36b5b6c184e991b88c9d46"
+      },
+      "public_frame": {
+        "format_magic": "Purify/CertPub1\u0000",
+        "bytes": 96,
+        "sha256": "9057d923d70e4b600eb9e7f085a32f4a1eb245e6188dde6a0b8147a0ad816196",
+        "certificate_context_digest": "7bcb06b8538ccc9c79fd2f595bbbee9f08c0d829a97ccd92fc3175eb379039f5",
+        "response_count": 2,
+        "step_count": 4,
+        "final_manifest": "45e8147f293a6edcf50c178d94a4731b5e18784c7b404ba9c357b9db224c1f9c"
+      }
+    },
+    "production_prover_api": {
+      "status": "accepted",
+      "proof": {
+        "bytes": 15268,
+        "sha256": "887eb27a8893078734a57fb497ed9f9aadff03803454e419d497f0650727babb"
+      },
+      "timings_seconds": {
+        "binding": 10.990,
+        "prove_and_reverify": 7494.866,
+        "total": 7505.857
+      },
+      "persisted_proof_reloaded": true,
+      "independent_verifier_reloaded": true,
+      "exact_final_state_verified": true,
+      "peak_resident_bytes": null,
+      "peak_memory_footprint_bytes": null,
+      "resource_metrics_unavailable_reason": "The successful sandboxed /usr/bin/time -l run denied extended metrics: sysctl kern.clockrate: Operation not permitted."
+    },
+    "external_char_cpp_integration_test": {
+      "source": {
+        "repository": "https://github.com/judica-org/char-bitcoin.git",
+        "ref": "refs/heads/work/char-certificate-nova-profile",
+        "ref_scope": "historical-local-development-ref",
+        "ref_availability": "remote fetchability not asserted",
+        "commit": "a24ee802b91ef850730c17254e11b97e257e57d5",
+        "tree": "9e122ae387707f49f52024a30019d90b32e0d699",
+        "subtree_path": "src/purify",
+        "subtree_tree": "e2c0331d687624ce16e10d550f1d85da7345ead7"
+      },
+      "proof_sha256": "887eb27a8893078734a57fb497ed9f9aadff03803454e419d497f0650727babb",
+      "test_file": "src/test/char_certificate_nonce_parent_tests.cpp",
+      "test_suite": "char_certificate_nonce_parent_tests",
+      "canonical_manifest_accepted": true,
+      "descriptor_reordered_manifest_rejected": true,
+      "elapsed_seconds": 392.58,
+      "passed": true
+    },
+    "packaged_cli": {
+      "validation_scope": "build-install-and-unit-tests-only",
+      "full_proof_generated": false,
+      "executable": {
+        "filename": "purify-certificate-parent-prover",
+        "bytes": 6072144,
+        "sha256": "c940d2bc1110b9166eed4bd958ae455b0cc9abd739bc81006fa74b3d275d05c9",
+        "platform": "Mach-O 64-bit arm64",
+        "linked_libraries": [
+          "/usr/lib/libSystem.B.dylib",
+          "/usr/lib/libiconv.2.dylib"
+        ],
+        "linked_only_to_system_libraries": true,
+        "matches_cargo_target_binary": true
+      },
+      "validation": {
+        "fresh_prefix_build_and_install_passed": true,
+        "library_tests_passed": 8,
+        "binary_tests_passed": 8,
+        "resource_gated_proof_test_ignored": true
+      }
+    }
+  }
+}

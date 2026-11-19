@@ -308,18 +308,19 @@ pub(crate) fn constrain_certificate_member_leaf<CS: ConstraintSystem<Scalar>>(
         cs.namespace(|| "certificate member authorization"),
         witness.authorization_digest,
     )?;
-    let response_ordinal = allocate_bytes(
-        cs.namespace(|| "certificate response ordinal"),
-        witness.response_ordinal.to_be_bytes(),
-    )?;
-    let member_ordinal = allocate_bytes(
-        cs.namespace(|| "certificate member ordinal"),
-        witness.member_ordinal.to_be_bytes(),
-    )?;
+    let position = ConstrainedCertificateMemberPosition {
+        response_ordinal: allocate_bytes(
+            cs.namespace(|| "certificate response ordinal"),
+            witness.response_ordinal.to_be_bytes(),
+        )?,
+        member_ordinal: allocate_bytes(
+            cs.namespace(|| "certificate member ordinal"),
+            witness.member_ordinal.to_be_bytes(),
+        )?,
+    };
     let record_digest = constrain_member_record(
         cs.namespace(|| "certificate member record"),
-        &response_ordinal,
-        &member_ordinal,
+        &position,
         &authorization_digest,
         &full_host,
         &topic,
@@ -451,10 +452,14 @@ fn constrain_leaf_binding<CS: ConstraintSystem<Scalar>>(
     )
 }
 
+struct ConstrainedCertificateMemberPosition {
+    response_ordinal: [NovaByte; 8],
+    member_ordinal: [NovaByte; 4],
+}
+
 fn constrain_member_record<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
-    response_ordinal: &[NovaByte; 8],
-    member_ordinal: &[NovaByte; 4],
+    position: &ConstrainedCertificateMemberPosition,
     authorization_digest: &[NovaByte; 32],
     full_host: &[NovaByte],
     topic: &[NovaByte; 32],
@@ -465,8 +470,8 @@ fn constrain_member_record<CS: ConstraintSystem<Scalar>>(
         return Err(synthesis_error("certificate member host length"));
     }
     let mut encoded = Vec::with_capacity(8 + 4 + 32 + 96 + 32 + 32 + 33 + 33 + 32);
-    encoded.extend_from_slice(response_ordinal);
-    encoded.extend_from_slice(member_ordinal);
+    encoded.extend_from_slice(&position.response_ordinal);
+    encoded.extend_from_slice(&position.member_ordinal);
     encoded.extend_from_slice(authorization_digest);
     encoded.extend_from_slice(full_host);
     encoded.extend_from_slice(topic);

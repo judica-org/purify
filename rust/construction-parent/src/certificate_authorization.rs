@@ -123,10 +123,12 @@ mod tests {
         assert_eq!(encoded.len() % 2, 0);
         encoded
             .as_bytes()
-            .chunks_exact(2)
-            .map(|digits| {
-                let high = (digits[0] as char).to_digit(16).expect("hex digit");
-                let low = (digits[1] as char).to_digit(16).expect("hex digit");
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[high, low]| {
+                let high = (high as char).to_digit(16).expect("hex digit");
+                let low = (low as char).to_digit(16).expect("hex digit");
                 ((high << 4) | low) as u8
             })
             .collect()

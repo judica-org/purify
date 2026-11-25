@@ -456,29 +456,100 @@ Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
                           "derive_nonzero_scalar:exhausted");
 }
 
-Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
-                     const TaggedHash &tag, std::size_t index,
-                     std::uint64_t attempt = 0) {
-  SecretBytes prefix;
-  prefix.value.reserve(seed.size() + 2 * sizeof(std::uint64_t));
-  prefix.value.assign(seed.begin(), seed.end());
+using U64Le = std::array<unsigned char, 8>;
+
+U64Le u64_le(std::uint64_t value) {
+  U64Le out{};
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    out[i] = static_cast<unsigned char>((value >> (8 * i)) & 0xffU);
+  }
+  return out;
+}
+
+/**
+ * The hash state after `tag(seed`, for deriving many scalars from one seed.
+ *
+ * A V4 seed carries the whole witness, several hundred kilobytes, and one
+ * proof derives tens of thousands of scalars from it. Hashing the seed for
+ * every scalar made that hashing the dominant cost of a proof. This absorbs
+ * the seed once; each scalar then finishes a copy of the state with its own
+ * labels. The digests are exactly those of hashing `seed || labels` in full.
+ *
+ * The state retains seed-derived bytes and is erased on destruction.
+ */
+class SeedHash {
+public:
+  SeedHash(const TaggedHash &tag, std::span<const unsigned char> seed) {
+    const auto &tag_digest = tag.tag_digest();
+    const std::array<const unsigned char *, 3> items{
+        tag_digest.data(), tag_digest.data(),
+        seed.empty() ? nullptr : seed.data()};
+    const std::array<std::size_t, 3> item_lens{tag_digest.size(),
+                                               tag_digest.size(), seed.size()};
+    const int ok = purify_sha256_prefix_init(&prefix_, items.data(),
+                                             item_lens.data(), items.size());
+    assert(ok != 0 && "SeedHash requires well-formed segments");
+    (void)ok;
+  }
+  ~SeedHash() { purify_sha256_prefix_clear(&prefix_); }
+  SeedHash(const SeedHash &) = delete;
+  SeedHash &operator=(const SeedHash &) = delete;
+
+  /** `tag(seed || labels...)`, with each label appended in order. */
+  [[nodiscard]] ScalarBytes
+  digest(std::span<const std::span<const unsigned char>> labels) const {
+    // Scalar derivations use at most three labels: index, attempt, counter.
+    static constexpr std::size_t kMaxLabels = 4;
+    assert(labels.size() <= kMaxLabels && "SeedHash::digest label count");
+    std::array<const unsigned char *, kMaxLabels> items{};
+    std::array<std::size_t, kMaxLabels> item_lens{};
+    const std::size_t count = std::min(labels.size(), kMaxLabels);
+    for (std::size_t i = 0; i < count; ++i) {
+      items[i] = labels[i].empty() ? nullptr : labels[i].data();
+      item_lens[i] = labels[i].size();
+    }
+    ScalarBytes out{};
+    const int ok = purify_sha256_prefix_finish(
+        &prefix_, out.data(), items.data(), item_lens.data(), count);
+    assert(ok != 0 && "SeedHash::digest requires well-formed labels");
+    (void)ok;
+    return out;
+  }
+
+private:
+  purify_sha256_prefix prefix_{};
+};
+
+/**
+ * Parses `tag(seed || labels...)` as one secret scalar candidate.
+ *
+ * The seed was absorbed once into `seed_hash` and is neither copied nor
+ * hashed again here.
+ */
+template <typename... Labels>
+Result<FieldElement> secret_scalar_candidate(const SeedHash &seed_hash,
+                                             const Labels &...labels) {
+  static_assert(sizeof...(Labels) <= 4,
+                "SeedHash::digest accepts at most four labels");
+  SecretScalarBytes candidate_bytes;
+  const std::array<std::span<const unsigned char>, sizeof...(Labels)>
+      label_spans{std::span<const unsigned char>(labels)...};
+  ScalarBytes digest = seed_hash.digest(label_spans);
+  candidate_bytes.value = digest;
+  ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
+  return FieldElement::try_from_bytes32(candidate_bytes.value);
+}
+
+Status derive_scalar(FieldElement &out, const SeedHash &seed_hash,
+                     std::size_t index, std::uint64_t attempt) {
   PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index,
                           narrow_size_to_u64(index, "derive_scalar:index"),
                           "derive_scalar:index");
-  append_u64_le(prefix.value, encoded_index);
-  append_u64_le(prefix.value, attempt);
+  const U64Le index_le = u64_le(encoded_index);
+  const U64Le attempt_le = u64_le(attempt);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
-    SecretBytes input;
-    input.value.reserve(prefix.value.size() + sizeof(std::uint64_t));
-    input.value.assign(prefix.value.begin(), prefix.value.end());
-    append_u64_le(input.value, counter);
-    SecretScalarBytes candidate_bytes;
-    ScalarBytes digest = tag.digest(std::span<const unsigned char>(
-        input.value.data(), input.value.size()));
-    candidate_bytes.value = digest;
-    ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
-    Result<FieldElement> candidate =
-        FieldElement::try_from_bytes32(candidate_bytes.value);
+    Result<FieldElement> candidate = secret_scalar_candidate(
+        seed_hash, index_le, attempt_le, u64_le(counter));
     if (candidate.has_value()) {
       out = *candidate;
       secure_clear_field_element(*candidate);
@@ -489,30 +560,36 @@ Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
                           "derive_scalar:exhausted");
 }
 
+/**
+ * Fills `out[i]` with the scalar `tag(seed || i || attempt || counter)`.
+ *
+ * The seed is absorbed once. It can be the whole witness, and hashing it
+ * again for each of tens of thousands of scalars dominated the prover.
+ */
+Status derive_scalars(std::span<FieldElement> out,
+                      std::span<const unsigned char> seed,
+                      const TaggedHash &tag, std::uint64_t attempt) {
+  const SeedHash seed_hash(tag, seed);
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    PURIFY_RETURN_IF_ERROR(derive_scalar(out[i], seed_hash, i, attempt),
+                           "derive_scalars:scalar");
+  }
+  return {};
+}
+
 Status derive_secret_nonzero_scalar(FieldElement &out,
                                     std::span<const unsigned char> seed,
                                     const TaggedHash &tag,
                                     std::size_t index) {
-  SecretBytes prefix;
-  prefix.value.reserve(seed.size() + sizeof(std::uint64_t));
-  prefix.value.assign(seed.begin(), seed.end());
   PURIFY_ASSIGN_OR_RETURN(
       const auto &encoded_index,
       narrow_size_to_u64(index, "derive_secret_nonzero_scalar:index"),
       "derive_secret_nonzero_scalar:index");
-  append_u64_le(prefix.value, encoded_index);
+  const U64Le index_le = u64_le(encoded_index);
+  const SeedHash seed_hash(tag, seed);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
-    SecretBytes input;
-    input.value.reserve(prefix.value.size() + sizeof(std::uint64_t));
-    input.value.assign(prefix.value.begin(), prefix.value.end());
-    append_u64_le(input.value, counter);
-    SecretScalarBytes candidate_bytes;
-    ScalarBytes digest = tag.digest(std::span<const unsigned char>(
-        input.value.data(), input.value.size()));
-    candidate_bytes.value = digest;
-    ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
     Result<FieldElement> candidate =
-        FieldElement::try_from_bytes32(candidate_bytes.value);
+        secret_scalar_candidate(seed_hash, index_le, u64_le(counter));
     if (candidate.has_value()) {
       if (!candidate->is_zero()) {
         out = *candidate;
@@ -2354,12 +2431,10 @@ prove_experimental_circuit_zk_norm_arg_impl(
     std::vector<FieldElement> padding(
         dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
     WipeOnDestruction padding_wiper(padding);
-    for (std::size_t i = 0; i < padding.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(padding[i], seed.value, kCircuitZkBlindTaggedHash, i,
-                        attempt),
-          "prove_experimental_circuit_zk_norm_arg_impl:blind");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(padding, seed.value, kCircuitZkBlindTaggedHash,
+                       attempt),
+        "prove_experimental_circuit_zk_norm_arg_impl:blind");
 
     PURIFY_ASSIGN_OR_RETURN(
         auto raw_inputs,
@@ -2428,21 +2503,17 @@ prove_experimental_circuit_zk_norm_arg_impl(
 
     std::vector<FieldElement> mask_n(hidden.n_vec.size(), FieldElement::zero());
     WipeOnDestruction mask_n_wiper(mask_n);
-    for (std::size_t i = 0; i < mask_n.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_n[i], seed.value, kCircuitZkMaskNTaggedHash, i,
-                        attempt),
-          "prove_experimental_circuit_zk_norm_arg_impl:mask_n");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(mask_n, seed.value, kCircuitZkMaskNTaggedHash,
+                       attempt),
+        "prove_experimental_circuit_zk_norm_arg_impl:mask_n");
 
     std::vector<FieldElement> mask_l(hidden.l_vec.size(), FieldElement::zero());
     WipeOnDestruction mask_l_wiper(mask_l);
-    for (std::size_t i = 0; i < mask_l.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_l[i], seed.value, kCircuitZkMaskLTaggedHash, i,
-                        attempt),
-          "prove_experimental_circuit_zk_norm_arg_impl:mask_l");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(mask_l, seed.value, kCircuitZkMaskLTaggedHash,
+                       attempt),
+        "prove_experimental_circuit_zk_norm_arg_impl:mask_l");
 
     FieldElement t2 =
         weighted_bppp_inner_product(mask_n, mask_n, hidden.public_data->rho);
@@ -3084,12 +3155,10 @@ prove_circuit_zk_norm_arg_v4_impl(
     std::vector<FieldElement> padding(
         dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
     WipeOnDestruction padding_wiper(padding);
-    for (std::size_t i = 0; i < padding.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(padding[i], seed.value, kCircuitZkBlindV4TaggedHash,
-                        i, attempt),
-          "prove_circuit_zk_norm_arg_v4:blind");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(padding, seed.value, kCircuitZkBlindV4TaggedHash,
+                       attempt),
+        "prove_circuit_zk_norm_arg_v4:blind");
 
     PURIFY_ASSIGN_OR_RETURN(
         auto raw_inputs,
@@ -3219,21 +3288,17 @@ prove_circuit_zk_norm_arg_v4_impl(
     std::vector<FieldElement> mask_n(hidden.n_vec.size(),
                                      FieldElement::zero());
     WipeOnDestruction mask_n_wiper(mask_n);
-    for (std::size_t i = 0; i < mask_n.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_n[i], mask_seed.value,
-                        kCircuitZkMaskNV4TaggedHash, i, attempt),
-          "prove_circuit_zk_norm_arg_v4:mask_n");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(mask_n, mask_seed.value, kCircuitZkMaskNV4TaggedHash,
+                       attempt),
+        "prove_circuit_zk_norm_arg_v4:mask_n");
     std::vector<FieldElement> mask_l(hidden.l_vec.size(),
                                      FieldElement::zero());
     WipeOnDestruction mask_l_wiper(mask_l);
-    for (std::size_t i = 0; i < mask_l.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_l[i], mask_seed.value,
-                        kCircuitZkMaskLV4TaggedHash, i, attempt),
-          "prove_circuit_zk_norm_arg_v4:mask_l");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(mask_l, mask_seed.value, kCircuitZkMaskLV4TaggedHash,
+                       attempt),
+        "prove_circuit_zk_norm_arg_v4:mask_l");
 
     FieldElement t2 = weighted_bppp_inner_product(
         mask_n, mask_n, hidden.public_data->rho);

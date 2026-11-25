@@ -138,6 +138,11 @@ public:
         return out;
     }
 
+    /** SHA-256 of the tag; the 64-byte prefix of every digest is two copies of it. */
+    [[nodiscard]] const std::array<unsigned char, 32>& tag_digest() const noexcept {
+        return tag_hash_;
+    }
+
 private:
     std::array<unsigned char, 32> tag_hash_{};
 };

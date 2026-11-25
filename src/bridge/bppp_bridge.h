@@ -10,6 +10,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "purify/secp_bridge.h"
 
@@ -35,6 +36,36 @@ typedef int (*purify_bppp_round_challenge_callback)(
  * @param c_vec_len Length of the c vector.
  * @return Required output buffer size in bytes.
  */
+/**
+ * SHA-256 state after a fixed prefix.
+ *
+ * Hashing a long prefix once and finishing a copy of this state for each
+ * suffix yields the same digests as hashing `prefix || suffix` every time.
+ * The state holds a compression of the prefix and up to 63 of its trailing
+ * bytes verbatim, so clear it when the prefix is secret.
+ */
+typedef struct purify_sha256_prefix {
+    uint32_t state[8];
+    unsigned char buffer[64];
+    uint64_t bytes;
+} purify_sha256_prefix;
+
+/** Absorbs every item in order. An item may be NULL only when its length is zero. */
+int purify_sha256_prefix_init(purify_sha256_prefix* prefix,
+                              const unsigned char* const* items,
+                              const size_t* item_lens,
+                              size_t items_count);
+
+/** Writes SHA-256(prefix items || items) to `output32`; `prefix` is unchanged. */
+int purify_sha256_prefix_finish(const purify_sha256_prefix* prefix,
+                                unsigned char output32[32],
+                                const unsigned char* const* items,
+                                const size_t* item_lens,
+                                size_t items_count);
+
+/** Erases a prefix state. */
+void purify_sha256_prefix_clear(purify_sha256_prefix* prefix);
+
 size_t purify_bppp_required_proof_size(size_t n_vec_len, size_t c_vec_len);
 
 /** @brief Serializes the secp256k1 base generator into compressed form. */

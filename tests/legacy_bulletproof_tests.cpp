@@ -210,6 +210,53 @@ void test_experimental_bulletproof_multiple_outputs(TestContext& ctx) {
                "trailing proof bytes are rejected");
 }
 
+/**
+ * A proof shorter than its fixed prefix plus the leading inner-product scalar
+ * must be rejected before that scalar is read. Each candidate is an exactly
+ * sized allocation, so a sanitizer build reports any read past its end.
+ */
+void test_experimental_bulletproof_rejects_short_proofs(TestContext& ctx) {
+    auto context = make_test_secp_context(ctx);
+    if (context == nullptr) return;
+    NativeBulletproofCircuit circuit(2, 1, 0);
+    const auto row = circuit.add_constraint();
+    circuit.add_output_term(0, row, FieldElement::one());
+    circuit.add_commitment_term(0, row, FieldElement::one().negate());
+    BulletproofAssignmentData assignment;
+    assignment.left = {FieldElement::from_int(3), FieldElement::from_int(5)};
+    assignment.right = {FieldElement::from_int(4), FieldElement::from_int(6)};
+    assignment.output = {FieldElement::from_int(12), FieldElement::from_int(30)};
+    assignment.commitments = {FieldElement::from_int(12)};
+    purify::BulletproofScalarBytes nonce{};
+    nonce.fill(0x53);
+    const auto generator = purify::bppp::base_generator(context.get());
+    const auto binding = purify::bytes_from_ascii("short-proof-boundary");
+    auto proof = purify::prove_experimental_circuit(
+        circuit, assignment, nonce, generator, context.get(), binding);
+    expect_ok(ctx, proof, "short-proof fixture proves");
+    if (!proof.has_value()) return;
+    auto accepted = purify::verify_experimental_circuit(
+        circuit, *proof, generator, context.get(), binding);
+    ctx.expect(accepted.has_value() && *accepted, "short-proof fixture verifies at full length");
+
+    // 321 bytes is the fixed prefix; the verifier also reads 32 bytes at that offset.
+    constexpr std::size_t kFixedPrefix = 64 + 256 + 1;
+    ctx.expect(proof->proof.size() > kFixedPrefix + 32, "fixture proof extends past the leading scalar");
+    for (const std::size_t length : {std::size_t{1}, std::size_t{64}, kFixedPrefix - 1, kFixedPrefix,
+                                     kFixedPrefix + 1, kFixedPrefix + 16, kFixedPrefix + 31,
+                                     kFixedPrefix + 32, proof->proof.size() - 1}) {
+        if (length >= proof->proof.size()) continue;
+        purify::ExperimentalBulletproofProof shortened;
+        shortened.commitments = proof->commitments;
+        shortened.proof = Bytes(proof->proof.begin(),
+                                proof->proof.begin() + static_cast<std::ptrdiff_t>(length));
+        shortened.proof.shrink_to_fit();
+        auto rejected = purify::verify_experimental_circuit(
+            circuit, shortened, generator, context.get(), binding);
+        ctx.expect(rejected.has_value() && !*rejected, "a shortened proof is rejected without error");
+    }
+}
+
 void test_experimental_bulletproof_output_transcript_boundary(TestContext& ctx) {
     auto context = make_test_secp_context(ctx);
     if (context == nullptr) return;
@@ -480,6 +527,7 @@ void test_legacy_bridge_rejects_overflowed_sizes(TestContext& ctx) {
 void run_legacy_bulletproof_tests(TestContext& ctx) {
     test_experimental_bulletproof_roundtrip(ctx);
     test_experimental_bulletproof_multiple_outputs(ctx);
+    test_experimental_bulletproof_rejects_short_proofs(ctx);
     test_experimental_bulletproof_output_transcript_boundary(ctx);
     test_circuit_shape_rejects_invalid_constraint_indices(ctx);
     test_legacy_scratch_tracks_constraint_count(ctx);

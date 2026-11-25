@@ -37,31 +37,54 @@ scalar to the assembler. They do not participate in a second proving round.
 
 ## Compact payload
 
-Construction payload version 4 is:
+Construction payload version 5 is:
 
 ```
 version8 || recovery_root64 || setup_count32be || anchor_count32be
 || setup_entry[0] || ... || anchor_entry[0] || ...
 ```
 
-Each 98-byte setup entry is:
+Each 99-byte setup entry is:
 
 ```
-full_signed_recovery_share66 || circuit_precommitment32
+full_signed_recovery_share66 || raw_commitment33
 ```
 
-Each 128-byte anchor entry is:
+Each 129-byte anchor entry is:
 
 ```
 ephemeral_root64 || masked_punishment_scalar32 ||
-circuit_precommitment32
+raw_commitment33
 ```
 
 The total serialized size is:
 
 ```
-73 + 98*N + 128*A bytes
+73 + 99*N + 129*A bytes
 ```
+
+`raw_commitment33` is the first field of the child V4 proof: its raw witness
+commitment, a finite compressed secp256k1 point. The payload carries it so
+the verifier can compute the leaf precommitment itself:
+
+```
+d = Precommit(circuit_binding_digest, shape, registered_public_point,
+              raw_commitment)
+```
+
+`registered_public_point` is the registry's punishment key for an anchor leaf
+and the roster-derived weighted member key for a setup leaf. The payload does
+not carry `d`. The parent relation proves that `d` is the hash of its own
+witness for the public point and the raw commitment. Because the verifier
+fixes that hash input, the witness must be the registered point, and the
+relation's Schnorr check therefore applies to the registered point itself.
+
+Version 4 carried `d` instead. A prover could then choose any public point
+inside the relation, hash it into a `d` of its choosing, and pass the Schnorr
+check for that point, while the verifier used the registered point only for
+the anchored offset. A registered key of the form `k*G + w*H_j`, with `H_j` a
+zero-coefficient hiding generator, would have been accepted and could never
+be recovered. Version 4 payloads are rejected.
 
 The payload contains the ciphertexts, not merely their hashes, so Bitcoin-only
 recovery remains possible if the out-of-band child proofs disappear. Anchor
@@ -93,7 +116,7 @@ root, preventing the detectable recovery-key alias.
 For ordered setup and anchor records, native preparation produces one pending
 algebraic obligation per child. Parent constants are derived from the same
 public circuit, ciphertext or full share, public output, context, and child
-precommitment. The mixed recurrence starts from the canonical all-zero
+raw commitment. The mixed recurrence starts from the canonical all-zero
 545-byte claim, authenticates every setup leaf in roster order, then every
 anchor leaf in registry order, and returns one final pending claim. There is no
 centralized setup proof, caller-provided seed, or proof promotion step.
@@ -144,7 +167,7 @@ The scalar-only protocol is an incompatible cutover:
 | --- | --- |
 | Anchor escrow record | 4 |
 | Recovery contribution record | 1 |
-| Construction payload | 4 |
+| Construction payload | 5 |
 | Anchor binding and randomness | `/v4` |
 | Construction statement | `/v5` |
 | Construction leaf basis | `Purify/Accountable/ConstructionLeafAccumulation/v1` |
@@ -171,7 +194,7 @@ deployment maximum is 676,297 bytes.
 The public construction envelope contains:
 
 ```
-73 + 98*N + 128*A + size(parent_proof)
+73 + 99*N + 129*A + size(parent_proof)
 ```
 
 This excludes registry data already addressed by the statement, Bitcoin
@@ -180,7 +203,7 @@ bytes and each setup contribution is 1,203 bytes; their proof bodies are
 consumed during construction rather than repeated in the compact payload.
 
 The qualified parent proof is 15,076 bytes, giving the exact total
-`15,149 + 98*N + 128*A`. The external verifier artifact is 693,708,278 encoded
+`15,149 + 99*N + 129*A`. The external verifier artifact is 693,708,278 encoded
 bytes and authenticates a 3,206,736,424-byte decoded payload.
 
 ## Integration boundary

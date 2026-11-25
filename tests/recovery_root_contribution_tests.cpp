@@ -357,10 +357,14 @@ void test_recovery_root_contribution(TestContext& ctx) {
     if (!prepared) return;
     auto parent_constants = accumulator->derive_parent_constants(
         fixture->roster, fixture->formation, member_index,
-        parsed->share(), prepared->circuit_precommitment(), secp.get());
+        parsed->share(), prepared->raw_commitment(), secp.get());
     expect_ok(ctx, parent_constants,
               "contribution parent constants derive from public inputs");
     if (!parent_constants) return;
+    ctx.expect(parent_constants->circuit_precommitment ==
+                   prepared->circuit_precommitment(),
+               "verifier recomputes the contribution's precommitment from "
+               "the weighted member point");
     ctx.expect(
         parent_constants->raw_generator_digest ==
                 raw_generator_digest(
@@ -375,7 +379,7 @@ void test_recovery_root_contribution(TestContext& ctx) {
         descriptor.insert(descriptor.end(), value.begin(), value.end());
     };
     append_descriptor(parent_constants->circuit_binding_digest);
-    append_descriptor(prepared->circuit_precommitment());
+    append_descriptor(parent_constants->circuit_precommitment);
     append_descriptor(parent_constants->coefficient_commitment);
     append_descriptor(parent_constants->anchored_offset);
     ctx.expect(descriptor.size() == 130,
@@ -384,9 +388,9 @@ void test_recovery_root_contribution(TestContext& ctx) {
         ctx,
         accumulator->derive_parent_constants(
             fixture->roster, fixture->formation, member_index,
-            parsed->share(), purify::bppp::ScalarBytes{}, secp.get()),
-        purify::ErrorCode::RangeViolation,
-        "contribution parent constants reject a zero precommitment");
+            parsed->share(), purify::bppp::PointBytes{}, secp.get()),
+        purify::ErrorCode::BackendRejectedInput,
+        "contribution parent constants reject an identity raw commitment");
 
     const auto other_index = (member_index + 1) %
                              fixture->member_secrets.size();

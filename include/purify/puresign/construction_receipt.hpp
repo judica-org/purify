@@ -47,22 +47,36 @@ private:
     ResolvedConstructionSetupDigestBytes digest_{};
 };
 
-/** One ordered recovery-share leaf and its exact V4 precommitment. */
+/**
+ * One ordered recovery-share leaf and its child proof's raw commitment.
+ *
+ * The raw commitment is the first field of the child V4 proof. The verifier
+ * hashes it together with the roster-derived weighted member point to obtain
+ * the leaf precommitment. The payload deliberately does not carry that
+ * precommitment: a prover-supplied one would let the parent relation use a
+ * public point other than the registered one.
+ */
 struct ConstructionReceiptSetupEntry {
     ConstructionReceiptSetupEntry(
         RecoveryRootShare recovery_share,
-        bppp::ScalarBytes precommitment)
+        bppp::PointBytes child_raw_commitment)
         : share(std::move(recovery_share)),
-          circuit_precommitment(precommitment) {}
+          raw_commitment(child_raw_commitment) {}
 
     RecoveryRootShare share;
-    bppp::ScalarBytes circuit_precommitment{};
+    bppp::PointBytes raw_commitment{};
 };
 
-/** One ordered anchor ciphertext and its exact V4 precommitment. */
+/**
+ * One ordered anchor ciphertext and its child proof's raw commitment.
+ *
+ * The verifier hashes the raw commitment together with the registered
+ * punishment key to obtain the leaf precommitment; see
+ * ConstructionReceiptSetupEntry.
+ */
 struct ConstructionReceiptAnchorEntry {
     AnchorEscrowCiphertext ciphertext{};
-    bppp::ScalarBytes circuit_precommitment{};
+    bppp::PointBytes raw_commitment{};
 };
 
 /**
@@ -77,16 +91,16 @@ struct ConstructionReceiptAnchorEntry {
  */
 class ConstructionReceiptPayload {
 public:
-    static constexpr unsigned char kSerializationVersion = 4;
+    static constexpr unsigned char kSerializationVersion = 5;
     static constexpr std::size_t kFixedHeaderSize = 1 + 64 + 4 + 4;
     static constexpr std::size_t kSetupEntrySize =
         RecoveryRootShare::kSerializedSize +
-        bppp::ScalarBytes{}.size();
+        bppp::PointBytes{}.size();
     static constexpr std::size_t kAnchorEntrySize =
         AnchorEscrowCiphertext::kSerializedSize +
-        bppp::ScalarBytes{}.size();
-    static_assert(kSetupEntrySize == 98);
-    static_assert(kAnchorEntrySize == 128);
+        bppp::PointBytes{}.size();
+    static_assert(kSetupEntrySize == 99);
+    static_assert(kAnchorEntrySize == 129);
 
     [[nodiscard]] static Result<ConstructionReceiptPayload> create(
         UInt512 recovery_root,

@@ -82,16 +82,17 @@ For `S` setup members and `A` anchors:
 | --- | ---: |
 | One ciphertext | 96 |
 | One independent child record | 1,233 |
-| One setup payload entry | 98 |
-| One anchor payload entry | 128 |
-| Compact payload | `73 + 98*S + 128*A` |
+| One setup payload entry | 99 |
+| One anchor payload entry | 129 |
+| Compact payload | `73 + 99*S + 129*A` |
 
-Each setup entry contains a full signed 66-byte share and exact 32-byte
-precommitment. The 32 bytes after each anchor ciphertext are likewise its
-exact circuit precommitment. Independent proof bodies remain out-of-band
+Each setup entry contains a full signed 66-byte share and its child proof's
+33-byte raw commitment. The 33 bytes after each anchor ciphertext are likewise
+its child proof's raw commitment, from which the verifier computes the leaf
+precommitment. Independent proof bodies remain out-of-band
 inputs to construction and are not repeated in the compact payload.
 
-The final construction proof is additional to `73 + 98*S + 128*A`. The
+The final construction proof is additional to `73 + 99*S + 129*A`. The
 qualified mixed parent proof is 15,076 bytes. Its external verifier artifact
 is authenticated independently of the scalar ciphertext relation.
 

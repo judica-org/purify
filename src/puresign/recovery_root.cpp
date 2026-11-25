@@ -974,7 +974,7 @@ ConstructionLeafAccumulator::derive_parent_constants(
     const NonceHostBoundSigningRoster& roster,
     const CoalitionFormation& formation, std::size_t member_index,
     const RecoveryRootShare& share,
-    const bppp::ScalarBytes& circuit_precommitment,
+    const bppp::PointBytes& raw_commitment,
     purify_secp_context* secp_context) const {
     PURIFY_RETURN_IF_ERROR(
         require_recovery_contribution_hash_suite(
@@ -985,17 +985,14 @@ ConstructionLeafAccumulator::derive_parent_constants(
             secp_context, "recovery_contribution_parent:context"),
         "recovery_contribution_parent:context");
     PURIFY_ASSIGN_OR_RETURN(
-        const auto precommitment,
-        bppp::candidate::CircuitPrecommitmentDigestV4::parse(
-            circuit_precommitment),
-        "recovery_contribution_parent:precommitment");
-    PURIFY_ASSIGN_OR_RETURN(
         const auto circuit, contribution_circuit(share),
         "recovery_contribution_parent:circuit");
     PURIFY_ASSIGN_OR_RETURN(
         const auto binding,
         contribution_binding(roster, formation, member_index, share),
         "recovery_contribution_parent:binding");
+    // The precommitment is recomputed from this roster-derived weighted
+    // point, which is what ties the parent's discrete-log check to it.
     PURIFY_ASSIGN_OR_RETURN(
         const auto weighted,
         weighted_member_point(roster, member_index, secp_context),
@@ -1005,11 +1002,12 @@ ConstructionLeafAccumulator::derive_parent_constants(
         auto constants,
         bppp::candidate::
             derive_circuit_norm_parent_constants_v4_with_public_commitments(
-                circuit, precommitment, outputs, secp_context, binding),
+                circuit, raw_commitment, outputs, secp_context, binding),
         "recovery_contribution_parent:derive");
     return ConstructionLeafParentConstants{
         std::move(constants.circuit_binding_digest),
         std::move(constants.raw_generator_digest),
+        constants.precommitment.bytes(),
         std::move(constants.coefficient_commitment),
         std::move(constants.anchored_offset)};
 }
@@ -1075,8 +1073,8 @@ ConstructionLeafAccumulator::prepare(
             prepare_v4_circuit_norm_for_algebraic_reduction(
                 basis_, std::move(*prepared), secp_context),
         "recovery_contribution_accumulation:norm");
-    return PreparedConstructionLeaf(circuit_precommitment,
-                                    std::move(norm));
+    return PreparedConstructionLeaf(contribution.raw_commitment_,
+                                    circuit_precommitment, std::move(norm));
 }
 
 Status RecoveryRootSetupProof::validate_encoding(

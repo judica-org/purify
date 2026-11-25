@@ -410,17 +410,21 @@ void test_anchor_escrow(TestContext& ctx) {
         "prepared anchor exposes its nonzero V4 precommitment");
     auto parent_constants = accumulator->derive_parent_constants(
         fixture->roster, anchor->public_key, punishment_key, context,
-        parsed->ciphertext(), prepared->circuit_precommitment(),
+        parsed->ciphertext(), prepared->raw_commitment(),
         secp.get());
     expect_ok(ctx, parent_constants,
               "anchor parent constants derive from public payload data");
     if (!parent_constants) return;
+    ctx.expect(parent_constants->circuit_precommitment ==
+                   prepared->circuit_precommitment(),
+               "verifier recomputes the anchor's precommitment from the "
+               "registered punishment key");
     expect_error(
         ctx,
         accumulator->derive_parent_constants(
             fixture->roster, fixture->roster.recovery_root(),
             punishment_key, context, parsed->ciphertext(),
-            prepared->circuit_precommitment(), secp.get()),
+            prepared->raw_commitment(), secp.get()),
         purify::ErrorCode::BindingMismatch,
         "parent constants reject a recovery-root alias for the anchor");
     ctx.expect(
@@ -435,28 +439,50 @@ void test_anchor_escrow(TestContext& ctx) {
     auto changed_parent_constants = accumulator->derive_parent_constants(
         fixture->roster, anchor->public_key, punishment_key,
         changed_parent_context, parsed->ciphertext(),
-        prepared->circuit_precommitment(), secp.get());
+        prepared->raw_commitment(), secp.get());
     expect_ok(ctx, changed_parent_constants,
               "changed anchor context still derives public constants");
     if (!changed_parent_constants) return;
+    // The precommitment hashes the binding digest, so it and every
+    // challenge-derived constant follow a changed context.
     ctx.expect(
         changed_parent_constants->circuit_binding_digest !=
                 parent_constants->circuit_binding_digest &&
+            changed_parent_constants->circuit_precommitment !=
+                parent_constants->circuit_precommitment &&
             changed_parent_constants->raw_generator_digest ==
-                parent_constants->raw_generator_digest &&
-            changed_parent_constants->coefficient_commitment ==
-                parent_constants->coefficient_commitment &&
-            changed_parent_constants->anchored_offset ==
-                parent_constants->anchored_offset,
-        "only the parent binding digest follows a changed public context");
+                parent_constants->raw_generator_digest,
+        "parent binding digest and precommitment follow a changed context");
     expect_error(
         ctx,
         accumulator->derive_parent_constants(
             fixture->roster, anchor->public_key, punishment_key, context,
-            parsed->ciphertext(), purify::bppp::ScalarBytes{},
+            parsed->ciphertext(), purify::bppp::PointBytes{},
             secp.get()),
-        purify::ErrorCode::RangeViolation,
-        "anchor parent constants reject a zero precommitment");
+        purify::ErrorCode::BackendRejectedInput,
+        "anchor parent constants reject an identity raw commitment");
+
+    // The parent relation proves its transcript starts from this
+    // precommitment. It is derived from the registered key, so a proof whose
+    // transcript hashed any other public point cannot match the manifest.
+    std::array<unsigned char, 32> unrelated_secret{};
+    unrelated_secret.back() = 0x5d;
+    auto unrelated_punishment =
+        purify::accountable::AnchorPunishmentKey::from_secret(
+            unrelated_secret, secp.get());
+    expect_ok(ctx, unrelated_punishment,
+              "unrelated punishment key derives");
+    if (!unrelated_punishment) return;
+    auto unrelated_parent_constants = accumulator->derive_parent_constants(
+        fixture->roster, anchor->public_key,
+        unrelated_punishment->public_key(), context, parsed->ciphertext(),
+        prepared->raw_commitment(), secp.get());
+    expect_ok(ctx, unrelated_parent_constants,
+              "parent constants derive for an unrelated registered key");
+    if (!unrelated_parent_constants) return;
+    ctx.expect(unrelated_parent_constants->circuit_precommitment !=
+                   prepared->circuit_precommitment(),
+               "anchor precommitment follows the registered punishment key");
     auto reduction =
         purify::bppp::accumulation::prove_algebraic_norm_reduction(
             accumulator->basis(), prepared->norm(), secp.get());

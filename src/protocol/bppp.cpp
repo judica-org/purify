@@ -3897,10 +3897,16 @@ namespace {
 Result<candidate::CircuitNormParentConstantsV4>
 derive_circuit_norm_parent_constants_v4_impl(
     const NativeBulletproofCircuit &circuit,
-    const candidate::CircuitPrecommitmentDigestV4 &precommitment,
+    const candidate::CircuitPrecommitmentDigestV4 *supplied_precommitment,
+    const PointBytes *raw_commitment,
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding) {
+  // Exactly one source of the precommitment is given.
+  if ((supplied_precommitment == nullptr) == (raw_commitment == nullptr)) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "circuit_parent_constants_v4:precommitment_source");
+  }
   PURIFY_RETURN_IF_ERROR(
       validate_circuit_proof_v4_inputs(
           circuit, public_commitments, secp_context, true),
@@ -3920,6 +3926,26 @@ derive_circuit_norm_parent_constants_v4_impl(
       const auto shape,
       circuit_shape_v4(circuit, true),
       "circuit_parent_constants_v4:shape");
+  std::optional<candidate::CircuitPrecommitmentDigestV4> derived_precommitment;
+  if (raw_commitment != nullptr) {
+    PURIFY_RETURN_IF_ERROR(
+        validate_finite_point_v4(
+            *raw_commitment, secp_context,
+            "circuit_parent_constants_v4:raw_commitment"),
+        "circuit_parent_constants_v4:raw_commitment");
+    // The precommitment hashes these exact public commitments. A parent that
+    // proves the same hash for its own witness is thereby bound to them.
+    PURIFY_ASSIGN_OR_RETURN(
+        auto derived,
+        candidate::derive_circuit_precommitment_v4(
+            shape, binding_digest, public_commitments, *raw_commitment,
+            secp_context),
+        "circuit_parent_constants_v4:precommitment");
+    derived_precommitment = std::move(derived.digest);
+  }
+  const candidate::CircuitPrecommitmentDigestV4 &precommitment =
+      derived_precommitment.has_value() ? *derived_precommitment
+                                        : *supplied_precommitment;
   PURIFY_ASSIGN_OR_RETURN(
       const auto raw_generator_digest,
       raw_generator_digest_v4(shape, secp_context),
@@ -3955,7 +3981,8 @@ derive_circuit_norm_parent_constants_v4_impl(
       "circuit_parent_constants_v4:anchored_offset");
   return candidate::CircuitNormParentConstantsV4{
       std::move(binding_digest), std::move(raw_generator_digest),
-      std::move(coefficient_commitment), std::move(anchored_offset)};
+      precommitment, std::move(coefficient_commitment),
+      std::move(anchored_offset)};
 }
 
 } // namespace
@@ -3963,12 +3990,24 @@ derive_circuit_norm_parent_constants_v4_impl(
 Result<candidate::CircuitNormParentConstantsV4>
 candidate::derive_circuit_norm_parent_constants_v4_with_public_commitments(
     const NativeBulletproofCircuit &circuit,
+    const PointBytes &raw_commitment,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding) {
+  return derive_circuit_norm_parent_constants_v4_impl(
+      circuit, nullptr, &raw_commitment, public_commitments, secp_context,
+      statement_binding);
+}
+
+Result<candidate::CircuitNormParentConstantsV4>
+candidate::derive_circuit_norm_parent_constants_v4_from_precommitment(
+    const NativeBulletproofCircuit &circuit,
     const CircuitPrecommitmentDigestV4 &precommitment,
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding) {
   return derive_circuit_norm_parent_constants_v4_impl(
-      circuit, precommitment, public_commitments, secp_context,
+      circuit, &precommitment, nullptr, public_commitments, secp_context,
       statement_binding);
 }
 

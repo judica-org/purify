@@ -191,8 +191,11 @@ escrow.
 ## Mixed parent receipt
 
 Member contributions remain out of band. The compact construction payload
-retains, for each member, only its 66-byte share and 32-byte circuit
-precommitment. The mixed recurrence starts from the canonical all-zero
+retains, for each member, only its 66-byte share and its child proof's
+33-byte raw commitment. The verifier computes the leaf precommitment from that
+raw commitment and the roster-derived weighted member key; see
+[construction receipts](construction-receipt.md). The mixed recurrence starts
+from the canonical all-zero
 545-byte claim, processes every setup leaf in roster order, then every anchor
 leaf, and authenticates one final pending claim. Acceptance requires both the
 recursive proof and the native final accumulation decision.
@@ -201,18 +204,22 @@ The post-cutover payload shape is:
 
 ```
 version8 || recovery_root64 || setup_count32be || anchor_count32be
-|| setup_entry[98 * N] || anchor_entry[128 * A]
+|| setup_entry[99 * N] || anchor_entry[129 * A]
 ```
 
 The qualified mixed parent proof is 15,076 bytes:
 
 ```
-15,149 + 98*N + 128*A bytes
+15,149 + 99*N + 129*A bytes
 ```
 
-At 100 setup members and 100 anchors this is 37,749 bytes. Payload v4,
-statement v5, manifest v3, the checked mixed fixtures, proof length, suite,
-and external VK2 verifier identity are qualified together. The standalone
+At 100 setup members and 100 anchors this is 37,949 bytes. Manifest v3, the
+relation, proof length, suite, and external VK2 verifier identity are
+qualified together. Payload v5 changes only how the verifier obtains each leaf
+precommitment. It leaves the relation and both artifacts unchanged, but it
+changes the construction statement digest, so the checked fixture proofs were
+regenerated with the unchanged PK1 and pass the artifact-backed gate against
+the unchanged VK2. The standalone
 prover additionally authenticates the selected external PK1 prover identity
 and that same VK2 before returning proof bytes. PK1 is transparent public
 setup material and is neither part of the receipt nor included in its size.

@@ -158,22 +158,22 @@
     "accepted_wit4": {
       "path": "tests/vectors/construction_parent_sha256_accepted.wit4",
       "bytes": 17587,
-      "sha256": "77b7331e92a538ebd1bfe90480166b298196ff4dd9a3d8f7557c202a3bab3418"
+      "sha256": "22584834f5ddb7763d05bdc631a117bed313eba1d9478a72db8f898774aec507"
     },
     "nondeciding_wit4": {
       "path": "tests/vectors/construction_parent_sha256_nondeciding.wit4",
       "bytes": 17587,
-      "sha256": "9620a21298d175d3c68a5b7b98da82e11065beae2b6048c76625a2b7303a8115"
+      "sha256": "cba7ab049fd92e36579bbe74d0c2963bacd8879991321fc3071303a92e90f10f"
     },
     "accepted_proof": {
       "path": "tests/vectors/construction_parent_sha256_accepted.proof",
       "bytes": 15076,
-      "sha256": "74b66a779134a39560185472708d94e9a1532240f7fcf9c66a88d91728e8d779"
+      "sha256": "dc507ce5580d85a58fd5ec7694b5942b57a35338d1c67fa91571d7f95c80835d"
     },
     "nondeciding_proof": {
       "path": "tests/vectors/construction_parent_sha256_nondeciding.proof",
       "bytes": 15076,
-      "sha256": "a869016dea8d439f579b8c7be6c3613bc3e5f5e9f18f6177ee27c6050038b072"
+      "sha256": "fe47397b2f939ab62f24436767f6bf8568b44d8b932935cd568f882d6efd9b96"
     }
   }
 }

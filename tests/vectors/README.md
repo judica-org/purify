@@ -34,10 +34,24 @@ relation, PK1, VK2, and 15,076-byte proof format are unchanged.
 
 | Vector | SHA256 |
 | --- | --- |
-| Accepted Wit4 | `77b7331e92a538ebd1bfe90480166b298196ff4dd9a3d8f7557c202a3bab3418` |
-| Nondeciding Wit4 | `9620a21298d175d3c68a5b7b98da82e11065beae2b6048c76625a2b7303a8115` |
-| Accepted proof | `74b66a779134a39560185472708d94e9a1532240f7fcf9c66a88d91728e8d779` |
-| Nondeciding proof | `a869016dea8d439f579b8c7be6c3613bc3e5f5e9f18f6177ee27c6050038b072` |
+| Accepted Wit4 | `22584834f5ddb7763d05bdc631a117bed313eba1d9478a72db8f898774aec507` |
+| Nondeciding Wit4 | `cba7ab049fd92e36579bbe74d0c2963bacd8879991321fc3071303a92e90f10f` |
+| Accepted proof | `dc507ce5580d85a58fd5ec7694b5942b57a35338d1c67fa91571d7f95c80835d` |
+| Nondeciding proof | `fe47397b2f939ab62f24436767f6bf8568b44d8b932935cd568f882d6efd9b96` |
+
+The two Wit4 fixtures were regenerated for construction payload version 5,
+which carries each child proof's raw commitment instead of its precommitment.
+They differ from the payload-version-4 fixtures only in bytes 16 through 47,
+the construction statement digest: every descriptor, public point, proof
+transcript, reduction, step and final root is unchanged. The relation, PK1 and
+VK2 are unchanged as well.
+
+Both checked proofs were regenerated for these Wit4 fixtures with the prover
+CLI and the unchanged PK1, one fixture per run. The CLI verified each proof
+against the unchanged VK2 before writing it, and both pass the artifact-backed
+release gate: the accepted proof is accepted, and the nondeciding proof fails
+only at the native decision boundary. The timing and memory figures below
+describe the original release gate, not these two runs.
 
 The 693,708,278-byte VK2 verifier artifact and 693,582,375-byte PK1 prover
 artifact remain external. Their authenticated identities and all vector

@@ -16,10 +16,18 @@ namespace purify::accountable {
 class RecoveryRootContribution;
 class RecoveryRootShare;
 
-/** Verifier-derived public constants consumed by one recursive parent leaf. */
+/**
+ * Verifier-derived public constants consumed by one recursive parent leaf.
+ *
+ * `circuit_precommitment` is recomputed from the leaf's registered public
+ * point and the raw commitment carried by the payload. The parent relation
+ * proves that the same value is the hash of its own witness for those two
+ * points, so its discrete-log check applies to the registered point itself.
+ */
 struct ConstructionLeafParentConstants {
     std::array<unsigned char, 32> circuit_binding_digest{};
     std::array<unsigned char, 32> raw_generator_digest{};
+    bppp::ScalarBytes circuit_precommitment{};
     bppp::PointBytes coefficient_commitment{};
     bppp::PointBytes anchored_offset{};
 };
@@ -34,7 +42,12 @@ public:
     PreparedConstructionLeaf& operator=(
         PreparedConstructionLeaf&&) noexcept = default;
 
-    /** The verifier-derived precommitment retained by the final payload. */
+    /** The proof's raw witness commitment, retained by the final payload. */
+    [[nodiscard]] const bppp::PointBytes& raw_commitment() const noexcept {
+        return raw_commitment_;
+    }
+
+    /** The precommitment this proof's transcript starts from. */
     [[nodiscard]] const bppp::ScalarBytes& circuit_precommitment()
         const noexcept {
         return circuit_precommitment_;
@@ -47,11 +60,14 @@ public:
 
 private:
     PreparedConstructionLeaf(
+        bppp::PointBytes raw_commitment,
         bppp::ScalarBytes circuit_precommitment,
         bppp::accumulation::AlgebraicPreparedNorm norm)
-        : circuit_precommitment_(circuit_precommitment),
+        : raw_commitment_(raw_commitment),
+          circuit_precommitment_(circuit_precommitment),
           norm_(std::move(norm)) {}
 
+    bppp::PointBytes raw_commitment_{};
     bppp::ScalarBytes circuit_precommitment_{};
     bppp::accumulation::AlgebraicPreparedNorm norm_;
 
@@ -90,6 +106,10 @@ public:
     /**
      * Derives the exact public constants bound by one parent recurrence leaf.
      *
+     * `raw_commitment` is the child proof's raw witness commitment as carried
+     * by the payload. The leaf precommitment is recomputed from it and the
+     * registered punishment key; it is never accepted from the payload.
+     *
      * This authenticates no proof and does not discharge an accumulation
      * obligation. Receipt acceptance must verify the recursive parent and
      * complete the final native decision.
@@ -101,7 +121,7 @@ public:
         const AnchorPunishmentPublicKey& punishment_key,
         const AnchorEscrowContextDigest& context_digest,
         const AnchorEscrowCiphertext& ciphertext,
-        const bppp::ScalarBytes& circuit_precommitment,
+        const bppp::PointBytes& raw_commitment,
         purify_secp_context* secp_context) const;
 
     /**
@@ -119,7 +139,7 @@ public:
         const AnchorPunishmentPublicKey& punishment_key,
         const AnchorEscrowContextDigest& context_digest,
         const AnchorEscrowCiphertext& ciphertext,
-        const bppp::ScalarBytes& circuit_precommitment,
+        const bppp::PointBytes& raw_commitment,
         purify_secp_context* secp_context) const;
 
     /** Derive one formation-bound recovery-contribution leaf descriptor. */
@@ -129,7 +149,7 @@ public:
         const CoalitionFormation& formation,
         std::size_t member_index,
         const RecoveryRootShare& share,
-        const bppp::ScalarBytes& circuit_precommitment,
+        const bppp::PointBytes& raw_commitment,
         purify_secp_context* secp_context) const;
 
     [[nodiscard]] Result<PreparedConstructionLeaf> prepare(

@@ -13,6 +13,7 @@
 #include <cstring>
 
 #include "bulletproof_internal.hpp"
+#include "exact_point_proof.hpp"
 #include "detail/common.hpp"
 #include "purify/bppp.hpp"
 #include "purify/curve.hpp"
@@ -121,6 +122,56 @@ Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof, purify_sec
     return xonly == nonce_proof.nonce.xonly;
 }
 
+/**
+ * The Fiat-Shamir context of the exact-point proof: the whole circuit statement and the
+ * commitment the Bulletproof is about.
+ */
+template <typename CircuitLike>
+Result<Bytes> exact_point_context(const CircuitLike& circuit, std::span<const unsigned char> statement_binding,
+                                  const bppp::PointBytes& commitment) {
+    static const TaggedHash hash("PureSign/Proof/ExactNonce/V1");
+    PURIFY_ASSIGN_OR_RETURN(const auto& circuit_digest, experimental_circuit_binding_digest(circuit, statement_binding),
+                            "exact_point_context:circuit_digest");
+    const auto digest = hash.digest_many<2>({circuit_digest, commitment});
+    return Bytes(digest.begin(), digest.end());
+}
+
+/** True when the exact-point fields are canonical: an x-only point and a nonzero scalar. */
+Result<bool> exact_point_encoding_valid(const NonceProof& nonce_proof, purify_secp_context* secp_context) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "exact_point_encoding_valid:secp_context"),
+                           "exact_point_encoding_valid:secp_context");
+    if (purify_bip340_validate_xonly_pubkey(secp_context, nonce_proof.exact_point_nonce.data()) == 0) {
+        return false;
+    }
+    const auto response = FieldElement::try_from_bytes32(nonce_proof.exact_point_response);
+    return response.has_value() && !response->is_zero();
+}
+
+/**
+ * Checks that the proof's single commitment is `v*G` for a known `v`.
+ *
+ * The Bulletproof accepts a commitment `o*G + b*H` for any blind `b`. Together with this
+ * check `b` must be zero, so the commitment is the unique point `o*G`.
+ */
+template <typename CircuitLike>
+Result<bool> verify_exact_point(const CircuitLike& circuit, const NonceProof& nonce_proof,
+                                std::span<const unsigned char> statement_binding,
+                                purify_secp_context* secp_context) {
+    if (nonce_proof.proof.commitments.size() != 1) {
+        return unexpected_error(ErrorCode::SizeMismatch, "verify_exact_point:commitments_size");
+    }
+    PURIFY_ASSIGN_OR_RETURN(const bool canonical, exact_point_encoding_valid(nonce_proof, secp_context),
+                            "verify_exact_point:encoding");
+    if (!canonical) {
+        return false;
+    }
+    const bppp::PointBytes& commitment = nonce_proof.proof.commitments.front();
+    PURIFY_ASSIGN_OR_RETURN(const auto& exact_context, exact_point_context(circuit, statement_binding, commitment),
+                            "verify_exact_point:context");
+    const bppp::detail::ExactPointProof exact{nonce_proof.exact_point_nonce, nonce_proof.exact_point_response};
+    return bppp::detail::verify_exact_point(commitment, exact_context, exact, secp_context);
+}
+
 Status validate_message_proof_cache(const MessageProofCache& cache) {
     return detail::validate_message_proof_cache(cache, kMessageNonceTag);
 }
@@ -168,14 +219,36 @@ Result<NonceProof> build_nonce_proof_from_template(const SecretKey& secret, cons
                                                 statement_binding, {},
                                                 backend_cache),
         "build_nonce_proof_from_template:prove_experimental_circuit");
+    if (proof.commitments.size() != 1 || witness.assignment.commitments.size() != 1) {
+        return unexpected_error(ErrorCode::SizeMismatch, "build_nonce_proof_from_template:commitments_size");
+    }
+    // The nonce point is public, so the nonce scalar is committed with a zero blind. The
+    // exact-point proof shows that, which is what leaves one accepted nonce. Its Schnorr nonce
+    // is derived from the prover seed, the committed scalar and this context, so one statement
+    // always yields one proof.
+    PURIFY_ASSIGN_OR_RETURN(const auto& exact_context,
+                            exact_point_context(circuit, statement_binding, proof.commitments.front()),
+                            "build_nonce_proof_from_template:exact_point_context");
+    PURIFY_ASSIGN_OR_RETURN(
+        const auto& exact,
+        bppp::detail::prove_exact_point(proof.commitments.front(), witness.assignment.commitments.front(),
+                                        exact_context, proof_nonce, secp_context),
+        "build_nonce_proof_from_template:prove_exact_point");
 
     NonceProof out{};
     out.nonce = nonce_data.nonce;
     out.proof = std::move(proof);
+    out.exact_point_nonce = exact.nonce_xonly;
+    out.exact_point_response = exact.response;
     PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(out, secp_context),
                             "build_nonce_proof_from_template:nonce_proof_matches_nonce");
     if (!match) {
         return unexpected_error(ErrorCode::InternalMismatch, "build_nonce_proof_from_template:nonce_mismatch");
+    }
+    PURIFY_ASSIGN_OR_RETURN(const bool exact_ok, verify_exact_point(circuit, out, statement_binding, secp_context),
+                            "build_nonce_proof_from_template:verify_exact_point");
+    if (!exact_ok) {
+        return unexpected_error(ErrorCode::InternalMismatch, "build_nonce_proof_from_template:exact_point_mismatch");
     }
     return out;
 }
@@ -244,6 +317,11 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key, const 
         return false;
     }
     Bytes statement_binding = proof_statement_binding(scope);
+    PURIFY_ASSIGN_OR_RETURN(const bool exact, verify_exact_point(circuit, nonce_proof, statement_binding, secp_context),
+                            context);
+    if (!exact) {
+        return false;
+    }
     return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(secp_context), secp_context, statement_binding,
                                        backend_cache);
 }
@@ -261,6 +339,11 @@ Result<bool> verify_nonce_proof_with_circuit(const PublicKey& public_key,
         return false;
     }
     Bytes statement_binding = proof_statement_binding(scope);
+    PURIFY_ASSIGN_OR_RETURN(const bool exact, verify_exact_point(circuit, nonce_proof, statement_binding, secp_context),
+                            context);
+    if (!exact) {
+        return false;
+    }
     return verify_experimental_circuit(circuit, nonce_proof.proof, bppp::base_generator(secp_context), secp_context, statement_binding,
                                        backend_cache);
 }

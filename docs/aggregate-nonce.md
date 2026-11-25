@@ -215,6 +215,14 @@ alone forces zero blinding; deployment must establish the binding of the
 combined nonce proof and Schnorr signature. No blinding masks were removed to
 claim public aggregation.
 
+PureSign's Bulletproof backend does force zero blinding for its single-nonce
+proofs. Its `NonceProof` carries a Schnorr proof that the one output
+commitment is `v * G` for a known `v`. The arithmetic proof shows the
+commitment opens to the Purify output `o` under some blind `b`; both hold
+together only for `b = 0` and `v = o`, so each key and input has exactly one
+accepted nonce. The summed and batched baselines in this document call the
+generic API directly and do not carry that proof.
+
 ## Public-only certificate preparation
 
 After a coalition completes its proof, the certificate preparer must need only

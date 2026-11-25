@@ -1288,10 +1288,10 @@ void check_v4_algebraic_circuit_adapter(
               "V4 public pending norm reaches mandatory decision");
     auto public_parent_constants = candidate::
         derive_circuit_norm_parent_constants_v4_with_public_commitments(
-            circuit, public_publication->precommitment, public_points,
-            secp, binding);
+            circuit, public_publication->proof.raw_commitment,
+            public_points, secp, binding);
     expect_ok(ctx, public_parent_constants,
-              "V4 public parent constants derive without raw A");
+              "V4 public parent constants derive from raw A");
     if (!public_parent_constants) return;
     ctx.expect(
         public_parent_constants->raw_generator_digest ==
@@ -1304,6 +1304,28 @@ void check_v4_algebraic_circuit_adapter(
             public_parent_constants->anchored_offset ==
                 (**public_prepared).transcript_input().anchored_offset,
         "V4 public parent constants match full preparation");
+    ctx.expect(public_parent_constants->precommitment.bytes() ==
+                   public_publication->precommitment.bytes(),
+               "V4 parent constants recompute the proof's precommitment");
+
+    // A parent relation proves its transcript starts from the precommitment
+    // derived here. Deriving it from the verifier's own public point is what
+    // stops a prover from running the relation against a different point.
+    auto changed_parent_constants = candidate::
+        derive_circuit_norm_parent_constants_v4_with_public_commitments(
+            circuit, public_publication->proof.raw_commitment,
+            changed_public_points, secp, binding);
+    expect_ok(ctx, changed_parent_constants,
+              "V4 parent constants derive for another public point");
+    if (!changed_parent_constants) return;
+    ctx.expect(changed_parent_constants->precommitment.bytes() !=
+                   public_publication->precommitment.bytes(),
+               "V4 parent precommitment binds the verifier's public point");
+    ctx.expect(!candidate::
+                   derive_circuit_norm_parent_constants_v4_with_public_commitments(
+                       circuit, PointBytes{}, public_points, secp, binding)
+                   .has_value(),
+               "V4 parent constants reject an identity raw commitment");
 }
 
 void check_zero_families(TestContext& ctx, purify_secp_context* secp) {

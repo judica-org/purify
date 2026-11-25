@@ -68,7 +68,7 @@ The scalar-only cutover is a new protocol suite. Old records are not accepted.
 | Item | Selected value |
 | --- | --- |
 | Escrow record version | 4 |
-| Construction payload version | 4 |
+| Construction payload version | 5 |
 | Escrow binding domain | `Purify/Accountable/AnchorEscrow/v4` |
 | Construction statement domain | `Purify/Accountable/ConstructionReceiptStatement/v5` |
 | Accumulation domain | `Purify/Accountable/ConstructionLeafAccumulation/v1` |
@@ -102,12 +102,15 @@ The ciphertext is one 64-byte ephemeral root followed by one 32-byte masked
 scalar. A construction payload is:
 
 ```
-73 + 98*S + 128*A bytes
+73 + 99*S + 129*A bytes
 ```
 
-Each 98-byte setup entry contains a full signed recovery share and its exact
-precommitment. Each 128-byte anchor entry contains the 96-byte ciphertext and
-exact v4 circuit precommitment. Anchor references, roots, punishment keys, and
+Each 99-byte setup entry contains a full signed recovery share and its child
+proof's raw commitment. Each 129-byte anchor entry contains the 96-byte
+ciphertext and its child proof's raw commitment. The verifier computes each
+leaf precommitment from that raw commitment and the registered public point,
+which is what ties the parent's discrete-log check to the registered
+punishment key. Anchor references, roots, punishment keys, and
 context digests are resolved from the registry and authenticated by the
 construction statement rather than duplicated in the compact payload.
 

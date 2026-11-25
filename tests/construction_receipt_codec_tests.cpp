@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <iostream>
+#include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -90,6 +93,27 @@ Result<AnchorPunishmentPublicKey> punishment_key(unsigned char marker) {
     return AnchorPunishmentPublicKey::create(xonly, secp.get());
 }
 
+/** A finite, canonically encoded secp256k1 point standing in for a child proof's raw commitment. */
+Result<purify::bppp::PointBytes> raw_commitment(unsigned char marker) {
+    auto secp = purify::make_secp_context();
+    if (!secp) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BackendRejectedInput,
+            "construction_receipt_codec_test:secp_context");
+    }
+    std::array<unsigned char, 32> scalar{};
+    scalar.back() = marker;
+    purify::bppp::PointBytes point{};
+    point[0] = 0x02;
+    if (purify_bip340_key_from_seckey(
+            secp.get(), scalar.data(), point.data() + 1) == 0) {
+        return purify::unexpected_error(
+            purify::ErrorCode::BackendRejectedInput,
+            "construction_receipt_codec_test:raw_commitment");
+    }
+    return point;
+}
+
 Result<ResolvedConstructionSetupDigest> resolved_setup(
     unsigned char marker) {
     ResolvedConstructionSetupDigestBytes digest{};
@@ -105,9 +129,12 @@ Result<ReceiptFixture> make_fixture() {
             auto share, recovery_share(scalar),
             "construction_receipt_codec_test:share");
         shares.push_back(share);
+        PURIFY_ASSIGN_OR_RETURN(
+            const auto setup_raw_commitment,
+            raw_commitment(static_cast<unsigned char>(20 + scalar)),
+            "construction_receipt_codec_test:setup_raw_commitment");
         fixture.setup_entries.emplace_back(
-            std::move(share),
-            FieldElement::from_u64(20 + scalar).to_bytes_be());
+            std::move(share), setup_raw_commitment);
     }
     PURIFY_ASSIGN_OR_RETURN(
         const auto aggregate,
@@ -122,8 +149,9 @@ Result<ReceiptFixture> make_fixture() {
         "construction_receipt_codec_test:ephemeral_0");
     fixture.anchor_entries[0].ciphertext.masked_scalar =
         FieldElement::from_u64(11);
-    fixture.anchor_entries[0].circuit_precommitment =
-        FieldElement::from_u64(31).to_bytes_be();
+    PURIFY_ASSIGN_OR_RETURN(fixture.anchor_entries[0].raw_commitment,
+                            raw_commitment(31),
+                            "construction_receipt_codec_test:raw_commitment_0");
 
     PURIFY_ASSIGN_OR_RETURN(
         fixture.anchor_entries[1].ciphertext.ephemeral_key,
@@ -131,8 +159,9 @@ Result<ReceiptFixture> make_fixture() {
         "construction_receipt_codec_test:ephemeral_1");
     fixture.anchor_entries[1].ciphertext.masked_scalar =
         FieldElement::from_u64(21);
-    fixture.anchor_entries[1].circuit_precommitment =
-        FieldElement::from_u64(32).to_bytes_be();
+    PURIFY_ASSIGN_OR_RETURN(fixture.anchor_entries[1].raw_commitment,
+                            raw_commitment(32),
+                            "construction_receipt_codec_test:raw_commitment_1");
 
     fixture.resolved.reserve(2);
     for (std::size_t i = 0; i < 2; ++i) {
@@ -168,19 +197,19 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
     expect_ok(ctx, payload, "canonical payload constructs");
     if (!payload) return;
 
-    constexpr std::size_t kExpectedSize = 73 + 2 * 98 + 2 * 128;
+    constexpr std::size_t kExpectedSize = 73 + 2 * 99 + 2 * 129;
     static_assert(ConstructionReceiptPayload::kFixedHeaderSize == 73);
-    static_assert(ConstructionReceiptPayload::kSetupEntrySize == 98);
-    static_assert(ConstructionReceiptPayload::kAnchorEntrySize == 128);
+    static_assert(ConstructionReceiptPayload::kSetupEntrySize == 99);
+    static_assert(ConstructionReceiptPayload::kAnchorEntrySize == 129);
     const Bytes encoded = payload->serialize();
     ctx.expect(payload->serialized_size() == kExpectedSize,
                "reported size accounts for every fixed field");
     ctx.expect(encoded.size() == kExpectedSize,
-               "wire size is exactly 73 + 98*N + 128*A bytes");
+               "wire size is exactly 73 + 99*N + 129*A bytes");
     ctx.expect(encoded[0] ==
                        ConstructionReceiptPayload::kSerializationVersion &&
-                   encoded[0] == 4,
-               "wire starts with construction receipt version 4");
+                   encoded[0] == 5,
+               "wire starts with construction receipt version 5");
     const auto recovery_root_bytes = fixture->recovery_root.to_bytes_be();
     ctx.expect(std::equal(recovery_root_bytes.begin(),
                           recovery_root_bytes.end(),
@@ -201,11 +230,11 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
                "setup entry starts with its exact signed share");
     ctx.expect(
         std::equal(
-            fixture->setup_entries[0].circuit_precommitment.begin(),
-            fixture->setup_entries[0].circuit_precommitment.end(),
+            fixture->setup_entries[0].raw_commitment.begin(),
+            fixture->setup_entries[0].raw_commitment.end(),
             encoded.begin() + kFirstSetupOffset +
                 RecoveryRootShare::kSerializedSize),
-        "setup entry appends its exact precommitment");
+        "setup entry appends its exact raw commitment");
 
     constexpr std::size_t kFirstCiphertextOffset =
         ConstructionReceiptPayload::kFixedHeaderSize +
@@ -222,15 +251,15 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
                           first_masked.end(),
                           encoded.begin() + kFirstCiphertextOffset + 64),
                "ciphertext appends its 32-byte masked scalar");
-    constexpr std::size_t kFirstPrecommitmentOffset =
+    constexpr std::size_t kFirstRawCommitmentOffset =
         kFirstCiphertextOffset +
         purify::accountable::AnchorEscrowCiphertext::kSerializedSize;
     ctx.expect(
         std::equal(
-            fixture->anchor_entries[0].circuit_precommitment.begin(),
-            fixture->anchor_entries[0].circuit_precommitment.end(),
-            encoded.begin() + kFirstPrecommitmentOffset),
-        "entry appends its exact 32-byte circuit precommitment");
+            fixture->anchor_entries[0].raw_commitment.begin(),
+            fixture->anchor_entries[0].raw_commitment.end(),
+            encoded.begin() + kFirstRawCommitmentOffset),
+        "entry appends its exact 33-byte raw commitment");
     constexpr std::size_t kSecondEntryOffset =
         kFirstCiphertextOffset +
         ConstructionReceiptPayload::kAnchorEntrySize;
@@ -241,12 +270,12 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
                    second_entry_ephemeral.end(),
                    encoded.begin() + kSecondEntryOffset) &&
             std::equal(
-                fixture->anchor_entries[1].circuit_precommitment.begin(),
-                fixture->anchor_entries[1].circuit_precommitment.end(),
+                fixture->anchor_entries[1].raw_commitment.begin(),
+                fixture->anchor_entries[1].raw_commitment.end(),
                 encoded.begin() + kSecondEntryOffset +
                     purify::accountable::AnchorEscrowCiphertext::
                         kSerializedSize),
-        "entry stride is exactly 128 bytes");
+        "entry stride is exactly 129 bytes");
 
     auto decoded = ConstructionReceiptPayload::deserialize(encoded);
     expect_ok(ctx, decoded, "canonical wire payload decodes");
@@ -262,11 +291,11 @@ void test_canonical_layout_and_round_trip(TestContext& ctx) {
         "round trip preserves both typed entry counts");
     ctx.expect(
         decoded->setup_entries()[0].share.serialize() == first_share &&
-            decoded->anchor_entries()[0].circuit_precommitment ==
-                fixture->anchor_entries[0].circuit_precommitment &&
-            decoded->anchor_entries()[1].circuit_precommitment ==
-                fixture->anchor_entries[1].circuit_precommitment,
-        "round trip preserves every circuit precommitment");
+            decoded->anchor_entries()[0].raw_commitment ==
+                fixture->anchor_entries[0].raw_commitment &&
+            decoded->anchor_entries()[1].raw_commitment ==
+                fixture->anchor_entries[1].raw_commitment,
+        "round trip preserves every raw commitment");
 }
 
 void test_construction_invariants(TestContext& ctx) {
@@ -295,27 +324,39 @@ void test_construction_invariants(TestContext& ctx) {
                  purify::ErrorCode::RangeViolation,
                  "out-of-range recovery roots are rejected");
 
-    auto zero_precommitment = fixture->anchor_entries;
-    zero_precommitment[0].circuit_precommitment = {};
+    auto identity_raw_commitment = fixture->anchor_entries;
+    identity_raw_commitment[0].raw_commitment = {};
     expect_error(
         ctx,
         ConstructionReceiptPayload::create(
             fixture->recovery_root, fixture->setup_entries,
-            std::move(zero_precommitment)),
+            std::move(identity_raw_commitment)),
         purify::ErrorCode::RangeViolation,
-        "zero circuit precommitments are rejected on create");
+        "identity raw commitments are rejected on create");
 
-    auto noncanonical_precommitment = fixture->setup_entries;
-    noncanonical_precommitment[0].circuit_precommitment =
-        purify::prime_p().to_bytes_be();
+    // An x coordinate at or above the field prime is not a canonical point.
+    auto noncanonical_raw_commitment = fixture->setup_entries;
+    noncanonical_raw_commitment[0].raw_commitment.fill(0xff);
+    noncanonical_raw_commitment[0].raw_commitment[0] = 0x02;
     expect_error(
         ctx,
         ConstructionReceiptPayload::create(
             fixture->recovery_root,
-            std::move(noncanonical_precommitment),
+            std::move(noncanonical_raw_commitment),
             fixture->anchor_entries),
         purify::ErrorCode::RangeViolation,
-        "noncanonical circuit precommitments are rejected on create");
+        "noncanonical raw commitments are rejected on create");
+
+    auto wrong_prefix_raw_commitment = fixture->setup_entries;
+    wrong_prefix_raw_commitment[0].raw_commitment[0] = 0x04;
+    expect_error(
+        ctx,
+        ConstructionReceiptPayload::create(
+            fixture->recovery_root,
+            std::move(wrong_prefix_raw_commitment),
+            fixture->anchor_entries),
+        purify::ErrorCode::RangeViolation,
+        "raw commitments must use a compressed prefix");
 }
 
 void test_noncanonical_and_framing_rejection(TestContext& ctx) {
@@ -340,14 +381,14 @@ void test_noncanonical_and_framing_rejection(TestContext& ctx) {
     ctx.expect(!ConstructionReceiptPayload::deserialize(truncated_entry),
                "whole-entry truncation is rejected by the count");
 
-    auto truncated_precommitment = encoded;
-    truncated_precommitment.erase(
-        truncated_precommitment.end() - 32,
-        truncated_precommitment.end());
+    auto truncated_raw_commitment = encoded;
+    truncated_raw_commitment.erase(
+        truncated_raw_commitment.end() - 33,
+        truncated_raw_commitment.end());
     ctx.expect(
         !ConstructionReceiptPayload::deserialize(
-            truncated_precommitment),
-        "truncated circuit precommitment is rejected by framing");
+            truncated_raw_commitment),
+        "truncated raw commitment is rejected by framing");
 
     auto trailing = encoded;
     trailing.push_back(0);
@@ -436,28 +477,27 @@ void test_noncanonical_and_framing_rejection(TestContext& ctx) {
     ctx.expect(!ConstructionReceiptPayload::deserialize(invalid_scalar),
                "noncanonical masked scalars are rejected");
 
-    constexpr std::size_t kFirstPrecommitment =
+    constexpr std::size_t kFirstRawCommitment =
         kFirstCiphertext +
         purify::accountable::AnchorEscrowCiphertext::kSerializedSize;
-    auto zero_precommitment = encoded;
-    std::fill_n(zero_precommitment.begin() + kFirstPrecommitment,
-                32, 0);
+    auto identity_raw_commitment = encoded;
+    std::fill_n(identity_raw_commitment.begin() + kFirstRawCommitment,
+                33, 0);
     expect_error(
         ctx,
-        ConstructionReceiptPayload::deserialize(zero_precommitment),
+        ConstructionReceiptPayload::deserialize(identity_raw_commitment),
         purify::ErrorCode::RangeViolation,
-        "zero circuit precommitments are rejected on decode");
+        "identity raw commitments are rejected on decode");
 
-    auto noncanonical_precommitment = encoded;
-    std::copy(
-        modulus.begin(), modulus.end(),
-        noncanonical_precommitment.begin() + kFirstPrecommitment);
+    auto noncanonical_raw_commitment = encoded;
+    std::fill_n(noncanonical_raw_commitment.begin() + kFirstRawCommitment + 1,
+                32, 0xff);
     expect_error(
         ctx,
         ConstructionReceiptPayload::deserialize(
-            noncanonical_precommitment),
+            noncanonical_raw_commitment),
         purify::ErrorCode::RangeViolation,
-        "noncanonical circuit precommitments are rejected on decode");
+        "noncanonical raw commitments are rejected on decode");
 
 }
 
@@ -479,8 +519,8 @@ void test_parent_envelope_layout_and_syntax(TestContext& ctx) {
     if (!envelope) return;
     const Bytes encoded = envelope->serialize();
     const std::size_t expected_size =
-        73 + 98 * fixture->setup_entries.size() +
-        128 * fixture->anchor_entries.size() + parent_proof.size();
+        73 + 99 * fixture->setup_entries.size() +
+        129 * fixture->anchor_entries.size() + parent_proof.size();
     ctx.expect(envelope->serialized_size() == expected_size &&
                    encoded.size() == expected_size,
                "envelope uses the qualified 15,076-byte parent proof");
@@ -541,12 +581,18 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     expect_ok(ctx, digest, "statement digest constructs");
     if (!digest) return;
 #if !PURIFY_USE_LEGACY_FIELD_HASHES
-    ctx.expect(
+    const std::string digest_hex =
         purify::UInt256::from_bytes_be(digest->data(), digest->size())
-                .to_hex() ==
-            "ce8734bae36717a69f9f5286ef5f0ff1"
-            "9fdff2358e22ef3123cdcc31492ee231",
-        "statement digest matches the canonical V5 tagged-hash vector");
+            .to_hex();
+    constexpr std::string_view kExpectedDigestHex =
+        "ce4c5f2679c534132a4dfe9794928c0d"
+        "37f8c82782d4c6eaa7284465b064cd6c";
+    if (digest_hex != kExpectedDigestHex) {
+        std::cerr << "      actual: " << digest_hex << "\n";
+    }
+    ctx.expect(digest_hex == kExpectedDigestHex,
+               "statement digest matches the canonical V5 tagged-hash vector "
+               "for a version 5 payload");
 #endif
     auto repeated =
         purify::accountable::construction_receipt_statement_digest(
@@ -705,23 +751,26 @@ void test_statement_digest_binds_all_inputs(TestContext& ctx) {
     ctx.expect(*changed_ciphertext_digest != *digest,
                "statement digest binds every ciphertext byte");
 
-    auto changed_precommitment = *fixture;
-    changed_precommitment.anchor_entries[0].circuit_precommitment =
-        FieldElement::from_u64(33).to_bytes_be();
-    auto changed_precommitment_payload =
-        make_payload(changed_precommitment);
-    expect_ok(ctx, changed_precommitment_payload,
-              "changed circuit precommitment payload constructs");
-    if (!changed_precommitment_payload) return;
-    auto changed_precommitment_digest =
+    auto changed_raw_commitment = *fixture;
+    auto other_raw_commitment = raw_commitment(33);
+    expect_ok(ctx, other_raw_commitment, "another raw commitment derives");
+    if (!other_raw_commitment) return;
+    changed_raw_commitment.anchor_entries[0].raw_commitment =
+        *other_raw_commitment;
+    auto changed_raw_commitment_payload =
+        make_payload(changed_raw_commitment);
+    expect_ok(ctx, changed_raw_commitment_payload,
+              "changed raw commitment payload constructs");
+    if (!changed_raw_commitment_payload) return;
+    auto changed_raw_commitment_digest =
         purify::accountable::construction_receipt_statement_digest(
-            *changed_precommitment_payload, *setup,
-            changed_precommitment.resolved);
-    expect_ok(ctx, changed_precommitment_digest,
-              "changed circuit precommitment digest constructs");
-    if (!changed_precommitment_digest) return;
-    ctx.expect(*changed_precommitment_digest != *digest,
-               "statement digest binds every circuit precommitment");
+            *changed_raw_commitment_payload, *setup,
+            changed_raw_commitment.resolved);
+    expect_ok(ctx, changed_raw_commitment_digest,
+              "changed raw commitment digest constructs");
+    if (!changed_raw_commitment_digest) return;
+    ctx.expect(*changed_raw_commitment_digest != *digest,
+               "statement digest binds every raw commitment");
 
     auto reordered_setup = *fixture;
     std::swap(reordered_setup.setup_entries[0],

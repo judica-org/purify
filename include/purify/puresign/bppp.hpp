@@ -5,6 +5,12 @@
 /**
  * @file puresign/bppp.hpp
  * @brief Experimental BPPP-backed PureSign proof(R) helpers.
+ *
+ * A message-bound nonce signs only its own message. A topic-bound nonce is derived from the topic
+ * alone, so every call for one secret and topic yields the same nonce. Sign at most one message per
+ * topic: two different messages signed under one topic reveal the BIP340 secret key to anyone who
+ * sees both signatures. This is deliberate. The accountable layer relies on it to expose a signer
+ * who equivocates within a slot. Nothing here records which topics have been used; the caller must.
  */
 
 #pragma once
@@ -329,6 +335,10 @@ struct ProvenSignature {
  *
  * The public nonce is safe to send over the wire. The secret scalar is intentionally not
  * serializable and is wiped on destruction and after moves.
+ *
+ * @warning Being move-only makes one object single-use, not one nonce. Preparing the same topic
+ * again yields the same nonce, and `scalar()` returns a copy without consuming the object. Signing
+ * two different messages with one nonce reveals the BIP340 secret key.
  */
 class PreparedNonce {
 public:
@@ -399,6 +409,8 @@ public:
      * @param signer The BIP340 signer derived from the same secret as this prepared nonce.
      * @param message The message to sign.
      * @return The resulting BIP340 signature.
+     * @warning The message is not checked against the topic. A second message signed under the
+     * same topic, through any prepared nonce, reveals the BIP340 secret key.
      */
     [[nodiscard]] Result<Signature> sign_topic_message(const Bip340Key& signer,
                                                        std::span<const unsigned char> message,
@@ -489,6 +501,7 @@ public:
      * @param secret The owned secret corresponding to the prepared nonce.
      * @param message The message to sign.
      * @return The resulting signature bundled with its nonce proof.
+     * @warning A second message signed under the same topic reveals the BIP340 secret key.
      */
     [[nodiscard]] Result<ProvenSignature> sign_topic_message(const SecretKey& secret,
                                                              std::span<const unsigned char> message,
@@ -568,6 +581,8 @@ public:
      * @brief Deterministically prepares a topic-bound nonce.
      * @param topic The topic to bind into the nonce derivation.
      * @return The move-only prepared nonce.
+     * @warning Every call with the same topic returns the same nonce. Use each topic for one
+     * message only; a second message reveals the BIP340 secret key.
      */
     [[nodiscard]] Result<PreparedNonce> prepare_topic_nonce(std::span<const unsigned char> topic,
                                                             purify_secp_context* secp_context) const;
@@ -628,6 +643,9 @@ public:
      * @param message The message to sign.
      * @param topic The topic that the nonce must be bound to.
      * @return The resulting BIP340 signature.
+     * @warning The nonce depends on the topic, not the message. Calling this twice with one topic
+     * and two different messages reveals the BIP340 secret key. This call keeps no state, so the
+     * caller must ensure each topic is used once. Use `sign_message` when no topic is needed.
      */
     [[nodiscard]] Result<Signature> sign_with_topic(std::span<const unsigned char> message,
                                                     std::span<const unsigned char> topic,
@@ -681,6 +699,7 @@ public:
      * @param topic The topic that the nonce proof must bind to.
      * @param circuit_cache Optional BPPP prover cache to reuse across calls.
      * @return The resulting signature-plus-proof bundle.
+     * @warning Signing two different messages under one topic reveals the BIP340 secret key.
      */
     [[nodiscard]] Result<ProvenSignature> sign_with_topic_proof(
         std::span<const unsigned char> message,
@@ -694,6 +713,7 @@ public:
      * @param cache The prebuilt cache for the exact topic bound into the proof.
      * @param circuit_cache Optional BPPP prover cache to reuse across calls.
      * @return The resulting signature-plus-proof bundle.
+     * @warning Signing two different messages under one topic reveals the BIP340 secret key.
      */
     [[nodiscard]] Result<ProvenSignature> sign_with_topic_proof(
         std::span<const unsigned char> message,

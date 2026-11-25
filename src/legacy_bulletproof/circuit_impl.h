@@ -407,7 +407,12 @@ static int secp256k1_bulletproof_relation66_verify_impl(const secp256k1_ecmult_c
     size_t i;
 
     /* sanity-check input */
-    if (plen < 64 + 256 + 1) {  /* inner product argument will do a more precise check */
+    /* The fixed prefix is taux and mu (64 bytes), then one sign byte and eight
+     * x-coordinates (1 + 256 bytes). This function also reads the 32-byte
+     * scalar t from the front of the inner product proof, so the prefix alone
+     * is not enough: a shorter buffer would be read past its end. The inner
+     * product argument still checks the exact length. */
+    if (plen < 64 + 256 + 1 + 32) {
         return 0;
     }
     if (plen > SECP256K1_BULLETPROOF_MAX_PROOF) {

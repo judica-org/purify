@@ -651,6 +651,87 @@ int purify_sha256_many(unsigned char output32[32],
   return 1;
 }
 
+/* The public prefix type mirrors secp256k1_sha256 so it can be copied in and out. */
+_Static_assert(sizeof(purify_sha256_prefix) == sizeof(secp256k1_sha256),
+               "purify_sha256_prefix must match secp256k1_sha256");
+_Static_assert(offsetof(purify_sha256_prefix, buffer) == offsetof(secp256k1_sha256, buf) &&
+                   offsetof(purify_sha256_prefix, bytes) == offsetof(secp256k1_sha256, bytes),
+               "purify_sha256_prefix must lay out like secp256k1_sha256");
+
+/* Writes every item to `sha256`. Returns zero for a NULL item with nonzero length. */
+static int purify_sha256_write_items(secp256k1_sha256* sha256,
+                                     const unsigned char* const* items,
+                                     const size_t* item_lens,
+                                     size_t items_count) {
+    size_t i;
+    if (items_count != 0 && (items == NULL || item_lens == NULL)) {
+        return 0;
+    }
+    for (i = 0; i < items_count; ++i) {
+        if (items[i] == NULL) {
+            if (item_lens[i] != 0) {
+                return 0;
+            }
+            continue;
+        }
+        if (item_lens[i] != 0) {
+            secp256k1_sha256_write(sha256, items[i], item_lens[i]);
+        }
+    }
+    return 1;
+}
+
+int purify_sha256_prefix_init(purify_sha256_prefix* prefix,
+                              const unsigned char* const* items,
+                              const size_t* item_lens,
+                              size_t items_count) {
+    secp256k1_sha256 sha256;
+    int ok;
+    if (prefix == NULL) {
+        return 0;
+    }
+    secp256k1_sha256_initialize(&sha256);
+    ok = purify_sha256_write_items(&sha256, items, item_lens, items_count);
+    if (ok) {
+        memcpy(prefix, &sha256, sizeof(*prefix));
+    } else {
+        purify_bridge_secure_clear(prefix, sizeof(*prefix));
+    }
+    secp256k1_sha256_clear(&sha256);
+    return ok;
+}
+
+int purify_sha256_prefix_finish(const purify_sha256_prefix* prefix,
+                                unsigned char output32[32],
+                                const unsigned char* const* items,
+                                const size_t* item_lens,
+                                size_t items_count) {
+    secp256k1_sha256 sha256;
+    int ok;
+    if (output32 == NULL) {
+        return 0;
+    }
+    if (prefix == NULL) {
+        memset(output32, 0, 32);
+        return 0;
+    }
+    memcpy(&sha256, prefix, sizeof(sha256));
+    ok = purify_sha256_write_items(&sha256, items, item_lens, items_count);
+    if (ok) {
+        secp256k1_sha256_finalize(&sha256, output32);
+    } else {
+        memset(output32, 0, 32);
+    }
+    secp256k1_sha256_clear(&sha256);
+    return ok;
+}
+
+void purify_sha256_prefix_clear(purify_sha256_prefix* prefix) {
+    if (prefix != NULL) {
+        purify_bridge_secure_clear(prefix, sizeof(*prefix));
+    }
+}
+
 void purify_hmac_sha256(unsigned char output32[32],
                         const unsigned char* key, size_t key_len,
                         const unsigned char* data, size_t data_len) {

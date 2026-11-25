@@ -210,11 +210,10 @@ Result<Bytes> serialize_accepted_construction_parent_witness(
                 resolved_setup.roster(), resolved_setup.formation(),
                 index, witness.contribution, secp_context, cache),
             "construction_parent_witness:prepare_setup");
-        if (prepared.circuit_precommitment() !=
-            entry.circuit_precommitment) {
+        if (prepared.raw_commitment() != entry.raw_commitment) {
             return unexpected_error(
                 ErrorCode::BindingMismatch,
-                "construction_parent_witness:setup_precommitment");
+                "construction_parent_witness:setup_raw_commitment");
         }
         PURIFY_ASSIGN_OR_RETURN(
             auto leaf,
@@ -247,11 +246,10 @@ Result<Bytes> serialize_accepted_construction_parent_witness(
                 resolved.punishment_key, resolved.context_digest,
                 witness.record, secp_context, cache),
             "construction_parent_witness:prepare_anchor");
-        if (prepared.circuit_precommitment() !=
-            entry.circuit_precommitment) {
+        if (prepared.raw_commitment() != entry.raw_commitment) {
             return unexpected_error(
                 ErrorCode::BindingMismatch,
-                "construction_parent_witness:anchor_precommitment");
+                "construction_parent_witness:anchor_raw_commitment");
         }
         PURIFY_ASSIGN_OR_RETURN(
             auto leaf,

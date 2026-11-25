@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string_view>
@@ -132,8 +133,8 @@ void test_puresign_message_signing(TestContext& ctx) {
         Result<Bytes> nonce_proof_bytes = proven->nonce_proof.serialize(context.get());
         expect_ok(ctx, nonce_proof_bytes, "NonceProof serializes");
         if (nonce_proof_bytes.has_value()) {
-            ctx.expect(!nonce_proof_bytes->empty() && (*nonce_proof_bytes)[0] == 2,
-                       "NonceProof uses the unique-derivation wire format version");
+            ctx.expect(!nonce_proof_bytes->empty() && (*nonce_proof_bytes)[0] == 3,
+                       "NonceProof uses the exact-point wire format version");
             Result<purify::puresign::NonceProof> parsed_nonce_proof =
                 purify::puresign::NonceProof::deserialize(*nonce_proof_bytes, context.get());
             expect_ok(ctx, parsed_nonce_proof, "NonceProof round-trips");
@@ -150,6 +151,20 @@ void test_puresign_message_signing(TestContext& ctx) {
             expect_error(ctx, purify::puresign::NonceProof::deserialize(legacy_nonce_proof, context.get()),
                          ErrorCode::BackendRejectedInput,
                          "NonceProof rejects the old counter-bearing wire format");
+
+            Bytes unpinned_nonce_proof = *nonce_proof_bytes;
+            unpinned_nonce_proof[0] = 2;
+            expect_error(ctx, purify::puresign::NonceProof::deserialize(unpinned_nonce_proof, context.get()),
+                         ErrorCode::BackendRejectedInput,
+                         "NonceProof rejects the version without an exact-point proof");
+
+            // The exact-point response sits after the version, the length and two x coordinates.
+            Bytes zero_response_nonce_proof = *nonce_proof_bytes;
+            std::fill_n(zero_response_nonce_proof.begin() + 69, 32, static_cast<unsigned char>(0));
+            expect_error(ctx,
+                         purify::puresign::NonceProof::deserialize(zero_response_nonce_proof, context.get()),
+                         ErrorCode::BackendRejectedInput,
+                         "NonceProof rejects a zero exact-point response");
         }
 
         Result<Bytes> proven_bytes = proven->serialize(context.get());
@@ -238,6 +253,92 @@ void test_puresign_message_signing(TestContext& ctx) {
             ctx.expect(*reparsed_verified, "parsed PureSign artifacts verify");
         }
     }
+}
+
+/**
+ * The Bulletproof accepts a commitment `o*G + b*H` to the Purify output for any blind `b`.
+ * Without the exact-point proof a key holder could therefore present a different "proven"
+ * nonce for the same key and message with every new `b`.
+ */
+void test_puresign_bulletproof_nonce_is_unique(TestContext& ctx) {
+    Result<SecretKey> secret = sample_secret();
+    expect_ok(ctx, secret, "sample secret parses for the unique-nonce check");
+    purify::SecpContextPtr context = make_test_secp_context(ctx);
+    if (!secret.has_value() || context == nullptr) {
+        return;
+    }
+    const Bytes message = sample_message();
+    Result<purify::puresign::KeyPair> key_pair = purify::puresign::KeyPair::from_secret(*secret, context.get());
+    Result<purify::puresign::MessageProofCache> cache = purify::puresign::MessageProofCache::build(message);
+    expect_ok(ctx, key_pair, "unique-nonce fixture derives the key pair");
+    expect_ok(ctx, cache, "unique-nonce fixture builds the message template");
+    if (!key_pair.has_value() || !cache.has_value()) {
+        return;
+    }
+    const purify::puresign::PublicKey& public_key = key_pair->public_key();
+    Result<purify::puresign::PreparedNonceWithProof> honest =
+        key_pair->prepare_message_nonce_with_proof(message, context.get());
+    expect_ok(ctx, honest, "unique-nonce fixture prepares the honest proof");
+    if (!honest.has_value()) {
+        return;
+    }
+    Result<bool> honest_ok = public_key.verify_message_nonce_proof(message, honest->proof(), context.get());
+    ctx.expect(honest_ok.has_value() && *honest_ok, "the honest nonce proof verifies");
+
+    // Prove the same statement again, but commit to the output with a nonzero blind.
+    Result<purify::BulletproofWitnessData> witness = purify::prove_assignment_data(cache->eval_input, *secret);
+    expect_ok(ctx, witness, "unique-nonce fixture derives the witness");
+    if (!witness.has_value()) {
+        return;
+    }
+    Result<purify::NativeBulletproofCircuit> circuit = cache->circuit_template.instantiate(witness->public_key);
+    expect_ok(ctx, circuit, "unique-nonce fixture instantiates the circuit");
+    if (!circuit.has_value()) {
+        return;
+    }
+    const Bytes binding = purify::bytes_from_ascii("PureSign/Proof/Message/V1");
+    const auto generator = purify::bppp::base_generator(context.get());
+    purify::BulletproofScalarBytes seed{};
+    seed.fill(0x6b);
+    std::array<purify::BulletproofScalarBytes, 1> blinds{};
+    blinds[0].back() = 9;
+    Result<purify::ExperimentalBulletproofProof> blinded = purify::prove_experimental_circuit(
+        *circuit, witness->assignment, seed, generator, context.get(), binding, blinds);
+    expect_ok(ctx, blinded, "a blinded proof of the same statement constructs");
+    if (!blinded.has_value() || blinded->commitments.size() != 1) {
+        return;
+    }
+    Result<bool> blinded_circuit_ok =
+        purify::verify_experimental_circuit(*circuit, *blinded, generator, context.get(), binding);
+    ctx.expect(blinded_circuit_ok.has_value() && *blinded_circuit_ok,
+               "the Bulletproof alone accepts the blinded commitment");
+
+    purify::puresign::NonceProof forged{};
+    forged.proof = *blinded;
+    int parity = 0;
+    ctx.expect(purify_bip340_xonly_from_point(context.get(), forged.proof.commitments.front().data(),
+                                              forged.nonce.xonly.data(), &parity) != 0,
+               "the blinded commitment is a valid point");
+    ctx.expect(forged.nonce.xonly != honest->public_nonce().xonly,
+               "the blinded commitment names a different nonce");
+    // The forger cannot produce an exact-point proof for the blinded point. Replaying the
+    // honest one is the closest available input.
+    forged.exact_point_nonce = honest->proof().exact_point_nonce;
+    forged.exact_point_response = honest->proof().exact_point_response;
+    Result<bool> forged_ok = public_key.verify_message_nonce_proof(message, forged, context.get());
+    ctx.expect(forged_ok.has_value() && !*forged_ok, "a second nonce for the same key and message is rejected");
+
+    purify::puresign::NonceProof wrong_response = honest->proof();
+    wrong_response.exact_point_response.back() ^= 1;
+    Result<bool> wrong_response_ok =
+        public_key.verify_message_nonce_proof(message, wrong_response, context.get());
+    ctx.expect(wrong_response_ok.has_value() && !*wrong_response_ok,
+               "a changed exact-point response is rejected");
+
+    purify::puresign::NonceProof zero_response = honest->proof();
+    zero_response.exact_point_response.fill(0);
+    Result<bool> zero_response_ok = public_key.verify_message_nonce_proof(message, zero_response, context.get());
+    ctx.expect(zero_response_ok.has_value() && !*zero_response_ok, "a zero exact-point response is rejected");
 }
 
 void test_puresign_topic_signing(TestContext& ctx) {
@@ -994,6 +1095,7 @@ void test_puresign_plusplus_topic_proof_cache_clone_for_thread(TestContext& ctx)
 
 void run_puresign_tests(purify_test::TestContext& ctx) {
     test_puresign_message_signing(ctx);
+    test_puresign_bulletproof_nonce_is_unique(ctx);
     test_puresign_topic_signing(ctx);
     test_puresign_topic_proof_cache_clone_for_thread(ctx);
     test_puresign_binding_checks(ctx);

@@ -1177,7 +1177,7 @@ CertificateNonceLeafAccumulator::derive_parent_constants_from_public_data(
     PURIFY_ASSIGN_OR_RETURN(
         auto constants,
         bppp::candidate::
-            derive_circuit_norm_parent_constants_v4_with_public_commitments(
+            derive_circuit_norm_parent_constants_v4_from_precommitment(
                 circuit, precommitment, public_commitments, secp_context,
                 statement_binding),
         "certificate_nonce_leaf_parent:derive");

@@ -165,20 +165,43 @@ prepare_circuit_zk_norm_arg_v4_impl(
 struct CircuitNormParentConstantsV4 {
   TranscriptDigest circuit_binding_digest{};
   TranscriptDigest raw_generator_digest{};
+  /** The precommitment the challenges below were derived from. */
+  CircuitPrecommitmentDigestV4 precommitment;
   PointBytes coefficient_commitment{};
   PointBytes anchored_offset{};
 };
 
 /**
- * Derive public-leaf constants from a public nonzero precommitment.
+ * Derive public-leaf constants from the proof's public raw commitment.
  *
- * A parent relation must separately constrain this precommitment to the
- * private raw commitment and returned circuit binding digest, while binding
- * the exact ordered public commitments. These derived constants alone do not
- * authenticate a caller-supplied precommitment.
+ * The precommitment is recomputed here from the circuit binding, the exact
+ * ordered public commitments and the raw commitment; it is never taken from
+ * the caller. A parent relation proves that the same precommitment is the
+ * hash of its own witness for the public commitments and the raw commitment.
+ * Because this side fixes the hash input, that witness must equal the public
+ * commitments given here, so the relation's discrete-log check applies to
+ * these exact points. A precommitment supplied by the prover would leave the
+ * relation's public commitments unconstrained.
  */
 [[nodiscard]] Result<CircuitNormParentConstantsV4>
 derive_circuit_norm_parent_constants_v4_with_public_commitments(
+    const NativeBulletproofCircuit &circuit,
+    const PointBytes &raw_commitment,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding);
+
+/**
+ * Derive public-leaf constants from a precommitment the caller supplies.
+ *
+ * Nothing here shows that `precommitment` commits to `public_commitments`.
+ * The caller must establish that by other means. Construction leaves use the
+ * raw-commitment form above instead; the certificate nonce parent is the one
+ * remaining caller, and its binding has not been re-examined since that form
+ * was added. The returned `precommitment` is the one passed in.
+ */
+[[nodiscard]] Result<CircuitNormParentConstantsV4>
+derive_circuit_norm_parent_constants_v4_from_precommitment(
     const NativeBulletproofCircuit &circuit,
     const CircuitPrecommitmentDigestV4 &precommitment,
     std::span<const PointBytes> public_commitments,

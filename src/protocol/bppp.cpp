@@ -14,6 +14,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -26,6 +27,7 @@
 #include "algebraic_circuit_proof.hpp"
 #include "bppp_internal.hpp"
 #include "bulletproof_internal.hpp"
+#include "exact_point_proof.hpp"
 #include "purify/secp_bridge.h"
 #include "secure_cleanup.hpp"
 
@@ -455,29 +457,100 @@ Result<FieldElement> derive_nonzero_scalar(std::span<const unsigned char> seed,
                           "derive_nonzero_scalar:exhausted");
 }
 
-Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
-                     const TaggedHash &tag, std::size_t index,
-                     std::uint64_t attempt = 0) {
-  SecretBytes prefix;
-  prefix.value.reserve(seed.size() + 2 * sizeof(std::uint64_t));
-  prefix.value.assign(seed.begin(), seed.end());
+using U64Le = std::array<unsigned char, 8>;
+
+U64Le u64_le(std::uint64_t value) {
+  U64Le out{};
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    out[i] = static_cast<unsigned char>((value >> (8 * i)) & 0xffU);
+  }
+  return out;
+}
+
+/**
+ * The hash state after `tag(seed`, for deriving many scalars from one seed.
+ *
+ * A V4 seed carries the whole witness, several hundred kilobytes, and one
+ * proof derives tens of thousands of scalars from it. Hashing the seed for
+ * every scalar made that hashing the dominant cost of a proof. This absorbs
+ * the seed once; each scalar then finishes a copy of the state with its own
+ * labels. The digests are exactly those of hashing `seed || labels` in full.
+ *
+ * The state retains seed-derived bytes and is erased on destruction.
+ */
+class SeedHash {
+public:
+  SeedHash(const TaggedHash &tag, std::span<const unsigned char> seed) {
+    const auto &tag_digest = tag.tag_digest();
+    const std::array<const unsigned char *, 3> items{
+        tag_digest.data(), tag_digest.data(),
+        seed.empty() ? nullptr : seed.data()};
+    const std::array<std::size_t, 3> item_lens{tag_digest.size(),
+                                               tag_digest.size(), seed.size()};
+    const int ok = purify_sha256_prefix_init(&prefix_, items.data(),
+                                             item_lens.data(), items.size());
+    assert(ok != 0 && "SeedHash requires well-formed segments");
+    (void)ok;
+  }
+  ~SeedHash() { purify_sha256_prefix_clear(&prefix_); }
+  SeedHash(const SeedHash &) = delete;
+  SeedHash &operator=(const SeedHash &) = delete;
+
+  /** `tag(seed || labels...)`, with each label appended in order. */
+  [[nodiscard]] ScalarBytes
+  digest(std::span<const std::span<const unsigned char>> labels) const {
+    // Scalar derivations use at most three labels: index, attempt, counter.
+    static constexpr std::size_t kMaxLabels = 4;
+    assert(labels.size() <= kMaxLabels && "SeedHash::digest label count");
+    std::array<const unsigned char *, kMaxLabels> items{};
+    std::array<std::size_t, kMaxLabels> item_lens{};
+    const std::size_t count = std::min(labels.size(), kMaxLabels);
+    for (std::size_t i = 0; i < count; ++i) {
+      items[i] = labels[i].empty() ? nullptr : labels[i].data();
+      item_lens[i] = labels[i].size();
+    }
+    ScalarBytes out{};
+    const int ok = purify_sha256_prefix_finish(
+        &prefix_, out.data(), items.data(), item_lens.data(), count);
+    assert(ok != 0 && "SeedHash::digest requires well-formed labels");
+    (void)ok;
+    return out;
+  }
+
+private:
+  purify_sha256_prefix prefix_{};
+};
+
+/**
+ * Parses `tag(seed || labels...)` as one secret scalar candidate.
+ *
+ * The seed was absorbed once into `seed_hash` and is neither copied nor
+ * hashed again here.
+ */
+template <typename... Labels>
+Result<FieldElement> secret_scalar_candidate(const SeedHash &seed_hash,
+                                             const Labels &...labels) {
+  static_assert(sizeof...(Labels) <= 4,
+                "SeedHash::digest accepts at most four labels");
+  SecretScalarBytes candidate_bytes;
+  const std::array<std::span<const unsigned char>, sizeof...(Labels)>
+      label_spans{std::span<const unsigned char>(labels)...};
+  ScalarBytes digest = seed_hash.digest(label_spans);
+  candidate_bytes.value = digest;
+  ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
+  return FieldElement::try_from_bytes32(candidate_bytes.value);
+}
+
+Status derive_scalar(FieldElement &out, const SeedHash &seed_hash,
+                     std::size_t index, std::uint64_t attempt) {
   PURIFY_ASSIGN_OR_RETURN(const auto &encoded_index,
                           narrow_size_to_u64(index, "derive_scalar:index"),
                           "derive_scalar:index");
-  append_u64_le(prefix.value, encoded_index);
-  append_u64_le(prefix.value, attempt);
+  const U64Le index_le = u64_le(encoded_index);
+  const U64Le attempt_le = u64_le(attempt);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
-    SecretBytes input;
-    input.value.reserve(prefix.value.size() + sizeof(std::uint64_t));
-    input.value.assign(prefix.value.begin(), prefix.value.end());
-    append_u64_le(input.value, counter);
-    SecretScalarBytes candidate_bytes;
-    ScalarBytes digest = tag.digest(std::span<const unsigned char>(
-        input.value.data(), input.value.size()));
-    candidate_bytes.value = digest;
-    ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
-    Result<FieldElement> candidate =
-        FieldElement::try_from_bytes32(candidate_bytes.value);
+    Result<FieldElement> candidate = secret_scalar_candidate(
+        seed_hash, index_le, attempt_le, u64_le(counter));
     if (candidate.has_value()) {
       out = *candidate;
       secure_clear_field_element(*candidate);
@@ -488,30 +561,36 @@ Status derive_scalar(FieldElement &out, std::span<const unsigned char> seed,
                           "derive_scalar:exhausted");
 }
 
+/**
+ * Fills `out[i]` with the scalar `tag(seed || i || attempt || counter)`.
+ *
+ * The seed is absorbed once. It can be the whole witness, and hashing it
+ * again for each of tens of thousands of scalars dominated the prover.
+ */
+Status derive_scalars(std::span<FieldElement> out,
+                      std::span<const unsigned char> seed,
+                      const TaggedHash &tag, std::uint64_t attempt) {
+  const SeedHash seed_hash(tag, seed);
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    PURIFY_RETURN_IF_ERROR(derive_scalar(out[i], seed_hash, i, attempt),
+                           "derive_scalars:scalar");
+  }
+  return {};
+}
+
 Status derive_secret_nonzero_scalar(FieldElement &out,
                                     std::span<const unsigned char> seed,
                                     const TaggedHash &tag,
                                     std::size_t index) {
-  SecretBytes prefix;
-  prefix.value.reserve(seed.size() + sizeof(std::uint64_t));
-  prefix.value.assign(seed.begin(), seed.end());
   PURIFY_ASSIGN_OR_RETURN(
       const auto &encoded_index,
       narrow_size_to_u64(index, "derive_secret_nonzero_scalar:index"),
       "derive_secret_nonzero_scalar:index");
-  append_u64_le(prefix.value, encoded_index);
+  const U64Le index_le = u64_le(encoded_index);
+  const SeedHash seed_hash(tag, seed);
   for (std::uint64_t counter = 0; counter < 256; ++counter) {
-    SecretBytes input;
-    input.value.reserve(prefix.value.size() + sizeof(std::uint64_t));
-    input.value.assign(prefix.value.begin(), prefix.value.end());
-    append_u64_le(input.value, counter);
-    SecretScalarBytes candidate_bytes;
-    ScalarBytes digest = tag.digest(std::span<const unsigned char>(
-        input.value.data(), input.value.size()));
-    candidate_bytes.value = digest;
-    ::purify::detail::secure_clear_bytes(digest.data(), digest.size());
     Result<FieldElement> candidate =
-        FieldElement::try_from_bytes32(candidate_bytes.value);
+        secret_scalar_candidate(seed_hash, index_le, u64_le(counter));
     if (candidate.has_value()) {
       if (!candidate->is_zero()) {
         out = *candidate;
@@ -583,8 +662,12 @@ Result<PointBytes> point_scale(const PointBytes &point,
 Result<PointBytes> generator_scale(const PointBytes &generator,
                                    const FieldElement &scalar,
                                    purify_secp_context *secp_context);
-Result<PointBytes> generator_to_point(const PointBytes &generator,
-                                      purify_secp_context *secp_context);
+/**
+ * The first `count` generators of the stream `create_generators` returns, as
+ * compressed SEC1 points. Both encodings are derived once per process.
+ */
+Result<std::vector<PointBytes>>
+create_generator_points(std::size_t count, purify_secp_context *secp_context);
 Result<PointBytes>
 commit_norm_arg_witness_only(const NormArgInputs &inputs,
                              purify_secp_context *secp_context,
@@ -703,7 +786,8 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
     purify_secp_context *secp_context,
     bool externalize_commitments = false,
     ExperimentalCircuitBackend *cache = nullptr,
-    const CircuitNormArgChallenges *explicit_challenges = nullptr) {
+    const CircuitNormArgChallenges *explicit_challenges = nullptr,
+    bool scale_generators = true) {
   (void)cache;
   PURIFY_RETURN_IF_ERROR(
       require_secp_context(secp_context, "build_circuit_norm_arg_public_data:secp_context"),
@@ -866,11 +950,6 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
   out->target = constant.negate();
   out->c_vec_bytes = scalar_bytes(out->c_vec);
 
-  std::size_t raw_n_value_count = 0;
-  if (!checked_mul_size(dimensions.gate_count, 2, raw_n_value_count)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "build_circuit_norm_arg_public_data:raw_n_value_count");
-  }
   std::size_t generator_count = 0;
   if (!checked_add_size(out->n_vec_len, out->c_vec.size(),
                         generator_count)) {
@@ -881,15 +960,20 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
   PURIFY_ASSIGN_OR_RETURN(
       auto generators, create_generators(generator_count, secp_context),
       "build_circuit_norm_arg_public_data:create_generators");
+  PURIFY_ASSIGN_OR_RETURN(
+      out->raw_generator_points,
+      create_generator_points(generator_count, secp_context),
+      "build_circuit_norm_arg_public_data:generator_points");
+  if (!scale_generators) {
+    // The norm-argument generators stay empty. A parent descriptor needs only
+    // the coefficient commitment and the anchored offset, which use raw
+    // generators, and this skips one scalar multiplication per G generator.
+    out->raw_generators = std::move(generators);
+    CircuitNormArgPublicDataPtr shared = out;
+    return shared;
+  }
   out->raw_generators = generators;
   out->generators = std::move(generators);
-  out->raw_generator_points.reserve(raw_n_value_count);
-  for (std::size_t i = 0; i < raw_n_value_count; ++i) {
-    PURIFY_ASSIGN_OR_RETURN(
-        auto point, generator_to_point(out->raw_generators[i], secp_context),
-        "build_circuit_norm_arg_public_data:generator_to_point");
-    out->raw_generator_points.push_back(point);
-  }
 
   FieldElement rho_power = rho;
   FieldElement generator_term = mul_scale;
@@ -928,10 +1012,11 @@ build_circuit_norm_arg_public_data_from_challenges(
     const NativeBulletproofCircuit &circuit,
     purify_secp_context *secp_context, bool externalize_commitments,
     ExperimentalCircuitBackend *cache,
-    const CircuitNormArgChallenges &explicit_challenges) {
+    const CircuitNormArgChallenges &explicit_challenges,
+    bool scale_generators = true) {
   return build_circuit_norm_arg_public_data_impl(
       circuit, {}, nullptr, secp_context, externalize_commitments, cache,
-      &explicit_challenges);
+      &explicit_challenges, scale_generators);
 }
 
 Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
@@ -1106,20 +1191,6 @@ Result<PointBytes> generator_scale(const PointBytes &generator,
           out.data()))) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
                             "generator_scale:backend");
-  }
-  return out;
-}
-
-Result<PointBytes> generator_to_point(const PointBytes &generator,
-                                      purify_secp_context *secp_context) {
-  PointBytes out{};
-  PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context, "generator_to_point:secp_context"),
-      "generator_to_point:secp_context");
-  if (!require_ok(purify_bppp_generator_to_point(
-          secp_context, generator.data(), out.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "generator_to_point:backend");
   }
   return out;
 }
@@ -1477,27 +1548,39 @@ validate_public_commitments(std::span<const PointBytes> public_commitments,
   return {};
 }
 
-Result<PointBytes> add_scaled_points_allow_infinity(
-    const PointBytes &base_commitment,
+/**
+ * Sums `scalars[i] * points[i]` over public inputs in one multi-scalar
+ * multiplication. The result is a compressed point, or 33 zero bytes for the
+ * identity.
+ *
+ * Every caller passes public points and public scalars, so this uses the
+ * variable-time routine. Do not use it for witness values.
+ */
+Result<PointBytes> public_multi_scalar_mul(
     std::span<const PointBytes> points,
     std::span<const FieldElement> scalars,
     purify_secp_context *secp_context) {
   if (points.size() != scalars.size()) {
     return unexpected_error(ErrorCode::SizeMismatch,
-                            "add_scaled_points_allow_infinity:size");
+                            "public_multi_scalar_mul:size");
   }
-  PointBytes out = base_commitment;
-  for (std::size_t i = 0; i < points.size(); ++i) {
-    if (scalars[i].is_zero()) {
-      continue;
-    }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto &scaled,
-        point_scale(points[i], scalars[i], secp_context),
-        "add_scaled_points_allow_infinity:scale");
-    PURIFY_ASSIGN_OR_RETURN(
-        out, point_add_allow_infinity(out, scaled, secp_context),
-        "add_scaled_points_allow_infinity:add");
+  PURIFY_RETURN_IF_ERROR(
+      require_secp_context(secp_context,
+                           "public_multi_scalar_mul:secp_context"),
+      "public_multi_scalar_mul:secp_context");
+  std::vector<ScalarBytes> encoded;
+  encoded.reserve(scalars.size());
+  for (const FieldElement &scalar : scalars) {
+    encoded.push_back(scalar.to_bytes_be());
+  }
+  PointBytes out{};
+  if (!require_ok(purify_bppp_public_msm(
+          secp_context,
+          reinterpret_cast<const unsigned char *>(points.data()),
+          reinterpret_cast<const unsigned char *>(encoded.data()),
+          points.size(), out.data()))) {
+    return unexpected_error(ErrorCode::BackendRejectedInput,
+                            "public_multi_scalar_mul:backend");
   }
   return out;
 }
@@ -1510,6 +1593,12 @@ Result<PointBytes> circuit_anchored_offset_v4(
       public_data.public_commitment_coeffs.size()) {
     return unexpected_error(ErrorCode::SizeMismatch,
                             "circuit_anchored_offset_v4:public_size");
+  }
+  if (public_data.minus_shift.size() != public_data.plus_shift.size() ||
+      public_data.raw_generator_points.size() / 2 <
+          public_data.plus_shift.size()) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "circuit_anchored_offset_v4:shift_size");
   }
 
   std::vector<PointBytes> points;
@@ -1536,8 +1625,7 @@ Result<PointBytes> circuit_anchored_offset_v4(
     scalars.push_back(
         public_data.public_commitment_coeffs[i].negate());
   }
-  return add_scaled_points_allow_infinity(
-      PointBytes{}, points, scalars, secp_context);
+  return public_multi_scalar_mul(points, scalars, secp_context);
 }
 
 Result<PointBytes>
@@ -1572,11 +1660,20 @@ Result<PointBytes> coefficient_commitment_v4(
     return PointBytes{};
   }
 
-  NormArgInputs inputs;
-  inputs.generators = public_data.raw_generators;
-  inputs.n_vec.assign(public_data.n_vec_len, ScalarBytes{});
-  inputs.l_vec = public_data.c_vec_bytes;
-  return commit_norm_arg_witness_only(inputs, secp_context, nullptr);
+  // The coefficients are public, so this is one variable-time multi-scalar
+  // multiplication over the raw H generators that follow the G generators.
+  std::size_t generator_count = 0;
+  if (!checked_add_size(public_data.n_vec_len, public_data.c_vec.size(),
+                        generator_count) ||
+      public_data.raw_generator_points.size() != generator_count) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "coefficient_commitment_v4:generator_points");
+  }
+  const auto coefficient_generators =
+      std::span(public_data.raw_generator_points)
+          .subspan(public_data.n_vec_len, public_data.c_vec.size());
+  return public_multi_scalar_mul(coefficient_generators, public_data.c_vec,
+                                 secp_context);
 }
 
 Result<PointBytes>
@@ -1699,6 +1796,37 @@ derive_zk_challenge(std::span<const unsigned char> binding_digest,
 
 } // namespace
 
+Result<detail::ExactPointProof> detail::prove_exact_point(
+    const PointBytes &point, const FieldElement &value,
+    std::span<const unsigned char> context,
+    const ScalarBytes &secret_prover_seed, purify_secp_context *secp_context) {
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &batched,
+      batch_public_commitments(std::span<const PointBytes>(&point, 1), context,
+                               secp_context),
+      "prove_exact_point:batch");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &dlog,
+      prove_public_commitment_dlog(batched,
+                                   std::span<const FieldElement>(&value, 1),
+                                   context, secret_prover_seed, secp_context),
+      "prove_exact_point:prove");
+  return ExactPointProof{dlog.nonce_xonly, dlog.response};
+}
+
+Result<bool> detail::verify_exact_point(const PointBytes &point,
+                                        std::span<const unsigned char> context,
+                                        const ExactPointProof &proof,
+                                        purify_secp_context *secp_context) {
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &batched,
+      batch_public_commitments(std::span<const PointBytes>(&point, 1), context,
+                               secp_context),
+      "verify_exact_point:batch");
+  const PublicCommitmentDlogProof dlog{proof.nonce_xonly, proof.response};
+  return verify_public_commitment_dlog(batched, context, dlog, secp_context);
+}
+
 GeneratorBytes base_generator(purify_secp_context *secp_context) {
   GeneratorBytes out{};
   bool ok = secp_context != nullptr
@@ -1718,14 +1846,12 @@ GeneratorBytes value_generator_h(purify_secp_context *secp_context) {
   return out;
 }
 
-Result<std::vector<PointBytes>> create_generators(std::size_t count,
-                                                  purify_secp_context *secp_context) {
+namespace {
+
+/** Derives the first `count` generators of the stream from scratch. */
+Result<std::vector<PointBytes>>
+generate_generators(std::size_t count, purify_secp_context *secp_context) {
   std::vector<PointBytes> out(count);
-  if (count == 0) {
-    return out;
-  }
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "create_generators:secp_context"),
-                         "create_generators:secp_context");
   std::span<unsigned char> serialized = writable_byte_span(out);
   std::size_t serialized_len = serialized.size();
   if (!require_ok(purify_bppp_create_generators(secp_context, count,
@@ -1739,6 +1865,111 @@ Result<std::vector<PointBytes>> create_generators(std::size_t count,
                             "create_generators:serialized_len");
   }
   return out;
+}
+
+/** Converts generator encodings to compressed SEC1 points. */
+Result<std::vector<PointBytes>>
+generators_to_points(std::span<const PointBytes> generators,
+                     purify_secp_context *secp_context) {
+  std::vector<PointBytes> out(generators.size());
+  if (generators.empty()) {
+    return out;
+  }
+  if (!require_ok(purify_bppp_generators_to_points(
+          secp_context,
+          reinterpret_cast<const unsigned char *>(generators.data()),
+          generators.size(),
+          reinterpret_cast<unsigned char *>(out.data())))) {
+    return unexpected_error(ErrorCode::BackendRejectedInput,
+                            "generators_to_points:backend");
+  }
+  return out;
+}
+
+/**
+ * The BPPP generator stream, derived once per process.
+ *
+ * The backend derives generator `i` from a fixed public seed and the
+ * generators before it, so every request is a prefix of one stream and does
+ * not depend on the context. Each generator costs a hash-to-curve. A V4 leaf
+ * uses 32,768 of them, and deriving them afresh for every proof, preparation
+ * and parent descriptor was the largest single cost of each.
+ *
+ * Requests above the cap bypass the cache, which bounds its memory to a few
+ * megabytes.
+ */
+struct GeneratorStream {
+  static constexpr std::size_t kMaxCached = std::size_t{1} << 17;
+
+  std::mutex mutex;
+  std::vector<PointBytes> generators;
+  std::vector<PointBytes> points;
+};
+
+GeneratorStream &generator_stream() {
+  static GeneratorStream stream;
+  return stream;
+}
+
+Result<std::vector<PointBytes>>
+create_generator_points(std::size_t count, purify_secp_context *secp_context) {
+  if (count == 0) {
+    return std::vector<PointBytes>{};
+  }
+  PURIFY_RETURN_IF_ERROR(
+      require_secp_context(secp_context,
+                           "create_generator_points:secp_context"),
+      "create_generator_points:secp_context");
+  if (count > GeneratorStream::kMaxCached) {
+    PURIFY_ASSIGN_OR_RETURN(const auto generators,
+                            generate_generators(count, secp_context),
+                            "create_generator_points:generate");
+    return generators_to_points(generators, secp_context);
+  }
+  GeneratorStream &stream = generator_stream();
+  const std::lock_guard lock(stream.mutex);
+  if (stream.generators.size() < count) {
+    PURIFY_ASSIGN_OR_RETURN(auto generated,
+                            generate_generators(count, secp_context),
+                            "create_generator_points:generate");
+    stream.generators = std::move(generated);
+    stream.points.clear();
+  }
+  if (stream.points.size() < count) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto points, generators_to_points(stream.generators, secp_context),
+        "create_generator_points:points");
+    stream.points = std::move(points);
+  }
+  return std::vector<PointBytes>(
+      stream.points.begin(),
+      stream.points.begin() + static_cast<std::ptrdiff_t>(count));
+}
+
+} // namespace
+
+Result<std::vector<PointBytes>> create_generators(std::size_t count,
+                                                  purify_secp_context *secp_context) {
+  if (count == 0) {
+    return std::vector<PointBytes>{};
+  }
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "create_generators:secp_context"),
+                         "create_generators:secp_context");
+  if (count > GeneratorStream::kMaxCached) {
+    return generate_generators(count, secp_context);
+  }
+  GeneratorStream &stream = generator_stream();
+  const std::lock_guard lock(stream.mutex);
+  if (stream.generators.size() < count) {
+    PURIFY_ASSIGN_OR_RETURN(auto generated,
+                            generate_generators(count, secp_context),
+                            "create_generators:generate");
+    stream.generators = std::move(generated);
+    stream.points.clear();
+  }
+  return std::vector<PointBytes>(
+      stream.generators.begin(),
+      stream.generators.begin() + static_cast<std::ptrdiff_t>(count));
 }
 
 Result<PointBytes>
@@ -2322,12 +2553,10 @@ prove_experimental_circuit_zk_norm_arg_impl(
     std::vector<FieldElement> padding(
         dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
     WipeOnDestruction padding_wiper(padding);
-    for (std::size_t i = 0; i < padding.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(padding[i], seed.value, kCircuitZkBlindTaggedHash, i,
-                        attempt),
-          "prove_experimental_circuit_zk_norm_arg_impl:blind");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(padding, seed.value, kCircuitZkBlindTaggedHash,
+                       attempt),
+        "prove_experimental_circuit_zk_norm_arg_impl:blind");
 
     PURIFY_ASSIGN_OR_RETURN(
         auto raw_inputs,
@@ -2396,21 +2625,17 @@ prove_experimental_circuit_zk_norm_arg_impl(
 
     std::vector<FieldElement> mask_n(hidden.n_vec.size(), FieldElement::zero());
     WipeOnDestruction mask_n_wiper(mask_n);
-    for (std::size_t i = 0; i < mask_n.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_n[i], seed.value, kCircuitZkMaskNTaggedHash, i,
-                        attempt),
-          "prove_experimental_circuit_zk_norm_arg_impl:mask_n");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(mask_n, seed.value, kCircuitZkMaskNTaggedHash,
+                       attempt),
+        "prove_experimental_circuit_zk_norm_arg_impl:mask_n");
 
     std::vector<FieldElement> mask_l(hidden.l_vec.size(), FieldElement::zero());
     WipeOnDestruction mask_l_wiper(mask_l);
-    for (std::size_t i = 0; i < mask_l.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_l[i], seed.value, kCircuitZkMaskLTaggedHash, i,
-                        attempt),
-          "prove_experimental_circuit_zk_norm_arg_impl:mask_l");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(mask_l, seed.value, kCircuitZkMaskLTaggedHash,
+                       attempt),
+        "prove_experimental_circuit_zk_norm_arg_impl:mask_l");
 
     FieldElement t2 =
         weighted_bppp_inner_product(mask_n, mask_n, hidden.public_data->rho);
@@ -3052,12 +3277,10 @@ prove_circuit_zk_norm_arg_v4_impl(
     std::vector<FieldElement> padding(
         dimensions.l_vec_len - dimensions.used_l, FieldElement::zero());
     WipeOnDestruction padding_wiper(padding);
-    for (std::size_t i = 0; i < padding.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(padding[i], seed.value, kCircuitZkBlindV4TaggedHash,
-                        i, attempt),
-          "prove_circuit_zk_norm_arg_v4:blind");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(padding, seed.value, kCircuitZkBlindV4TaggedHash,
+                       attempt),
+        "prove_circuit_zk_norm_arg_v4:blind");
 
     PURIFY_ASSIGN_OR_RETURN(
         auto raw_inputs,
@@ -3187,21 +3410,17 @@ prove_circuit_zk_norm_arg_v4_impl(
     std::vector<FieldElement> mask_n(hidden.n_vec.size(),
                                      FieldElement::zero());
     WipeOnDestruction mask_n_wiper(mask_n);
-    for (std::size_t i = 0; i < mask_n.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_n[i], mask_seed.value,
-                        kCircuitZkMaskNV4TaggedHash, i, attempt),
-          "prove_circuit_zk_norm_arg_v4:mask_n");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(mask_n, mask_seed.value, kCircuitZkMaskNV4TaggedHash,
+                       attempt),
+        "prove_circuit_zk_norm_arg_v4:mask_n");
     std::vector<FieldElement> mask_l(hidden.l_vec.size(),
                                      FieldElement::zero());
     WipeOnDestruction mask_l_wiper(mask_l);
-    for (std::size_t i = 0; i < mask_l.size(); ++i) {
-      PURIFY_RETURN_IF_ERROR(
-          derive_scalar(mask_l[i], mask_seed.value,
-                        kCircuitZkMaskLV4TaggedHash, i, attempt),
-          "prove_circuit_zk_norm_arg_v4:mask_l");
-    }
+    PURIFY_RETURN_IF_ERROR(
+        derive_scalars(mask_l, mask_seed.value, kCircuitZkMaskLV4TaggedHash,
+                       attempt),
+        "prove_circuit_zk_norm_arg_v4:mask_l");
 
     FieldElement t2 = weighted_bppp_inner_product(
         mask_n, mask_n, hidden.public_data->rho);
@@ -3678,10 +3897,16 @@ namespace {
 Result<candidate::CircuitNormParentConstantsV4>
 derive_circuit_norm_parent_constants_v4_impl(
     const NativeBulletproofCircuit &circuit,
-    const candidate::CircuitPrecommitmentDigestV4 &precommitment,
+    const candidate::CircuitPrecommitmentDigestV4 *supplied_precommitment,
+    const PointBytes *raw_commitment,
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding) {
+  // Exactly one source of the precommitment is given.
+  if ((supplied_precommitment == nullptr) == (raw_commitment == nullptr)) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "circuit_parent_constants_v4:precommitment_source");
+  }
   PURIFY_RETURN_IF_ERROR(
       validate_circuit_proof_v4_inputs(
           circuit, public_commitments, secp_context, true),
@@ -3701,6 +3926,26 @@ derive_circuit_norm_parent_constants_v4_impl(
       const auto shape,
       circuit_shape_v4(circuit, true),
       "circuit_parent_constants_v4:shape");
+  std::optional<candidate::CircuitPrecommitmentDigestV4> derived_precommitment;
+  if (raw_commitment != nullptr) {
+    PURIFY_RETURN_IF_ERROR(
+        validate_finite_point_v4(
+            *raw_commitment, secp_context,
+            "circuit_parent_constants_v4:raw_commitment"),
+        "circuit_parent_constants_v4:raw_commitment");
+    // The precommitment hashes these exact public commitments. A parent that
+    // proves the same hash for its own witness is thereby bound to them.
+    PURIFY_ASSIGN_OR_RETURN(
+        auto derived,
+        candidate::derive_circuit_precommitment_v4(
+            shape, binding_digest, public_commitments, *raw_commitment,
+            secp_context),
+        "circuit_parent_constants_v4:precommitment");
+    derived_precommitment = std::move(derived.digest);
+  }
+  const candidate::CircuitPrecommitmentDigestV4 &precommitment =
+      derived_precommitment.has_value() ? *derived_precommitment
+                                        : *supplied_precommitment;
   PURIFY_ASSIGN_OR_RETURN(
       const auto raw_generator_digest,
       raw_generator_digest_v4(shape, secp_context),
@@ -3713,11 +3958,12 @@ derive_circuit_norm_parent_constants_v4_impl(
   const CircuitNormArgChallenges challenges{
       transcript.rho().scalar, transcript.mul_scale().scalar,
       transcript.mul_ratio().scalar, transcript.row_ratio().scalar};
+  // The descriptor uses only raw generators, so the scaled set is skipped.
   PURIFY_ASSIGN_OR_RETURN(
       const auto public_data,
       build_circuit_norm_arg_public_data_from_challenges(
           circuit, secp_context, true, nullptr,
-          challenges),
+          challenges, false),
       "circuit_parent_constants_v4:public_data");
   if (generator_backend_cache_key(public_data->raw_generators) !=
       raw_generator_digest) {
@@ -3735,7 +3981,8 @@ derive_circuit_norm_parent_constants_v4_impl(
       "circuit_parent_constants_v4:anchored_offset");
   return candidate::CircuitNormParentConstantsV4{
       std::move(binding_digest), std::move(raw_generator_digest),
-      std::move(coefficient_commitment), std::move(anchored_offset)};
+      precommitment, std::move(coefficient_commitment),
+      std::move(anchored_offset)};
 }
 
 } // namespace
@@ -3743,12 +3990,24 @@ derive_circuit_norm_parent_constants_v4_impl(
 Result<candidate::CircuitNormParentConstantsV4>
 candidate::derive_circuit_norm_parent_constants_v4_with_public_commitments(
     const NativeBulletproofCircuit &circuit,
+    const PointBytes &raw_commitment,
+    std::span<const PointBytes> public_commitments,
+    purify_secp_context *secp_context,
+    std::span<const unsigned char> statement_binding) {
+  return derive_circuit_norm_parent_constants_v4_impl(
+      circuit, nullptr, &raw_commitment, public_commitments, secp_context,
+      statement_binding);
+}
+
+Result<candidate::CircuitNormParentConstantsV4>
+candidate::derive_circuit_norm_parent_constants_v4_from_precommitment(
+    const NativeBulletproofCircuit &circuit,
     const CircuitPrecommitmentDigestV4 &precommitment,
     std::span<const PointBytes> public_commitments,
     purify_secp_context *secp_context,
     std::span<const unsigned char> statement_binding) {
   return derive_circuit_norm_parent_constants_v4_impl(
-      circuit, precommitment, public_commitments, secp_context,
+      circuit, &precommitment, nullptr, public_commitments, secp_context,
       statement_binding);
 }
 

@@ -28,8 +28,16 @@ The precommitment transcript absorbs these typed items in order:
 Challenge zero clears the digest's most significant bit and requires the
 resulting scalar to be nonzero. That scalar is the public precommitment digest
 `d`. The construction manifest must bind the exact 32-byte canonical encoding
-of `d`. The parent later constrains the hidden raw commitment and public fields
-to this value.
+of `d`. The parent later constrains its witness for the raw commitment and the
+public commitments to this value.
+
+A parent's verifier must compute `d` itself from the statement's own public
+commitments and the proof's raw commitment. It must not accept `d` from the
+prover. The parent relation only shows that `d` is the hash of some public
+commitments and some raw commitment. If the prover chose `d`, those could be
+any points it liked, and the relation's Schnorr check would say nothing about
+the statement's public commitments. The construction receipt therefore
+carries each leaf's raw commitment, not its precommitment.
 
 The mode is a closed enum. Public mode requires one public point for every
 circuit commitment. Hidden mode requires no public points, but its internal

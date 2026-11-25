@@ -14,6 +14,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -661,8 +662,12 @@ Result<PointBytes> point_scale(const PointBytes &point,
 Result<PointBytes> generator_scale(const PointBytes &generator,
                                    const FieldElement &scalar,
                                    purify_secp_context *secp_context);
-Result<PointBytes> generator_to_point(const PointBytes &generator,
-                                      purify_secp_context *secp_context);
+/**
+ * The first `count` generators of the stream `create_generators` returns, as
+ * compressed SEC1 points. Both encodings are derived once per process.
+ */
+Result<std::vector<PointBytes>>
+create_generator_points(std::size_t count, purify_secp_context *secp_context);
 Result<PointBytes>
 commit_norm_arg_witness_only(const NormArgInputs &inputs,
                              purify_secp_context *secp_context,
@@ -781,7 +786,8 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
     purify_secp_context *secp_context,
     bool externalize_commitments = false,
     ExperimentalCircuitBackend *cache = nullptr,
-    const CircuitNormArgChallenges *explicit_challenges = nullptr) {
+    const CircuitNormArgChallenges *explicit_challenges = nullptr,
+    bool scale_generators = true) {
   (void)cache;
   PURIFY_RETURN_IF_ERROR(
       require_secp_context(secp_context, "build_circuit_norm_arg_public_data:secp_context"),
@@ -944,11 +950,6 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
   out->target = constant.negate();
   out->c_vec_bytes = scalar_bytes(out->c_vec);
 
-  std::size_t raw_n_value_count = 0;
-  if (!checked_mul_size(dimensions.gate_count, 2, raw_n_value_count)) {
-    return unexpected_error(ErrorCode::Overflow,
-                            "build_circuit_norm_arg_public_data:raw_n_value_count");
-  }
   std::size_t generator_count = 0;
   if (!checked_add_size(out->n_vec_len, out->c_vec.size(),
                         generator_count)) {
@@ -959,15 +960,20 @@ Result<CircuitNormArgPublicDataPtr> build_circuit_norm_arg_public_data_impl(
   PURIFY_ASSIGN_OR_RETURN(
       auto generators, create_generators(generator_count, secp_context),
       "build_circuit_norm_arg_public_data:create_generators");
+  PURIFY_ASSIGN_OR_RETURN(
+      out->raw_generator_points,
+      create_generator_points(generator_count, secp_context),
+      "build_circuit_norm_arg_public_data:generator_points");
+  if (!scale_generators) {
+    // The norm-argument generators stay empty. A parent descriptor needs only
+    // the coefficient commitment and the anchored offset, which use raw
+    // generators, and this skips one scalar multiplication per G generator.
+    out->raw_generators = std::move(generators);
+    CircuitNormArgPublicDataPtr shared = out;
+    return shared;
+  }
   out->raw_generators = generators;
   out->generators = std::move(generators);
-  out->raw_generator_points.reserve(raw_n_value_count);
-  for (std::size_t i = 0; i < raw_n_value_count; ++i) {
-    PURIFY_ASSIGN_OR_RETURN(
-        auto point, generator_to_point(out->raw_generators[i], secp_context),
-        "build_circuit_norm_arg_public_data:generator_to_point");
-    out->raw_generator_points.push_back(point);
-  }
 
   FieldElement rho_power = rho;
   FieldElement generator_term = mul_scale;
@@ -1006,10 +1012,11 @@ build_circuit_norm_arg_public_data_from_challenges(
     const NativeBulletproofCircuit &circuit,
     purify_secp_context *secp_context, bool externalize_commitments,
     ExperimentalCircuitBackend *cache,
-    const CircuitNormArgChallenges &explicit_challenges) {
+    const CircuitNormArgChallenges &explicit_challenges,
+    bool scale_generators = true) {
   return build_circuit_norm_arg_public_data_impl(
       circuit, {}, nullptr, secp_context, externalize_commitments, cache,
-      &explicit_challenges);
+      &explicit_challenges, scale_generators);
 }
 
 Result<CircuitNormArgReduction> reduce_experimental_circuit_to_norm_arg(
@@ -1184,20 +1191,6 @@ Result<PointBytes> generator_scale(const PointBytes &generator,
           out.data()))) {
     return unexpected_error(ErrorCode::BackendRejectedInput,
                             "generator_scale:backend");
-  }
-  return out;
-}
-
-Result<PointBytes> generator_to_point(const PointBytes &generator,
-                                      purify_secp_context *secp_context) {
-  PointBytes out{};
-  PURIFY_RETURN_IF_ERROR(
-      require_secp_context(secp_context, "generator_to_point:secp_context"),
-      "generator_to_point:secp_context");
-  if (!require_ok(purify_bppp_generator_to_point(
-          secp_context, generator.data(), out.data()))) {
-    return unexpected_error(ErrorCode::BackendRejectedInput,
-                            "generator_to_point:backend");
   }
   return out;
 }
@@ -1555,27 +1548,39 @@ validate_public_commitments(std::span<const PointBytes> public_commitments,
   return {};
 }
 
-Result<PointBytes> add_scaled_points_allow_infinity(
-    const PointBytes &base_commitment,
+/**
+ * Sums `scalars[i] * points[i]` over public inputs in one multi-scalar
+ * multiplication. The result is a compressed point, or 33 zero bytes for the
+ * identity.
+ *
+ * Every caller passes public points and public scalars, so this uses the
+ * variable-time routine. Do not use it for witness values.
+ */
+Result<PointBytes> public_multi_scalar_mul(
     std::span<const PointBytes> points,
     std::span<const FieldElement> scalars,
     purify_secp_context *secp_context) {
   if (points.size() != scalars.size()) {
     return unexpected_error(ErrorCode::SizeMismatch,
-                            "add_scaled_points_allow_infinity:size");
+                            "public_multi_scalar_mul:size");
   }
-  PointBytes out = base_commitment;
-  for (std::size_t i = 0; i < points.size(); ++i) {
-    if (scalars[i].is_zero()) {
-      continue;
-    }
-    PURIFY_ASSIGN_OR_RETURN(
-        const auto &scaled,
-        point_scale(points[i], scalars[i], secp_context),
-        "add_scaled_points_allow_infinity:scale");
-    PURIFY_ASSIGN_OR_RETURN(
-        out, point_add_allow_infinity(out, scaled, secp_context),
-        "add_scaled_points_allow_infinity:add");
+  PURIFY_RETURN_IF_ERROR(
+      require_secp_context(secp_context,
+                           "public_multi_scalar_mul:secp_context"),
+      "public_multi_scalar_mul:secp_context");
+  std::vector<ScalarBytes> encoded;
+  encoded.reserve(scalars.size());
+  for (const FieldElement &scalar : scalars) {
+    encoded.push_back(scalar.to_bytes_be());
+  }
+  PointBytes out{};
+  if (!require_ok(purify_bppp_public_msm(
+          secp_context,
+          reinterpret_cast<const unsigned char *>(points.data()),
+          reinterpret_cast<const unsigned char *>(encoded.data()),
+          points.size(), out.data()))) {
+    return unexpected_error(ErrorCode::BackendRejectedInput,
+                            "public_multi_scalar_mul:backend");
   }
   return out;
 }
@@ -1588,6 +1593,12 @@ Result<PointBytes> circuit_anchored_offset_v4(
       public_data.public_commitment_coeffs.size()) {
     return unexpected_error(ErrorCode::SizeMismatch,
                             "circuit_anchored_offset_v4:public_size");
+  }
+  if (public_data.minus_shift.size() != public_data.plus_shift.size() ||
+      public_data.raw_generator_points.size() / 2 <
+          public_data.plus_shift.size()) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "circuit_anchored_offset_v4:shift_size");
   }
 
   std::vector<PointBytes> points;
@@ -1614,8 +1625,7 @@ Result<PointBytes> circuit_anchored_offset_v4(
     scalars.push_back(
         public_data.public_commitment_coeffs[i].negate());
   }
-  return add_scaled_points_allow_infinity(
-      PointBytes{}, points, scalars, secp_context);
+  return public_multi_scalar_mul(points, scalars, secp_context);
 }
 
 Result<PointBytes>
@@ -1650,11 +1660,20 @@ Result<PointBytes> coefficient_commitment_v4(
     return PointBytes{};
   }
 
-  NormArgInputs inputs;
-  inputs.generators = public_data.raw_generators;
-  inputs.n_vec.assign(public_data.n_vec_len, ScalarBytes{});
-  inputs.l_vec = public_data.c_vec_bytes;
-  return commit_norm_arg_witness_only(inputs, secp_context, nullptr);
+  // The coefficients are public, so this is one variable-time multi-scalar
+  // multiplication over the raw H generators that follow the G generators.
+  std::size_t generator_count = 0;
+  if (!checked_add_size(public_data.n_vec_len, public_data.c_vec.size(),
+                        generator_count) ||
+      public_data.raw_generator_points.size() != generator_count) {
+    return unexpected_error(ErrorCode::InternalMismatch,
+                            "coefficient_commitment_v4:generator_points");
+  }
+  const auto coefficient_generators =
+      std::span(public_data.raw_generator_points)
+          .subspan(public_data.n_vec_len, public_data.c_vec.size());
+  return public_multi_scalar_mul(coefficient_generators, public_data.c_vec,
+                                 secp_context);
 }
 
 Result<PointBytes>
@@ -1827,14 +1846,12 @@ GeneratorBytes value_generator_h(purify_secp_context *secp_context) {
   return out;
 }
 
-Result<std::vector<PointBytes>> create_generators(std::size_t count,
-                                                  purify_secp_context *secp_context) {
+namespace {
+
+/** Derives the first `count` generators of the stream from scratch. */
+Result<std::vector<PointBytes>>
+generate_generators(std::size_t count, purify_secp_context *secp_context) {
   std::vector<PointBytes> out(count);
-  if (count == 0) {
-    return out;
-  }
-  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "create_generators:secp_context"),
-                         "create_generators:secp_context");
   std::span<unsigned char> serialized = writable_byte_span(out);
   std::size_t serialized_len = serialized.size();
   if (!require_ok(purify_bppp_create_generators(secp_context, count,
@@ -1848,6 +1865,111 @@ Result<std::vector<PointBytes>> create_generators(std::size_t count,
                             "create_generators:serialized_len");
   }
   return out;
+}
+
+/** Converts generator encodings to compressed SEC1 points. */
+Result<std::vector<PointBytes>>
+generators_to_points(std::span<const PointBytes> generators,
+                     purify_secp_context *secp_context) {
+  std::vector<PointBytes> out(generators.size());
+  if (generators.empty()) {
+    return out;
+  }
+  if (!require_ok(purify_bppp_generators_to_points(
+          secp_context,
+          reinterpret_cast<const unsigned char *>(generators.data()),
+          generators.size(),
+          reinterpret_cast<unsigned char *>(out.data())))) {
+    return unexpected_error(ErrorCode::BackendRejectedInput,
+                            "generators_to_points:backend");
+  }
+  return out;
+}
+
+/**
+ * The BPPP generator stream, derived once per process.
+ *
+ * The backend derives generator `i` from a fixed public seed and the
+ * generators before it, so every request is a prefix of one stream and does
+ * not depend on the context. Each generator costs a hash-to-curve. A V4 leaf
+ * uses 32,768 of them, and deriving them afresh for every proof, preparation
+ * and parent descriptor was the largest single cost of each.
+ *
+ * Requests above the cap bypass the cache, which bounds its memory to a few
+ * megabytes.
+ */
+struct GeneratorStream {
+  static constexpr std::size_t kMaxCached = std::size_t{1} << 17;
+
+  std::mutex mutex;
+  std::vector<PointBytes> generators;
+  std::vector<PointBytes> points;
+};
+
+GeneratorStream &generator_stream() {
+  static GeneratorStream stream;
+  return stream;
+}
+
+Result<std::vector<PointBytes>>
+create_generator_points(std::size_t count, purify_secp_context *secp_context) {
+  if (count == 0) {
+    return std::vector<PointBytes>{};
+  }
+  PURIFY_RETURN_IF_ERROR(
+      require_secp_context(secp_context,
+                           "create_generator_points:secp_context"),
+      "create_generator_points:secp_context");
+  if (count > GeneratorStream::kMaxCached) {
+    PURIFY_ASSIGN_OR_RETURN(const auto generators,
+                            generate_generators(count, secp_context),
+                            "create_generator_points:generate");
+    return generators_to_points(generators, secp_context);
+  }
+  GeneratorStream &stream = generator_stream();
+  const std::lock_guard lock(stream.mutex);
+  if (stream.generators.size() < count) {
+    PURIFY_ASSIGN_OR_RETURN(auto generated,
+                            generate_generators(count, secp_context),
+                            "create_generator_points:generate");
+    stream.generators = std::move(generated);
+    stream.points.clear();
+  }
+  if (stream.points.size() < count) {
+    PURIFY_ASSIGN_OR_RETURN(
+        auto points, generators_to_points(stream.generators, secp_context),
+        "create_generator_points:points");
+    stream.points = std::move(points);
+  }
+  return std::vector<PointBytes>(
+      stream.points.begin(),
+      stream.points.begin() + static_cast<std::ptrdiff_t>(count));
+}
+
+} // namespace
+
+Result<std::vector<PointBytes>> create_generators(std::size_t count,
+                                                  purify_secp_context *secp_context) {
+  if (count == 0) {
+    return std::vector<PointBytes>{};
+  }
+  PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "create_generators:secp_context"),
+                         "create_generators:secp_context");
+  if (count > GeneratorStream::kMaxCached) {
+    return generate_generators(count, secp_context);
+  }
+  GeneratorStream &stream = generator_stream();
+  const std::lock_guard lock(stream.mutex);
+  if (stream.generators.size() < count) {
+    PURIFY_ASSIGN_OR_RETURN(auto generated,
+                            generate_generators(count, secp_context),
+                            "create_generators:generate");
+    stream.generators = std::move(generated);
+    stream.points.clear();
+  }
+  return std::vector<PointBytes>(
+      stream.generators.begin(),
+      stream.generators.begin() + static_cast<std::ptrdiff_t>(count));
 }
 
 Result<PointBytes>
@@ -3810,11 +3932,12 @@ derive_circuit_norm_parent_constants_v4_impl(
   const CircuitNormArgChallenges challenges{
       transcript.rho().scalar, transcript.mul_scale().scalar,
       transcript.mul_ratio().scalar, transcript.row_ratio().scalar};
+  // The descriptor uses only raw generators, so the scaled set is skipped.
   PURIFY_ASSIGN_OR_RETURN(
       const auto public_data,
       build_circuit_norm_arg_public_data_from_challenges(
           circuit, secp_context, true, nullptr,
-          challenges),
+          challenges, false),
       "circuit_parent_constants_v4:public_data");
   if (generator_backend_cache_key(public_data->raw_generators) !=
       raw_generator_digest) {

@@ -37,6 +37,23 @@ Result<bool> nonce_proof_matches_nonce(const NonceProof& nonce_proof, purify_sec
     return xonly == nonce_proof.nonce.xonly;
 }
 
+/** True when the exact-point fields are canonical: an x-only point and a nonzero scalar. */
+Result<bool> exact_point_encoding_valid(const NonceProof& nonce_proof, purify_secp_context* secp_context) {
+    PURIFY_RETURN_IF_ERROR(require_secp_context(secp_context, "exact_point_encoding_valid:secp_context"),
+                           "exact_point_encoding_valid:secp_context");
+    if (purify_bip340_validate_xonly_pubkey(secp_context, nonce_proof.exact_point_nonce.data()) == 0) {
+        return false;
+    }
+    const auto response = FieldElement::try_from_bytes32(nonce_proof.exact_point_response);
+    return response.has_value() && !response->is_zero();
+}
+
+// Version 3 added the exact-point proof. Version 2 proofs carried only the Bulletproof and
+// are rejected: they do not pin a unique nonce.
+constexpr unsigned char kNonceProofVersion = 3;
+// version || u32 proof size || nonce x || exact-point nonce x || exact-point response
+constexpr std::size_t kNonceProofHeaderSize = 1 + 4 + 32 + 32 + 32;
+
 }  // namespace
 
 Bytes PublicKey::serialize() const {
@@ -123,42 +140,57 @@ Result<Bytes> NonceProof::serialize(purify_secp_context* secp_context) const {
     if (!match) {
         return unexpected_error(ErrorCode::BindingMismatch, "NonceProof::serialize:nonce_mismatch");
     }
+    PURIFY_ASSIGN_OR_RETURN(const bool canonical, exact_point_encoding_valid(*this, secp_context),
+                            "NonceProof::serialize:exact_point_encoding");
+    if (!canonical) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "NonceProof::serialize:exact_point_noncanonical");
+    }
     PURIFY_ASSIGN_OR_RETURN(const auto& proof_bytes, proof.serialize(), "NonceProof::serialize:proof");
     if (proof_bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return unexpected_error(ErrorCode::UnexpectedSize, "NonceProof::serialize:proof_size");
     }
     std::size_t serialized_size = 0;
-    if (!checked_add_size(37, proof_bytes.size(), serialized_size)) {
+    if (!checked_add_size(kNonceProofHeaderSize, proof_bytes.size(), serialized_size)) {
         return unexpected_error(ErrorCode::Overflow, "NonceProof::serialize:reserve");
     }
 
     Bytes out;
     out.reserve(serialized_size);
-    out.push_back(static_cast<unsigned char>(2));
+    out.push_back(kNonceProofVersion);
     detail::append_u32_le(out, static_cast<std::uint32_t>(proof_bytes.size()));
     out.insert(out.end(), nonce.xonly.begin(), nonce.xonly.end());
+    out.insert(out.end(), exact_point_nonce.begin(), exact_point_nonce.end());
+    out.insert(out.end(), exact_point_response.begin(), exact_point_response.end());
     out.insert(out.end(), proof_bytes.begin(), proof_bytes.end());
     return out;
 }
 
 Result<NonceProof> NonceProof::deserialize(std::span<const unsigned char> serialized,
                                            purify_secp_context* secp_context) {
-    if (serialized.size() < 37) {
+    if (serialized.size() < kNonceProofHeaderSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:header");
     }
-    if (serialized[0] != 2) {
+    if (serialized[0] != kNonceProofVersion) {
         return unexpected_error(ErrorCode::BackendRejectedInput, "NonceProof::deserialize:version");
     }
     std::optional<std::uint32_t> proof_size = detail::read_u32_le(serialized, 1);
     assert(proof_size.has_value() && "header length check should guarantee a u32 proof size");
-    if (*proof_size != serialized.size() - 37) {
+    if (*proof_size != serialized.size() - kNonceProofHeaderSize) {
         return unexpected_error(ErrorCode::InvalidFixedSize, "NonceProof::deserialize:proof_size");
     }
 
     NonceProof out{};
     std::copy_n(serialized.begin() + 5, 32, out.nonce.xonly.begin());
+    std::copy_n(serialized.begin() + 37, 32, out.exact_point_nonce.begin());
+    std::copy_n(serialized.begin() + 69, 32, out.exact_point_response.begin());
+    PURIFY_ASSIGN_OR_RETURN(const bool canonical, exact_point_encoding_valid(out, secp_context),
+                            "NonceProof::deserialize:exact_point_encoding");
+    if (!canonical) {
+        return unexpected_error(ErrorCode::BackendRejectedInput, "NonceProof::deserialize:exact_point_noncanonical");
+    }
     PURIFY_ASSIGN_OR_RETURN(auto proof_value,
-                            ExperimentalBulletproofProof::deserialize(serialized.subspan(37, *proof_size)),
+                            ExperimentalBulletproofProof::deserialize(
+                                serialized.subspan(kNonceProofHeaderSize, *proof_size)),
                             "NonceProof::deserialize:proof");
     out.proof = std::move(proof_value);
     PURIFY_ASSIGN_OR_RETURN(auto match, nonce_proof_matches_nonce(out, secp_context),

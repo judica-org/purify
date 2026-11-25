@@ -223,10 +223,21 @@ struct Signature {
  * `(secret, scope, input)`. There is intentionally no public retry selector in this format:
  * if the derived scalar is zero, preparation fails instead of allowing multiple valid public
  * nonces for the same input. That failure occurs with negligible probability, about `2^-256`.
+ *
+ * Two proofs establish that binding together. The Bulletproof shows that the commitment
+ * `proof.commitments[0]` opens to the Purify output `o`, but it accepts any blinding: a point
+ * `o*G + b*H` passes for every `b`. The exact-point proof is a Schnorr proof that the same
+ * commitment is `v*G` for a known `v`. Both can hold only when `b = 0` and `v = o`, so the
+ * commitment is `o*G` itself and a given key and input have exactly one accepted nonce. The
+ * Bulletproof alone does not give this; a verifier must check both.
  */
 struct NonceProof {
     Nonce nonce;
     ExperimentalBulletproofProof proof;
+    /** Even-Y x-only Schnorr nonce of the exact-point proof. */
+    XOnly32 exact_point_nonce{};
+    /** Schnorr response of the exact-point proof; canonical and nonzero. */
+    Scalar32 exact_point_response{};
 
     [[nodiscard]] Result<Bytes> serialize(purify_secp_context* secp_context) const;
     [[nodiscard]] static Result<NonceProof> deserialize(std::span<const unsigned char> serialized,

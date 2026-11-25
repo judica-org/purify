@@ -703,6 +703,12 @@ then keeps only the BIP340 x-only encoding of the corresponding even-$Y$ represe
 itself remains hidden; the verifier checks that the x-only projection of the public commitment point
 matches the advertised nonce.
 
+The \bp\ proof alone does not show that the prover used the unblinded mode: its verifier accepts a
+commitment $[o]G_{\mathrm{secp}} + [b]H$ for every blind $b$, so a key holder could present a
+different point for each $b$. Legacy PureSign therefore attaches a Schnorr proof of knowledge of $v$
+with $V_0 = [v]G_{\mathrm{secp}}$. Both proofs hold together only when $b = 0$ and $v = o$, which
+makes $[o]G_{\mathrm{secp}}$ the single accepted commitment for a given key and input.
+
 Inside that wrapper, the imported backend then runs a standard \bp-style\ polynomial proof
 for the flattened circuit~\cite{bulletproofs}. The math has three layers.
 

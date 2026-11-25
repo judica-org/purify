@@ -26,6 +26,7 @@
 #include "algebraic_circuit_proof.hpp"
 #include "bppp_internal.hpp"
 #include "bulletproof_internal.hpp"
+#include "exact_point_proof.hpp"
 #include "purify/secp_bridge.h"
 #include "secure_cleanup.hpp"
 
@@ -1698,6 +1699,37 @@ derive_zk_challenge(std::span<const unsigned char> binding_digest,
 }
 
 } // namespace
+
+Result<detail::ExactPointProof> detail::prove_exact_point(
+    const PointBytes &point, const FieldElement &value,
+    std::span<const unsigned char> context,
+    const ScalarBytes &secret_prover_seed, purify_secp_context *secp_context) {
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &batched,
+      batch_public_commitments(std::span<const PointBytes>(&point, 1), context,
+                               secp_context),
+      "prove_exact_point:batch");
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &dlog,
+      prove_public_commitment_dlog(batched,
+                                   std::span<const FieldElement>(&value, 1),
+                                   context, secret_prover_seed, secp_context),
+      "prove_exact_point:prove");
+  return ExactPointProof{dlog.nonce_xonly, dlog.response};
+}
+
+Result<bool> detail::verify_exact_point(const PointBytes &point,
+                                        std::span<const unsigned char> context,
+                                        const ExactPointProof &proof,
+                                        purify_secp_context *secp_context) {
+  PURIFY_ASSIGN_OR_RETURN(
+      const auto &batched,
+      batch_public_commitments(std::span<const PointBytes>(&point, 1), context,
+                               secp_context),
+      "verify_exact_point:batch");
+  const PublicCommitmentDlogProof dlog{proof.nonce_xonly, proof.response};
+  return verify_public_commitment_dlog(batched, context, dlog, secp_context);
+}
 
 GeneratorBytes base_generator(purify_secp_context *secp_context) {
   GeneratorBytes out{};
